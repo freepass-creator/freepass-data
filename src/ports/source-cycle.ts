@@ -18,13 +18,16 @@ export interface CycleCommands {
   compareAndApply(beforeDigest: string, after: CycleProduct, commandKey: string): Promise<void>;
 }
 export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number };
-export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number };
+export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
+  unassignedPlateCount?: number };
 export type CycleEntry = { kind: 'DOWNGRADE' | 'ENROLL' | 'REEXPOSE' | 'UPDATE'; before: CycleProduct | null; after: CycleProduct };
 export type CyclePlan = {
   schema: 'source-cycle/v1'; config: CycleConfig; plannedAt: number; evidence: CycleEvidence;
   entries: CycleEntry[]; held: number; blockers: string[]; sourceCount: number; exposedBefore: number;
+  warnings: string[]; unassignedPlateCount: number;
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
+  observationOnlyCount?: number;
   observedSellableCount?: number; unassignedPlateCount?: number;
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,

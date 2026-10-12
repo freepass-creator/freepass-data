@@ -28,7 +28,8 @@ export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidde
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility): CycleCapture {
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[] }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
-  let complete = true;
+  // Transport coverage is independent of UID/normalization holds.
+  let complete = scopes.every(scope => copy.tabs.some(tab => tab.title === scope && tab.complete && tab.values.length >= tab.rowCount));
   for (const tab of copy.tabs) {
     const originalHeaders = [...tab.values[0]!], plateIndex = originalHeaders.indexOf('차량번호');
     let uidIndex = originalHeaders.indexOf('UID');
@@ -64,31 +65,59 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid } } }; }) };
 }
 export type AicaTable = { title: string; values: unknown[][] };
-/** Native A/B/C columns are pinned; prices are identified by explicit period headers, never positions guessed from another sheet. */
-export function aicaNativeCapture(tables: AicaTable[], observedAt: string): CycleCapture {
-  const rows: CycleCapture['rows'] = []; let heldCount = 0;
-  const completedScopes: string[] = [];
+/** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
+export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
+  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [];
+  let visibilityComplete = true, observationOnlyCount = 0;
+  const money = (value: unknown): SourceAmount => {
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (text === '무보증') return amount(0);
+      if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) return amount(null);
+      return amount(Number(text.replaceAll(',', '')));
+    }
+    return amount(value);
+  };
   for (const title of AICA_SCOPES) {
     const table = tables.find(t => t.title === title), headers = table?.values[0]?.map(v => String(v).trim());
-    if (!table || !headers || headers[0] !== '배차상태' || headers[1] !== '구분' || headers[2] !== '차량번호') continue;
+    const sheet = meta?.sheets?.find(s => s.properties?.title === title);
+    const grid = sheet?.data?.find(d => (d.startRow ?? 0) === 0);
+    if (!table || !headers) continue;
+    if (!sheet || !grid || !Array.isArray(grid.rowMetadata) || grid.rowMetadata.length < table.values.length ||
+        (sheet.properties?.gridProperties?.rowCount ?? 0) < table.values.length) {
+      visibilityComplete = false; continue;
+    }
+    if (sheet.properties?.hidden) { visibilityComplete = false; continue; }
+    const required = title === '월렌트' ? ['차종', '1개월'] :
+      ['배차상태', '구분', '차량번호', '차급', '차종분류', '트림', '연료', '외장', '내장', 'Km', '월렌트', '장기보증',
+        '36개월', '48개월', '60개월', '옵션', '최초등록', '소비자가격', '제조사', '배기량', '연주행', '대인', '대물', '자차', '자손'];
+    if (required.some(h => headers.filter(v => v === h).length !== 1)) continue;
     completedScopes.push(title);
     for (const [index, cells] of table.values.slice(1).entries()) {
-      if (cells.every(v => v === '' || v === null)) continue;
+      if (grid.rowMetadata[index + 1]?.hiddenByUser || grid.rowMetadata[index + 1]?.hiddenByFilter ||
+          cells.every(v => v === '' || v == null)) continue;
+      if (title === '월렌트') { observationOnlyCount++; continue; }
       const get = (header: string) => cells[headers.indexOf(header)];
-      const plate = isAssignedPlate(cells[2]) ? plateIdentityKey(cells[2]) : null;
-      const terms = headers.flatMap((header, column) => {
-        const match = /^(\d+)개월$/.exec(header); if (!match || cells[column] === '' || cells[column] == null) return [];
-        const deposit = get(`${match[1]}개월 보증금`) ?? get('보증금');
-        return [{ months: Number(match[1]), monthlyRent: amount(cells[column]), deposit: amount(deposit === '무보증' ? 0 : deposit),
-          mileage: typeof get('연주행') === 'string' ? String(get('연주행')) : null, raw: { rent: cells[column], deposit: deposit ?? null } }];
+      const plate = isAssignedPlate(get('차량번호')) ? plateIdentityKey(get('차량번호')) : null;
+      const deposit = get('장기보증');
+      const terms = [36, 48, 60].flatMap(months => {
+        const rent = get(`${months}개월`);
+        // Blank periods are absent offers, not offers with an UNKNOWN rent.
+        if (rent == null || (typeof rent === 'string' && ['', '-', '--', '\u2014', 'x', 'X', '\uc5c6\uc74c', 'N/A'].includes(rent.trim()))) return [];
+        return [{ months, monthlyRent: typeof rent === 'string' && rent.trim() === '무보증' ? amount(null) : money(rent), deposit: money(deposit),
+          mileage: typeof get('연주행') === 'string' ? String(get('연주행')) : null, raw: { rent, deposit: deposit ?? null } }];
       });
-      rows.push({ scope: title, record: { sourceId: 'RP004', uid: sourceUid(plate, get('UID')) ?? '', plate,
-        vehicleText: String(get('차명 원문') ?? get('차명') ?? ''), status: { raw: String(cells[0] ?? ''), saleAvailable: null },
-        terms, observedAt, raw: { cells, headers, sheet_uid: get('UID') ?? null, source: 'aica-sheet', source_tab: title,
-          source_row: index + 2, product_group: title === '월렌트' ? 'MONTHLY' : 'LONG_TERM' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
+      rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
+        vehicleText: [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' '),
+        status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
+        raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
+          source_row: index + 2, product_group: 'LONG_TERM',
+          original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])) },
+        vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }
-  return { observedAt, complete: completedScopes.length === AICA_SCOPES.length, completedScopes, visibilityComplete: true, rows, heldCount };
+  return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
+    completedScopes, visibilityComplete, rows, heldCount: 0, observationOnlyCount };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({
   sourceId: 'RP004', kind: 'AICA', scopes: [...AICA_SCOPES], maxDowngradeRatio: ratio }, read));

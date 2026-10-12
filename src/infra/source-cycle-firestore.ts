@@ -47,7 +47,9 @@ export function productRecord(uid: string, f: Fields, observedAt: string): Sourc
     status: { raw: String(f.status ?? ''), saleAvailable: f.listable === true && f.status !== '출고불가' && f.status !== '계약중' && f.status_kind !== '불가' },
     terms: Object.entries((f.price ?? {}) as Record<string, any>).filter(([months]) => /^\d+$/.test(months)).map(([months, p]) => ({ months: Number(months),
       monthlyRent: cycleAmount(p.rent), deposit: cycleAmount(p.deposit), mileage: typeof p.mileage === 'string' ? p.mileage : null, raw: p })),
-    observedAt, raw: { source: f.source ?? null }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
+    observedAt, raw: { source: f.source ?? null,
+      ...(f.source_tab !== undefined ? { source_tab: f.source_tab } : {}),
+      ...(f.product_group !== undefined ? { product_group: f.product_group } : {}) }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
 }
 function envelope(d: Doc): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
@@ -78,6 +80,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
     source_observed_at: r.observedAt, source_cycle_record: r, source_cycle_raw: r.raw,
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
+/** Firestore field paths with non-ASCII or special characters must be backtick-quoted. */
+const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
   token?: () => Promise<string>; observationSources?: string[] }) {
@@ -113,11 +117,11 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
       const products: CycleProduct[] = []; let page = ''; const pages = new Set<string>();
       do {
-        const query = new URLSearchParams({ pageSize: '1000' });
+        const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
-          'source', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract',
-          'publication_withdrawal', 'publication_withdrawal_prior']) query.append('mask.fieldPaths', field);
+          'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract',
+          'publication_withdrawal', 'publication_withdrawal_prior']) query.append('mask.fieldPaths', fieldPath(field));
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {
@@ -159,7 +163,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       if (current && envelope(current).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
       const fields = nativeCycleFields(after, current ? decodeFields(current.fields) : {});
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
-      for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', field);
+      for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
       const result = await request(docPath(after.record.uid) + '?' + query, 'PATCH', { fields: encodeFields(fields) });
       const reread = await getDoc(after.record.uid);
       if (!reread || reread.updateTime !== result.updateTime || Object.entries(fields).some(([k, v]) =>

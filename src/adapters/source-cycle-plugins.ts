@@ -18,10 +18,12 @@ export type CycleCapture = {
   complete: boolean; completedScopes: string[]; visibilityComplete: boolean;
   rows: Array<{ scope: string; record: SourceProductRecord; hiddenTab?: boolean; hiddenByUser?: boolean; hiddenByFilter?: boolean }>;
   heldCount: number;
+  observationOnlyCount?: number;
   heldReasons?: string[];
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;
+  observationCountOfRead?(read: SourceRead<T>): number;
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
@@ -35,6 +37,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
   return {
     sourceId: def.sourceId, family: CYCLE_FAMILIES[def.kind], maxDowngradeRatio: def.maxDowngradeRatio,
     ...(syncedAt ? { syncedAt } : {}),
+    observationCountOfRead: read => read.raw?.observationOnlyCount ?? 0,
     syncedAtOfRead: read => read.raw?.synced_at ?? null,
     async read(): Promise<SourceRead<CycleCapture>> {
       const attemptedAt = clock();
@@ -44,7 +47,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
             raw.heldCount < 0 || raw.heldCount > 100_000 || !Number.isFinite(Date.parse(raw.observedAt)))
           return { raw: null, attemptedAt, observedAt: null, complete: false, error: 'SCHEMA_INVALID' };
         const complete = raw.complete === true && def.scopes.every(s => raw.completedScopes.includes(s)) &&
-          (def.kind !== 'F05' || raw.visibilityComplete === true);
+          (!['F05', 'AICA'].includes(def.kind) || raw.visibilityComplete === true);
         return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL' };
       } catch (e) {
         const text = e instanceof Error ? e.message : '';
@@ -59,6 +62,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
       for (const [i, row] of read.raw.rows.entries()) {
         if (!def.scopes.includes(row.scope) || row.scope === '종합') continue;
         if (row.record.sourceId !== def.sourceId) { held.push({ row: i + 1, reasons: ['SOURCE_MISMATCH'] }); continue; }
+        if (def.kind === 'AICA' && (row.scope === '월렌트' || row.hiddenTab || row.hiddenByUser || row.hiddenByFilter)) continue;
         const r = structuredClone(row.record), status = r.status.raw.trim();
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
         switch (def.kind) {
@@ -67,7 +71,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
               !row.hiddenByFilter && status !== '출고불가';
             break;
           case 'AICA':
-            r.status.saleAvailable = ['배차가능', '배차문의', '수리중'].includes(status);
+            r.status.saleAvailable = status !== '출고불가';
             // Preserve the provider spelling in status.raw; expose its common label as evidence.
             r.raw = { ...r.raw, sourceCycleDisplayStatus: status === '배차문의' ? '출고협의' : status === '수리중' ? '상품화중' : status };
             break;

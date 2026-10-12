@@ -38,6 +38,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
+      state.observationOnlyCount = plugin.observationCountOfRead?.(read) ?? 0;
       const unassigned = converted.held.filter(h => h.reasons.some(r => r.includes('UID_REQUIRED'))).length;
       state.unassignedPlateCount = unassigned;
       state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
@@ -57,12 +58,14 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
             .map(([k, child]) => [k, withoutReadClock(child)])) : v;
         if (!read.observedAt || Date.parse(read.observedAt) < Date.parse(prior.observedAt ?? '') || Date.parse(read.observedAt) > clock() ||
           !deepEqual(withoutReadClock(converted.records), withoutReadClock(prior.records)) || converted.held.length !== prior.heldCount ||
+          unassigned !== (prior.unassignedPlateCount ?? 0) ||
           (read.complete && !read.error) !== prior.complete) throw new Error('CYCLE_REPLAN_REQUIRED');
         converted.records = structuredClone(prior.records);
         read.observedAt = prior.observedAt;
       }
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
-        observedAt: read.observedAt, heldCount: converted.held.length }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
+        observedAt: read.observedAt, heldCount: converted.held.length,
+        ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
       state.heldCount = plan.held;
       if (options.approvedPlan && !deepEqual(plan, options.approvedPlan)) throw new Error('CYCLE_REPLAN_REQUIRED');
@@ -73,6 +76,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL') + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${options.apply ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
       summary += ` · 번호미배정 ${unassigned}`;
+      if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
+      if (plugin.family === 'AICA') summary += ` · 월렌트 관측 ${state.observationOnlyCount}`;
       if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
       state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
       // A dry-run must never consume the change token for a later authorized apply.

@@ -239,16 +239,167 @@ describe('native mappings and UID', () => {
       { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now);
     expect(built.plan.entries).toHaveLength(0); expect(built.plan.held).toBeGreaterThan(0);
   });
-  it('Aica maps A/B/C, separate monthly group, and first duplicate', async () => {
-    const tables = AICA_SCOPES.map(title => ({ title, values: [['배차상태', '구분', '차량번호', '차명', '12개월', '보증금', '연주행', 'UID'],
-      ['배차문의', '합성', title === '월렌트' ? 'TEST2002' : 'TEST2001', '합성차', 100, '무보증', '20000km', '']] }));
-    const p = aicaNativePlugin(async () => aicaNativeCapture(tables, time), 0.2), out = p.toRecords(await p.read());
-    expect(out.records).toHaveLength(2); expect(out.held).toHaveLength(2);
-    expect(out.records[0]!.raw.sourceCycleDisplayStatus).toBe('출고협의');
-    expect(out.records[1]!.raw.product_group).toBe('MONTHLY');
+  const aicaHeaders = ['배차상태', '구분', '차량번호', '차급', '차종분류', '트림', '연료', '외장', '내장', 'Km', '월렌트', '장기보증',
+    '36개월', '48개월', '60개월', '옵션', '최초등록', '소비자가격', '제조사', '배기량', '연주행', '대인', '대물', '자차', '자손'];
+  const aicaRow = (overrides: Record<string, unknown> = {}) => aicaHeaders.map(h => ({
+    배차상태: '배차문의', 구분: '재렌트', 차량번호: 'TEST2001', 차급: '합성급', 차종분류: '합성모델', 트림: '합성트림 2WD A/T',
+    연료: '합성연료', 외장: '원문 외장', 내장: '원문 내장', Km: '12,345', 월렌트: '999,999', 장기보증: '무보증',
+    '36개월': '123,456', '48개월': '', '60개월': 234567, 옵션: '원문 옵션', 최초등록: '2025-01', 소비자가격: '31,234,567',
+    제조사: '합성제조사', 배기량: '1,234', 연주행: '3만km', 대인: '원문 대인', 대물: '원문 대물', 자차: '원문 자차', 자손: '원문 자손',
+    ...overrides } as Record<string, unknown>)[h]);
+  function aicaFixture(rows = [aicaRow(), aicaRow({ 차량번호: 'TEST2002', 장기보증: '1,234,000', 배차상태: '배차중' })]) {
+    const tables = AICA_SCOPES.map((title, i) => ({ title, values: title === '월렌트' ?
+      [['모델명', '1개월 월 요금'], ['합성 월상품', '345,678']] : [aicaHeaders, ...(i === 0 ? rows : [])] }));
+    const meta = { sheets: tables.map(t => ({ properties: { title: t.title, hidden: false, gridProperties: { rowCount: t.values.length } },
+      data: [{ startRow: 0, rowMetadata: t.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false })) }] })) };
+    return { tables, meta };
+  }
+  async function aicaRead(f = aicaFixture()) {
+    const capture = aicaNativeCapture(f.tables, time, f.meta);
+    const plugin = aicaNativePlugin(async () => capture, 1), read = await plugin.read();
+    return { capture, plugin, read, ...plugin.toRecords(read) };
+  }
+  it.each(['', '  ', null, undefined])('SPEC3C creates only the populated 48-month period (blank=%s)', async blank => {
+    const out = await aicaRead(aicaFixture([aicaRow({ '36개월': blank, '48개월': '456,789', '60개월': blank })]));
+    expect(out.records[0]!.terms.map(t => t.months)).toEqual([48]);
+    const built = planSourceCycle(out.plugin, { records: out.records, complete: out.read.complete, observedAt: time, heldCount: 0 },
+      { complete: true, products: [] }, now);
+    expect(built.plan.held).toBe(0);
+    expect(built.plan.entries.map(e => e.kind)).toEqual(['ENROLL']);
+    expect(built.plan.entries[0]!.after.listable).toBe(true);
   });
-  it('Aica wrong native header is incomplete instead of zero inventory', () => {
-    expect(aicaNativeCapture([{ title: AICA_SCOPES[0], values: [['wrong']] }], time).complete).toBe(false);
+  it('SPEC3C F05 missing tabs and partial row coverage remain incomplete', async () => {
+    const s = sheet([{}]);
+    const plugin = sourceCyclePlugin({ sourceId: s.source, kind: 'F05',
+      scopes: [...new Set(sharedSheetChannels.filter(c => c.code === s.source).map(c => c.tab))], maxDowngradeRatio: 1 },
+      async () => f05NativeCapture(s.source, s.capture, s.visibility));
+    const tab = s.capture.tabs.find(t => t.rowCount > 1)!;
+    Object.assign(tab, { complete: false }); // Deliberately malformed transport fixture.
+    expect((await plugin.read()).complete).toBe(false);
+    tab.complete = true; tab.rowCount++;
+    expect((await plugin.read()).complete).toBe(false);
+    s.capture.tabs = s.capture.tabs.filter(t => t !== tab);
+    expect((await plugin.read()).complete).toBe(false);
+  });
+  it.each(['AICA', 'F05'] as const)('SPEC3C %s holds one unidentified row without blocking known-row plans', async kind => {
+    let plugin;
+    if (kind === 'AICA') {
+      plugin = (await aicaRead(aicaFixture([
+        aicaRow(), aicaRow({ 차량번호: 'TEST2002' }), aicaRow({ 차량번호: 'TEST2003' }),
+        aicaRow({ 차량번호: 'TEST2004', 배차상태: '출고불가' }), aicaRow({ 차량번호: '' }),
+      ]))).plugin;
+    } else {
+      const s = sheet([{}, { 차량번호: 'TEST2002' }, { 차량번호: 'TEST2003' },
+        { 차량번호: 'TEST2004', 차량상태: '출고불가' }, { 차량번호: '신차' }]);
+      const capture = f05NativeCapture(s.source, s.capture, s.visibility);
+      plugin = sourceCyclePlugin({ sourceId: s.source, kind, scopes: capture.completedScopes, maxDowngradeRatio: 1 }, async () => capture);
+    }
+    const read = await plugin.read(), converted = plugin.toRecords(read);
+    expect(read.complete).toBe(true); expect(read.error).toBeNull();
+    expect(converted.held).toHaveLength(1);
+    const old = converted.records.slice(1).map(record => ({ ...product(record.uid), record: structuredClone(record) }));
+    old[0]!.record.vehicleText = 'previous facts';
+    old[1]!.listable = false;
+    old[2]!.record.status = { raw: '출고가능', saleAvailable: true };
+    const absent = structuredClone(old[0]!); absent.record.uid = 'TEST9999'; absent.record.plate = 'TEST9999';
+    const snapshot = { complete: true, products: [...old, absent] };
+    const noWrite = vi.fn(async (): Promise<never> => { throw Error('UNEXPECTED_WRITE'); });
+    const commands = { list: async () => snapshot, read: noWrite, backup: noWrite, readBackup: noWrite, compareAndApply: noWrite };
+    const ctrl = fileCycleControl(await directory(), async () => {});
+    const result = await runSourceCycle(plugin, commands, ctrl, { now: () => now });
+    expect(result.status).toBe('DRY_RUN');
+    expect(result.summary).toContain('번호미배정 1');
+    expect(result.summary).toContain('ABSENCE_DOWNGRADE_SKIPPED');
+    const plan = 'plan' in result ? result.plan! : null;
+    expect(plan).toMatchObject({ blockers: [], warnings: ['ABSENCE_DOWNGRADE_SKIPPED'], unassignedPlateCount: 1,
+      held: 1, evidence: { complete: true, unassignedPlateCount: 1 } });
+    expect(plan!.entries.map(e => e.kind).sort()).toEqual(['DOWNGRADE', 'ENROLL', 'REEXPOSE', 'UPDATE']);
+    expect(plan!.entries.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT')).toEqual([]);
+    expect(plan!.entries.find(e => e.kind === 'DOWNGRADE')!.after.publication_withdrawal?.reason).toBe('SOURCE_NOT_SELLABLE');
+    expect(await ctrl.load(plugin.sourceId)).toMatchObject({ failures: 0, error: null, lastCompleteAt: time, unassignedPlateCount: 1 });
+    expect(noWrite).not.toHaveBeenCalled();
+  });
+  it('Aica SPEC3B maps ZERO/KNOWN, populated periods and unchanged RAW', async () => {
+    const f = aicaFixture(), before = structuredClone(f), out = await aicaRead(f);
+    expect(out.read.complete).toBe(true); expect(out.held).toEqual([]); expect(out.records).toHaveLength(2);
+    expect(out.records[0]).toMatchObject({ uid: 'TEST2001', vehicleText: '합성모델 합성트림 2WD A/T',
+      status: { raw: '배차문의', saleAvailable: true }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'],
+      raw: { sourceCycleDisplayStatus: '출고협의', original: { 제조사: '합성제조사', 최초등록: '2025-01', 소비자가격: '31,234,567',
+        배기량: '1,234', 연료: '합성연료', Km: '12,345', 외장: '원문 외장', 내장: '원문 내장' } } });
+    expect(out.records[0]!.terms.map(t => t.months)).toEqual([36, 60]);
+    expect(out.records[0]!.terms.map(t => t.monthlyRent.value)).toEqual([123456, 234567]);
+    expect(out.records[0]!.terms.every(t => t.deposit.state === 'ZERO' && t.deposit.value === 0 && t.mileage === '3만km')).toBe(true);
+    expect(out.records[1]!.terms.every(t => t.deposit.state === 'KNOWN' && t.deposit.value === 1234000)).toBe(true);
+    expect(out.records[0]!.raw.cells).toEqual(f.tables[0]!.values[1]); expect(f).toEqual(before);
+    expect(nativeCycleFields({ ...product(), record: out.records[0]! })).toMatchObject({
+      maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true });
+  });
+  it.each(['', '협의', null, -1, '12,34'])('Aica ambiguous deposit %s remains UNKNOWN', async deposit => {
+    const out = await aicaRead(aicaFixture([aicaRow({ 장기보증: deposit })]));
+    expect(out.records[0]!.terms.every(t => t.deposit.state === 'UNKNOWN' && t.deposit.value === null)).toBe(true);
+  });
+  it.each(['배차문의', '수리중', '배차중', '배차가능', '출고불가'])('Aica only explicit stop is unavailable: %s', async status => {
+    const out = await aicaRead(aicaFixture([aicaRow({ 배차상태: status })]));
+    expect(out.records[0]!.status.saleAvailable).toBe(status !== '출고불가');
+    if (status === '수리중') expect(out.records[0]!.raw.sourceCycleDisplayStatus).toBe('상품화중');
+  });
+  it('Aica monthly models are observations only, including existing monthly products', async () => {
+    const out = await aicaRead(); expect(out.capture.observationOnlyCount).toBe(1);
+    expect(out.plugin.observationCountOfRead!(out.read)).toBe(1);
+    const monthly = product('MONTHLY'); monthly.record.sourceId = 'RP004'; monthly.record.raw.source_tab = '월렌트';
+    const plan = planSourceCycle(out.plugin, { records: out.records, complete: true, observedAt: time, heldCount: 0 },
+      { complete: true, products: [monthly] }, now).plan;
+    expect(plan.sourceCount).toBe(2); expect(plan.exposedBefore).toBe(0);
+    expect(plan.entries.map(e => e.kind)).toEqual(['ENROLL', 'ENROLL']); expect(out.held).toEqual([]);
+  });
+  it('Aica same plate yields UPDATE then no change, never absence DOWNGRADE', async () => {
+    const out = await aicaRead(), old = out.records.map(record => ({ ...product(record.uid), record: structuredClone(record) }));
+    old[0]!.record.terms[0]!.monthlyRent = { state: 'KNOWN', value: 111111 };
+    const evidence = { records: out.records, complete: true, observedAt: time, heldCount: 0 };
+    const plan = planSourceCycle(out.plugin, evidence, { complete: true, products: old }, now).plan;
+    expect(plan.held).toBe(0); expect(plan.blockers).toEqual([]); expect(plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
+    old[0] = plan.entries[0]!.after;
+    expect(planSourceCycle(out.plugin, evidence, { complete: true, products: old }, now).plan.entries).toEqual([]);
+  });
+  it('Aica legacy Firestore monthly documents stay outside dry-run; summary counts observations', async () => {
+    const out = await aicaRead(), { commands, fake } = await setup();
+    fake.docs.set('MONTHLY', { name: 'projects/synthetic-test/databases/(default)/documents/products/MONTHLY',
+      updateTime: time, fields: encodeFields({ provider_company_code: 'RP004', listable: true, status: '가용',
+        source: 'aica-sheet', source_tab: '월렌트', product_group: 'MONTHLY' }) });
+    const ctrl = fileCycleControl(await directory(), async () => {});
+    const result = await runSourceCycle(out.plugin, commands, ctrl, { now: () => now });
+    expect(result.status).toBe('DRY_RUN'); expect(result.summary).toContain('하향 0');
+    expect(result.summary).toContain('월렌트 관측 1'); expect(result.summary).toContain('번호미배정 0');
+    expect((await ctrl.load('RP004')).observationOnlyCount).toBe(1);
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+    expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toContain('source_tab');
+    expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toContain('`원문`');
+  });
+  it.each([0, 1234000])('Aica numeric deposit %s and whitespace-empty period', async deposit => {
+    const out = await aicaRead(aicaFixture([aicaRow({ 장기보증: deposit, '48개월': '  ' })]));
+    expect(out.records[0]!.terms.map(t => t.months)).toEqual([36, 60]);
+    expect(out.records[0]!.terms.every(t => t.deposit.value === deposit && t.deposit.state === (deposit ? 'KNOWN' : 'ZERO'))).toBe(true);
+  });
+  it('Aica excludes hidden rows and tabs; missing visibility/header is incomplete', async () => {
+    const f = aicaFixture([aicaRow(), aicaRow({ 차량번호: 'TEST2002' }), aicaRow({ 차량번호: 'TEST2003' })]);
+    f.meta.sheets[0]!.data[0]!.rowMetadata[1]!.hiddenByUser = true;
+    f.meta.sheets[0]!.data[0]!.rowMetadata[2]!.hiddenByFilter = true;
+    expect((await aicaRead(f)).records.map(r => r.uid)).toEqual(['TEST2003']);
+    f.meta.sheets[0]!.properties.hidden = true;
+    expect((await aicaRead(f)).records).toEqual([]); expect((await aicaRead(f)).read.complete).toBe(false);
+    expect(aicaNativeCapture(f.tables, time).complete).toBe(false);
+    const wrong = aicaFixture(); wrong.tables[0]!.values[0] = ['wrong'];
+    expect((await aicaRead(wrong)).read.complete).toBe(false);
+  });
+  it('Aica plate-only UID, duplicate and unassigned holds protect absence', async () => {
+    const f = aicaFixture([aicaRow(), aicaRow(), aicaRow({ 차량번호: '' })]);
+    f.tables[0]!.values[0]!.push('UID'); f.tables[0]!.values[3]!.push('DO_NOT_USE');
+    const out = await aicaRead(f); expect(out.records).toHaveLength(1);
+    expect(out.held.flatMap(h => h.reasons)).toEqual(['DUPLICATE_UID_SUSPECT', 'UID_REQUIRED', 'UNASSIGNED_PLATE']);
+    const old = product('TEST9999'); old.record.sourceId = 'RP004';
+    const plan = planSourceCycle(out.plugin, { records: out.records, complete: true, observedAt: time, heldCount: out.held.length },
+      { complete: true, products: [old] }, now).plan;
+    expect(plan.entries.some(e => e.kind === 'DOWNGRADE')).toBe(false);
   });
   it('Iron rejects unproven homepage coverage', () => {
     expect(() => ironNativeCapture('<html/>', time)).toThrow('IRON_LIST_SCHEMA_HOLD');

@@ -49,8 +49,8 @@ export function validateSourceRecord(input: unknown): string[] {
   if (typeof r.observedAt !== 'string' || !Number.isFinite(Date.parse(r.observedAt))) reasons.push('OBSERVATION_INVALID');
   if (!r.status || typeof r.status.raw !== 'string' || !r.status.raw.trim() || ![true, false, null].includes(r.status.saleAvailable) || r.status.saleAvailable === null) reasons.push('STATUS_UNKNOWN');
   if (!Array.isArray(r.terms) || !r.terms.length || r.terms.some(t => !t || !Number.isSafeInteger(t.months) || t.months <= 0 ||
-    !validSourceAmount(t.monthlyRent) || !validSourceAmount(t.deposit) || t.monthlyRent.state === 'UNKNOWN' || t.deposit.state === 'UNKNOWN' ||
-    typeof t.mileage !== 'string' || !t.mileage.trim() || !t.raw || typeof t.raw !== 'object' || Array.isArray(t.raw)) ||
+    !validSourceAmount(t.monthlyRent) || !validSourceAmount(t.deposit) || t.monthlyRent.state === 'UNKNOWN' ||
+    (t.mileage !== null && typeof t.mileage !== 'string') || !t.raw || typeof t.raw !== 'object' || Array.isArray(t.raw)) ||
     new Set(r.terms.map(t => t.months)).size !== r.terms.length) reasons.push('TERMS_HOLD');
   return reasons;
 }

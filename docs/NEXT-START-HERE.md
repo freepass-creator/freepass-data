@@ -231,6 +231,20 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 SOURCE-ENGINE SPEC3C 빈 기간·번호미배정 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3C-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`. SPEC 사전점검 영수증 사용, 기존 미커밋 변경 보존, 커밋 없음.
+- 변경: 빈 기간 제외 회귀 고정. 아이카/F05 공통 계획에 번호미배정 수와 비차단 `ABSENCE_DOWNGRADE_SKIPPED`; 정상 UID 동작 유지·SOURCE_ABSENT만 생략. 실제 읽기 불완전은 적용 전 차단.
+- 검증: 관련 254 PASS, build/architecture/data boundary PASS. 전체 3276 PASS/18 FAIL/18 SKIP; CLI 권한·홈 경로·로컬 서버 실행 실패로 전체 통과 HOLD. 네트워크·운영 쓰기 없음.
+- 남음/next_start_here: `SOURCE-ENGINE-RESULT3C-20261012.md` → 관련 cycle 시험. 허용 환경에서 전체 잔여 시험과 새 라이브 읽기 계획 확인. 과거 계획/digest 재사용 금지.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3B 아이카 실제 형식 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3B-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`, 미커밋 작업 트리. 사용자 규칙대로 SPEC 사전점검 영수증 사용, 네트워크/외부 도구 생략.
+- 변경: 장기보증 공통값, 36/48/60개월 값 있는 기간, E+F 차명/원문 보존, 출고불가만 판매 불가, 숨김 제외, 월렌트 관측 전용 및 기존 월렌트 문서 하향 제외. 기존 runtime gws/Firestore 백틱 미커밋 수정 보존.
+- 검증: 관련 9파일 281 PASS, build/architecture/data-access/diff-check PASS. 라이브 읽기·운영 쓰기·커밋 0.
+- 남음/next_start_here: [RESULT3B](SOURCE-ENGINE-RESULT3B-20261012.md)에서 파일·시험·HOLD 확인 후 연결 담당이 새 라이브 읽기 계획으로 기존 UID 대조. 아이언 실 envelope 적합성 HOLD, 운영 적용 미실행.
+
 ### 2026-10-13 원천 엔진 3단계 — REST runtime 코드·시험 / 라이브 적합성 HOLD
 
 - 목적/정본: `SOURCE-ENGINE-SPEC3-20261012.md`; 시작 HEAD `3ac8cb283209eb9ae8c12bb55c49956b8359e9ee`, `work/freepass-data/source-engine-core-20261012`. SPEC 영수증으로 사전점검 대체, 커밋 없음.

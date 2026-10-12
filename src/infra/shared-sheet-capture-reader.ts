@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { GoogleAuth } from 'google-auth-library';
 
 type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch };
@@ -24,7 +26,26 @@ const sheetsUrl = (spreadsheetId: string, suffix = '') => {
   return new URL(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${suffix}`);
 };
 
+/** 운영 PC 전용 읽기 전송: SHEETS_TRANSPORT=gws 이면 이미 인증된 gws CLI(회사 계정 위임)로 읽는다. 비밀은 건드리지 않는다. */
+function sheetsViaGws(url: URL): unknown {
+  const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
+  if (!m) throw new Error('SHEETS_URL_UNSUPPORTED');
+  const params: Record<string, unknown> = { spreadsheetId: m[1] };
+  const ranges: string[] = [];
+  for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else params[k] = v === 'true' ? true : v; }
+  if (ranges.length) params.ranges = ranges;
+  const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
+  const bin = process.env.GWS_BIN ?? (() => {
+    const where = (execFileSync('where', ['gws.cmd'], { encoding: 'utf8' }).split('\n')[0] ?? '').trim();
+    const exe = readFileSync(where, 'utf8').match(/"([^"]+gws\.exe)"/)?.[1];
+    if (!exe) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
+    return exe;
+  })();
+  const out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  return JSON.parse(out.slice(out.indexOf('{')));
+}
 async function sheetsGet(url: URL, ports: Ports): Promise<unknown> {
+  if (process.env.SHEETS_TRANSPORT === 'gws' && !ports.fetcher && !ports.accessToken) return sheetsViaGws(url);
   const token = await (ports.accessToken ?? sheetsAccessToken)();
   if (!token || /\s/.test(token)) throw new Error('SHEETS_AUTH_UNAVAILABLE');
   let response: Response;

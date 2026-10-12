@@ -83,6 +83,13 @@ describe('source cycle planning/application', () => {
     expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
     expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
   });
+  it('SPEC3C incomplete transport blocks apply before backup or product writes', async () => {
+    const m = memory([]);
+    const built = planSourceCycle(config, evidence([record('new')], false), await m.commands.list(config.sourceId), now);
+    expect(built.plan.blockers).toContain('SOURCE_INCOMPLETE');
+    await expect(apply(m.commands, built)).rejects.toThrow('CYCLE_BLOCKED');
+    expect(m.order).toEqual([]);
+  });
   it('blocks over-ratio before even backups; exact cap is allowed', async () => {
     const m = memory([product('a'), product('b')]);
     const built = planSourceCycle(config, evidence([]), await m.commands.list(config.sourceId), now);

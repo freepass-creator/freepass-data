@@ -19,11 +19,19 @@ const facts = (r: SourceProductRecord) => withoutObservationClocks(r);
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
+  // Monthly model offers are observations, never vehicle identities or absence candidates.
+  if (config.family === 'AICA') {
+    const vehicle = (r: SourceProductRecord) => r.raw.source_tab !== '월렌트' && r.raw.product_group !== 'MONTHLY';
+    evidence = { ...evidence, records: evidence.records.filter(vehicle) };
+    snapshot = { ...snapshot, products: snapshot.products.filter(p => vehicle(p.record)) };
+  }
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
     maxDowngradeRatio: config.maxDowngradeRatio }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
+    warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
+  if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
   if (snapshot.products.some(p => p.record.sourceId !== config.sourceId) ||
       new Set(snapshot.products.map(p => sourceProductKey(p.record))).size !== snapshot.products.length)
     plan.blockers.push('CATALOG_IDENTITY_INVALID');
@@ -77,7 +85,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }
   // Missing/unidentified rows may hide any UID: never infer absence from a partial normalization.
-  if (evidence.complete && evidence.heldCount === 0 && !identityHolds && fresh) {
+  const absenceUnsafe = evidence.heldCount > 0 || identityHolds || plan.unassignedPlateCount > 0;
+  if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
+  if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
       if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before)) continue;
       if (Date.parse(before.record.observedAt) > at) { plan.held++; continue; }

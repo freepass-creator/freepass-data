@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
@@ -23,7 +25,28 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
   });
+  // 시트 읽기는 이미 인증된 gws(회사 계정 위임)로 한다 — gcloud 사용자 토큰에는 Sheets 권한이 없다. 비밀은 건드리지 않는다.
+  const gwsBin = () => {
+    if (env.GWS_BIN) return env.GWS_BIN;
+    if (process.platform !== 'win32') return 'gws';
+    const where = (execFileSync('where', ['gws.cmd'], { encoding: 'utf8' }).split('\n')[0] ?? '').trim();
+    const exe = readFileSync(where, 'utf8').match(/"([^"]+gws\.exe)"/)?.[1];
+    if (!exe) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
+    return exe;
+  };
+  const sheetsViaGws = (url: URL): Response => {
+    const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
+    if (!m) throw new Error('SHEETS_URL_UNSUPPORTED');
+    const params: Record<string, unknown> = { spreadsheetId: decodeURIComponent(m[1]!) };
+    const ranges: string[] = [];
+    for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else if (v === 'true') params[k] = true; else params[k] = v; }
+    if (ranges.length) params.ranges = ranges;
+    const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
+    const out = execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    return new Response(out.slice(out.indexOf('{')), { status: 200 });
+  };
   const get = async (url: URL, authenticated: boolean) => {
+    if (authenticated && url.hostname === 'sheets.googleapis.com') return sheetsViaGws(url);
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
@@ -71,9 +94,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         for (const title of AICA_SCOPES) url.searchParams.append('ranges', `'${title}'`);
         url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
         const observedAt = new Date().toISOString();
+        const visibilityBefore = await visibility(id);
         const before = await (await get(url, true)).json(), after = await (await get(url, true)).json();
+        const visibilityAfter = await visibility(id);
+        if (stableDigest(visibilityBefore) !== stableDigest(visibilityAfter)) throw new Error('SOURCE_VISIBILITY_CHANGED');
         if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== AICA_SCOPES.length) throw new Error('AICA_CAPTURE_CHANGED');
-        return aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt);
+        return aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter);
       }, ratio));
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
