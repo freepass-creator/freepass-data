@@ -209,3 +209,8 @@ ERP5 순수 변환은 별도 `codex/erp5-product-mapping-20260921` 작업이 담
 - 회전: 새 Secret Manager 버전 추가 → 서비스 재배포 → ERP5 환경변수 교체 확인 → 이전 버전 비활성.
 - 폐기: 소비자 항목을 `FREEPASS_DATA_CONSUMERS_JSON`에서 제거 + 서비스 재배포 + 비밀 버전 파기.
 - ERP5 production 호출 신원은 이미 있는 Vercel OIDC → WIF `erp5-production` → 서비스 계정 `erp5-firestore-reader`(freepass-data-read `run.invoker`)다. 새 IAM 불필요, preview 환경은 바인딩 없음. `/catalog`는 ACTIVE 릴리스가 없어 `NO_ACTIVE_RELEASE`로 닫혀 있으므로 ERP5는 `catalog-compat`를 읽는다.
+
+## 이안카 사진 ID 기반 서빙 게이트 (2026-10-12, 기본 꺼짐)
+- 설정: 환경변수 `IANCAR_PHOTO_ID_GATE_SUPPLIERS`(쉼표 구분 공급사 코드, 예 `RP031`). 비어 있으면 꺼짐 = 기존처럼 사람 검수 refs(`photo_original_refs`)가 있어야만 서빙. 끄면 즉시 되돌아간다.
+- 켜진 공급사의 공개 상품이 검수 refs 없이 `iancar_one_photo_ids`(상품 문서에 등록된 ONE 사진 ID)만 있으면, 원천(ONE) 앨범의 «개수»가 등록 개수와 같고(무중복) 차량 신원·신선도 검사(원천 읽기 쪽)가 통과할 때만 서빙한다. ONE 은 사진 ID 를 재발급하므로(등록 ID 와 현재 ID 겹침 0 실측, 2026-10-12) ID 값 일치는 조건이 아니다. 요청은 순번(index)뿐이라 임의 ID 요청은 불가하고 열쇠·ID·내부 필드는 응답에 나가지 않는다. 서빙 전 자동 검사(래스터 MIME·크기 상한)와 서빙 후 상품 재확인(`revalidate`: 비공개·철회·등록 개수 변경이면 거짓)은 기존과 같다. 검수 refs 가 있는 상품은 기존 경로가 우선한다.
+- 기준: 다른 공급사(롯데·S3·sokrc 등) 사진도 사람 검수 없이 이미 공개 화면에 나가고 있어 같은 기준으로 맞춘다. 사진 사용 범위 질문(KH·스타스카이·에코) 답이 오면 그 결과에 맞춰 공급사 단위로 켜거나 끈다(허용 목록 방식).

@@ -8,7 +8,7 @@ import { stableDigest } from '../src/shared/stable-digest.js';
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '123가4567 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '123가4567 재고 확인' },
   type: '재고',
   vehicle: {
     plate: '123가4567',
@@ -387,6 +387,41 @@ describe('readKakaoKnownFacts', () => {
     })).toEqual([]);
   });
 
+  it('stores non-raw channels at T0 with no promotion and reads them back as T0 with the fixed-notice validity', async () => {
+    const store = writeStore();
+    const notice = candidate({
+      source: { ...candidate().source, msgNo: '300', channel: 'KAKAO_NOTICE', noticeFixed: true, excerpt: '공지 조건 안내' } as never,
+      type: '조건', vehicle: undefined as never, fields: { 항목: '조건', 요약: '조건 안내', 값: '출고 후 익일 정산' },
+    });
+    const inputs = [notice];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const facts = await readKakaoKnownFacts(store, { supplierCode: 'RP001', topic: '조건', asOf: '2026-12-01T00:00:00.000Z' });
+    expect(facts).toMatchObject([{ layer: 'T0', signalOnly: true }]);
+    expect(facts[0]!.expiresAt).toBe('2027-01-10T00:00:00.000Z');
+    expect(await readKakaoKnownFacts(store, { supplierCode: 'RP001', topic: '조건', asOf: '2027-02-01T00:00:00.000Z' })).toEqual([]);
+  });
+  it('treats a tampered autoPromotable on an approximate-time candidate as a stored invariant violation', async () => {
+    const { hasKakaoInfoStoredInvariantViolation } = await import('../src/application/apply-kakao-info-candidates.js');
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T1', sentAtApprox: true, autoPromotable: true, vehicle: { plateEvidenceSource: 'LITERAL_IN_UTTERANCE', plateEvidenceDistance: 0, plateStatusSameSentence: true, plateEvidenceMsgNo: 100 } } })).toBe(true);
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T0', sentAtApprox: true, autoPromotable: false } })).toBe(false);
+  });
+  it('treats stored documents without a channel as T0-only: invariant violation if promoted, and never T1 on read', async () => {
+    const { hasKakaoInfoStoredInvariantViolation } = await import('../src/application/apply-kakao-info-candidates.js');
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T1', autoPromotable: false } })).toBe(true);
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T0', autoPromotable: true } })).toBe(true);
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T0', autoPromotable: false, channel: 'SOMETHING_ELSE' } })).toBe(false);
+    expect(hasKakaoInfoStoredInvariantViolation({ kakaoInfo: { type: '재고', layer: 'T1', autoPromotable: false, channel: 'SOMETHING_ELSE' } })).toBe(true);
+    const store = writeStore();
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const rows = await store.listCandidatesBySource('kakao-info-candidate');
+    const stripped = rows.map(row => {
+      const info = { ...(row.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo };
+      delete info.channel;
+      return { ...row, candidate: { ...(row.candidate as object), kakaoInfo: info } };
+    });
+    expect(await readKakaoKnownFacts({ listCandidatesBySource: async () => stripped as never }, { supplierCode: 'RP001', vehicleKey: '123가4567', topic: '재고', asOf: '2026-10-12T01:00:00.000Z' })).toEqual([]);
+  });
   it('fails closed when a vehicleUid is requested but none is stored', async () => {
     const store = writeStore();
     const inputs = [candidate()];

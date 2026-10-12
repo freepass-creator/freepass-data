@@ -1012,3 +1012,41 @@ describe('EANCAR ONE official partner API', () => {
     expect(JSON.stringify(shape)).not.toContain('700000');
   });
 });
+
+describe('ONE GET 일시 오류 재시도', () => {
+  const ok = () => new Response(JSON.stringify({ success: true, data: [], pagination: { page: 1, page_size: 1, total: 0 }, synced_at: new Date().toISOString(), stale: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+  it('503 한두 번 뒤 성공하면 이어 받는다', async () => {
+    let calls = 0;
+    const fetcher = (async () => (++calls < 3 ? new Response('', { status: 503 }) : ok())) as typeof fetch;
+    await createIancarOneApiClient(config, fetcher).listVehicles();
+    expect(calls).toBe(3);
+  });
+  it('503 가 계속되면 세 번 시도 뒤 같은 오류로 끝난다', async () => {
+    let calls = 0;
+    const fetcher = (async () => { calls++; return new Response('', { status: 503 }); }) as typeof fetch;
+    await expect(createIancarOneApiClient(config, fetcher).listVehicles()).rejects.toThrow('IANCAR_ONE_API_HTTP_503');
+    expect(calls).toBe(3);
+  });
+  it('404·401 은 재시도하지 않는다', async () => {
+    for (const status of [404, 401]) {
+      let calls = 0;
+      const fetcher = (async () => { calls++; return new Response('', { status }); }) as typeof fetch;
+      await expect(createIancarOneApiClient(config, fetcher).listVehicles()).rejects.toThrow(`IANCAR_ONE_API_HTTP_${status}`);
+      expect(calls).toBe(1);
+    }
+  });
+});
+
+describe('iancarOnePhotoIds — 신원 불일치·stale 거부', () => {
+  const vehicle = (over: Record<string, unknown> = {}) => ({ data: { vehicle_id: 'EANCAR-x', plate_number: '12가3456', stale: false,
+    photos: [{ photo_id: 'p1', url: '/v1/vehicles/EANCAR-x/photos/p1', representative: true }], ...over } });
+  it('정상 응답은 ID 를 돌려준다', () => expect(iancarOnePhotoIds(vehicle(), 'EANCAR-x', '12가3456')).toEqual(['p1']));
+  it('차량 ID·번호가 다르면 IDENTITY_MISMATCH', () => {
+    expect(() => iancarOnePhotoIds(vehicle(), 'EANCAR-y', '12가3456')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    expect(() => iancarOnePhotoIds(vehicle(), 'EANCAR-x', '99가9999')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+  });
+  it('stale 이 true(또는 없음)이면 DETAIL_STALE', () => {
+    expect(() => iancarOnePhotoIds(vehicle({ stale: true }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+    expect(() => iancarOnePhotoIds(vehicle({ stale: undefined }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+  });
+});

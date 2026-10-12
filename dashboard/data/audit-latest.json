@@ -13,32 +13,32 @@
   "change": {
     "counts": {
       "ADDED": 0,
-      "CHANGED": 0,
+      "CHANGED": 88,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1776
+      "UNCHANGED": 1688
     },
     "current": {
       "count": 1776,
-      "digest": "aca0fa7ad34382f5c0ead9beb72af7feb83a77fa7be5629b9f1ea71bfe560982",
-      "readTime": "2026-10-12T04:11:53.943394Z"
+      "digest": "94a0e1c911a258e8e49ca4e6ee3addfe3adcc9f2e59a4b74de2574a6f40dc2ed",
+      "readTime": "2026-10-12T06:27:07.357990Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "0e56eb8e9c57ede7356d49de42b6b377a4ddfec16307160f4bf4229d70c4757c",
-    "inventoryTransitionCount": 0,
+    "digest": "e8f4faeda719e2fa6d1de1b5ad9348c6dc41b4b8a7c5e64de6f22a1bf99caceb",
+    "inventoryTransitionCount": 15,
     "previous": {
       "count": 1776,
-      "digest": "dba5776c7864cb19e53f1c4c7facc1a7114804fc83a0d3a9b3ece461871ebfab",
-      "readTime": "2026-10-12T03:59:14.212332Z"
+      "digest": "d9fdaf0a947ff66403e8eafcc3d7e092786d4fc85d48abbab879c39eddd88558",
+      "readTime": "2026-10-12T05:08:18.782461Z"
     },
-    "status": "NO_CHANGE"
+    "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 0,
+    "inventoryTransitionCount": 15,
     "mappedForReview": 180,
     "mappingHold": 1596,
-    "productFieldPathCount": 755
+    "productFieldPathCount": 760
   },
-  "runId": "38202760438-1",
+  "runId": "38212526777-1",
   "source": {
     "collections": {
       "partner": 64,
@@ -47,9 +47,9 @@
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "aca0fa7ad34382f5c0ead9beb72af7feb83a77fa7be5629b9f1ea71bfe560982",
+    "digest": "94a0e1c911a258e8e49ca4e6ee3addfe3adcc9f2e59a4b74de2574a6f40dc2ed",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-12T04:11:53.943394Z"
+    "readTime": "2026-10-12T06:27:07.357990Z"
   },
   "version": "erp5-source-inventory/1"
 }

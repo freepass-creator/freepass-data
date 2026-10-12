@@ -245,11 +245,13 @@ export async function runIancarPublicationWithdrawal(input: {
 
 export async function runIancarPhaseOnePublication(input: {
   capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
+  photoPending?: boolean; keepWithdrawn?: boolean; refreshFacts?: boolean;
 }) {
   const prepared = { products: buildIancarOnePublicationProducts(input.capture),
     sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
     apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
     ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
+    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}), ...(input.refreshFacts ? { refreshFacts: true } : {}),
     ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
     ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
   const runtime = createJobDataAccessRuntime();
@@ -276,6 +278,15 @@ export async function runIancarPhotoPublication(input: Parameters<typeof publish
     summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
   return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
+}
+
+export async function runIancarPhaseOneRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
+  const prepared = { ...input, expectedSchema: 'iancar-phase-one-typed-backup/1' };
+  const runtime = createJobDataAccessRuntime();
+  const spec = { context: { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-phase-one', purpose: 'restore verified RP031 phase-one publication backup' },
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' }, operation: input.apply ? 'RESTORE_IANCAR_PHASE_ONE' : 'READ_IANCAR_PHASE_ONE_RESTORE_PLAN',
+    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
 }
 
 export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
@@ -794,5 +805,26 @@ export function createPeriodFeeCoverageRuntime() {
       resource: { kind: 'SOURCE', name: 'period_fee_ledger' },
       summarize: (rows) => ({ count: rows.length, digest: stableDigest(rows.map(row => row.documentKey).sort()) }),
     }, listActivePeriodFeeLedgerRows),
+  };
+}
+
+export async function createContractLockRuntime() {
+  const { readProductsByIds, releaseContractLock } = await import('../infra/contract-lock-firestore.js');
+  const context = {
+    actor: { id: 'service:freepass-data-contract-lock', kind: 'SERVICE' as const },
+    clientId: 'job:release-contract-locks',
+    purpose: 'release approved stale contract locks on products (cancelled intake); status fields untouched',
+  };
+  const read = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const write = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  return {
+    readProducts: (ids: string[]) => read.read({
+      context, operation: 'READ_PRODUCTS_FOR_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' },
+      summarize: (value) => ({ count: Object.keys(value).length, digest: stableDigest(Object.keys(value).sort().map(key => stableDigest(key))) }),
+    }, () => readProductsByIds(ids)),
+    release: (requestDigest: string, input: Parameters<typeof releaseContractLock>[0]) => write.write({
+      context, operation: 'WRITE_CONTRACT_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' }, requestDigest,
+      summarize: (value) => ({ count: value === 'RELEASED' ? 1 : 0, digest: stableDigest({ requestDigest, value }) }),
+    }, () => releaseContractLock(input)),
   };
 }

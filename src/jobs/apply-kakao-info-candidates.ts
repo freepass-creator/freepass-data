@@ -10,14 +10,23 @@ const USAGE = 'USAGE: node dist/src/jobs/apply-kakao-info-candidates.js <candida
 
 /** 입력 파일은 후보 배열이거나 {candidates:[…]}. 기본은 시험 실행(쓰기 없음). 쓰기는 --apply + 환경변수 2개 + digest 일치. */
 export async function runApplyKakaoInfoCandidates(args: string[], env: NodeJS.ProcessEnv): Promise<{ summary: unknown; result: KakaoInfoApplyResult }> {
-  const files = args.filter(arg => !arg.startsWith('--') && args[args.indexOf(arg) - 1] !== '--digest');
+  const files = args.filter((arg, index) => !arg.startsWith('--') && args[index - 1] !== '--digest');
   const apply = args.includes('--apply');
   const digestIndex = args.indexOf('--digest');
   const digestArg = digestIndex >= 0 ? args[digestIndex + 1] : undefined;
-  if (files.length !== 1 || (apply && !digestArg)) throw new Error(USAGE);
-  const parsed = JSON.parse(await readFile(resolve(files[0]!), 'utf8')) as unknown;
-  const inputs = (Array.isArray(parsed) ? parsed : (parsed as { candidates?: unknown }).candidates) as KakaoInfoCandidateInput[] | undefined;
-  if (!Array.isArray(inputs) || !inputs.length) throw new Error('KAKAO_INFO_INPUT_EMPTY');
+  if (!files.length || (apply && !digestArg)) throw new Error(USAGE);
+  // 파일은 후보 배열이거나 {supplierCode?, candidates:[…]} — 파일 최상위 supplierCode 는 후보에 없을 때만 채운다.
+  const inputs: KakaoInfoCandidateInput[] = [];
+  for (const file of files) {
+    const parsed = JSON.parse(await readFile(resolve(file), 'utf8')) as unknown;
+    const wrapper = Array.isArray(parsed) ? { candidates: parsed } : parsed as { supplierCode?: string; candidates?: unknown };
+    if (!Array.isArray(wrapper.candidates)) throw new Error('KAKAO_INFO_INPUT_EMPTY');
+    for (const candidate of wrapper.candidates as Array<Record<string, unknown>>) {
+      inputs.push((candidate.supplierCode === undefined && wrapper.supplierCode !== undefined
+        ? { supplierCode: wrapper.supplierCode, ...candidate } : candidate) as unknown as KakaoInfoCandidateInput);
+    }
+  }
+  if (!inputs.length) throw new Error('KAKAO_INFO_INPUT_EMPTY');
   const inputDigest = stableDigest(inputs);
   const runtime = await createKakaoInfoSourceDataAccessRuntime();
   const now = new Date().toISOString();
