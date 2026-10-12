@@ -3,6 +3,7 @@ import {
   assertKakaoInfoCandidate,
   classifyKakaoInfoSignal,
   createKakaoInfoCandidate,
+  isKakaoStateAutoPromotable,
   kakaoInfoCandidateId,
   type KakaoInfoCandidateInput,
 } from '../src/domain/kakao-info-candidate.js';
@@ -70,6 +71,18 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     const future = new Date(Date.now() + 6 * 60 * 1000).toISOString();
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, sentAt: future } })))
       .toEqual({ ok: false, reason: 'FUTURE_SENT_AT' });
+  });
+
+  it('rejects non-numeric msgNo without echoing the value', () => {
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
+      .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });
+  });
+
+  it('requires strict ISO UTC sentAt instead of parseable free-form dates', () => {
+    for (const sentAt of ['2026-10-12', '2026-10-12T00:00:00Z', '2026-10-12 00:00:00']) {
+      expect(createKakaoInfoCandidate(base({ source: { ...base().source, sentAt } })))
+        .toEqual({ ok: false, reason: 'INVALID_SOURCE' });
+    }
   });
 
   it('demotes plate to plateUnverified unless nearby message evidence proves it', () => {
@@ -162,5 +175,11 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(classifyKakaoInfoSignal(price, '2026-10-18T23:59:59.999Z').isFresh).toBe(true);
     expect(classifyKakaoInfoSignal(price, '2026-10-19T00:00:00.001Z').isFresh).toBe(false);
     expect(classifyKakaoInfoSignal(price, '2026-10-12T00:00:00.000Z').expiresAt).toBe('2026-10-19T00:00:00.000Z');
+  });
+
+  it('requires callers to pass explicit freshness for state auto-promotion', () => {
+    const stock = assertKakaoInfoCandidate(base());
+    expect(() => isKakaoStateAutoPromotable(stock, undefined as unknown as boolean))
+      .toThrow('INVALID_KAKAO_INFO_FRESHNESS');
   });
 });

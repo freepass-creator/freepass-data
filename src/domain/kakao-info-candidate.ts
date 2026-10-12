@@ -7,6 +7,7 @@ export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_
 export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
+  | 'INVALID_MSG_NO'
   | 'SENDER_UNVERIFIED'
   | 'INVALID_EXCERPT'
   | 'SENSITIVE_EXCERPT'
@@ -64,6 +65,16 @@ const stateNegationSignals = ['아님', '않', '없음 아님'];
 
 const nonBlank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+const isStrictIsoUtc = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+};
+
+const isValidMsgNo = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9]{1,12}$/.test(value.trim());
 
 const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]/g, '').toUpperCase();
 
@@ -235,9 +246,10 @@ export function kakaoInfoCandidateId(input: KakaoInfoCandidateInput) {
 
 export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoInfoCandidateResult {
   if (!isValidRoomCode(input.roomCode)) return { ok: false, reason: 'INVALID_ROOM_CODE' };
-  if (!Number.isFinite(Date.parse(input.source?.sentAt)) || !nonBlank(input.source?.msgNo)) {
+  if (!isStrictIsoUtc(input.source?.sentAt)) {
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
+  if (!isValidMsgNo(input.source?.msgNo)) return { ok: false, reason: 'INVALID_MSG_NO' };
   if (Date.parse(input.source.sentAt) - Date.now() > 5 * 60 * 1000) return { ok: false, reason: 'FUTURE_SENT_AT' };
   if (input.source.side !== '상대') return { ok: false, reason: 'SENDER_UNVERIFIED' };
   if (!nonBlank(input.source.excerpt) || Array.from(input.source.excerpt).length > 80) {
@@ -328,7 +340,8 @@ export function isKakaoMoneyInfo(type: KakaoInfoType) {
   return moneyTypes.has(type);
 }
 
-export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh = true) {
+export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh: boolean) {
+  if (typeof isFresh !== 'boolean') throw new Error('INVALID_KAKAO_INFO_FRESHNESS');
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
   const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));
   const hasNegative = stateNegativeSignals.some((signal) => text.includes(signal));
