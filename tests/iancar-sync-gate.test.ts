@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { checkIancarSyncExpect } from '../src/domain/iancar-sync-gate.js';
 
-const plan = { created: 6, absenceHeld: 12, withdrawalHoldsReleased: 8, open: 96, deletes: 0, contractChanges: 0, skippedCount: 1 };
-const good = { created: [5, 6], absenceHeld: [12, 12], withdrawalHoldsReleased: [8, 8], open: [95, 97], deletes: [0, 0], contractChanges: [0, 0], skippedCount: [0, 1] };
+const plan = { created: 6, absenceHeld: 12, withdrawalHoldsReleased: 8, open: 96, deletes: 0, contractChanges: 0, policyDocumentChanges: 0, skippedCount: 1 };
+const good = { created: [5, 6], absenceHeld: [12, 12], withdrawalHoldsReleased: [8, 8], open: [95, 97], deletes: [0, 0], contractChanges: [0, 0], policyDocumentChanges: [0, 0], skippedCount: [0, 1] };
 const run = (expectValue: unknown, p: Record<string, unknown> = plan) => checkIancarSyncExpect(expectValue === undefined ? undefined : typeof expectValue === 'string' ? expectValue : JSON.stringify(expectValue), p);
 
 describe('이안카 단발 적용 건수 관문 (fail-closed)', () => {
@@ -29,8 +29,13 @@ describe('이안카 단발 적용 건수 관문 (fail-closed)', () => {
     expect(run(good, { ...plan, deletes: 1 }).ok).toBe(false);
     expect(run(good, { ...plan, contractChanges: 1 }).ok).toBe(false);
   });
+  it('정책 문서 변경이 0이 아니거나 설정에 없으면 중단', () => {
+    expect(run(good, { ...plan, policyDocumentChanges: 1 }).ok).toBe(false);
+    const { policyDocumentChanges: _drop, ...withoutPolicy } = good;
+    expect(run(withoutPolicy).ok).toBe(false);
+  });
   it('중복 키는 마지막 값으로 덮이지 않고 중단한다', () => {
-    const dup = '{"created":[5,6],"absenceHeld":[12,12],"withdrawalHoldsReleased":[8,8],"open":[95,97],"deletes":[0,0],"contractChanges":[0,0],"skippedCount":[0,1],"deletes":[0,1]}';
+    const dup = '{"created":[5,6],"absenceHeld":[12,12],"withdrawalHoldsReleased":[8,8],"open":[95,97],"deletes":[0,0],"contractChanges":[0,0],"policyDocumentChanges":[0,0],"skippedCount":[0,1],"deletes":[0,1]}';
     expect(run(dup, { ...plan, deletes: 1 })).toEqual({ ok: false, reasons: ['DUPLICATE_KEY:deletes'] });
     expect(run(dup)).toEqual({ ok: false, reasons: ['DUPLICATE_KEY:deletes'] });
     // 이스케이프로 철자만 다른 같은 키도 같은 키로 본다(e = e).

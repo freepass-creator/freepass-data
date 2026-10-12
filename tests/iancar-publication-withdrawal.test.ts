@@ -667,7 +667,7 @@ it('collector finishes successfully and reports lock warnings without changing i
   const warnings = ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'];
   vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true');
   vi.stubEnv('IANCAR_SYNC_EXPECT', JSON.stringify({ created: [0, 0], absenceHeld: [0, 0], withdrawalHoldsReleased: [0, 0], open: [0, 0],
-    deletes: [0, 0], contractChanges: [0, 0], skippedCount: [1, 1] }));
+    deletes: [0, 0], contractChanges: [0, 0], policyDocumentChanges: [0, 0], skippedCount: [1, 1] }));
   vi.doMock('../src/adapters/iancar-one-api.js', () => ({
     iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
     collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
@@ -678,7 +678,7 @@ it('collector finishes successfully and reports lock warnings without changing i
   vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: async () => ({
     status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 },
     skippedRatio: 0.2, maxSkippedRatio: 0.2, warnings,
-    created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0, deletes: 0, contractChanges: 0,
+    created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
   }) }));
   try {
     process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync']; process.exitCode = 0;
