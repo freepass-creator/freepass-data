@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeValue } from './supplier-freshness-lib.mjs';
 import { classifyField } from './supplier-field-reconcile-lib.mjs';
+import { hiddenRowsByTab } from './sellable-lib.mjs';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0], code = argv[1];
@@ -58,18 +59,26 @@ async function readAica(products) {
   const id = process.env.FREEPASS_AICA_SHEET_ID || (products.find(p => p.provider_company_code === 'RP004' && /spreadsheets\/d\/([^/]+)/.test(p.source_url ?? ''))?.source_url ?? '').match(/spreadsheets\/d\/([^/]+)/)?.[1];
   if (!id) return { ok: false, reason: '아이카 시트 주소를 찾지 못함(FREEPASS_AICA_SHEET_ID 필요)' };
   const records = [];
-  for (const tab of ['중고재렌트', '장기특별이벤트', '신차선출고']) {
-    const v = sheetRead(id, `'${tab}'!A1:Y1100`);
+  // 대표 확정(10-12): 보이는 탭 장기특별이벤트·신차선출고·중고재렌트(월렌트 별도), 숨김 탭·숨긴 줄(행 숨기기·필터 숨김) 제외
+  const gwsGet = params => { const o = execFileSync(gwsBin(), ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: id, ...params })], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); return JSON.parse(o.slice(o.indexOf('{'))); };
+  const meta = gwsGet({ fields: 'sheets(properties(title,hidden))' });
+  const visibleTabs = ['중고재렌트', '장기특별이벤트', '신차선출고'].filter(t => meta.sheets.some(x => x.properties.title === t && !x.properties.hidden));
+  const hiddenRows = visibleTabs.length ? hiddenRowsByTab(gwsGet({ includeGridData: true, ranges: visibleTabs.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })) : new Map();
+  let hiddenSkipped = 0;
+  for (const tab of visibleTabs) {
+    const v = sheetRead(id, `'${tab}'!A1:Y1500`);
     const hi = v.findIndex(r => r.includes('차량번호')); if (hi < 0) continue;
     const idx = Object.fromEntries(v[hi].map((h, i) => [h, i]));
-    for (const r of v.slice(hi + 1)) {
+    for (const [ri, r] of v.entries()) {
+      if (ri <= hi) continue;
       const g = h => String(r[idx[h]] ?? '').trim(); if (!g('차량번호')) continue;
+      if (hiddenRows.get(tab)?.has(ri + 1)) { hiddenSkipped++; continue; }
       const rent = {}; for (const [h, m] of [['월렌트', 1], ['36개월', 36], ['48개월', 48], ['60개월', 60]]) { const n = Number(g(h).replace(/,/g, '')); if (n > 0) rent[m] = n; }
       records.push({ plate: g('차량번호'), 제조사: g('제조사'), 차명: g('트림'), 연식: null, 최초등록: g('최초등록'), 연료: g('연료'), 주행거리: g('Km'), 외장: g('외장'), 월대여료: rent,
         보증금: g('장기보증'), 상태: g('배차상태'), 사진수: null, 원천탭: tab, raw: Object.fromEntries(v[hi].map((h, i) => [h, r[i] ?? ''])) });
     }
   }
-  return { ok: true, readAt: new Date().toISOString(), records, note: '시트에는 사진·원천 갱신 시각 칸이 없다' };
+  return { ok: true, readAt: new Date().toISOString(), records, hiddenSkipped, visibleTabs, note: `보이는 탭 ${visibleTabs.join('·')} · 숨긴 줄 ${hiddenSkipped}개 제외 · 시트에는 사진·원천 갱신 시각 칸이 없다` };
 }
 
 function readIancar() {
