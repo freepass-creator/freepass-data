@@ -64,6 +64,26 @@ export function parseContractLockSheetEvidence(value: unknown): ContractLockShee
   return { readAt: input.readAt, otherTabsRead: input.otherTabsRead as string[], items };
 }
 
+/** 계획 JSON 형식 검증: 번호·공급사 코드 문자열, 시트 행·잠금 시각 정수(생략·null 불가), 같은 차량 중복 불가. 틀리면 null. */
+export function parseContractLockReleasePlan(value: unknown): ContractLockReleasePlan | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.planId !== 'string' || !input.planId || !Array.isArray(input.items) || !input.items.length) return null;
+  const items: ContractLockReleaseItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.items) {
+    if (!raw || typeof raw !== 'object') return null;
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.plate !== 'string' || !entry.plate || seen.has(entry.plate)) return null;
+    if (typeof entry.supplierCode !== 'string' || !entry.supplierCode) return null;
+    if (typeof entry.sheetRow !== 'number' || !Number.isInteger(entry.sheetRow) || entry.sheetRow < 1) return null;
+    if (typeof entry.expectedLockAt !== 'number' || !Number.isInteger(entry.expectedLockAt) || entry.expectedLockAt <= 0) return null;
+    seen.add(entry.plate);
+    items.push({ plate: entry.plate, supplierCode: entry.supplierCode, sheetRow: entry.sheetRow, expectedLockAt: entry.expectedLockAt });
+  }
+  return { planId: input.planId, items };
+}
+
 export const isContractLockEvidenceFresh = (evidence: Pick<ContractLockSheetEvidence, 'readAt'>, now: Date) => {
   const readAt = Date.parse(evidence.readAt);
   return Number.isFinite(readAt) && now.getTime() - readAt <= CONTRACT_LOCK_EVIDENCE_MAX_AGE_MS && readAt - now.getTime() <= 60_000;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   contractLockPlanDigest,
   decideContractLockRelease,
+  parseContractLockReleasePlan,
   parseContractLockSheetEvidence,
   summarizeContractLockDecisions,
 } from '../src/application/contract-lock-release.js';
@@ -157,5 +158,12 @@ describe('release-contract-locks job', () => {
     expect(seen[0]).toEqual({ evidenceReadAt: ev.readAt, maxEvidenceAgeMs: 15 * 60 * 1000 });
     expect(result.writes).toBe(0);
     expect(result.results.map(entry => entry.result)).toEqual(['EVIDENCE_EXPIRED', 'EVIDENCE_EXPIRED']);
+  });
+  it('rejects plans with a missing lock time, bad row, or duplicate vehicle', () => {
+    const { expectedLockAt: _drop, ...noLockAt } = item;
+    expect(parseContractLockReleasePlan({ planId: 'p', items: [noLockAt] })).toBeNull();
+    expect(parseContractLockReleasePlan({ planId: 'p', items: [{ ...item, sheetRow: 0 }] })).toBeNull();
+    expect(parseContractLockReleasePlan({ planId: 'p', items: [item, item] })).toBeNull();
+    expect(parseContractLockReleasePlan({ planId: 'p', items: [item] })).not.toBeNull();
   });
 });

@@ -5,9 +5,9 @@ import {
   CONTRACT_LOCK_EVIDENCE_MAX_AGE_MS,
   contractLockPlanDigest,
   decideContractLockRelease,
+  parseContractLockReleasePlan,
   parseContractLockSheetEvidence,
   summarizeContractLockDecisions,
-  type ContractLockReleasePlan,
 } from '../application/contract-lock-release.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { createContractLockRuntime } from './data-access-runtime.js';
@@ -44,10 +44,10 @@ export async function runReleaseContractLocks(args: string[], env: NodeJS.Proces
   const apply = args.includes('--apply');
   const backupDir = arg(args, '--backup-dir');
   if (!planPath || !evidencePath || (apply && !backupDir)) throw new Error(USAGE);
-  const plan = JSON.parse(await readFile(resolve(planPath), 'utf8')) as ContractLockReleasePlan;
+  const plan = parseContractLockReleasePlan(JSON.parse(await readFile(resolve(planPath), 'utf8')) as unknown);
+  if (!plan) throw new Error('CONTRACT_LOCK_PLAN_INVALID');
   const evidence = parseContractLockSheetEvidence(JSON.parse(await readFile(resolve(evidencePath), 'utf8')) as unknown);
   if (!evidence) throw new Error('CONTRACT_LOCK_EVIDENCE_INVALID');
-  if (new Set(plan.items.map(entry => entry.plate)).size !== plan.items.length) throw new Error('CONTRACT_LOCK_PLAN_DUPLICATE_PLATE');
   const planDigest = contractLockPlanDigest(plan);
   if (apply && (env.FREEPASS_CONTRACT_LOCK_RELEASE !== 'on' || env.FREEPASS_CONTRACT_LOCK_RELEASE_APPROVED !== planDigest)) {
     throw new Error('CONTRACT_LOCK_RELEASE_NOT_APPROVED');

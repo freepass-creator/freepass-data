@@ -32,7 +32,7 @@ export async function releaseContractLock(input: ContractLockReleaseWrite): Prom
     if (!Number.isFinite(evidenceAt) || Date.now() - evidenceAt > input.maxEvidenceAgeMs) return 'EVIDENCE_EXPIRED' as const;
     const snap = await tx.get(ref);
     const data = snap.data() as Rec | undefined;
-    if (!data || data.provider_company_code !== input.supplierCode || data.locked_by_contract !== 'LEDGER' || data._ledger_lock_at !== input.expectedLockAt) {
+    if (!data || data.provider_company_code !== input.supplierCode || data.locked_by_contract !== 'LEDGER' || typeof data._ledger_lock_at !== 'number' || data._ledger_lock_at !== input.expectedLockAt) {
       return 'PRECONDITION_FAILED' as const;
     }
     tx.update(ref, {
