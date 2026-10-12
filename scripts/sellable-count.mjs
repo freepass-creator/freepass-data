@@ -29,16 +29,24 @@ function gwsBin() {
 }
 const tmp = name => join(process.env.TEMP || '/tmp', `sellable-${name}-${Date.now()}.json`);
 
+// 신선도 자동 보류 «그림자 측정»(정책 후보값, src/domain/source-freshness.ts 와 같은 값 — 바꿀 때 같이). 소비자 동작은 바꾸지 않는다.
+const HOLD_MIN = { F05: 10, AICA: 5, IANCAR: 60, OTHER: 30 };
+const stampMs = v => (typeof v === 'number' ? (v > 1e12 ? v : v > 1e9 ? v * 1000 : null) : typeof v === 'string' && Date.parse(v) ? Date.parse(v) : null);
+const stateObs = f => { const t = [f._var_polled_at, f._direct_ingest_at].map(stampMs).filter(x => x != null); return t.length ? Math.max(...t) : null; };
+const f05CodeSet = new Set(spec.supplierChannels.sharedInputSheet.map(x => x.code));
+const holdMinutes = c => (c === 'RP004' ? HOLD_MIN.AICA : c === 'RP031' ? HOLD_MIN.IANCAR : f05CodeSet.has(c) ? HOLD_MIN.F05 : HOLD_MIN.OTHER);
+const freshOk = (d, now) => d.obs != null && d.obs <= now + 60000 && (now - d.obs) / 60000 <= holdMinutes(d.code);
+
 // 프리패스 데이터 + ERP5 노출
 const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
 const docs = []; let pageToken = '';
 do {
   const q = new URLSearchParams({ pageSize: '300' }); if (pageToken) q.set('pageToken', pageToken);
-  for (const f of ['car_number', 'provider_company_code', 'partner_code', 'listable', 'status']) q.append('mask.fieldPaths', f);
+  for (const f of ['car_number', 'provider_company_code', 'partner_code', 'listable', 'status', '_var_polled_at', '_direct_ingest_at']) q.append('mask.fieldPaths', f);
   const res = await fetch(`https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID || 'freepasserp5'}/databases/(default)/documents/products?${q}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`FIRESTORE_READ_${res.status}`);
   const body = await res.json();
-  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true }); }
+  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
   pageToken = body.nextPageToken ?? '';
 } while (pageToken);
 const erp5 = new Set(((await (await fetch('https://freepasserp5.vercel.app/api/catalog', { signal: AbortSignal.timeout(90000) })).json()).vehicles ?? []).map(v => key(v.plate)));
@@ -90,7 +98,8 @@ for (const c of codes) {
   const s = src[c]; const mine = docs.filter(d => d.code === c);
   const dataSell = new Set(mine.filter(d => d.listable).map(d => d.plate));
   const erp5Sell = new Set([...erp5].filter(p => plateCode.get(p) === c));
-  const r = { code: c, 이름: NAMES[c] ?? c, 읽힘: !!s?.읽힘, 비고: s?.비고 ?? '원천 지도에 없음', 원천판매가능: s?.읽힘 ? s.set.size : null, 번호미배정: s?.미배정 ?? 0, 데이터판매: dataSell.size, ERP5노출: erp5Sell.size };
+  const nowMs = Date.now();
+  const r = { 신선도통과: mine.filter(d => d.listable && freshOk(d, nowMs)).length, code: c, 이름: NAMES[c] ?? c, 읽힘: !!s?.읽힘, 비고: s?.비고 ?? '원천 지도에 없음', 원천판매가능: s?.읽힘 ? s.set.size : null, 번호미배정: s?.미배정 ?? 0, 데이터판매: dataSell.size, ERP5노출: erp5Sell.size };
   if (s?.읽힘) {
     r.원천O데이터X = [...s.set].filter(p => !dataSell.has(p)).map(l4);
     r.데이터O원천X = [...dataSell].filter(p => !s.set.has(p)).map(p => `${l4(p)}${s.all.has(p) ? '(원천 판매불가)' : '(원천에 없음)'}`);
@@ -101,9 +110,10 @@ for (const c of codes) {
 rows.sort((a, b) => b.데이터판매 - a.데이터판매);
 const tot = a => rows.reduce((n, r) => n + (r[a] ?? 0), 0);
 console.log(`판매가능대수 ${new Date().toISOString()} (원천 읽힘 공급사만 합산)`);
-console.log('공급사 | 원천 판매가능 | 데이터 판매 | ERP5 노출 | 원천O데이터X | 데이터O원천X | ERP5≠데이터 | 비고');
-for (const r of rows) if (r.데이터판매 || r.원천판매가능 || r.번호미배정) console.log([`${r.이름}(${r.code})`, r.원천판매가능 == null ? '막힘' : r.원천판매가능 + (r.번호미배정 ? `(+번호미배정 ${r.번호미배정})` : ''), r.데이터판매, r.ERP5노출, r.읽힘 ? r.원천O데이터X.length : '-', r.읽힘 ? r.데이터O원천X.length : '-', r.ERP5와데이터차이.length, r.비고].join(' | '));
+console.log('공급사 | 원천 판매가능 | 데이터 판매 | 신선도 통과(그림자) | ERP5 노출 | 원천O데이터X | 데이터O원천X | ERP5≠데이터 | 비고');
+for (const r of rows) if (r.데이터판매 || r.원천판매가능 || r.번호미배정) console.log([`${r.이름}(${r.code})`, r.원천판매가능 == null ? '막힘' : r.원천판매가능 + (r.번호미배정 ? `(+번호미배정 ${r.번호미배정})` : ''), r.데이터판매, r.신선도통과, r.ERP5노출, r.읽힘 ? r.원천O데이터X.length : '-', r.읽힘 ? r.데이터O원천X.length : '-', r.ERP5와데이터차이.length, r.비고].join(' | '));
 const read = rows.filter(r => r.읽힘);
+console.log(`신선도 자동 보류 그림자: 데이터 판매 ${tot('데이터판매')}대 중 기준(공통 시트 10분·아이카 5분·이안카 60분·기타 30분) 통과 ${tot('신선도통과')}대 — 소비자 동작은 아직 바꾸지 않음`);
 console.log(`합계(읽힘 ${read.length}곳): 원천 판매가능 ${read.reduce((n, r) => n + r.원천판매가능, 0)} · 데이터 판매 ${read.reduce((n, r) => n + r.데이터판매, 0)} · ERP5 노출 ${read.reduce((n, r) => n + r.ERP5노출, 0)} | 전체 데이터 판매 ${tot('데이터판매')} · ERP5 노출 ${erp5.size}`);
 { const sum = codes => read.filter(r => codes.includes(r.code)).reduce((n, r) => n + r.원천판매가능, 0);
   const f05Codes = new Set(spec.supplierChannels.sharedInputSheet.map(x => x.code));
