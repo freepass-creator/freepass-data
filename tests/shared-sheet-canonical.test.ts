@@ -13,12 +13,39 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
-import { stableDigest } from '../src/shared/stable-digest.js';
+import { stableDigest, stableRecordSetDigest, stableValue } from '../src/shared/stable-digest.js';
+
+it('checks the actual Linux Actions producer collation before accepting preserved digests', () => {
+  if (process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true') return;
+  expect(new Intl.Collator().resolvedOptions().locale).toBe('en-US');
+  const keys = ['a', 'A', 'z', 'Z', '가', '나', 'é', 'e\u0301', 'Rec-2', 'rec-1'];
+  for (const a of keys) for (const b of keys) {
+    expect(a.localeCompare(b, 'en-US')).toBe(a.localeCompare(b));
+  }
+});
+
+it('preserves producer digests when Windows and CI default collations differ', () => {
+  const compare = String.prototype.localeCompare;
+  const value = { z: 0, 가: { a: 1, 나: 2 }, a: 3 };
+  const records = [{ lineageRecordId: '가', value }, { lineageRecordId: 'z', value }];
+  let defaultLocale = 'en-US';
+  const mock = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, other, locales, options) {
+    return compare.call(this, other, locales ?? defaultLocale, options);
+  });
+  try {
+    const expected = { value: stableDigest(value), records: stableRecordSetDigest(records) };
+    defaultLocale = 'ko-KR';
+    expect(compare.call('가', 'z', 'en-US')).not.toBe(compare.call('가', 'z', 'ko-KR'));
+    expect(stableDigest(value)).toBe(expected.value);
+    expect(stableRecordSetDigest(records)).toBe(expected.records);
+    expect(Object.keys(stableValue(value) as object)).toEqual(['a', 'z', '가']);
+  } finally { mock.mockRestore(); }
+});
 
 function masterSnapshot(): VehicleMasterSnapshot {
   const names = { maker: '시험제조사', model: '시험모델', sub_model: '시험세부모델' };
   const body = { readAt: new Date().toISOString(), masters: [{ id: 'master', data: names }],
-    trims: [{ id: 'trim', data: { ...names, master_id: 'master', trim: '시험트림' } }] };
+    trims: [{ id: 'trim', data: { ...names, master_id: 'master', trim: '시험트림', fuel: '하이브리드', engine_cc: 1234, drivetrain: 'AWD', seats: 5, model_year_start: '2026', model_year_end: '현재' } }] };
   return { source: 'freepasserp5/vehicle_master+vehicle_trim_master', complete: true, ...body,
     digest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
 }
@@ -259,9 +286,9 @@ describe('shared sheet local source to Canonical', () => {
   it('pins color refinement in the reviewed plan and persists its candidate facts through existing intake', async () => {
     const s = await stores(), c = capture({ 외부색상: '흰색', 내부색상: '검정' });
     const normal = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
-    expect(normal.plan.ruleVersion).toBe('shared-sheet-normalizer/5');
+    expect(normal.plan.ruleVersion).toBe('shared-sheet-normalizer/7');
     const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true);
-    expect(p.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+    expect(p.plan.ruleVersion).toBe('shared-sheet-normalizer/8');
     expect(p.plan.includeSupplierColors).toBe(true);
     const applied = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
       plan: p.plan, expectedPlanDigest: p.report.planDigest });
@@ -283,7 +310,7 @@ describe('shared sheet local source to Canonical', () => {
     const old = await s.source.listCandidates(prepareRawSourceBatch(buildSharedSheetBatch(c)).runId);
     expect(old[0]!.candidate.vehicleFacts!.fields.exteriorColor).toBeUndefined();
     const fresh = await planSharedSheetCanonical(s.store, later(capture({ 외부색상: '흰색' })), 'synthetic-target', undefined, true);
-    expect(fresh.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+    expect(fresh.plan.ruleVersion).toBe('shared-sheet-normalizer/8');
   });
   it.each([0, '0', '', '미확인', '협의'])('holds short deposit %j without inventing zero; preserves long-term evidence', value => {
     const n = normalized(capture({ 단기보증: value }));
@@ -302,7 +329,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(n.suppliedTerms).toBe(3);
   });
   it('preserves overlapping master/year/deposit HOLDs by source row and term without borrowing long deposit', () => {
-    const c = capture({ 단기보증: '', 연식: '25MY' });
+    const c = capture({ 단기보증: '', 연식: '24MY' });
     const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
     const before = structuredClone(raw);
     const evidence = masterEvidence();
@@ -351,7 +378,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(n.record.candidate.issues).not.toContain('INVALID_EXTERIORCOLOR');
     expect(n.record.status).toBe('VALID');
     const old = normalizeSharedSheet(raw, masterEvidence());
-    expect(old.record.candidate.vehicleFacts!.ruleVersion).toBe('shared-sheet-normalizer/5');
+    expect(old.record.candidate.vehicleFacts!.ruleVersion).toBe('shared-sheet-normalizer/7');
     expect(old.record.candidate.vehicleFacts!.fields).not.toHaveProperty('exteriorColor');
   });
   // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
@@ -404,12 +431,12 @@ describe('shared sheet local source to Canonical', () => {
     expect(again.report).toMatchObject({ status: 'APPLIED', committed: 0, noChange: 1 });
     expect({ audits: s.store.audits.length, revisions: (await s.store.listRevisionHistory()).length, raws: (await s.source.listRaw(p.plan.runId)).length }).toEqual(before);
   });
-  it('reviews subsequent rent and facts changes with exact revisions and immutable history', async () => {
+  it('holds a later displacement contradiction without changing saved facts or economics', async () => {
     const s = await stores(); const first = await apply(s);
     const next = await apply(s, later(capture({ '12개월': 606, 배기량: '1,235cc' })));
-    expect(next.plan.entries[0]!.action).toBe('CHANGE'); expect(next.result.report).toMatchObject({ status: 'APPLIED' });
-    expect((await s.store.listOffers())[0]!.revision).toBe(2);
-    expect((await s.store.listVehicleAssets())[0]!.sourceVehicleFacts!.fields.displacementCc!.value).toBe(1235);
+    expect(next.plan.entries[0]!.action).toBe('HOLD');
+    expect((await s.store.listOffers())[0]!.revision).toBe(1);
+    expect((await s.store.listVehicleAssets())[0]!.sourceVehicleFacts!.fields.displacementCc!.value).toBe(1234);
     expect((await s.store.listVehicleAssets())[0]!.sourceFirstRunId).toBe(first.plan.runId);
     expect((await s.source.listRaw(first.plan.runId))[0]!.payload.values).toEqual(capture().tabs[0]!.values[1]);
   });
@@ -445,7 +472,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(p.result.report).toMatchObject({ status: 'PARTIAL_HOLD', held: 1 }); expect(await s.store.listOffers()).toHaveLength(0);
     expect(await s.source.listRaw(p.plan.runId)).toHaveLength(1);
   });
-  it.each([{ 최초등록일: '26.02.30' }, { 최초등록일: '25.04' }, { '12개월': '협의' }, { 단기보증: '10~20' }])('HOLDs ambiguous values without guessing', data => {
+  it.each([{ 최초등록일: '26.02.30' }, { 최초등록일: '24.04' }, { '12개월': '협의' }, { 단기보증: '10~20' }])('HOLDs ambiguous values without guessing', data => {
     expect(normalized(capture(data)).record.status).toBe('REJECTED');
   });
   it('rejects missing tabs, reordered headers and wrong digest; a malformed row is quarantined, not the batch', () => {

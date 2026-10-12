@@ -32,7 +32,7 @@ const sonokongPickup = (overrides: Record<string, unknown> = {}) => product({
   provider_name: '손오공',
   product_type: '픽업 구독',
   price: {
-    '36': { rent: 800000, deposit: 1000000 },
+    '60': { rent: 1000000, deposit: 1000000 },
   },
   ...overrides,
 });
@@ -54,6 +54,7 @@ describe('period fee ledger planner', () => {
     expect(plan.rows[0]).toMatchObject({
       valueBasis: 'CURRENT_AT_SNAPSHOT',
       valueAsOf: '2026-10-12',
+      evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE',
       vehicleUid: 'TEST-FAKE-ASSET-001',
       applyState: 'READY',
       holdReasonCode: null,
@@ -75,7 +76,7 @@ describe('period fee ledger planner', () => {
     expect(Object.keys(plan.summary.reasonCounts).length).toBeGreaterThan(0);
   });
 
-  it('uses confirmed supplier raw vehicle value evidence for Sonokong pickup fees', () => {
+  it('uses the Sonokong pickup 60-month rent x term rule without vehicle value evidence', () => {
     const plan = planPeriodFeeLedger({
       products: { confirmed: sonokongPickup({ '원문': { '차량가격': '31,240,000' }, consumer_price: 31000000 }) },
       policies: {},
@@ -83,28 +84,23 @@ describe('period fee ledger planner', () => {
     }, { clock });
 
     expect(plan.rows[0]).toMatchObject({
-      vehicleValueEvidence: {
-        grade: 'CONFIRMED',
-        source: 'SUPPLIER_RAW',
-        amount: 31240000,
-        differenceAmount: 240000,
-      },
-      supplierBillingFee: { state: 'CALCULATED', amount: { amount: 1249600, currency: 'KRW' } },
-      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 937200, currency: 'KRW' } },
+      vehicleValueEvidence: null,
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM' },
+      channelPayoutFee: { state: 'CALCULATED_APPROX', amount: { amount: 1200000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM' },
     });
-    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 0, channelPayoutFee: 0 });
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 1 });
   });
 
-  it('marks consumer_price and exact new_car_trim matches as approximate fee calculations', () => {
+  it('does not use approximate vehicle value evidence for Sonokong pickup fees', () => {
     const consumer = planPeriodFeeLedger({
       products: { approx: sonokongPickup({ consumer_price: 30000000 }) },
       policies: {},
       referenceInputs: {},
     }, { clock });
     expect(consumer.rows[0]).toMatchObject({
-      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: 30000000 },
-      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1200000, currency: 'KRW' } },
-      channelPayoutFee: { state: 'CALCULATED_APPROX', amount: { amount: 900000, currency: 'KRW' } },
+      vehicleValueEvidence: null,
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' } },
+      channelPayoutFee: { state: 'CALCULATED_APPROX', amount: { amount: 1200000, currency: 'KRW' } },
     });
     expect(consumer.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 1 });
     expect(consumer.summary.feeStates.supplierBillingFee).toMatchObject({ CALCULATED: 0, CALCULATED_APPROX: 1 });
@@ -116,18 +112,15 @@ describe('period fee ledger planner', () => {
       referenceInputs: {},
     }, { clock });
     expect(trim.rows[0]).toMatchObject({
-      vehicleValueEvidence: { grade: 'APPROX', source: 'NEW_CAR_TRIM', amount: 29000000 },
-      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1160000, currency: 'KRW' } },
+      vehicleValueEvidence: null,
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' } },
     });
   });
 
-  it('keeps Sonokong vehicle value UNKNOWN for missing, zero, invalid, negative, and ambiguous trim evidence', () => {
+  it('keeps unsupported Sonokong pickup terms UNKNOWN without filling zero', () => {
     const cases = {
-      missing: sonokongPickup(),
-      zeroRaw: sonokongPickup({ '원문': { '차량가격': '0' }, consumer_price: 0 }),
-      decimalRaw: sonokongPickup({ '원문': { '차량가격': '3000.5' } }),
-      negativeConsumer: sonokongPickup({ consumer_price: -30000000 }),
-      ambiguousTrim: sonokongPickup({ trimKey: 'trim-ambiguous' }),
+      missing: sonokongPickup({ price: { '24': { rent: 1000000, deposit: 1000000 } } }),
+      raw: sonokongPickup({ price: { '24': { rent: 1000000, deposit: 1000000 } }, '원문': { '차량가격': '31,240,000' } }),
     };
     const plan = planPeriodFeeLedger({
       products: cases,
@@ -136,11 +129,11 @@ describe('period fee ledger planner', () => {
       referenceInputs: {},
     }, { clock });
 
-    expect(plan.rows).toHaveLength(5);
+    expect(plan.rows).toHaveLength(2);
     expect(plan.rows.every(row => row.vehicleValueEvidence === null)).toBe(true);
-    expect(plan.rows.every(row => row.supplierBillingFee.state === 'UNKNOWN' && row.supplierBillingFee.amount === null)).toBe(true);
-    expect(plan.rows.every(row => row.channelPayoutFee.reasonCode === 'VEHICLE_VALUE_REQUIRED')).toBe(true);
-    expect(plan.summary.reasonCounts.VEHICLE_VALUE_REQUIRED).toBe(10);
+    expect(plan.rows.every(row => row.supplierBillingFee.state === 'CALCULATED_APPROX' && row.supplierBillingFee.amount?.amount === 1040000)).toBe(true);
+    expect(plan.rows.every(row => row.channelPayoutFee.state === 'CALCULATED_APPROX' && row.channelPayoutFee.amount?.amount === 960000)).toBe(true);
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 2, channelPayoutFee: 2 });
   });
 
   it('does not change other suppliers by passing vehicle value evidence', () => {
@@ -278,6 +271,9 @@ describe('period fee ledger planner', () => {
 
     expect(second.history.map(row => row.kind).sort()).toEqual(['DEPOSIT', 'RENT', 'STATUS']);
     expect(second.history.some(row => row.fieldPath === 'vehicle_status' && row.before === '출고불가' && row.after === '출고가능')).toBe(true);
+    expect(first.rows.every(row => row.evidenceScope === 'BASELINE_NOT_CONTRACT_EVIDENCE')).toBe(true);
+    expect(second.rows.every(row => row.evidenceScope === 'OBSERVED_AT_SNAPSHOT')).toBe(true);
+    expect(first.planDigest).not.toBe(second.planDigest);
   });
 
   it('is deterministic and does not mutate inputs', () => {
@@ -328,7 +324,7 @@ describe('period fee ledger planner', () => {
 
     expect(plan.observedAt).toBe(observedAt);
     expect(plan.snapshotId).toBe(snapshotId);
-    expect(plan.rows[0]).toMatchObject({ computedAt: observedAt, valueAsOf: '2026-10-12' });
+    expect(plan.rows[0]).toMatchObject({ computedAt: observedAt, valueAsOf: '2026-10-12', evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE' });
     delete process.env.PERIOD_FEE_LEDGER_OBSERVED_AT;
     delete process.env.PERIOD_FEE_LEDGER_SNAPSHOT_ID;
   });
@@ -350,6 +346,6 @@ describe('period fee ledger planner', () => {
       deposit: 1000000,
     });
 
-    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } });
+    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0, baselineExcludedCount: 1 } });
   });
 });

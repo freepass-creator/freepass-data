@@ -5,12 +5,14 @@ Status: migration control document
 
 ## Principle
 
-**Firebase/Firestore/RTDB/Storage business-data access authority belongs exclusively to FreePass Data.**
+**FreePass Data owns business-data write/control authority. Unprofiled consumers have no Firebase business-data access; an explicitly approved platform-server read profile describes the server-only read exception.**
 
-Consumer applications may keep Firebase Auth only for user identity. They must not hold a Firebase
-business-data credential, import a database/storage SDK for business data, or know collection/path names
-as a runtime contract. All reads and writes go through an authenticated FreePass Data contract and the
-Data Access Gateway.
+Consumer applications may keep Firebase Auth only for user identity. Browsers and unapproved consumers
+must not hold business-data credentials or directly read Firestore/RTDB/Storage. Unprofiled reads and all
+business writes retain the authenticated Data contract/Gateway flow. The 2026-10-11 approved server-read
+direction in [Commercial Data Catalog](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration)
+is now described in the existing [machine authority contract](../contracts/firebase-access-authority.v1.json).
+This description does not create IAM grants, deploy services, or make collection/path names a public API.
 
 FreePass Data is the **data access/control plane**, not the semantic owner of every business domain.
 
@@ -21,7 +23,7 @@ FreePass Data is the **data access/control plane**, not the semantic owner of ev
 - FreePass Data owns shared access contracts, storage authority boundaries, access audit, release evidence,
   and the rule that application code does not treat Firebase collection paths as a public API.
 
-Target:
+Default consumer/write target (no implicit server-read exception):
 
 ```text
 domain UI / service / automation
@@ -43,12 +45,28 @@ domain command/read adapter
 Firebase / Firestore / Storage
 ```
 
-A migration is not complete while a consumer still carries a Firebase database/storage credential or directly
-imports a Firebase database/storage SDK for business data. This is now a hard architecture rule, not a
-long-term preference. The machine-readable authority contract is `contracts/firebase-access-authority.v1.json`.
+The sole described exception is ERP5 production server catalog read: fixed `freepasserp5`/`(default)`,
+approved WIF identity, `getCatalogSnapshot`, and the pinned `CATALOG_FIELDS` server mask for
+`products`/`policy`/`partner`. The authoritative code reference is ERP5 revision
+`28b58768b109c664bcce34d3c95b36005c800f52` (`firestore-config`, `firestore-auth`,
+`firestore-catalog-fields`, `firestore-reader` under `lib/`). Raw server masks include internal fields and
+are not public response schemas: platform-server authorization and a public output allowlist remain required.
+Identity/mask/read-only transaction are CODE_CONFIRMED references; applied IAM and live enforcement are
+UNKNOWN, `effectiveGrant=false`. Production readiness reported elsewhere does not change these evidence states.
+IAM database scope does not authorize collection/field access or fees. `catalog_offers` is not part of this
+catalog profile; fee reads require separate human/organization/field and exact offerId/termKey/revision authority.
+Photos retain the separate Data `erp5-public-media` photos capability, not direct Storage/provider credentials.
+Browser credentials, arbitrary consumers/targets, direct writes and RTDB remain prohibited. Central Data access
+continues through `src/infra/firebase-target.ts`; this profile introduces no alternate Data target/store.
+
+A migration is not complete while unapproved credentials/paths remain, or while an approved server profile
+lacks independently verified identity, scope, stored-fact parity and readback. A JSON profile is policy
+description only, not a runtime authorizer or proof of a live permission grant. The dated path inventory below
+is historical evidence and is not a fresh audit of every consumer.
 
 Firebase Auth used only to establish user identity is a separate concern; application data reads/writes
-after authentication must still use FreePass Data contracts.
+after authentication must still use approved Data stored-fact/read contracts or the default Gateway flow;
+Firebase Auth is never a database-authorization bypass.
 
 ## Current observed direct paths
 
@@ -133,7 +151,7 @@ Existing migration evidence:
 
 Target:
 - customer/public catalog surfaces read approved FreePass Data projections, not `products` directly
-- remove browser Firestore subscription and server ERP5 service-account credential after parity
+- remove browser Firestore subscription and unapproved/long-lived server credentials after parity; the explicit ERP5 server WIF profile is not a grant for legacy ERP4
 - scheduled legacy publisher remains temporary until release-bound shadow/output parity is complete
 
 Migration status: **MIGRATION_IN_PROGRESS / HOLD**
@@ -168,13 +186,13 @@ Migration status: **MIGRATION_IN_PROGRESS / HOLD**
 
 A consumer can be marked migrated only when all are true:
 
-1. no direct Firebase database/storage credential remains for business data
-2. no direct Firestore/RTDB/Storage collection/path call remains in runtime business code
+1. no browser/unapproved Firebase business credential remains; approved server identity has separate evidence
+2. no unapproved direct path remains; approved server reads obey the referenced mask, fixed target and readonly boundary
 3. every read/write has consumer identity, capability and purpose
-4. every attempt emits DataAccessEvent evidence
+4. Gateway attempts emit DataAccessEvent evidence; direct server-read identity/purpose/scope evidence requires separate implementation verification
 5. writes have domain command ID, idempotency/revision/authority evidence
 6. read response identifies revision/release/snapshot evidence where applicable
-7. direct old path is blocked by rules/IAM or removed
+7. unapproved old paths are blocked or removed; the approved server profile is not indiscriminately retired
 8. parity/readback passes against the prior production path
 9. fallback cannot silently reactivate the old database path
 

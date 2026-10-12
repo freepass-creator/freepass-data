@@ -52,7 +52,7 @@ export type TermAmountState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
 export type TermAmountCalculation =
   | { kind: 'FIXED'; amount: Money }
   | { kind: 'MULTIPLY'; base: 'MONTHLY_RENT'; multiplier: number }
-  | { kind: 'RATE'; base: 'MONTHLY_RENT_X_TERM' | 'VEHICLE_PRICE'; rate: number };
+  | { kind: 'RATE'; base: 'MONTHLY_RENT_X_TERM' | 'VEHICLE_PRICE'; rate: number; adjustmentAmount?: Money };
 export type TermEconomicAmount = {
   vatTreatment?: 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
   vatAmount?: number | null;
@@ -63,10 +63,12 @@ export type TermEconomicAmount = {
   /** Rules and evidence actually used; empty for unresolved amounts. */
   sourceRefs: string[];
   priceSourceRefs?: string[];
-  referenceRentBasis?: { termKey: string; termMonths: 36; monthlyRent: Money; multiplier: number };
+  referenceRentBasis?: { termKey: string; termMonths: 12 | 36; monthlyRent: Money; multiplier: number };
   ruleId?: string | null;
   policyId?: string;
   reasonCode?: string | null;
+  approximate?: boolean;
+  note?: string | null;
 };
 export type OfferTermEconomics = {
   termKey: string;

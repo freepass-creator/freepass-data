@@ -170,6 +170,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -205,6 +214,15 @@
             "string",
             "null"
           ]
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -231,6 +249,17 @@
           "type": "string",
           "format": "date",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "evidenceScope": {
+          "enum": [
+            "BASELINE_NOT_CONTRACT_EVIDENCE",
+            "OBSERVED_AT_SNAPSHOT",
+            "UNKNOWN_SCOPE"
+          ]
+        },
+        "baselineExcludedCount": {
+          "type": "integer",
+          "minimum": 0
         },
         "supplierBillingFee": {
           "$ref": "#/$defs/ledgerFeeAmount"
