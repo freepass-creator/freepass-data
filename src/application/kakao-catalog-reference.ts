@@ -1033,7 +1033,7 @@ export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVE
   return stated ?? (['RP006', 'RP020'].includes(text(source.provider_company_code)) ? 'NEW_PREDELIVERY' : undefined);
 }
 
-function statedNewProductSubtype(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
+export function statedNewProductSubtype(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
   const raw = source['원문'];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const all = (raw as Rec)['전체'];
@@ -1153,7 +1153,12 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       };
     };
     const explicitSubtype = explicitNewProductSubtypeFromSource(source);
-    const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
+    // 원문이 직접 적은 출고 방식(예: 견적출고)과 증거 입력의 subtype 이 다르면 어느 쪽도 믿지 않고 멈춘다.
+    const statedSubtype = statedNewProductSubtype(source);
+    const evidenceSubtype = (automaticCommissionEvidence as Rec).newProductSubtype ?? (effectiveEvidence as Rec | undefined)?.newProductSubtype;
+    const subtypeConflict = !!statedSubtype && !!evidenceSubtype && statedSubtype !== evidenceSubtype;
+    const guardSubtype = (fee: CommissionResolution): CommissionResolution => subtypeConflict ? unknownCommission('CONFLICTING_NEW_PRODUCT_SUBTYPE') : fee;
+    const channelPayoutFee = withVehicleValueEvidence(guardSubtype(resolveSalesCommission({
       ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...effectiveEvidence,
       ...automaticCommissionEvidence,
@@ -1163,8 +1168,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    }));
-    const supplierBillingFee = withVehicleValueEvidence(resolveSupplierBillingFee({
+    })));
+    const supplierBillingFee = withVehicleValueEvidence(guardSubtype(resolveSupplierBillingFee({
       ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...effectiveEvidence,
       ...automaticCommissionEvidence,
@@ -1174,7 +1179,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    }));
+    })));
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{
       termKey: `source:${sourceKey}`,

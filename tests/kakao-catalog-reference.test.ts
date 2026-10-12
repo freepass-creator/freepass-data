@@ -1490,3 +1490,13 @@ describe('아이언·우리캐피탈 신차렌트 선출고 기준 (대표 10-12
     expect(explicitNewProductSubtypeFromSource({ product_type: '신차렌트', provider_company_code: 'RP031' })).toBeUndefined();
   });
 });
+
+describe('원문 출고 방식과 증거 subtype 충돌', () => {
+  it('원문 «신차(견적출고)» 인데 증거가 선출고면 확정하지 않고 멈춘다', () => {
+    const product = { listable: true, provider_company_code: 'RP006', product_type: '신차렌트', price: { '36': { rent: 600000 } },
+      원문: { 전체: { 구분: '신차(견적출고)' } } };
+    const t = buildKakaoCatalogReferenceProduct('synthetic', product, { '36': { vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' } })!.offers[0]!.priceTerms[0]!;
+    expect(t.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
+    expect(t.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
+  });
+});
