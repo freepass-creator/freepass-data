@@ -73,6 +73,12 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       .toEqual({ ok: false, reason: 'FUTURE_SENT_AT' });
   });
 
+  it('re-checks personal data on the final trimmed output so whitespace cannot hide split identifiers', () => {
+    for (const fields of [{ 요약: 'alice@ ', 값: 'example.com' }, { 요약: '010-1234	', 값: '　5678' }, { 요약: ' alice@	', 값: '　example.com ' }]) {
+      expect(createKakaoInfoCandidate(base({ fields }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
+
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

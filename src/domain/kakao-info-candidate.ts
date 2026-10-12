@@ -284,6 +284,11 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     type: input.type,
     status: 'CANDIDATE',
   };
+  // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
+  const finalValues = candidateStringValues(normalized);
+  if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)) {
+    return { ok: false, reason: 'PII_DETECTED' };
+  }
   if (input.vehicle) {
     const sourceMsgNo = parseMsgNo(input.source.msgNo);
     const plate = input.vehicle.plate?.trim();
