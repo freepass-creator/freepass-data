@@ -1,3 +1,4 @@
+import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
 import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT } from '../domain/consumer-output-contract.js';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
@@ -36,6 +37,7 @@ import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { renderVehiclePhotoRendition } from '../adapters/vehicle-photo-rendition.js';
+import { createPhotoRenditionCache } from './photo-rendition-cache.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot, CatalogCompatibilityProductSnapshot } from '../infra/erp5-compat-catalog-reader.js';
@@ -388,7 +390,7 @@ export function createConsumerGateway(
     readProductCompat?(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot>;
     readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
-    readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean> }>;
+    readVehiclePhoto?(consumerId: string, productId: string, index?: number, options?: VehiclePhotoReadOptions): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean>; cacheTag?: string; fromRenditionCache?: true }>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
@@ -521,6 +523,8 @@ export function createConsumerGateway(
   const failedAuthPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.failedAuth);
   const consumerPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.consumer);
   let activePhotoResponses = 0;
+  // 줄인 사진(list/detail) 결과물 캐시 — 원천(ONE) 호출만 건너뛰고 DB 재확인은 매 요청 한다.
+  const renditionCache = createPhotoRenditionCache();
   const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; query: unknown; headers: { authorization?: string | undefined }; id: string; ip: string; ips?: string[] | undefined }, reply: import('fastify').FastifyReply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
@@ -567,8 +571,21 @@ export function createConsumerGateway(
       reply.raw.once('finish', release).once('close', release).once('error', release);
       if (reply.raw.destroyed) release();
       const read = compatReader.readVehiclePhoto.bind(compatReader);
+      const photoOptions: VehiclePhotoReadOptions = index !== undefined && size !== undefined
+        ? { renditionCacheLookup: tag => renditionCache.get(request.params.productId, index, size, tag) } : {};
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
-        summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
+        summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index, photoOptions));
+      if (result.fromRenditionCache) {
+        // 캐시 적중: 이미 검사·줄인 결과물. 비공개·철회·연결·개수 변경만 DB 로 다시 확인하고 내보낸다.
+        if (!await result.revalidate()) {
+          renditionCache.dropProduct(request.params.productId);
+          try { await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND'); }
+          catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
+          return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
+        }
+        reply.header('X-Photo-Cache', 'HIT');
+        return reply.type(result.contentType).send(result.bytes);
+      }
       if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
       if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
@@ -599,10 +616,12 @@ export function createConsumerGateway(
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
       }
       if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
+      if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes)) renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType });
       return reply.type(outputType).send(outputBytes);
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
       const code = error instanceof Error ? error.message : '';
+      if (code === 'VEHICLE_PHOTO_NOT_FOUND') renditionCache.dropProduct(request.params.productId); // 비공개·철회·불일치가 한 번이라도 확인되면 이 상품의 캐시를 믿지 않는다
       if (code === 'VEHICLE_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
       if (['VEHICLE_PHOTO_NOT_FOUND', 'VEHICLE_PHOTO_READER_UNAVAILABLE', 'VEHICLE_PHOTO_UNAVAILABLE'].includes(code)) return reply.code(code === 'VEHICLE_PHOTO_NOT_FOUND' ? 404 : 503).send({ code });
       return reply.code(503).send({ code: 'VEHICLE_PHOTO_READ_FAILED' });

@@ -327,6 +327,11 @@ export type VehiclePhotoRead = {
   photoIds?: string[]; upstreamPhotoIds?: string[];
   upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[];
 };
+/** 사진 읽기 선택 옵션. renditionCacheLookup: 같은 내용 표지(cacheTag)로 이미 줄여 둔 결과물이 있으면 돌려주는 함수(없으면 undefined). */
+export type VehiclePhotoReadOptions = {
+  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string } | undefined;
+};
+
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
   connection(product: Rec): string;
@@ -377,7 +382,7 @@ export function createVehiclePhotoReader(
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   const recheckIds = async (check: () => Promise<boolean>) => { if (!await check()) throw new Error('VEHICLE_PHOTO_NOT_FOUND'); };
-  return async (consumerId: string, productId: string, index?: number) => {
+  return async (consumerId: string, productId: string, index?: number, options: VehiclePhotoReadOptions = {}) => {
     // Diagnostic time is independent of the injected cache clock.
     const tick = () => { try { return performance.now(); } catch { return NaN; } };
     const started = observer ? tick() : 0;
@@ -406,6 +411,26 @@ export function createVehiclePhotoReader(
       const sourceConnection = (value: Rec) => JSON.stringify([iancarSource.connection(value), value.provider_company_code,
         value.iancar_one_vehicle_id, value.car_number]);
       const initialConnection = sourceConnection(product);
+      // 내용 버전 표지: 상품 연결(공급사·차량 ID·번호)과 등록 개수. 같은 표지의 사진 결과물은 같은 상품·같은 앨범 구성에서 나온 것이다.
+      const cacheTag = createHash('sha256').update(JSON.stringify([initialConnection, registeredPhotoCount])).digest('hex');
+      // DB 쪽 게이트만 다시 확인한다(비공개·철회·삭제·연결·개수 변경 검사) — 원천(ONE) 호출 없음.
+      const dbStillValid = async (): Promise<Rec | undefined> => {
+        enter('FINAL_DB');
+        let current: Rec | undefined;
+        try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); return undefined; }
+        enter('FINAL_GATE');
+        const currentIds = idGatePhotoIds(current);
+        const unchanged = !!current && isPublicIancarPhotoProduct(current) && iancarSource.eligible(current)
+          && !Object.hasOwn(current, 'photo_original_refs') && sourceConnection(current) === initialConnection
+          && !!currentIds && currentIds.length === registeredPhotoCount;
+        if (!unchanged) { emit('PROOF_CHANGED'); return undefined; }
+        return current;
+      };
+      if (index !== undefined && options.renditionCacheLookup) {
+        // 이미 만들어 둔 줄인 결과물이 있으면 원천을 읽지 않고 돌려준다(응답 직전 DB 재확인은 그대로 한다).
+        const hit = options.renditionCacheLookup(cacheTag);
+        if (hit) return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const, revalidate: async () => !!(await dbStillValid()) };
+      }
       const currentLayoutValid = (value: VehiclePhotoRead): boolean => {
         const served = value.photoIds, upstream = value.upstreamPhotoIds;
         const representatives = value.upstreamRepresentatives, ordinals = value.servingSourceOrdinals;
@@ -442,15 +467,8 @@ export function createVehiclePhotoReader(
         }
         if (!Number.isSafeInteger(result.count) || result.count < 1 || result.count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const revalidateIds = async (checkSource = true): Promise<boolean> => {
-          enter('FINAL_DB');
-          let current: Rec | undefined;
-          try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); return false; }
-          enter('FINAL_GATE');
-          const currentIds = idGatePhotoIds(current);
-          const unchanged = !!current && isPublicIancarPhotoProduct(current) && iancarSource.eligible(current)
-            && !Object.hasOwn(current, 'photo_original_refs') && sourceConnection(current) === initialConnection
-            && !!currentIds && currentIds.length === registeredPhotoCount;
-          if (!unchanged) { emit('PROOF_CHANGED'); return false; }
+          const current = await dbStillValid();
+          if (!current) return false;
           if (!checkSource) return true;
           enter('FINAL_SOURCE');
           let finalMetadata: VehiclePhotoRead;
@@ -464,7 +482,7 @@ export function createVehiclePhotoReader(
         };
         if (index === undefined) {
           await recheckIds(() => revalidateIds(false));
-          return { count: result.count, bytes: null, contentType: 'application/json', revalidate: revalidateIds };
+          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, revalidate: revalidateIds };
         }
         const bytes = result.bytes;
         enter('RESULT_MEDIA');
@@ -473,7 +491,7 @@ export function createVehiclePhotoReader(
           { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const frozenBytes = Buffer.from(bytes);
         await recheckIds(() => revalidateIds(false));
-        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, revalidate: revalidateIds };
+        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, revalidate: revalidateIds };
       } finally { active--; }
     }
     const mediaOnly = consumerId === 'erp5-public-media';
