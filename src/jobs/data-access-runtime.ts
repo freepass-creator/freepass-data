@@ -690,6 +690,31 @@ export async function createSourceIngestDataAccessRuntime() {
   };
 }
 
+export async function createKakaoInfoSourceDataAccessRuntime() {
+  const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
+  const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  const sourceStore = createFirestoreSourceStore();
+  return {
+    sourceStore,
+    dryRun: <T>(requestDigest: string, run: () => Promise<T>) => new DataAccessGateway(new MemoryDataAccessLogStore()).read({
+      context: { actor: { id: 'service:freepass-data-kakao-info', kind: 'SERVICE' as const },
+        clientId: 'job:apply-kakao-info-candidates', purpose: 'dry-run Kakao info source evidence write plan' },
+      operation: 'READ_KAKAO_INFO_CANDIDATE_APPLY_PLAN',
+      resource: { kind: 'SOURCE' as const, name: 'kakao-info-candidate' },
+      requestDigest,
+      summarize: (value) => ({ digest: stableDigest(value) }),
+    }, run),
+    write: <T>(requestDigest: string, run: () => Promise<T>) => access.write({
+      context: { actor: { id: 'service:freepass-data-kakao-info', kind: 'SERVICE' as const },
+        clientId: 'job:apply-kakao-info-candidates', purpose: 'persist digest-approved Kakao info source evidence only' },
+      operation: 'WRITE_KAKAO_INFO_SOURCE_INGEST',
+      resource: { kind: 'SOURCE' as const, name: 'kakao-info-candidate' },
+      requestDigest,
+      summarize: (value) => ({ digest: stableDigest(value) }),
+    }, run),
+  };
+}
+
 export async function createCentralDiagnosticDataAccessRuntime() {
   const {
     CENTRAL_ACTIVE_PROJECTION_COLLECTION,
