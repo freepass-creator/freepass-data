@@ -138,7 +138,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     for (const v of ['2026-10-12T01:00:00Z', '2026-10-12', '출고 2026-10-12T01:00:00.000Z']) {
       expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })).ok).toBe(true);
     }
-    for (const v of ['9001-01-12T3:4567', '9001011234567']) {
+    for (const v of ['9001-01-12T3:4567', '2001-01-12T3:4567', '9001011234567']) {
       expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
   });
