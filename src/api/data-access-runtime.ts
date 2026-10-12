@@ -72,10 +72,10 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         void ids.catch(() => { if (photoSets.get(key) === entry) photoSets.delete(key); });
       }
       const ids = await cached.ids;
-      if (index === undefined) return { count: ids.length, bytes: null, contentType: 'application/json' };
+      if (index === undefined) return { count: ids.length, photoIds: ids, bytes: null, contentType: 'application/json' };
       const id = ids[index];
       if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-      return { count: ids.length, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
+      return { count: ids.length, photoIds: ids, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
     }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver() }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()
