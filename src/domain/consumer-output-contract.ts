@@ -400,7 +400,9 @@ export function createVehiclePhotoReader(
     const gateIds = idGatePhotoIds(product);
     if (iancarSource && product && gateIds && idGateSuppliers.has(String(product.provider_company_code))
       && isPublicIancarPhotoProduct(product) && !hasVehiclePhotoVerification(product)) {
-      // ID 기반 게이트: 요청 키는 상품 문서에 등록된 ID 뿐이다. 원천 앨범이 등록 집합과 같을 때만 서빙하고 내부 필드는 응답에 싣지 않는다.
+      // ID 기반 게이트: 요청 키는 순번뿐이다(임의 ID 불가). 상품 문서에 사진 ID 가 등록돼 있고 원천 앨범의 «개수»가 등록 개수와 같을 때만
+      // 서빙한다. ONE 은 사진 ID 를 재발급하므로(등록 ID 와 현재 ID 의 겹침 0 실측) ID 값 일치는 조건으로 쓸 수 없다. 차량 신원(ID·번호)과
+      // 신선도(stale=false)는 원천 읽기 쪽 검사가 이미 한다. 내부 필드는 응답에 싣지 않는다.
       if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
       active++;
       try {
@@ -418,7 +420,7 @@ export function createVehiclePhotoReader(
         enter('RESULT_LAYOUT');
         const served = result.photoIds;
         if (!Array.isArray(served) || served.length !== gateIds.length || result.count !== gateIds.length
-          || new Set(served).size !== served.length || !served.every(id => gateIds.includes(id))) {
+          || new Set(served).size !== served.length) {
           emit('MEMBERSHIP_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND');
         }
         if (!Number.isSafeInteger(result.count) || result.count < 1 || result.count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
@@ -429,7 +431,7 @@ export function createVehiclePhotoReader(
           enter('FINAL_GATE');
           const currentIds = idGatePhotoIds(current);
           const unchanged = !!current && isPublicIancarPhotoProduct(current) && !hasVehiclePhotoVerification(current)
-            && !!currentIds && currentIds.length === gateIds.length && currentIds.every((id, i) => id === gateIds[i]);
+            && !!currentIds && currentIds.length === gateIds.length;
           if (!unchanged) emit('PROOF_CHANGED');
           return unchanged;
         };

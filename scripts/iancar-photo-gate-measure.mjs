@@ -4,6 +4,9 @@
 // 사용: READ_RUNTIME_URL=<읽기 런타임 주소> READ_RUNTIME_ID_TOKEN=<Cloud Run ID 토큰> ERP5_PHOTO_CONSUMER_TOKEN=<erp5-public-media 토큰> node scripts/iancar-photo-gate-measure.mjs [--label 켜기전|켠뒤]
 import { execFileSync } from 'node:child_process';
 
+// 상품 ID 만 인코딩하고 '/photos[/N]' 경로 구분자는 그대로 둔다(전체를 인코딩하면 '/' 가 %2F 가 되어 사진 경로가 아닌 일반 상품 경로로 가 403 이 된다).
+export const productPhotoPath = (id, index) => `${encodeURIComponent(id)}/photos${index === undefined ? '' : '/' + index}`;
+
 export function summarize(results) {
   const by = {};
   for (const r of results) by[`${r.manifest}/${r.first}`] = (by[`${r.manifest}/${r.first}`] || 0) + 1;
@@ -40,7 +43,7 @@ async function main() {
     pageToken = body.nextPageToken ?? '';
   } while (pageToken);
   const get = async path => {
-    const res = await fetch(`${base}/v1/consumers/erp5-public-media/catalog-compat/products/${encodeURIComponent(path)}`, {
+    const res = await fetch(`${base}/v1/consumers/erp5-public-media/catalog-compat/products/${path}`, {
       headers: { 'X-Serverless-Authorization': `Bearer ${idToken}`, Authorization: `Bearer ${token}` },
     });
     await res.body?.cancel();
@@ -48,7 +51,7 @@ async function main() {
   };
   const results = [];
   for (const doc of docs) {
-    results.push({ last4: doc.last4, manifest: await get(`${doc.id}/photos`), first: await get(`${doc.id}/photos/0`) });
+    results.push({ last4: doc.last4, manifest: await get(productPhotoPath(doc.id)), first: await get(productPhotoPath(doc.id, 0)) });
     await new Promise(resolve => setTimeout(resolve, 400)); // 소비처 한도(초당 10)와 원천 한도 보호
   }
   console.log(JSON.stringify({ label, at: new Date().toISOString(), ...summarize(results) }));
