@@ -185,10 +185,10 @@ export function refreshOfferEconomicsForChangedInputs(
       };
     }
     const target = referenceCandidate(current);
-    if (target === null) return { changed: false, exact: false };
     const oldBasis = oldPrices.get(basis.termKey);
     const newBasis = newPrices.get(basis.termKey);
     if (!newBasis || stableDigest(oldBasis ?? null) !== stableDigest(newBasis)) return { changed: true, exact: true };
+    if (target === null) return { changed: false, exact: false };
     const matches = (candidate: PriceTerm | undefined) => !!candidate &&
       (() => {
         const reference = referenceCandidate(candidate);
