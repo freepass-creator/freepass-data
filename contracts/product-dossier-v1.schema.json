@@ -5,74 +5,255 @@
   "description": "상품 하나에 대해 프리패스 데이터에 있는 모든 것. 내부 조회 전용 — 공개(ERP5) 응답에 싣지 않는다. 대조 도구는 fields[] 의 rawRef 로 원천에서 값을 읽어 rawValue 와 필드별로 비교한다.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "readAt", "lookup", "status", "fields"],
+  "required": [
+    "schema",
+    "readAt",
+    "lookup",
+    "status",
+    "fields"
+  ],
   "properties": {
-    "schema": { "const": "ProductDossier/v1" },
-    "readAt": { "type": "string", "format": "date-time" },
+    "schema": {
+      "const": "ProductDossier/v1"
+    },
+    "readAt": {
+      "type": "string",
+      "format": "date-time"
+    },
     "lookup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "value"],
+      "required": [
+        "kind",
+        "value"
+      ],
       "properties": {
-        "kind": { "enum": ["PLATE", "PLATE_LAST4", "PRODUCT_ID", "VEHICLE_UID"] },
-        "value": { "type": "string" }
+        "kind": {
+          "enum": [
+            "PLATE",
+            "PLATE_LAST4",
+            "PRODUCT_ID",
+            "VEHICLE_UID"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
       }
     },
-    "status": { "enum": ["OK", "PRODUCT_NOT_FOUND", "TOO_MANY_CANDIDATES", "NOT_LISTABLE", "NO_PRICE_ROWS"] },
-    "reason": { "type": ["string", "null"] },
-    "productId": { "type": ["string", "null"] },
-    "vehicleUid": { "type": ["string", "null"] },
+    "status": {
+      "enum": [
+        "OK",
+        "PRODUCT_NOT_FOUND",
+        "TOO_MANY_CANDIDATES",
+        "NOT_LISTABLE",
+        "NO_PRICE_ROWS"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "productId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "vehicleUid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "candidates": {
       "type": "array",
       "maxItems": 20,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["productId", "plateLast4"],
+        "required": [
+          "productId",
+          "plateLast4"
+        ],
         "properties": {
-          "productId": { "type": "string" },
-          "plateLast4": { "type": "string", "pattern": "^[0-9]{4}$" },
-          "supplierId": { "type": ["string", "null"] },
-          "carName": { "type": ["string", "null"] }
+          "productId": {
+            "type": "string"
+          },
+          "plateLast4": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "supplierId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "carName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
     "fields": {
       "type": "array",
-      "items": { "$ref": "#/$defs/field" }
+      "items": {
+        "$ref": "#/$defs/field"
+      }
+    },
+    "plate": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "차량번호 전체(내부 조회 전용, 파일 저장·공개 저장소 금지). 원천 대조용 키"
+    },
+    "supplierCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "listable": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "판매 중 여부. status 와 별개로 항상 채운다"
     }
   },
   "$defs": {
     "group": {
-      "enum": ["BASIC", "IDENTITY", "STATUS", "SUPPLIER_SOURCE", "PRICE_ROW", "BILLING_PAYOUT", "PHOTO", "POLICY_LINK", "RAW_MAPPING", "COLLECTION_HISTORY", "KAKAO_CANDIDATE"]
+      "enum": [
+        "BASIC",
+        "IDENTITY",
+        "STATUS",
+        "SUPPLIER_SOURCE",
+        "PRICE_ROW",
+        "BILLING_PAYOUT",
+        "PHOTO",
+        "POLICY_LINK",
+        "RAW_MAPPING",
+        "COLLECTION_HISTORY",
+        "KAKAO_CANDIDATE"
+      ]
     },
-    "source": { "enum": ["RAW", "REFINED", "CANDIDATE", "LEDGER", "ENGINE"] },
+    "source": {
+      "enum": [
+        "RAW",
+        "REFINED",
+        "CANDIDATE",
+        "LEDGER",
+        "ENGINE"
+      ]
+    },
     "field": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "group", "source", "asOf"],
+      "required": [
+        "path",
+        "group",
+        "source",
+        "asOf"
+      ],
       "properties": {
-        "path": { "type": "string", "description": "정리값 칸 경로. 예) product.maker, priceRow[source:24].monthlyRent, billing[source:24].amount" },
-        "group": { "$ref": "#/$defs/group" },
+        "path": {
+          "type": "string",
+          "description": "정리값 칸 경로. product.<칸> | priceRow[source:N].monthlyRent|deposit (N=개월) | billing[source:N].amount|state | photo.count 등. 사진은 photo.count(정수) 또는 photo.urls(배열)"
+        },
+        "group": {
+          "$ref": "#/$defs/group"
+        },
         "normalizedValue": {},
-        "rawValue": { "description": "원문 쪽 값(원문에 해당 칸이 있을 때). 없으면 생략" },
+        "rawValue": {
+          "description": "원문 쪽 값(원문에 해당 칸이 있을 때). 없으면 생략"
+        },
         "rawRef": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "supplierCode": { "type": "string" },
-            "sourceKind": { "type": "string" },
-            "sourceExternalId": { "type": ["string", "null"] },
-            "sheetTab": { "type": ["string", "null"] },
-            "sheetRow": { "type": ["integer", "string", "null"] },
-            "rawPath": { "type": ["string", "null"], "description": "원문 객체 안 칸 이름(예: 원문.차명)" }
+            "supplierCode": {
+              "type": "string"
+            },
+            "sourceKind": {
+              "type": "string"
+            },
+            "sourceExternalId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sheetTab": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sheetRow": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            },
+            "rawPath": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "원문 안 머리글 이름 그대로(예: 원문.전체.월렌트, 원문.전체.장기보증)"
+            }
           }
         },
-        "source": { "$ref": "#/$defs/source" },
-        "asOf": { "type": ["string", "null"], "description": "기준 시각(수집·박제·계산 시각). 모르면 null + reasonCode" },
-        "ledgerRunId": { "type": ["string", "null"], "description": "source=LEDGER 일 때 박제 run ID" },
-        "mismatch": { "type": "boolean", "description": "정리값이 원문과 다르면 true (정리값을 손으로 덮지 않는다)" },
-        "reasonCode": { "enum": ["NOT_COLLECTED", "NOT_APPLICABLE", "READ_FAILED", "UNCONFIRMED", null] }
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "asOf": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "기준 시각(수집·박제·계산 시각). 모르면 null + reasonCode"
+        },
+        "ledgerRunId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "source=LEDGER 일 때 박제 run ID"
+        },
+        "mismatch": {
+          "type": "boolean",
+          "description": "정리값이 원문과 다르면 true (정리값을 손으로 덮지 않는다)"
+        },
+        "reasonCode": {
+          "enum": [
+            "NOT_COLLECTED",
+            "NOT_APPLICABLE",
+            "READ_FAILED",
+            "UNCONFIRMED",
+            null
+          ]
+        },
+        "depositKind": {
+          "enum": [
+            "SHORT_TERM",
+            "LONG_TERM",
+            "NOT_APPLICABLE",
+            null
+          ],
+          "description": "원문 보증금이 단기/장기로 갈릴 때 구분"
+        }
       }
     }
   }

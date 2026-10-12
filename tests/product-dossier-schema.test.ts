@@ -11,8 +11,11 @@ const sample = {
   lookup: { kind: 'PLATE_LAST4', value: '0001' },
   status: 'OK',
   productId: 'product-1',
+  plate: '00가0001',
+  supplierCode: 'RP001',
+  listable: true,
   fields: [
-    { path: 'product.maker', group: 'BASIC', normalizedValue: '기아', rawValue: 'KIA', rawRef: { supplierCode: 'RP001', sourceKind: 'SHEET', sheetTab: 'T', sheetRow: 3 }, source: 'REFINED', asOf: '2026-10-12T00:00:00.000Z', mismatch: false },
+    { path: 'product.maker', group: 'BASIC', normalizedValue: '기아', rawValue: 'KIA', rawRef: { supplierCode: 'RP001', sourceKind: 'SHEET', sheetTab: 'T', sheetRow: 3, rawPath: '원문.전체.차명' }, source: 'REFINED', asOf: '2026-10-12T00:00:00.000Z', mismatch: false },
     { path: 'billing[source:12].amount', group: 'BILLING_PAYOUT', normalizedValue: null, source: 'LEDGER', asOf: '2026-10-12T00:00:00.000Z', ledgerRunId: 'run-1', reasonCode: 'UNCONFIRMED' },
   ],
 };
