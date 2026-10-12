@@ -145,6 +145,25 @@ export async function publishIancarPhotoReferences(input: {
   return { ...summary, status: 'PHOTO_ATOM_READBACK_VERIFIED', writeExecuted: true, runId, backupPath };
 }
 
+/** 죽은 ERP4 별칭 주소만 비우고 «사진 확인 중» 으로 표시한다. 드라이브 사진·폴더 링크가 있거나 별칭이 아닌 주소가 있으면 건드리지 않는다.
+ * 원래 값은 iancar_photo_source_original 에 남기고(이미 있으면 유지), 되돌리기는 이 칸으로 한다. */
+export function iancarPhotoPendingPatch(old: Record<string, any>): Record<string, unknown> {
+  const isAlias = (value: unknown) => {
+    try { const url = new URL(String(value)); return url.origin === 'https://freepasserp.com' && url.pathname === '/api/img'; } catch { return false; }
+  };
+  const urls: unknown[] = [old.image_url, ...(Array.isArray(old.image_urls) ? old.image_urls : [])]
+    .filter(value => typeof value === 'string' && value.trim());
+  const cacheUrls = Array.isArray(old.photo_cache?.urls) ? old.photo_cache.urls : [];
+  const hasDrive = cacheUrls.length > 0 || (typeof old.photo_link === 'string' && !!old.photo_link.trim());
+  // 별칭 주소만 있는 문서(또는 사진이 전혀 없는 새 문서)만 대상.
+  if (hasDrive || urls.some(value => !isAlias(value))) return {};
+  return {
+    image_urls: [], image_url: '', image_kind: 'PHOTO_PENDING',
+    iancar_photo_source_original: old.iancar_photo_source_original
+      ?? { image_urls: old.image_urls ?? null, image_url: old.image_url ?? null, photo_link: old.photo_link ?? null, image_kind: old.image_kind ?? null },
+  };
+}
+
 type PhaseOneProduct = {
   sourceVehicleId: string; car_number: string; price: Record<string, { rent: number; deposit: number }>;
   vehicle_status: string; status: string; status_kind: string; listable: boolean;
@@ -196,6 +215,10 @@ export const IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO = 0.20;
 export async function publishIancarPhaseOne(input: {
   products: PhaseOneProduct[]; sourceDigest: string; sourceSyncedAt: string;
   apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string; sourceEvidence?: string;
+  /** 사진 보류 모드: ONE 사진 주소(옛 별칭)를 쓰지 않고, 죽은 별칭만 비워 PHOTO_PENDING 으로 표시한다(드라이브 사진이 있는 차는 건드리지 않는다). */
+  photoPending?: boolean;
+  /** 임시 노출 중단(publication_withdrawal) 문서는 해제하지 않고 그대로 둔다. */
+  keepWithdrawn?: boolean;
 }) {
   const products = input.products;
   if (input.mirrorInventory) {
@@ -234,6 +257,7 @@ export async function publishIancarPhaseOne(input: {
   const originals = new Map(all.docs.map(doc => [doc.id, doc]));
   const skipped: { id: string; reason: string; revision: number }[] = [];
   const skippedByReason = { CONTRACT_LOCK: 0, DELETION_LOCK: 0, CONTRACT_AND_DELETION_LOCK: 0 };
+  let heldWithdrawn = 0;
   const candidates = products.map(product => {
     const plate = plates(product.car_number);
     if (!/^\d{2,3}[가-힣]\d{4}$/.test(plate) || !product.sourceVehicleId) throw new Error('IANCAR_PUBLICATION_IDENTITY_INVALID');
@@ -248,6 +272,7 @@ export async function publishIancarPhaseOne(input: {
       throw new Error('IANCAR_PUBLICATION_SOURCE_ID_COLLISION');
     const id = prior?.id ?? `iancar_${stableDigest(['RP031', product.sourceVehicleId]).slice(0, 24)}`;
     if (!prior && originals.has(id)) throw new Error('IANCAR_PUBLICATION_ID_COLLISION');
+    if (input.keepWithdrawn && old.publication_withdrawal) { heldWithdrawn++; return null; }
     if (old.locked_by_contract || old._deleted || old.deletedAt) {
       const reason = old.locked_by_contract
         ? (old._deleted || old.deletedAt ? 'CONTRACT_AND_DELETION_LOCK' : 'CONTRACT_LOCK') : 'DELETION_LOCK';
@@ -277,7 +302,8 @@ export async function publishIancarPhaseOne(input: {
     if (!prior) for (const [key, value] of Object.entries(product.facts)) {
       if (['maker', 'model', 'year', 'fuel_type', 'ext_color', 'mileage'].includes(key)) fields[key] = value;
     }
-    if (product.photo) Object.assign(fields, iancarPhotoPatch(old, { ...product.photo,
+    if (input.photoPending) Object.assign(fields, iancarPhotoPendingPatch(old));
+    else if (product.photo) Object.assign(fields, iancarPhotoPatch(old, { ...product.photo,
       productId: id, vehicleId: product.sourceVehicleId, plate }), { iancar_one_photo_ids: product.photo.photoIds });
     return { id, prior, fields };
   });
@@ -307,8 +333,10 @@ export async function publishIancarPhaseOne(input: {
     warnings: skippedCount ? ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'] : [],
     matched: planned.filter(row => row.prior && row.fields.iancar_phase_one).length, created: planned.filter(row => !row.prior).length,
     absenceHeld: planned.filter(row => row.fields.publication_withdrawal).length,
-    withPhotos: appliedProducts.filter(row => row.photo && row.photo.count > 0).length,
-    photoCount: appliedProducts.reduce((count, row) => count + (row.photo?.count ?? 0), 0),
+    withPhotos: input.photoPending ? 0 : appliedProducts.filter(row => row.photo && row.photo.count > 0).length,
+    photoCount: input.photoPending ? 0 : appliedProducts.reduce((count, row) => count + (row.photo?.count ?? 0), 0),
+    photoPendingMarked: planned.filter(row => row.fields.image_kind === 'PHOTO_PENDING').length,
+    keptWithdrawn: heldWithdrawn,
     open: appliedProducts.filter(row => row.listable).length, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
     policyReferencesDeferred: planned.filter(row => row.prior?.data().policy_code).length,
     policyDeferredTotal: planned.length,
