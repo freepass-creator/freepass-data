@@ -250,19 +250,40 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
         price: { '24': { rent: 500000, deposit: 0 } } },
       forbidden: { listable: true, provider_company_code: 'RP012', product_type: '중고구독',
         price: { '12': { rent: 500000, deposit: 0 } } },
+      ruleMissing: { listable: true, provider_company_code: 'RP012', product_type: '오공구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+        price: { '18': { rent: 500000, deposit: 0 } } },
+      incompleteWaiver: { listable: true, provider_company_code: 'RP004', deposit_note: '무보증',
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      knownPositive: { listable: true, provider_company_code: 'RP004', product_type: '중고렌트',
+        price: { '12': { rent: 500000, deposit: 1000000 } } },
     };
     const audit = buildZeroDepositCandidateAudit({ products, expectedProductIds: ['rawShort', 'missingProduct'], readAt: '2026-10-12T00:00:00.000Z' });
     expect(audit.publicSummary.countsByReason).toMatchObject({
       RAW_AMOUNT_NOT_REFLECTED: 3,
-      ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE: 1,
+      DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE: 1,
       CONFLICTING_ZERO_DEPOSIT_EVIDENCE: 1,
       ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: 1,
+      MISSING: 1,
+      INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE: 1,
       PRODUCT_DOC_MISSING: 1,
     });
     expect(audit.publicSummary.questionTemplateIdsByReason).toMatchObject({
-      ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE: 'zero-or-missing-without-waiver-evidence',
+      DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE: 'zero-or-missing-without-waiver-evidence',
       ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: 'zero-deposit-forbidden-by-product-policy',
+      MISSING: 'unknown-deposit-needs-review',
+      INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE: 'unknown-deposit-needs-review',
     });
+    expect(audit.report.details.find(row => row.productId === 'ruleMissing')).toMatchObject({
+      classification: 'UNKNOWN_DEPOSIT_NEEDS_REVIEW',
+      reasonCode: 'MISSING',
+      questionTemplateId: 'unknown-deposit-needs-review',
+    });
+    expect(audit.report.details.find(row => row.productId === 'incompleteWaiver')).toMatchObject({
+      classification: 'UNKNOWN_DEPOSIT_NEEDS_REVIEW',
+      reasonCode: 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE',
+      questionTemplateId: 'unknown-deposit-needs-review',
+    });
+    expect(audit.report.details.some(row => row.productId === 'knownPositive')).toBe(false);
     expect(audit.report.details.find(row => row.classification === 'RAW_AMOUNT_NOT_REFLECTED')).toMatchObject({
       productId: 'rawShort',
       questionTemplateId: null,

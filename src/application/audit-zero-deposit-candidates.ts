@@ -32,6 +32,10 @@ export const ZERO_DEPOSIT_QUESTION_TEMPLATES = {
     id: 'zero-deposit-forbidden-by-product-policy',
     question: '상품 정책상 무보증 불가인데 0원 — 금액 확인',
   },
+  UNKNOWN_DEPOSIT_NEEDS_REVIEW: {
+    id: 'unknown-deposit-needs-review',
+    question: '보증금을 확정할 근거가 부족 — 금액/무보증 여부 확인',
+  },
 } as const;
 
 export type ZeroDepositQuestionReason = keyof typeof ZERO_DEPOSIT_QUESTION_TEMPLATES;
@@ -61,7 +65,7 @@ function questionReason(reason: string, sourceAmount: unknown): ZeroDepositQuest
     return zeroLike(sourceAmount) ? 'ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE' : null;
   }
   if (reason === 'CONFLICT' || reason === 'TERM_NOT_COVERED_BY_RULE') return 'POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW';
-  return null;
+  return 'UNKNOWN_DEPOSIT_NEEDS_REVIEW';
 }
 
 export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
@@ -124,7 +128,7 @@ export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
         });
         continue;
       }
-      const classification = questionReason(evidence.reason, row.deposit);
+      const classification = evidence.state === 'UNKNOWN' ? questionReason(evidence.reason, row.deposit) : null;
       if (!classification) continue;
       const template = ZERO_DEPOSIT_QUESTION_TEMPLATES[classification];
       details.push({
@@ -143,8 +147,8 @@ export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
   const countsByReason: Record<string, number> = {};
   const questionTemplateIdsByReason: Record<string, string> = {};
   for (const row of details) {
-    countsByReason[row.classification] = (countsByReason[row.classification] ?? 0) + 1;
-    if (row.questionTemplateId) questionTemplateIdsByReason[row.classification] = row.questionTemplateId;
+    countsByReason[row.reasonCode] = (countsByReason[row.reasonCode] ?? 0) + 1;
+    if (row.questionTemplateId) questionTemplateIdsByReason[row.reasonCode] = row.questionTemplateId;
   }
   const report = {
     schema: 'freepass-data.zero-deposit-candidate-audit/v1',
