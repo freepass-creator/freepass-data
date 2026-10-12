@@ -7,6 +7,7 @@ export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_
 export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
+  | 'INVALID_CHANNEL'
   | 'INVALID_MSG_NO'
   | 'INVALID_PLATE_EVIDENCE'
   | 'SENDER_UNVERIFIED'
@@ -22,10 +23,22 @@ export type KakaoInfoRejectReason =
 
 export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELDS_DROPPED'; count: number };
 
+export type KakaoInfoChannel = 'KAKAO_RAW' | 'EN1_SUMMARY' | 'KAKAO_NOTICE';
+const kakaoInfoChannels = new Set<string>(['KAKAO_RAW', 'EN1_SUMMARY', 'KAKAO_NOTICE']);
+const NOTICE_FIXED_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 export type KakaoInfoCandidateInput = {
   supplierCode: string;
   roomCode: string;
-  source: { sentAt: string; side: string; msgNo: string; excerpt: string };
+  source: {
+    sentAt: string; side: string; msgNo: string; excerpt: string;
+    /** 출처 채널(필수). KAKAO_RAW 만 대화 원문 — EN1_SUMMARY·KAKAO_NOTICE 는 T0 고정·자동 승격 없음. 누락은 거부. */
+    channel: KakaoInfoChannel;
+    /** 발언 시각이 근사일 때(true) 또는 날짜만 추정(dateInferred). 자동 승격 금지. */
+    sentAtApprox?: true | 'dateInferred';
+    /** 고정 공지(KAKAO_NOTICE 만): 게시일 기준 90일 유효. */
+    noticeFixed?: true;
+  };
   type: KakaoInfoType;
   vehicle?: {
     plate?: string;
@@ -222,7 +235,7 @@ const allowedInputFields = new Set([
   'status',
 ]);
 
-const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt']);
+const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt', 'channel', 'sentAtApprox', 'noticeFixed']);
 const allowedVehicleFields = new Set(['plate', 'model', 'plateUnverified', 'plateEvidenceMsgNo', 'plateStatusSameSentence', 'plateEvidence']);
 const allowedPlateEvidenceFields = new Set(['source', 'distance']);
 const allowedFieldsFields = new Set(['항목', '요약', '값']);
@@ -315,6 +328,21 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     return { ok: false, reason: 'INVALID_CONFIDENCE' };
   }
   if (input.aiInvolved !== true || input.status !== 'CANDIDATE') return { ok: false, reason: 'INVALID_STATUS' };
+  const channel = input.source.channel;
+  if (typeof channel !== 'string' || !kakaoInfoChannels.has(channel)) return { ok: false, reason: 'INVALID_CHANNEL' };
+  if (input.source.sentAtApprox !== undefined && input.source.sentAtApprox !== true && input.source.sentAtApprox !== 'dateInferred') {
+    return { ok: false, reason: 'INVALID_SOURCE' };
+  }
+  if (input.source.noticeFixed !== undefined && (input.source.noticeFixed !== true || channel !== 'KAKAO_NOTICE')) {
+    return { ok: false, reason: 'INVALID_SOURCE' };
+  }
+  if (channel === 'EN1_SUMMARY') {
+    // 요약 채널: 공급사 확인 필수, 차량은 미특정(글자 근거를 만들 수 없는 요약이라 번호·근거를 받지 않는다).
+    if (input.needsSupplierConfirm !== true) return { ok: false, reason: 'INVALID_FIELDS' };
+    if (input.vehicle?.plate?.trim() || input.vehicle?.plateEvidence || input.vehicle?.plateEvidenceMsgNo !== undefined) {
+      return { ok: false, reason: 'INVALID_PLATE_EVIDENCE' };
+    }
+  }
 
   const unknownFields = collectUnknownFields(input);
   if (unknownFields.hasSensitiveKey) return { ok: false, reason: 'PII_DETECTED' };
@@ -327,6 +355,9 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       side: '상대',
       msgNo: input.source.msgNo.trim(),
       excerpt: input.source.excerpt,
+      channel,
+      ...(input.source.sentAtApprox !== undefined ? { sentAtApprox: input.source.sentAtApprox } : {}),
+      ...(input.source.noticeFixed === true ? { noticeFixed: true as const } : {}),
     },
     fields: { 항목: input.fields.항목.trim(), 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
     confidence: Math.round(input.confidence * 100) / 100,
@@ -384,7 +415,9 @@ export function assertKakaoInfoCandidate(input: KakaoInfoCandidateInput) {
 
 export function classifyKakaoInfoSignal(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source'>, now: string) {
   if (!Number.isFinite(Date.parse(now))) throw new Error('INVALID_KAKAO_INFO_NOW');
-  const ttlMs = candidate.type === '서류요구'
+  const ttlMs = candidate.source.noticeFixed === true && candidate.source.channel === 'KAKAO_NOTICE'
+    ? NOTICE_FIXED_TTL_MS
+    : candidate.type === '서류요구'
     ? 30 * 24 * 60 * 60 * 1000
     : stateTypes.has(candidate.type) || candidate.type === '접수가능'
       ? 24 * 60 * 60 * 1000
@@ -410,6 +443,8 @@ export function isKakaoT0OnlyInfo(type: KakaoInfoType) {
 
 export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh: boolean) {
   if (typeof isFresh !== 'boolean') throw new Error('INVALID_KAKAO_INFO_FRESHNESS');
+  if (candidate.source.channel !== 'KAKAO_RAW') return false;
+  if (candidate.source.sentAtApprox !== undefined) return false;
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
   const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));
   const hasNegative = stateNegativeSignals.some((signal) => text.includes(signal));
