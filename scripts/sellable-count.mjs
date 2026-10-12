@@ -48,7 +48,7 @@ do {
   const res = await fetch(`https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID || 'freepasserp5'}/databases/(default)/documents/products?${q}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`FIRESTORE_READ_${res.status}`);
   const body = await res.json();
-  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ id: d.name.split('/').pop(), pin: f._pin_state ?? null, status: f.status ?? null, plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
+  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ upd: Date.parse(d.updateTime) || null, id: d.name.split('/').pop(), pin: f._pin_state ?? null, status: f.status ?? null, plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
   pageToken = body.nextPageToken ?? '';
 } while (pageToken);
 const erp5 = new Set(((await (await fetch('https://freepasserp5.vercel.app/api/catalog', { signal: AbortSignal.timeout(90000) })).json()).vehicles ?? []).map(v => key(v.plate)));
@@ -106,9 +106,11 @@ for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/
 }
 { const out = tmp('RP023'); const args = ['read', 'RP023', '--out', out]; if (opt('homepage-plates')) args.push('--homepage-plates', opt('homepage-plates'));
   try { run('source-read.mjs', args); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.map(r => key(r.plate)));
-    src.RP023 = { set, all: set, 읽힘: true, 비고: opt('homepage-plates') ? '시트+홈피 목록에 존재' : '시트 목록에 존재(홈피 목록 파일 없음 → 일부)' }; }
+    const hpOnly = new Set(rows.filter(r => /홈페이지/.test(r.원천 ?? '')).map(r => key(r.plate))); // 대표 10-12: 홈페이지 게시 목록이 판매 가능 정본, 시트는 보조
+    src.RP023 = opt('homepage-plates') ? { set: hpOnly, all: set, 읽힘: true, 비고: `홈페이지 게시 목록이 정본(시트에만 있는 ${set.size - hpOnly.size}대는 판매 가능에서 제외)` } : { set, all: set, 읽힘: true, 비고: '시트 목록에 존재(홈피 목록 파일 없음 → 일부)' }; }
   catch { src.RP023 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; } }
-src.RP012 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '손오공 ERP 계정 없음(대표 손: 계정 등록)' };
+{ const mine = docs.filter(d => d.code === 'RP012' && d.listable), last = Math.max(0, ...mine.map(d => d.upd ?? 0)); // 수집기가 읽어 온 결과를 원천 기준으로 본다(대표 10-12)
+  src.RP012 = { set: new Set(mine.map(d => d.plate)), all: new Set(docs.filter(d => d.code === 'RP012').map(d => d.plate)), 읽힘: true, 비고: `ERP4 매시 수집기 반영 결과 기준(마지막 수정 ${last ? new Date(last).toISOString().slice(0, 16) + 'Z' : '-'})` }; }
 
 // 대조
 const codes = [...new Set([...Object.keys(src), ...docs.map(d => d.code)])].filter(c => c !== '-');
@@ -137,9 +139,9 @@ console.log(`합계(읽힘 ${read.length}곳): 원천 판매가능 ${read.reduce
 { const sum = codes => read.filter(r => codes.includes(r.code)).reduce((n, r) => n + r.원천판매가능, 0);
   const f05Codes = new Set(spec.supplierChannels.sharedInputSheet.map(x => x.code));
   const f05 = read.filter(r => f05Codes.has(r.code)).reduce((n, r) => n + (r.줄수 ?? r.원천판매가능), 0), data = c => rows.find(r => r.code === c)?.데이터판매 ?? 0;
-  const parts = [['공통 시트', f05], ['아이카', sum(['RP004'])], ['이안카', sum(['RP031'])], ['손오공', null], ['오토플러스', sum(['RP023'])], ['아이언', sum(['RP006'])]];
+  const parts = [['공통 시트', f05], ['아이카', sum(['RP004'])], ['이안카', sum(['RP031'])], ['손오공(수집기 반영 결과)', sum(['RP012'])], ['오토플러스', sum(['RP023'])], ['아이언', sum(['RP006'])]];
   const total = parts.reduce((n, [, v]) => n + (v ?? 0), 0);
-  console.log('원천 기준: ' + parts.map(([k, v]) => v == null ? `${k} 미확인(데이터 ${data('RP012')}대)` : `${k} ${v}대`).join(' · ') + ` · 총 ${total}대(손오공 제외)`);
+  console.log('원천 기준: ' + parts.map(([k, v]) => v == null ? `${k} 미확인(데이터 ${data('RP012')}대)` : `${k} ${v}대`).join(' · ') + ` · 총 ${total}대`);
   console.log('데이터 판매: ' + [['공통 시트', rows.filter(r => f05Codes.has(r.code)).reduce((n, r) => n + r.데이터판매, 0)], ['아이카', data('RP004')], ['이안카', data('RP031')], ['손오공', data('RP012')], ['오토플러스', data('RP023')], ['아이언', data('RP006')]].map(([k, v]) => `${k} ${v}대`).join(' · ') + ` · 총 ${tot('데이터판매')}대 (ERP5 노출 ${erp5.size}대)`); }
 if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.length || r.데이터O원천X.length) console.log(`  ${r.이름}: 원천O데이터X [${r.원천O데이터X.join(',')}] / 데이터O원천X [${r.데이터O원천X.join(',')}]`); }
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
