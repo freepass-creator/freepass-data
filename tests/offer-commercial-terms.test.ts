@@ -299,12 +299,12 @@ describe('F04 explicit canonical evidence', () => {
     const evidence = { '60': { vehicleValue: 30000000 } };
     const before = structuredClone({ offer, evidence });
     const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 230000 }, policyId: 'sales-commission-2026-10-11', approximate: true });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 330000 }, policyId: 'sales-commission-2026-10-11', approximate: true });
     expect(row.channelPayoutFee.amount?.amount).toBe(240000);
     expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A191:M191');
-    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.amount?.amount).toBe(230000);
+    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.amount?.amount).toBe(330000);
     const unsupported = { ...offer, priceTerms: [{ ...offer.priceTerms[0]!, termMonths: 24 }] };
-    expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 128000 }, approximate: true });
+    expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 228000 }, approximate: true });
     expect({ offer, evidence }).toEqual(before);
   });
   it('truncates Sonokong fractional-won commission and VAT while preserving other suppliers rounding', () => {
@@ -329,9 +329,9 @@ describe('F04 explicit canonical evidence', () => {
     }, 'PICKUP_SUBSCRIPTION')[0]!;
     expect(pickup.supplierBillingFee).toMatchObject({
       state: 'KNOWN',
-      amount: { amount: 65001 },
-      vatAmount: 6500,
-      totalAmount: 71501,
+      amount: { amount: 165001 },
+      vatAmount: 16500,
+      totalAmount: 181501,
       ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM',
     });
     expect(pickup.channelPayoutFee).toMatchObject({ amount: { amount: 120001 }, vatAmount: 12000 });
@@ -340,7 +340,7 @@ describe('F04 explicit canonical evidence', () => {
       termKey: `m${termMonths}`, termMonths, monthlyRent: { amount: 100001, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const,
     }));
     const rerent = precomputeOfferEconomics({ id: 'synthetic', supplierId: 'RP012', priceTerms: rerentTerms }, 'USED_RENT');
-    expect(rerent.map(row => row.supplierBillingFee.amount?.amount)).toEqual([14001, 35001, 56001, 35001]);
+    expect(rerent.map(row => row.supplierBillingFee.amount?.amount)).toEqual([114001, 135001, 156001, 135001]);
     expect(rerent.map(row => row.channelPayoutFee.amount?.amount)).toEqual([96000, 108001, 120001, 105001]);
 
     const fixedQ12 = precomputeOfferEconomics({
@@ -376,8 +376,8 @@ describe('F04 explicit canonical evidence', () => {
     }, 'PICKUP_SUBSCRIPTION');
     const byTerm = new Map(rows.map(row => [row.termMonths, row]));
     expect(byTerm.get(60)!.supplierBillingFee).toMatchObject({
-      amount: { amount: 1550000 },
-      calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0275, adjustmentAmount: { amount: -100000, currency: 'KRW' } },
+      amount: { amount: 1650000 },
+      calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0275 },
       ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM',
     });
     expect(byTerm.get(60)!.channelPayoutFee).toMatchObject({
@@ -387,7 +387,6 @@ describe('F04 explicit canonical evidence', () => {
     });
     expect(byTerm.get(24)!.supplierBillingFee.calculation).toMatchObject({
       kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0475,
-      adjustmentAmount: { amount: -100000, currency: 'KRW' },
     });
     expect(byTerm.get(24)!.channelPayoutFee.calculation).toMatchObject({
       kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.04,
@@ -405,7 +404,7 @@ describe('F04 explicit canonical evidence', () => {
     };
     input.internalEconomicsTerms = precomputeOfferEconomics(input, 'PICKUP_SUBSCRIPTION');
     expect(auditOfferEconomicsTerms(input).invalidFacts).not.toContain('ECONOMICS_CALCULATION_MISMATCH:60:SUPPLIER_BILLING_FEE');
-    input.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = Math.round(100001 * 60 * 275 / 10000) - 100000;
+    input.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = Math.round(100001 * 60 * 275 / 10000);
     expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:60:SUPPLIER_BILLING_FEE');
   });
   it('audits all RP012 rate fees with truncation, regardless of rule id prefix', () => {
