@@ -42,7 +42,7 @@ export function createPhotoRequestLimiter(options: PhotoRequestLimiterOptions = 
   };
   const release = () => { active -= 1; waiting.shift()?.(); };
 
-  /** 429 만 물러나서 다시 시도한다(상한 횟수). 다른 오류는 그대로 던진다. */
+  /** 429·502·503·504 만 물러나서 다시 시도한다(상한 횟수). 다른 오류는 그대로 던진다. */
   const run = async <T>(task: () => Promise<T>): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       if (!tryStartNow()) await startSlow();
@@ -53,7 +53,8 @@ export function createPhotoRequestLimiter(options: PhotoRequestLimiterOptions = 
       } catch (error) {
         release();
         const info = error as MaybeRateLimited;
-        if (info?.status !== 429 || attempt >= maxRetries) throw error;
+        const retriable = info?.status === 429 || info?.status === 502 || info?.status === 503 || info?.status === 504;
+        if (!retriable || attempt >= maxRetries) throw error;
         const retryAfter = typeof info.retryAfterSeconds === 'number' && info.retryAfterSeconds > 0 ? info.retryAfterSeconds * 1000 : 1000 * 2 ** attempt;
         const delay = Math.min(maxBackoff, retryAfter + Math.floor(random() * 500));
         nextStart = Math.max(nextStart, now() + delay);

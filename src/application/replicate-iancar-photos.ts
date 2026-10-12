@@ -55,9 +55,16 @@ export async function replicateIancarVehicle(productId: string, product: Rec, de
     if (!album.length || album.length > 200) return { ...base, reason: 'ALBUM_SIZE_INVALID' };
     const items: IancarPhotoManifest['items'] = [];
     let uploaded = 0, existing = 0, listBytes = 0, detailBytes = 0;
-    for (const [servingIndex, photo] of album.entries()) {
-      const original = await deps.getPhotoBytes(vehicleId, photo.photoId);
-      const rendered = await deps.renditioner(original.bytes);
+    // 내려받기+렌디션은 묶음(서빙 순서 보존)으로 병렬 처리한다. 호출 속도는 getPhotoBytes 를 감싼 공통 제한기가 정한다.
+    const CHUNK = 6;
+    const prepared: Array<{ photo: IancarAlbumPhoto; original: IancarPhotoBytes; rendered: { list: Buffer; detail: Buffer } }> = [];
+    for (let from = 0; from < album.length; from += CHUNK) {
+      prepared.push(...await Promise.all(album.slice(from, from + CHUNK).map(async photo => {
+        const original = await deps.getPhotoBytes(vehicleId, photo.photoId);
+        return { photo, original, rendered: await deps.renditioner(original.bytes) };
+      })));
+    }
+    for (const [servingIndex, { photo, original, rendered }] of prepared.entries()) {
       if (!isJpeg(rendered.list) || !isJpeg(rendered.detail)) return { ...base, reason: 'RENDITION_INVALID' };
       const sha256 = sha256Hex(original.bytes), listSha = sha256Hex(rendered.list), detailSha = sha256Hex(rendered.detail);
       const listObject = iancarPhotoObjectName(vehicleId, listSha, 'list');

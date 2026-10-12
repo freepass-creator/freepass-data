@@ -218,6 +218,14 @@ describe('photo request limiter', () => {
     await expect(limiter.run(async () => { throw Object.assign(new Error('rate'), { status: 429, retryAfterSeconds: 1 }); })).rejects.toThrow('rate');
   });
 
+  it('also backs off on transient 503 and still does not retry auth errors', async () => {
+    const limiter = createPhotoRequestLimiter({ maxConcurrent: 1, minIntervalMs: 0, maxRetries: 2, sleep: async () => undefined, random: () => 0 });
+    let calls = 0;
+    expect(await limiter.run(async () => { calls += 1; if (calls < 2) throw Object.assign(new Error('x'), { status: 503 }); return 'ok'; })).toBe('ok');
+    let auth = 0;
+    await expect(limiter.run(async () => { auth += 1; throw Object.assign(new Error('auth'), { status: 401 }); })).rejects.toThrow('auth');
+    expect(auth).toBe(1);
+  });
   it('does not retry other errors and limits concurrency', async () => {
     const limiter = createPhotoRequestLimiter({ maxConcurrent: 2, minIntervalMs: 0, sleep: async () => undefined });
     let active = 0, peak = 0;
