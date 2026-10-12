@@ -225,8 +225,15 @@ jobs:
           test "$(git show -s --format=%P HEAD)" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2'
           git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$WORKFLOW_SOURCE_SHA"
           source_dir="$(mktemp -d "$RUNNER_TEMP/photo-source.XXXXXX")"
-          git archive "$EXPECTED_SOURCE_SHA" | tar -x -C "$source_dir"
+          source_files="$(mktemp "$RUNNER_TEMP/photo-files.XXXXXX")"
+          git ls-tree -r --name-only -z "$EXPECTED_SOURCE_SHA" > "$source_files"
+          git -c core.autocrlf=false archive "$EXPECTED_SOURCE_SHA" | tar -x -C "$source_dir"
           cd "$source_dir"
+          # Existing public-file checks require a Git index; no remotes or credentials.
+          git init --quiet
+          git -c core.autocrlf=false --literal-pathspecs add --force --pathspec-from-file="$source_files" --pathspec-file-nul
+          git ls-files --cached -z | cmp - "$source_files"
+          test "$(git write-tree)" = '712c286a842dea616e7360b421fdd5e068540a40'
           npm ci
           npm run check:arch
           npm run check:standards
