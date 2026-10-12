@@ -3,6 +3,7 @@ import { stableDigest, stableValue } from '../shared/stable-digest.js';
 
 export type KakaoInfoType = '재고' | '가격' | '조건' | '정책변경' | '계약진행';
 export type KakaoInfoLayer = 'T0' | 'T1';
+export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_PREVIOUS';
 export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
@@ -13,13 +14,26 @@ export type KakaoInfoRejectReason =
   | 'INVALID_FIELDS'
   | 'INVALID_CONFIDENCE'
   | 'INVALID_STATUS'
-  | 'PII_DETECTED';
+  | 'PII_DETECTED'
+  | 'FUTURE_SENT_AT';
 
 export type KakaoInfoCandidateInput = {
   roomCode: string;
   source: { sentAt: string; side: string; msgNo: string; excerpt: string };
   type: KakaoInfoType;
-  vehicle?: { plate?: string; model?: string; plateUnverified?: string; plateEvidenceMsgNo?: number };
+  /**
+   * Plate evidence is extractor-owned trust-boundary proof. This transformer cannot inspect
+   * neighboring utterance text, so it only preserves literal evidence metadata and demotes
+   * missing/out-of-window evidence. D2 write must later verify products/<plate>; if absent,
+   * downgrade to vehicle-unspecified. TODO: implement that check in the D2 write stage only.
+   */
+  vehicle?: {
+    plate?: string;
+    model?: string;
+    plateUnverified?: string;
+    plateEvidenceMsgNo?: number;
+    plateEvidence?: { source: KakaoInfoPlateEvidenceSource };
+  };
   fields: { 요약: string; 값: string };
   confidence: number;
   needsSupplierConfirm: boolean;
@@ -40,6 +54,9 @@ const validTypes = new Set<KakaoInfoType>(['재고', '가격', '조건', '정책
 const stateTypes = new Set<KakaoInfoType>(['재고', '계약진행']);
 const moneyTypes = new Set<KakaoInfoType>(['가격', '조건', '정책변경']);
 const stateSignals = ['재고 있음', '재고 없음', '접수 가능', '출고 예정', '예약', '불가'];
+const statePositiveSignals = ['재고 있음', '접수 가능', '출고 가능', '출고 예정', '예약', '가능'];
+const stateNegativeSignals = ['재고 없음', '출고 불가', '불가'];
+const stateNegationSignals = ['아님', '않', '없음 아님'];
 
 const nonBlank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
@@ -54,11 +71,11 @@ const parseMsgNo = (value: string) => {
 };
 
 const hasPhoneNumber = (value: string) => {
-  const normalized = value.replace(/\+82/g, '0').replace(/[()\s.-]/g, '');
-  return /(?:010|011|016|017|018|019)\d{7,8}/.test(normalized) || /0[2-6]\d{7,8}/.test(normalized);
+  const normalized = value.replace(/\+82/g, '0').replace(/[()\s.,-]/g, '');
+  return /0\d{1,2}\d{7,8}/.test(normalized);
 };
 
-const hasResidentNumber = (value: string) => /\d{6}\s*-\s*[1-4]\d{6}/.test(value);
+const hasResidentNumber = (value: string) => /\d{6}\s*-?\s*[1-4]\d{6}/.test(value);
 
 const hasEmail = (value: string) => /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(value);
 
@@ -73,8 +90,24 @@ const hasAccountNumber = (value: string) => {
   return /\d[\d\s.-]{8,}\d/.test(value) && digits.length >= 10 && digits.length <= 14;
 };
 
+const isThousandCommaAmount = (value: string) => /^\d{1,3}(,\d{3})+$/.test(value.trim());
+
+const hasLongNumericIdentifier = (value: string) => {
+  const numericLikeChunks = value.match(/[\d\s().,-]{10,}/g) ?? [];
+  return numericLikeChunks.some((chunk) => {
+    const digits = chunk.replace(/\D/g, '');
+    if (digits.length < 10) return false;
+    if (isThousandCommaAmount(chunk)) return false;
+    return true;
+  });
+};
+
 export function hasSensitiveKakaoExcerpt(value: string) {
-  return hasPhoneNumber(value) || hasResidentNumber(value) || hasEmail(value) || hasAccountNumber(value);
+  return hasPhoneNumber(value)
+    || hasResidentNumber(value)
+    || hasEmail(value)
+    || hasAccountNumber(value)
+    || hasLongNumericIdentifier(value);
 }
 
 function candidateStringValues(input: KakaoInfoCandidateInput) {
@@ -91,6 +124,12 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
     input.vehicle?.plateUnverified,
   ].filter((value): value is string => typeof value === 'string');
   return strings;
+}
+
+function hasCrossFieldAccountEvidence(values: string[]) {
+  const hasAccountKeyword = values.some((value) => /(계좌|은행|입금)/.test(value));
+  if (!hasAccountKeyword) return false;
+  return values.some((value) => value.replace(/\D/g, '').length >= 10);
 }
 
 export function kakaoVehicleKey(candidate: Pick<KakaoInfoCandidateInput, 'vehicle'>) {
@@ -120,11 +159,15 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (!Number.isFinite(Date.parse(input.source?.sentAt)) || !nonBlank(input.source?.msgNo)) {
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
+  if (Date.parse(input.source.sentAt) - Date.now() > 5 * 60 * 1000) return { ok: false, reason: 'FUTURE_SENT_AT' };
   if (input.source.side !== '상대') return { ok: false, reason: 'SENDER_UNVERIFIED' };
   if (!nonBlank(input.source.excerpt) || Array.from(input.source.excerpt).length > 80) {
     return { ok: false, reason: 'INVALID_EXCERPT' };
   }
-  if (candidateStringValues(input).some(hasSensitiveKakaoExcerpt)) return { ok: false, reason: 'PII_DETECTED' };
+  const stringValues = candidateStringValues(input);
+  if (stringValues.some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)) {
+    return { ok: false, reason: 'PII_DETECTED' };
+  }
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
   if (!nonBlank(input.fields?.요약) || !nonBlank(input.fields?.값)) return { ok: false, reason: 'INVALID_FIELDS' };
   if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
@@ -150,10 +193,14 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     const plateEvidenceMsgNo = typeof input.vehicle.plateEvidenceMsgNo === 'number' && Number.isInteger(input.vehicle.plateEvidenceMsgNo)
       ? input.vehicle.plateEvidenceMsgNo
       : undefined;
+    const plateEvidenceSource = input.vehicle.plateEvidence?.source;
+    const plateEvidenceSourceAccepted =
+      plateEvidenceSource === 'LITERAL_IN_UTTERANCE' || plateEvidenceSource === 'LITERAL_IN_PREVIOUS';
     const plateDistance = plateEvidenceMsgNo !== undefined ? sourceMsgNo - plateEvidenceMsgNo : Number.NaN;
     const plateHasEvidence =
       Boolean(plate) &&
       Number.isInteger(plateEvidenceMsgNo) &&
+      plateEvidenceSourceAccepted &&
       Number.isInteger(sourceMsgNo) &&
       plateDistance >= 0 &&
       plateDistance <= 2 &&
@@ -164,6 +211,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       ...(input.vehicle.model ? { model: input.vehicle.model.trim() } : {}),
       ...(plateUnverified ? { plateUnverified } : {}),
       ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo: plateEvidenceMsgNo } : {}),
+      ...(plateHasEvidence && plateEvidenceSource ? { plateEvidence: { source: plateEvidenceSource } } : {}),
     };
     normalized.needsSupplierConfirm = Boolean(normalized.needsSupplierConfirm || plateUnverified);
   }
@@ -181,11 +229,12 @@ export function classifyKakaoInfoSignal(candidate: Pick<KakaoInfoCandidate, 'typ
   const ttlMs = stateTypes.has(candidate.type) ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
   const sent = Date.parse(candidate.source.sentAt);
   const expiresAt = new Date(sent + ttlMs).toISOString();
+  const nowMs = Date.parse(now);
   return {
     layer: 'T1' as KakaoInfoLayer,
     ttlSeconds: ttlMs / 1000,
     expiresAt,
-    isFresh: Date.parse(now) <= Date.parse(expiresAt),
+    isFresh: sent - nowMs <= 5 * 60 * 1000 && nowMs <= Date.parse(expiresAt),
   };
 }
 
@@ -194,8 +243,14 @@ export function isKakaoMoneyInfo(type: KakaoInfoType) {
 }
 
 export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields'>) {
-  return stateTypes.has(candidate.type) && stateSignals.some((signal) =>
-    candidate.fields.값.includes(signal) || candidate.fields.요약.includes(signal));
+  const text = `${candidate.fields.요약} ${candidate.fields.값}`;
+  const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));
+  const hasNegative = stateNegativeSignals.some((signal) => text.includes(signal));
+  const hasNegation = stateNegationSignals.some((signal) => text.includes(signal));
+  return stateTypes.has(candidate.type)
+    && !hasNegation
+    && !(hasPositive && hasNegative)
+    && stateSignals.some((signal) => text.includes(signal));
 }
 
 export function kakaoInfoFieldsDigest(candidate: Pick<KakaoInfoCandidate, 'fields'>) {

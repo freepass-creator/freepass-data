@@ -7,7 +7,12 @@ const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandi
   roomCode: 'K-TEST-FAKE-ROOM',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
-  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
+  vehicle: {
+    plate: 'TEST-FAKE-PLATE-1',
+    model: 'TEST-FAKE-MODEL',
+    plateEvidenceMsgNo: 100,
+    plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+  },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
   confidence: 0.8,
   needsSupplierConfirm: false,
@@ -37,7 +42,15 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       sourceKind: 'KAKAO',
       authority: 'CANDIDATE',
       aiInvolved: true,
-      normalized: { type: '재고', value: '재고 있음', vehicle: { productRef: 'products/TEST-FAKE-PLATE-1' } },
+      normalized: {
+        type: '재고',
+        value: '재고 있음',
+        vehicle: {
+          productRef: 'products/TEST-FAKE-PLATE-1',
+          plateEvidenceMsgNo: 100,
+          plateEvidenceSource: 'LITERAL_IN_UTTERANCE',
+        },
+      },
     });
     const store = { appendRaw: vi.fn() };
     prepareRawSourceBatch(plan.batch);
@@ -74,6 +87,14 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       .toEqual([false, false, false, true]);
   });
 
+  it('does not auto-promote negated or mixed state sentences', () => {
+    const plan = kakaoInfoCandidatesToSourceBatch([
+      candidate({ fields: { 요약: '재고', 값: '출고 불가였다가 가능' } }),
+      candidate({ fields: { 요약: '재고', 값: '재고 없음 아님' }, source: { ...candidate().source, msgNo: '101', excerpt: '다음 발언' } }),
+    ], { now: '2026-10-12T01:00:00.000Z' });
+    expect(plan.candidates.map((item) => item.autoPromotable)).toEqual([false, false]);
+  });
+
   it('preserves conflicting same-vehicle values as separate candidates instead of overwriting', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
       candidate({ source: { ...candidate().source, msgNo: '100' }, fields: { 요약: '재고', 값: '재고 있음' } }),
@@ -99,8 +120,22 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
   it('does not use the oldest message time as freshness now', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
       source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
-      vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
+      vehicle: {
+        plate: 'TEST-FAKE-PLATE-1',
+        model: 'TEST-FAKE-MODEL',
+        plateEvidenceMsgNo: 100,
+        plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+      },
     })], { now: '2026-10-12T00:00:00.000Z' });
+    expect(plan.candidates[0]?.isFresh).toBe(false);
+    expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);
+  });
+
+  it('marks future sentAt as not fresh when classifying already trusted candidates', () => {
+    const soonFuture = new Date(Date.now() + 4 * 60 * 1000).toISOString();
+    const plan = kakaoInfoCandidatesToSourceBatch([candidate({
+      source: { sentAt: soonFuture, side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+    })], { now: new Date(Date.now() - 2 * 60 * 1000).toISOString() });
     expect(plan.candidates[0]?.isFresh).toBe(false);
     expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);
   });

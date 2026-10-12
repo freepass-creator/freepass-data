@@ -31,6 +31,9 @@ export type KakaoInfoSourceBatchPlan = {
 function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolean) {
   const signal = classifyKakaoInfoSignal(candidate, now);
   const productRef = candidate.vehicle?.plate ? `products/${candidate.vehicle.plate}` : null;
+  // Trust boundary: plate literal evidence is extractor-owned. This transformer preserves
+  // the evidence metadata but does not inspect neighbor utterances or check products/<plate>.
+  // TODO(D2 write): if products/<plate> is absent, downgrade to vehicle-unspecified there.
   return {
     ruleVersion: 'kakao-info-candidate/1',
     sourceKind: 'KAKAO',
@@ -52,6 +55,8 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
         plate: candidate.vehicle?.plate ?? null,
         model: candidate.vehicle?.model ?? null,
         plateUnverified: candidate.vehicle?.plateUnverified ?? null,
+        plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
+        plateEvidenceSource: candidate.vehicle?.plateEvidence?.source ?? null,
         unspecified: productRef == null,
       },
       needsSupplierConfirm: candidate.needsSupplierConfirm || Boolean(candidate.vehicle?.plateUnverified),
@@ -160,7 +165,16 @@ export function kakaoInfoCandidatesToSourceBatch(
         kakaoInfo: normalizedCandidate,
       } as unknown as NormalizedCandidateRecord['candidate'],
     };
-    const lineage: FieldLineageRecord[] = ['type', 'summary', 'value', 'vehicle.productRef', 'needsSupplierConfirm', 'autoPromotable']
+    const lineage: FieldLineageRecord[] = [
+      'type',
+      'summary',
+      'value',
+      'vehicle.productRef',
+      'vehicle.plateEvidenceMsgNo',
+      'vehicle.plateEvidenceSource',
+      'needsSupplierConfirm',
+      'autoPromotable',
+    ]
       .map((fieldPath) => {
         const value = fieldPath.split('.').reduce<unknown>((current, part) =>
           current && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined, normalizedCandidate);

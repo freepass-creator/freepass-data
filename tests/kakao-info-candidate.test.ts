@@ -11,7 +11,12 @@ const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateI
   roomCode: 'K-TEST-FAKE-ROOM',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
-  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
+  vehicle: {
+    plate: 'TEST-FAKE-PLATE-1',
+    model: 'TEST-FAKE-MODEL',
+    plateEvidenceMsgNo: 100,
+    plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+  },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
   confidence: 0.8,
   needsSupplierConfirm: false,
@@ -44,22 +49,39 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       { fields: { 요약: '가격', 값: '(010) 1234 5678' } },
       { fields: { 요약: '가격', 값: 'test@example.com' } },
       { fields: { 요약: '가격', 값: '주민번호 900101-1234567' } },
+      { fields: { 요약: '가격', 값: '9001011234567' } },
       { fields: { 요약: '가격', 값: '은행 계좌 1234567890' } },
       { fields: { 요약: '가격', 값: '123-456-789012' } },
-      { vehicle: { plate: 'TEST-FAKE-PLATE-1', model: '010 1234 5678', plateEvidenceMsgNo: 100 } },
+      {
+        fields: { 요약: '계좌', 값: '123456789012' },
+      },
+      { vehicle: { plate: 'TEST-FAKE-PLATE-1', model: '010 1234 5678', plateEvidenceMsgNo: 100, plateEvidence: { source: 'LITERAL_IN_UTTERANCE' } } },
     ] satisfies Partial<KakaoInfoCandidateInput>[]) {
       expect(createKakaoInfoCandidate(base(patch))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
     expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1,000,000' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1000000' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '100만원' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010-1234-5678' })).ok).toBe(true);
   });
 
+  it('rejects candidates sent more than five minutes in the future', () => {
+    const future = new Date(Date.now() + 6 * 60 * 1000).toISOString();
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, sentAt: future } })))
+      .toEqual({ ok: false, reason: 'FUTURE_SENT_AT' });
+  });
+
   it('demotes plate to plateUnverified unless nearby message evidence proves it', () => {
-    expect(assertKakaoInfoCandidate(base()).vehicle).toMatchObject({ plate: 'TEST-FAKE-PLATE-1', plateEvidenceMsgNo: 100 });
+    expect(assertKakaoInfoCandidate(base()).vehicle).toMatchObject({
+      plate: 'TEST-FAKE-PLATE-1',
+      plateEvidenceMsgNo: 100,
+      plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+    });
     expect(assertKakaoInfoCandidate(base({ source: { ...base().source, msgNo: '102', excerpt: '다른 발언' } })).vehicle)
       .toMatchObject({ plate: 'TEST-FAKE-PLATE-1' });
     for (const input of [
       base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' } }),
+      base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 } }),
       base({ source: { ...base().source, msgNo: '99' } }),
       base({ source: { ...base().source, msgNo: '103' } }),
       base({ source: { ...base().source, excerpt: '번호 없음' } }),
