@@ -5,9 +5,9 @@ import type { KakaoInfoCandidateInput } from '../src/domain/kakao-info-candidate
 
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   roomCode: 'K-TEST-FAKE-ROOM',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: 'TEST-FAKE-MSG-1', excerpt: 'TEST-FAKE masked excerpt' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
-  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' },
+  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
   confidence: 0.8,
   needsSupplierConfirm: false,
@@ -17,6 +17,17 @@ const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandi
 });
 
 describe('kakaoInfoCandidatesToSourceBatch', () => {
+  it('requires caller supplied now and accepts no write port in its public signature', () => {
+    type BatchOptions = Parameters<typeof kakaoInfoCandidatesToSourceBatch>[1];
+    const valid: BatchOptions = { now: '2026-10-12T01:00:00.000Z' };
+    expect(valid.now).toBe('2026-10-12T01:00:00.000Z');
+    // @ts-expect-error The transformer does not accept store/write ports.
+    const invalid: BatchOptions = { now: '2026-10-12T01:00:00.000Z', store: { appendRaw: vi.fn() } };
+    expect(invalid).toBeDefined();
+    expect(() => kakaoInfoCandidatesToSourceBatch([candidate()], undefined as unknown as BatchOptions))
+      .toThrow('KAKAO_INFO_NOW_REQUIRED');
+  });
+
   it('maps candidates to the existing SourceBatch shape without calling any store or port', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([candidate()], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.writes).toBe(0);
@@ -37,7 +48,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
       vehicle: { model: 'TEST-FAKE-MODEL', plateUnverified: 'TEST-FAKE-PLATE-GUESS' },
       needsSupplierConfirm: false,
-    })]);
+    })], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.candidates[0]).toMatchObject({ productRef: null, vehicleUnspecified: true });
     expect(plan.batch.records[0]?.payload).toMatchObject({
       normalized: {
@@ -53,11 +64,11 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
 
   it('makes money-like types non-promotable and state signals promotable', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
-      candidate({ type: '가격', fields: { 요약: '가격', 값: 'TEST-FAKE-AMOUNT' }, source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-1' } }),
-      candidate({ type: '조건', fields: { 요약: '조건', 값: 'TEST-FAKE-CONDITION' }, source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-2' } }),
-      candidate({ type: '정책변경', fields: { 요약: '정책', 값: 'TEST-FAKE-POLICY' }, source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-3' } }),
-      candidate({ type: '계약진행', fields: { 요약: '진행', 값: '접수 가능' }, source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-4' } }),
-    ]);
+      candidate({ type: '가격', fields: { 요약: '가격', 값: 'TEST-FAKE-AMOUNT' }, source: { ...candidate().source, msgNo: '100' } }),
+      candidate({ type: '조건', fields: { 요약: '조건', 값: 'TEST-FAKE-CONDITION' }, source: { ...candidate().source, msgNo: '101', excerpt: '조건 발언' } }),
+      candidate({ type: '정책변경', fields: { 요약: '정책', 값: 'TEST-FAKE-POLICY' }, source: { ...candidate().source, msgNo: '102', excerpt: '정책 발언' } }),
+      candidate({ type: '계약진행', fields: { 요약: '진행', 값: '접수 가능' }, source: { ...candidate().source, msgNo: '103', excerpt: '계약 발언' } }),
+    ], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.candidates.map((item) => item.autoPromotable)).toEqual([false, false, false, true]);
     expect(plan.batch.records.map((record) => (record.payload.normalized as { autoPromotable: boolean }).autoPromotable))
       .toEqual([false, false, false, true]);
@@ -65,9 +76,9 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
 
   it('preserves conflicting same-vehicle values as separate candidates instead of overwriting', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
-      candidate({ source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-1' }, fields: { 요약: '재고', 값: '재고 있음' } }),
-      candidate({ source: { ...candidate().source, msgNo: 'TEST-FAKE-MSG-2' }, fields: { 요약: '재고', 값: '재고 없음' } }),
-    ]);
+      candidate({ source: { ...candidate().source, msgNo: '100' }, fields: { 요약: '재고', 값: '재고 있음' } }),
+      candidate({ source: { ...candidate().source, msgNo: '101', excerpt: '다음 발언' }, fields: { 요약: '재고', 값: '재고 없음' } }),
+    ], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.batch.records).toHaveLength(2);
     expect(new Set(plan.batch.records.map((record) => record.sourceRecordId)).size).toBe(2);
     expect(plan.candidates.map((item) => item.conflict)).toEqual([true, true]);
@@ -76,12 +87,21 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
   });
 
   it('normalizes field lineage as KAKAO candidate evidence and never produces canonical lineage', () => {
-    const plan = kakaoInfoCandidatesToSourceBatch([candidate()]);
+    const plan = kakaoInfoCandidatesToSourceBatch([candidate()], { now: '2026-10-12T01:00:00.000Z' });
     const raw = prepareRawSourceBatch(plan.batch).rawRecords[0]!;
     const { lineage } = plan.normalize(raw);
     expect(lineage.length).toBeGreaterThan(0);
     expect(lineage.every((item) => item.stage === 'RAW_TO_NORMALIZED')).toBe(true);
     expect(lineage.every((item) => item.canonical == null)).toBe(true);
     expect(lineage.map((item) => item.transformId)).toEqual(lineage.map(() => 'kakao-info-candidate'));
+  });
+
+  it('does not use the oldest message time as freshness now', () => {
+    const plan = kakaoInfoCandidatesToSourceBatch([candidate({
+      source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+      vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
+    })], { now: '2026-10-12T00:00:00.000Z' });
+    expect(plan.candidates[0]?.isFresh).toBe(false);
+    expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);
   });
 });

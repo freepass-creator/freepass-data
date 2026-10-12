@@ -12,13 +12,14 @@ export type KakaoInfoRejectReason =
   | 'INVALID_TYPE'
   | 'INVALID_FIELDS'
   | 'INVALID_CONFIDENCE'
-  | 'INVALID_STATUS';
+  | 'INVALID_STATUS'
+  | 'PII_DETECTED';
 
 export type KakaoInfoCandidateInput = {
   roomCode: string;
   source: { sentAt: string; side: string; msgNo: string; excerpt: string };
   type: KakaoInfoType;
-  vehicle?: { plate?: string; model?: string; plateUnverified?: string };
+  vehicle?: { plate?: string; model?: string; plateUnverified?: string; plateEvidenceMsgNo?: number };
   fields: { 요약: string; 값: string };
   confidence: number;
   needsSupplierConfirm: boolean;
@@ -43,15 +44,53 @@ const stateSignals = ['재고 있음', '재고 없음', '접수 가능', '출고
 const nonBlank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]/g, '').toUpperCase();
+
+const parseMsgNo = (value: string) => {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const trailing = trimmed.match(/(\d+)$/);
+  return trailing ? Number(trailing[1]) : Number.NaN;
+};
+
+const hasPhoneNumber = (value: string) => {
+  const normalized = value.replace(/\+82/g, '0').replace(/[()\s.-]/g, '');
+  return /(?:010|011|016|017|018|019)\d{7,8}/.test(normalized) || /0[2-6]\d{7,8}/.test(normalized);
+};
+
+const hasResidentNumber = (value: string) => /\d{6}\s*-\s*[1-4]\d{6}/.test(value);
+
+const hasEmail = (value: string) => /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(value);
+
+const hasAccountNumber = (value: string) => {
+  const hyphenAccount = value.match(/\d{2,6}-\d{2,6}-\d{2,8}/);
+  if (hyphenAccount) {
+    const digits = hyphenAccount[0].replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 14) return true;
+  }
+  if (!/(계좌|은행|입금)/.test(value)) return false;
+  const digits = value.replace(/\D/g, '');
+  return /\d[\d\s.-]{8,}\d/.test(value) && digits.length >= 10 && digits.length <= 14;
+};
+
 export function hasSensitiveKakaoExcerpt(value: string) {
-  const compact = value.replace(/[\s-]/g, '');
-  return [
-    /\d{2,6}-\d{2,6}-\d{2,8}/,
-    /\d{3}-\d{2}-\d{5}/,
-    /\d{6}[ -]?[1-4]\d{6}/,
-    /(?:010|011|016|017|018|019)[ -]?\d{3,4}[ -]?\d{4}/,
-    /\d{10,14}/,
-  ].some((pattern) => pattern.test(value) || pattern.test(compact));
+  return hasPhoneNumber(value) || hasResidentNumber(value) || hasEmail(value) || hasAccountNumber(value);
+}
+
+function candidateStringValues(input: KakaoInfoCandidateInput) {
+  const strings: string[] = [
+    input.source?.sentAt,
+    input.source?.side,
+    input.source?.msgNo,
+    input.source?.excerpt,
+    input.type,
+    input.fields?.요약,
+    input.fields?.값,
+    input.vehicle?.plate,
+    input.vehicle?.model,
+    input.vehicle?.plateUnverified,
+  ].filter((value): value is string => typeof value === 'string');
+  return strings;
 }
 
 export function kakaoVehicleKey(candidate: Pick<KakaoInfoCandidateInput, 'vehicle'>) {
@@ -85,7 +124,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (!nonBlank(input.source.excerpt) || Array.from(input.source.excerpt).length > 80) {
     return { ok: false, reason: 'INVALID_EXCERPT' };
   }
-  if (hasSensitiveKakaoExcerpt(input.source.excerpt)) return { ok: false, reason: 'SENSITIVE_EXCERPT' };
+  if (candidateStringValues(input).some(hasSensitiveKakaoExcerpt)) return { ok: false, reason: 'PII_DETECTED' };
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
   if (!nonBlank(input.fields?.요약) || !nonBlank(input.fields?.값)) return { ok: false, reason: 'INVALID_FIELDS' };
   if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
@@ -106,11 +145,27 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     needsSupplierConfirm: Boolean(input.needsSupplierConfirm || input.vehicle?.plateUnverified),
   };
   if (input.vehicle) {
+    const sourceMsgNo = parseMsgNo(input.source.msgNo);
+    const plate = input.vehicle.plate?.trim();
+    const plateEvidenceMsgNo = typeof input.vehicle.plateEvidenceMsgNo === 'number' && Number.isInteger(input.vehicle.plateEvidenceMsgNo)
+      ? input.vehicle.plateEvidenceMsgNo
+      : undefined;
+    const plateDistance = plateEvidenceMsgNo !== undefined ? sourceMsgNo - plateEvidenceMsgNo : Number.NaN;
+    const plateHasEvidence =
+      Boolean(plate) &&
+      Number.isInteger(plateEvidenceMsgNo) &&
+      Number.isInteger(sourceMsgNo) &&
+      plateDistance >= 0 &&
+      plateDistance <= 2 &&
+      (plateDistance !== 0 || normalizePlateText(input.source.excerpt).includes(normalizePlateText(plate!)));
+    const plateUnverified = plateHasEvidence ? input.vehicle.plateUnverified?.trim() : plate || input.vehicle.plateUnverified?.trim();
     normalized.vehicle = {
-      ...(input.vehicle.plate ? { plate: input.vehicle.plate.trim() } : {}),
+      ...(plateHasEvidence && plate ? { plate } : {}),
       ...(input.vehicle.model ? { model: input.vehicle.model.trim() } : {}),
-      ...(input.vehicle.plateUnverified ? { plateUnverified: input.vehicle.plateUnverified.trim() } : {}),
+      ...(plateUnverified ? { plateUnverified } : {}),
+      ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo: plateEvidenceMsgNo } : {}),
     };
+    normalized.needsSupplierConfirm = Boolean(normalized.needsSupplierConfirm || plateUnverified);
   }
   return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized) } };
 }

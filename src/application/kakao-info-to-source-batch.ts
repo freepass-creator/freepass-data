@@ -78,11 +78,12 @@ function conflictKeys(candidates: KakaoInfoCandidate[]) {
 
 export function kakaoInfoCandidatesToSourceBatch(
   inputs: KakaoInfoCandidateInput[],
-  options: { observedAt?: string; now?: string } = {},
+  options: { observedAt?: string; now: string },
 ): KakaoInfoSourceBatchPlan {
+  if (!options?.now) throw new Error('KAKAO_INFO_NOW_REQUIRED');
   const candidates = inputs.map(assertKakaoInfoCandidate);
   const observedAt = options.observedAt ?? candidates.map((candidate) => candidate.source.sentAt).sort()[0] ?? new Date(0).toISOString();
-  const now = options.now ?? observedAt;
+  const now = options.now;
   const conflicts = conflictKeys(candidates);
   const records = candidates.map((candidate) => {
     const key = candidate.vehicle?.plate ? `${candidate.vehicle.plate}|${candidate.type}` : '';

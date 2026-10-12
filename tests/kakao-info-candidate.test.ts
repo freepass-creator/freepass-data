@@ -9,9 +9,9 @@ import {
 
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   roomCode: 'K-TEST-FAKE-ROOM',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: 'TEST-FAKE-MSG-1', excerpt: 'TEST-FAKE masked excerpt' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
-  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' },
+  vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
   confidence: 0.8,
   needsSupplierConfirm: false,
@@ -30,9 +30,45 @@ describe('KakaoInfoCandidate/v1 validation', () => {
 
   it('rejects sensitive and overlong excerpts before making a candidate', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '전화 010-1234-5678' } })))
-      .toEqual({ ok: false, reason: 'SENSITIVE_EXCERPT' });
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: 'A'.repeat(81) } })))
       .toEqual({ ok: false, reason: 'INVALID_EXCERPT' });
+  });
+
+  it('rejects PII from every candidate string field except roomCode', () => {
+    for (const patch of [
+      { fields: { 요약: '가격', 값: '010.1234.5678' } },
+      { fields: { 요약: '가격', 값: '+82 10-1234-5678' } },
+      { fields: { 요약: '가격', 값: '010 1234 5678' } },
+      { fields: { 요약: '가격', 값: '010-1234-5678' } },
+      { fields: { 요약: '가격', 값: '(010) 1234 5678' } },
+      { fields: { 요약: '가격', 값: 'test@example.com' } },
+      { fields: { 요약: '가격', 값: '주민번호 900101-1234567' } },
+      { fields: { 요약: '가격', 값: '은행 계좌 1234567890' } },
+      { fields: { 요약: '가격', 값: '123-456-789012' } },
+      { vehicle: { plate: 'TEST-FAKE-PLATE-1', model: '010 1234 5678', plateEvidenceMsgNo: 100 } },
+    ] satisfies Partial<KakaoInfoCandidateInput>[]) {
+      expect(createKakaoInfoCandidate(base(patch))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1,000,000' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-010-1234-5678' })).ok).toBe(true);
+  });
+
+  it('demotes plate to plateUnverified unless nearby message evidence proves it', () => {
+    expect(assertKakaoInfoCandidate(base()).vehicle).toMatchObject({ plate: 'TEST-FAKE-PLATE-1', plateEvidenceMsgNo: 100 });
+    expect(assertKakaoInfoCandidate(base({ source: { ...base().source, msgNo: '102', excerpt: '다른 발언' } })).vehicle)
+      .toMatchObject({ plate: 'TEST-FAKE-PLATE-1' });
+    for (const input of [
+      base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' } }),
+      base({ source: { ...base().source, msgNo: '99' } }),
+      base({ source: { ...base().source, msgNo: '103' } }),
+      base({ source: { ...base().source, excerpt: '번호 없음' } }),
+    ]) {
+      const candidate = assertKakaoInfoCandidate(input);
+      expect(candidate.vehicle?.plate).toBeUndefined();
+      expect(candidate.vehicle?.plateUnverified).toBe('TEST-FAKE-PLATE-1');
+      expect(candidate.needsSupplierConfirm).toBe(true);
+    }
   });
 
   it('keeps candidateId idempotent and changes it when fields change', () => {
