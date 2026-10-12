@@ -734,3 +734,20 @@ Fastify `request.ip`는 `FREEPASS_DATA_TRUST_PROXY_HOPS` 정수0~3으로만 프�
 기존 infra의 `createApprovedDrivePhotoReader`는 승인된 정확 fileId에 대해 metadata와 `alt=media` GET만 수행한다. 원본 download 방식은 [Drive 공식 문서](https://developers.google.com/workspace/drive/api/guides/manage-downloads)를 따른다. `google-auth-library` Compute metadata 인증은 runtime service account와 drive.readonly scope만 사용하며 사용자 ADC/gws를 읽지 않는다. token/fetch fixture 주입을 지원한다. ID 불일치·휴지통·용량·미디어 오류는 download 전 거부하고 스트림을 공통 8MiB 한도 안에서 읽는다. 전체 bytes의 서명과 기존 공통 reader의 SHA256·차량키·승인 철회 검사 후에만 응답한다. SDK/HTTP 오류 원문이나 토큰은 기록·반환하지 않는다.
 
 factory를 운영 runtime에 자동 연결하지 않았다. 기존 선택적 ApprovedPhotoReader 인자로만 연결할 수 있다. 승인 refs/정확 폴더 ID/서비스 계정 Drive 읽기 권한의 운영 검증과 별도 승인이 남았다. 앞 절의 reader 미구현은 이 코드 작업으로 해소하되, 비공개 사진 읽기 권한·승인 연결 게시·배포 HOLD는 유지한다.
+
+### 손오공 «최신 원문» 보존 설계 — 계획만, 쓰기 미승인 (2026-10-12)
+
+**현황(실측, 읽기만).** 프리패스 데이터 `products`의 손오공(RP012) 문서 736건 중 판매 140건의 `원문` 칸은 처음 원문 백필 시점(09-04~09-11)의 스냅샷이다. ERP4 직접수집 엔진(`ingest-supplier-to-firestore`, 고정 커밋)은 매 회차 `원문`에 사진 증거와 옵션 증거만 덧붙이고(`mergeRawPhotoEvidence`) 손오공 API 목록·상세 전체를 다시 저장하지 않는다. 최신 API 덤프는 실행기 임시 파일이며 회차 끝에 삭제된다. 따라서 «원문은 처음 것과 최신 것 둘 다 보존» 원칙이 최신 쪽에서 충족되지 않는다. 정제 필드(가격·주행 등)는 변동분만 반영되고, 판매 140건 중 132건의 마지막 값 반영이 09-21이다(`_var_polled_at` 만 일부 갱신).
+
+**목표 구조.**
+1. 처음 원문: 기존 `원문` 칸을 그대로 둔다(수정 금지).
+2. 최신 원문: 새 칸 `원문_최신` = `{ observedAt, runId, sourceRevision, payloadDigest, 요약(버킷·노출·계약가능·월납 기간 수·사진 장수) }` 만 products 에 두고, 전체 JSON(목록·상세·estimates)은 기존 `source_runs`/`raw_records`(run 단위, 이전 run 보존)에 둔다. 1 MiB 문서 한도 때문에 전체를 products 문서에 넣지 않는다.
+3. 최신 원문의 출처는 이 저장소의 `source:sonogong` 읽기(이미 구현, 상세 estimates 포함 전량). 별도 reader 를 새로 만들지 않는다.
+
+**두 가지 이행 경로.**
+- 경로 1(정석): freepass-data 에서 자체 계정으로 `--apply-raw`. 필요: freepass-data 비밀 `SONOGONG_ACCOUNT_JSON`(옛 ERP4 와 같은 값, 대표 손 1회). 지휘통제실 결정으로 ERP4 폐기·이식 일정과 함께 요청한다.
+- 경로 2(임시, ERP4 동결): ERP4 실행기가 이미 받는 덤프를 가져오는 방법은 없다(회차 끝에 삭제, 저장소 변경 금지). 따라서 경로 2 는 채택하지 않는다.
+
+**쓰기 전 승인 항목.** `원문_최신` 새 칸 추가(스키마), 첫 `--apply-raw`, products 에 대한 연결 쓰기. 각각 계획·되읽기·롤백 방법(새 칸 삭제만으로 원복)을 PR 에 붙인 뒤 지휘통제실 승인.
+
+**대조 도구·수집 감사에 전달할 정정.** 일치율에서 본 가격·사진·주행 불일치는 `원문` 칸이 낡아서 생긴 차이일 수 있다. 다만 판매 140건 중 132건의 마지막 값 반영이 09-21이므로 «저장 정제값이 최신 공급사 값과 같다»는 별개로 증명되지 않았다 — 최신 원문을 얻은 뒤 같은 대조를 다시 해야 한다.
