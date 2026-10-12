@@ -411,9 +411,11 @@ export function createVehiclePhotoReader(
         try { result = await iancarSource.read(product, index, false); }
         catch (error) {
           const code = error instanceof Error ? error.message : '';
-          emit(code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || code === 'IANCAR_PHOTO_NOT_FOUND' ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
+          // 원천에서 차량이 사라진 경우(ONE 상세 404)는 일시 오류(503)가 아니라 «사진 없음»(404)으로 정직하게 답한다.
+          const gone = code === 'IANCAR_PHOTO_NOT_FOUND' || code === 'IANCAR_ONE_API_HTTP_404';
+          emit(code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || gone ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
           if (code.startsWith('VEHICLE_PHOTO_')) throw error;
-          if (code === 'IANCAR_PHOTO_NOT_FOUND') throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+          if (gone) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
           if (code === 'IANCAR_PHOTO_BUSY') throw new Error('VEHICLE_PHOTO_BUSY');
           throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
         }
