@@ -679,10 +679,68 @@ export async function collectIancarOneFullFacts(
  * Re-read the list after rates: state transitions do not invalidate unchanged rate identities.
  * New IDs/plate changes require another bounded pass, never invented rates or deletions.
  */
+/** Finite source-only transport: no publication, persistence, photo or retry path. */
+export function createIancarSourceOnlyFetcher(fetcher: Fetcher, now: () => number = Date.now) {
+  let calls = 0;
+  const bounded: Fetcher = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin !== IANCAR_ONE_API_ORIGIN || (init?.method ?? 'GET') !== 'GET'
+      || !(/^\/v1\/vehicles$/.test(url.pathname) || /^\/v1\/vehicles\/[^/]+\/rates$/.test(url.pathname)))
+      throw new Error('SOURCE_ONLY_ROUTE_REJECTED');
+    if (calls >= 612) throw new Error('SOURCE_ONLY_BUDGET_EXCEEDED');
+    if (url.pathname === '/v1/vehicles' && Number(url.searchParams.get('page')) > 2)
+      throw new Error('SOURCE_ONLY_SCOPE_EXCEEDED');
+    calls++;
+    const response = await fetcher(input, init);
+    if (!response.ok) throw new Error('SOURCE_ONLY_HTTP_REJECTED');
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('SOURCE_ONLY_SCHEMA_REJECTED');
+    const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      while (true) {
+        const next = await reader.read(); if (next.done) break;
+        size += next.value.byteLength;
+        if (size > 1_048_576) { await reader.cancel(); throw new Error('SOURCE_ONLY_BODY_LIMIT'); }
+        chunks.push(next.value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const boundedResponse = new Response(bytes, { status: response.status, headers: response.headers });
+    if (url.pathname === '/v1/vehicles') {
+      const body = JSON.parse(new TextDecoder().decode(bytes));
+      const synced = Date.parse(body.synced_at);
+      if (!Number.isSafeInteger(body.pagination?.total) || body.pagination.total < 0 || body.pagination.total > 200
+        || !Number.isSafeInteger(body.pagination?.page_size) || body.pagination.page_size < 1
+        || Math.ceil(body.pagination.total / body.pagination.page_size) > 2)
+        throw new Error('SOURCE_ONLY_SCOPE_EXCEEDED');
+      if (body.stale !== false || !Number.isFinite(synced) || now() - synced > 900_000 || synced - now() > 60_000)
+        throw new Error('SOURCE_ONLY_NOT_FRESH');
+    }
+    return boundedResponse;
+  };
+  return { fetcher: bounded, calls: () => calls };
+}
+
+export async function inspectIancarSourceOnly(config: IancarOneApiConfig, fetcher: Fetcher = fetch) {
+  const bounded = createIancarSourceOnlyFetcher(fetcher);
+  try {
+    const capture = await collectIancarOnePhaseOneFacts(config, bounded.fetcher, new Date().toISOString(), undefined,
+      { sourceOnly: true });
+    if (!capture.readyForRawIngest || capture.issues.length) throw new Error('SOURCE_ONLY_INCOMPLETE');
+    const phase = projectIancarOnePhaseOne(capture);
+    return { stage: 'SOURCE_ONLY', status: 'COMPLETE', count: phase.vehicles.length,
+      logicalCalls: bounded.calls(), fresh: true, writes: 0, photoBytes: 0 };
+  } catch {
+    return { stage: 'SOURCE_ONLY', status: 'STOP', count: 0,
+      logicalCalls: bounded.calls(), fresh: false, writes: 0, photoBytes: 0 };
+  }
+}
+
 export async function collectIancarOnePhaseOneFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void,
-  options: { photos?: boolean } = {}
+  options: { photos?: boolean; sourceOnly?: boolean } = {}
 ): Promise<IancarOneListCapture> {
   const wallStartedAt = Date.now();
   const observationNow = () => new Date(Date.parse(now) + Date.now() - wallStartedAt).toISOString();
@@ -704,6 +762,11 @@ export async function collectIancarOnePhaseOneFacts(
         const rates = await client.getRates(record.vehicleId);
         const rateCapturedAt = observationNow();
         if (aborted) return;
+        if (options.sourceOnly) projectIancarOnePhaseOne({ ...inventory, factScope: 'PHASE_ONE_FACTS',
+          total: 1, pages: 1, records: [{ ...record, payload: { ...record.payload, rates,
+            rateRequestEvidence: { vehicle_id: record.vehicleId,
+              path: `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`,
+              captured_at: rateCapturedAt, response_digest: digest(rates), attribution: 'REQUEST_PATH_BOUND_BY_LIST_ID' } } }] }, rateCapturedAt);
         // List photo summaries are not authoritative: inspect every vehicle detail, including hidden stock.
         const photoDetail = options.photos ? await client.getVehicle(record.vehicleId) : undefined;
         if (photoDetail !== undefined) iancarOnePhotoIds(photoDetail, record.vehicleId, plate);
@@ -725,6 +788,9 @@ export async function collectIancarOnePhaseOneFacts(
     const ending = await collectIancarOneVehicleList(config, fetcher, observationNow());
     if (Date.parse(ending.syncedAt) < Date.parse(inventory.syncedAt))
       throw new IancarOneApiError('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
+    if (options.sourceOnly && (!ending.readyForRawIngest || ending.records.length !== inventory.records.length
+      || ending.records.some(record => !inventory.records.some(previous => previous.vehicleId === record.vehicleId
+        && previous.fingerprint === record.fingerprint)))) throw new Error('SOURCE_ONLY_UNSTABLE');
     inventory = ending;
     if (!ending.readyForRawIngest) continue;
     if (!ending.records.every(record => observed.get(record.vehicleId)?.plate

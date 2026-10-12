@@ -120,7 +120,7 @@
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
         "state": { "enum": ["CALCULATED", "CALCULATED_APPROX", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
-        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT)$" } },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
