@@ -97,10 +97,10 @@ const run = (args, env) => spawnSync(process.execPath, [script, ...args], { enco
 
 test('적용 모드는 승인·건수 범위·백업 버킷을 외부에서 받지 못하면 시작을 거부(64) — 실행기가 승인을 대신하지 않는다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
-  const result = run(['--apply', '--once', '--lock-root', root], {});
+  const result = run(['--apply', '--once'], {});
   assert.equal(result.status, 64);
   assert.match(result.stderr, /EANCAR_ONE_SYNC_APPROVED|IANCAR_SYNC_EXPECT|EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET/);
-  const wrong = run(['--apply', '--once', '--lock-root', root], { EANCAR_ONE_SYNC_APPROVED: 'yes', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'b' });
+  const wrong = run(['--apply', '--once'], { EANCAR_ONE_SYNC_APPROVED: 'yes', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'b' });
   assert.equal(wrong.status, 64);
 });
 test('이미 살아 있는 프로세스가 잠금을 쥐고 있으면 종료 75(동시 실행 금지)', () => {

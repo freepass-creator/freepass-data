@@ -64,7 +64,7 @@ if (lock === 'STALE') { console.error(`이전 실행이 비정상 종료하며 �
 let child = null;
 const pause = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 무시 */ } };
 function killChildTree() {
-  if (!child || child.exitCode !== null || !child.pid) return true;
+  if (!child || !child.pid) return true;
   const pid = child.pid;
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
   else { try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 이미 종료 */ } } }
@@ -94,9 +94,10 @@ async function observe() {
 
 function runSync() {
   return new Promise(resolve => {
-    const args = ['tsx', 'src/jobs/collect-iancar-one-api.ts', '--sync', '--photos-pending', '--keep-withdrawn', ...(apply ? ['--apply-sync'] : [])];
-    child = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx', args, {
-      shell: process.platform === 'win32', detached: process.platform !== 'win32',
+    // npx/cmd 같은 중간 래퍼 없이 수집기 «node 프로세스 자체»를 직접 띄운다 — 자식 pid 가 곧 수집기라 종료 확인이 정확하다.
+    const args = ['--import', 'tsx', 'src/jobs/collect-iancar-one-api.ts', '--sync', '--photos-pending', '--keep-withdrawn', ...(apply ? ['--apply-sync'] : [])];
+    child = spawn(process.execPath, args, {
+      detached: process.platform !== 'win32',
       env: { ...process.env, EANCAR_ONE_API_KEY: key, FIREBASE_PROJECT_ID: 'freepasserp5', EANCAR_ONE_API_TIMEOUT_MS: '45000' },
     });
     let stdout = '', stderr = '';
