@@ -32,4 +32,13 @@ describe('ProductDossier/v1 schema', () => {
     expect(validate({ ...sample, fields: [{ ...sample.fields[0], source: 'GUESS' }] })).toBe(false);
     expect(validate({ ...sample, candidates: Array.from({ length: 21 }, () => ({ productId: 'p', plateLast4: '0001' })) })).toBe(false);
   });
+
+  it('expresses READ_FAILED and PARTIAL and forbids READ_FAILED fields under status OK', () => {
+    const failedField = { path: 'product.maker', group: 'BASIC', source: 'RAW', asOf: null, mismatch: 'NOT_COMPARED', reasonCode: 'READ_FAILED' };
+    expect(validate({ ...sample, status: 'OK', fields: [failedField] })).toBe(false);
+    expect(validate({ ...sample, status: 'PARTIAL', fields: [failedField] }), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ ...sample, status: 'PARTIAL', fields: [sample.fields[0]] })).toBe(false);
+    expect(validate({ ...sample, status: 'READ_FAILED', fields: [] })).toBe(false);
+    expect(validate({ ...sample, status: 'READ_FAILED', reason: '원천 읽기 실패', fields: [] }), JSON.stringify(validate.errors)).toBe(true);
+  });
 });

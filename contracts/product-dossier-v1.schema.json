@@ -44,17 +44,21 @@
     "status": {
       "enum": [
         "OK",
+        "PARTIAL",
+        "READ_FAILED",
         "PRODUCT_NOT_FOUND",
         "TOO_MANY_CANDIDATES",
         "NOT_LISTABLE",
         "NO_PRICE_ROWS"
-      ]
+      ],
+      "description": "OK 정상(어떤 field 도 READ_FAILED 금지) / PARTIAL 일부 칸 읽기 실패(READ_FAILED 칸이 1개 이상) / READ_FAILED 전체 조회 실패(fields 비어도 됨, reason 필수)"
     },
     "reason": {
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "description": "READ_FAILED·PARTIAL·NOT_LISTABLE 등 OK 가 아닐 때 사유(READ_FAILED 는 비어 있지 않은 문자열 필수)"
     },
     "productId": {
       "type": [
@@ -258,6 +262,16 @@
             null
           ],
           "description": "원문 보증금이 단기/장기로 갈릴 때 구분"
+        },
+        "depositState": {
+          "enum": [
+            "AMOUNT",
+            "VERIFIED_NO_DEPOSIT",
+            "UNKNOWN",
+            "NOT_APPLICABLE",
+            null
+          ],
+          "description": "보증금 상태(depositKind 와 별개): 금액 있음 / 확인된 무보증 / 미확인 / 해당 없음"
         }
       },
       "if": {
@@ -276,5 +290,85 @@
         ]
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "OK"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fields": {
+            "items": {
+              "properties": {
+                "reasonCode": {
+                  "not": {
+                    "const": "READ_FAILED"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "READ_FAILED"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "PARTIAL"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fields": {
+            "contains": {
+              "required": [
+                "reasonCode"
+              ],
+              "properties": {
+                "reasonCode": {
+                  "const": "READ_FAILED"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
