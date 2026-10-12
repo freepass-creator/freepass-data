@@ -8,6 +8,7 @@ export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
   | 'INVALID_MSG_NO'
+  | 'INVALID_PLATE_EVIDENCE'
   | 'SENDER_UNVERIFIED'
   | 'INVALID_EXCERPT'
   | 'SENSITIVE_EXCERPT'
@@ -274,6 +275,12 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
   if (!isValidMsgNo(input.source?.msgNo)) return { ok: false, reason: 'INVALID_MSG_NO' };
+  // 차량 근거 msgNo 도 메시지 번호와 같은 범위(0~999999 정수)만 허용한다 — 긴 숫자(주민번호 등)가 출력에 새지 않게.
+  if (input.vehicle?.plateEvidenceMsgNo !== undefined
+    && !(typeof input.vehicle.plateEvidenceMsgNo === 'number' && Number.isInteger(input.vehicle.plateEvidenceMsgNo)
+      && input.vehicle.plateEvidenceMsgNo >= 0 && input.vehicle.plateEvidenceMsgNo <= 999999)) {
+    return { ok: false, reason: 'INVALID_PLATE_EVIDENCE' };
+  }
   if (Date.parse(input.source.sentAt) - Date.now() > 5 * 60 * 1000) return { ok: false, reason: 'FUTURE_SENT_AT' };
   if (input.source.side !== '상대') return { ok: false, reason: 'SENDER_UNVERIFIED' };
   if (!nonBlank(input.source.excerpt) || Array.from(input.source.excerpt).length > 80) {

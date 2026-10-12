@@ -120,6 +120,12 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: 'alice@' }, fields: { 항목: '서류', 요약: 'example.com', 값: '등본' } } as never)))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
+  it('rejects out-of-range plateEvidenceMsgNo such as a resident-number shaped value', () => {
+    for (const bad of [9001011234567, -1, 1000000, 1.5]) {
+      expect(createKakaoInfoCandidate(base({ vehicle: { ...base().vehicle, plateEvidenceMsgNo: bad } })))
+        .toEqual({ ok: false, reason: 'INVALID_PLATE_EVIDENCE' });
+    }
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });
