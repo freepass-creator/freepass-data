@@ -73,3 +73,9 @@ test('ProductDossier/v1 → 대조용 상품 문서', () => {
   assert.equal(doc.maker, '기아'); assert.equal(doc.price['36'].rent, 700000); assert.equal(doc.provider_company_code, 'RP004'); assert.equal(doc.원문.전체['제조사'], '기아');
   assert.equal(dossierToProduct({ schema: 'x' }), null);
 });
+
+test('Dossier 최상위 plate·supplierCode·listable 과 photo.count', () => {
+  const doc = dossierToProduct({ schema: 'ProductDossier/v1', productId: 'doc-1', plate: '22나2222', supplierCode: 'RP021', listable: false, status: 'NOT_LISTABLE', fields: [
+    { path: 'photo.count', group: 'PHOTO', normalizedValue: 3, source: 'REFINED', asOf: null }] });
+  assert.equal(doc.car_number, '22나2222'); assert.equal(doc.provider_company_code, 'RP021'); assert.equal(doc.listable, false); assert.equal(doc.image_urls.length, 3);
+});

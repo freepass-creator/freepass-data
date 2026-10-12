@@ -97,15 +97,18 @@ const AICA_FIELDS = [...Object.values(AICA_HEADER_TO_FIELD).filter(f => f !== 'c
 // ProductDossier/v1 (contracts/product-dossier-v1.schema.json) → products 문서 모양. 입력: 배열 또는 JSONL 아님(배열/{dossiers:[…]}).
 // path: product.<칸> → <칸>, priceRow[source:N].monthlyRent|deposit → price.N.rent|deposit. rawValue + rawRef.rawPath 의 마지막 이름 → 원문.전체[이름](저장된 원문).
 export function dossierToProduct(d) {
-  if (d?.schema !== 'ProductDossier/v1' || !d.productId) return null;
-  const doc = { car_number: d.productId, listable: d.status === 'OK', price: {}, 원문: { 전체: {} }, __dossierAsOf: {} };
+  if (d?.schema !== 'ProductDossier/v1' || !(d.plate || d.productId)) return null;
+  // 최상위 plate·supplierCode·listable 사용(스키마 b6430537 이후). 없으면 productId·fields·status 로 대체.
+  const doc = { car_number: d.plate || d.productId, listable: typeof d.listable === 'boolean' ? d.listable : d.status === 'OK', price: {}, 원문: { 전체: {} }, __dossierAsOf: {} };
+  if (d.supplierCode) doc.provider_company_code = d.supplierCode;
   let photos = 0;
   for (const f of d.fields ?? []) {
     const price = f.path.match(/^priceRow\[source:(\d+)\]\.(monthlyRent|deposit)$/);
     const prod = f.path.match(/^product\.(.+)$/);
     if (price) (doc.price[price[1]] ??= {})[price[2] === 'monthlyRent' ? 'rent' : 'deposit'] = f.normalizedValue;
     else if (prod) doc[prod[1]] = f.normalizedValue;
-    else if (f.group === 'PHOTO') photos += Array.isArray(f.normalizedValue) ? f.normalizedValue.length : (f.normalizedValue ? 1 : 0);
+    else if (f.path === 'photo.count') photos += Number(f.normalizedValue) || 0;
+    else if (f.path === 'photo.urls' || f.group === 'PHOTO') photos += Array.isArray(f.normalizedValue) ? f.normalizedValue.length : (typeof f.normalizedValue === 'string' && f.normalizedValue ? 1 : 0);
     if (f.rawRef?.supplierCode) doc.provider_company_code ??= f.rawRef.supplierCode;
     if (f.rawValue !== undefined && f.rawRef?.rawPath) doc.원문.전체[f.rawRef.rawPath.split('.').pop()] = f.rawValue;
     doc.__dossierAsOf[f.path] = f.asOf;
