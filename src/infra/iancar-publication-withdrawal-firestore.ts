@@ -1,3 +1,4 @@
+import { iancarPolicyFields } from '../domain/iancar-policy-link.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -306,9 +307,9 @@ export async function publishIancarPhaseOne(input: {
       provider_company_code: 'RP031', partner_code: 'RP031', provider_name: '이안카',
       car_number: plate, product_code: old.product_code ?? id,
       vehicle_status: product.vehicle_status, status: product.status, status_kind: product.status_kind,
-      listable: product.listable, price: product.price, policy_code: null,
-      policy_code_source_original: old.policy_code ?? old.policy_code_source_original ?? null,
-      policy_reference_state: 'DEFERRED', iancar_one_vehicle_id: product.sourceVehicleId,
+      listable: product.listable, price: product.price,
+      // 정책 연결(공통 정책 LINKED)된 상품은 동기화가 다시 비우지 않는다. 연결 전 상품은 기존대로 DEFERRED(원래 값 보존).
+      ...iancarPolicyFields(old), iancar_one_vehicle_id: product.sourceVehicleId,
       iancar_phase_one: product.evidence, publication_withdrawal: null,
       publication_withdrawal_source_original: Object.hasOwn(old, 'publication_withdrawal_source_original')
         ? old.publication_withdrawal_source_original : old.publication_withdrawal ?? null,

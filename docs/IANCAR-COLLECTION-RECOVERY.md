@@ -105,3 +105,9 @@
 
 ## 5. 모델 기록
 구현·실측 Claude Sonnet 5.5, 설계 상의 Codex gpt-6-astra(읽기 전용, 수집/발행 분리·재개 전 검증 지적 반영). 독립 검토(다른 모델)는 PR 단계에서 Gemini 로 받는다.
+
+## 4-3. 이안카 정책 연결 (2026-10-12, 대표 정책 «만 26세 이상·연 2만km 기본»)
+- 원인: 노출 이안카 94대 전부 `policy_code=null`(1차 발행이 정책을 DEFERRED 로 비움) → ERP5 «보험 조건 미등록». 공통 정책 `FP-RP031-RENT` 는 있다(만 26세 이상·자차 포함·면책 50~100만원) — 단 `annual_mileage` 가 연 30,000km.
+- 작업: `src/jobs/iancar-policy-link.ts`. 기본은 읽기 전용 계획(쓰기 0). 적용 `--apply --expected-digest=<digest>` + `IANCAR_POLICY_LINK_APPROVED=true`, 복원 `--restore=<백업> --expected-digest=<digest> [--apply]` + `IANCAR_POLICY_LINK_RESTORE_APPROVED=true`. 백업은 로컬 비공개 폴더+`freepasserp5-data-audit-evidence`, 문서 updateTime 일치 조건부 트랜잭션, 되읽기(계획 칸 일치·계획 밖 칸 불변), 삭제 0.
+- 계획: ① 공통 정책 `annual_mileage` → 연 20,000km ② 노출 이안카 상품 `policy_code=FP-RP031-RENT`·`policy_reference_state=LINKED`(연결 전 값은 `policy_code_source_original` 에 보존, S01~S04 정책 문서는 삭제·수정 없음) ③ 연령 상한은 선택(`--age-upper=keep|65`, 기본 유지): 공통 정책 70세는 «자동 생성 정책 팩(codex:freepass-common-policy)»이라 이안카 공식 원문 출처가 문서에 없고, 현재 원천(ONE 보험 정보, 표본 12대)은 만 26~65세.
+- 동기화 보호: `publishIancarPhaseOne` 이 `LINKED` 상품의 policy_code 를 다시 비우지 않는다(`iancarPolicyFields`). 연결 전 상품은 기존 동작.
