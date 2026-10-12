@@ -5,10 +5,10 @@ import type { KakaoInfoCandidateInput } from '../src/domain/kakao-info-candidate
 
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
   type: '재고',
   vehicle: {
-    plate: 'TEST-FAKE-PLATE-1',
+    plate: '99허0000',
     model: 'TEST-FAKE-MODEL',
     plateEvidenceMsgNo: 100,
     plateStatusSameSentence: true,
@@ -47,7 +47,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
         type: '재고',
         value: '재고 있음',
         vehicle: {
-          productRef: 'products/TEST-FAKE-PLATE-1',
+          productRef: 'products/99허0000',
           plateEvidenceMsgNo: 100,
           plateStatusSameSentence: true,
           plateEvidenceSource: 'LITERAL_IN_UTTERANCE',
@@ -85,7 +85,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       candidate({
         type: '계약진행',
         fields: { 요약: '진행', 값: '접수 가능' },
-        source: { ...candidate().source, msgNo: '103', excerpt: 'TEST-FAKE-PLATE-1 계약 접수 가능' },
+        source: { ...candidate().source, msgNo: '103', excerpt: '99허0000 계약 접수 가능' },
         vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 103 },
       }),
     ], { now: '2026-10-12T01:00:00.000Z' });
@@ -106,7 +106,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
     const previous = candidate({
       source: { ...candidate().source, msgNo: '101', excerpt: 'B모델 재고 있음' },
       vehicle: {
-        plate: 'TEST-FAKE-PLATE-A',
+        plate: '97허0000',
         model: 'TEST-FAKE-MODEL-B',
         plateEvidenceMsgNo: 100,
         plateStatusSameSentence: true,
@@ -114,19 +114,19 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       },
     });
     const ambiguous = candidate({
-      source: { ...candidate().source, msgNo: '102', excerpt: 'TEST-FAKE-PLATE-1 TEST-FAKE-PLATE-2 재고 있음' },
+      source: { ...candidate().source, msgNo: '102', excerpt: '99허0000 98허0000 재고 있음' },
       vehicle: {
         model: 'TEST-FAKE-MODEL',
-        plateUnverified: 'TEST-FAKE-PLATE-1',
+        plateUnverified: '99허0000',
         plateEvidenceMsgNo: 102,
         plateStatusSameSentence: true,
         plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
       },
     });
     const otherSentence = candidate({
-      source: { ...candidate().source, msgNo: '103', excerpt: 'TEST-FAKE-PLATE-1 확인. 재고 있음' },
+      source: { ...candidate().source, msgNo: '103', excerpt: '99허0000 확인. 재고 있음' },
       vehicle: {
-        plate: 'TEST-FAKE-PLATE-1',
+        plate: '99허0000',
         model: 'TEST-FAKE-MODEL',
         plateEvidenceMsgNo: 103,
         plateStatusSameSentence: false,
@@ -134,7 +134,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       },
     });
     const sameSentence = candidate({
-      source: { ...candidate().source, msgNo: '104', excerpt: 'TEST-FAKE-PLATE-1 재고 있음' },
+      source: { ...candidate().source, msgNo: '104', excerpt: '99허0000 재고 있음' },
       vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 104 },
     });
     const plan = kakaoInfoCandidatesToSourceBatch([previous, ambiguous, otherSentence, sameSentence], { now: '2026-10-12T01:00:00.000Z' });
@@ -145,7 +145,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       .toEqual([false, false, false, true]);
   });
 
-  it('rejects phone-shaped roomCode and strips unknown input fields from payload.candidate', () => {
+  it('rejects phone-shaped roomCode and strips unknown input fields from payload.candidate without leaking names', () => {
     expect(() => kakaoInfoCandidatesToSourceBatch([candidate({ roomCode: 'K-01012345678' })], { now: '2026-10-12T01:00:00.000Z' }))
       .toThrow('INVALID_ROOM_CODE');
 
@@ -159,14 +159,52 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
     const payloadCandidate = plan.batch.records[0]?.payload.candidate as Record<string, unknown>;
     expect(payloadCandidate.senderName).toBeUndefined();
     expect(payloadCandidate.roomName).toBeUndefined();
-    expect(payloadCandidate.warnings).toEqual([{ code: 'UNKNOWN_FIELD', fields: ['senderName', 'roomName'] }]);
+    expect(payloadCandidate.warnings).toEqual([{ code: 'UNKNOWN_FIELDS_DROPPED', count: 2 }]);
+    expect(JSON.stringify(plan.batch)).not.toContain('senderName');
+    expect(JSON.stringify(plan.batch)).not.toContain('roomName');
+  });
+
+  it('rejects phone-shaped unknown keys without echoing the key in the error or payload', () => {
+    expect(() => kakaoInfoCandidatesToSourceBatch([
+      {
+        ...candidate(),
+        '010-1234-5678': 'x',
+      } as unknown as KakaoInfoCandidateInput,
+    ], { now: '2026-10-12T01:00:00.000Z' })).toThrow('PII_DETECTED');
+    expect(() => kakaoInfoCandidatesToSourceBatch([
+      {
+        ...candidate(),
+        vehicle: { ...candidate().vehicle!, '010-1234-5678': 'x' },
+      } as unknown as KakaoInfoCandidateInput,
+    ], { now: '2026-10-12T01:00:00.000Z' })).toThrow('PII_DETECTED');
+  });
+
+  it('demotes blank-normalized or invalid plate text and blocks promotion/productRef', () => {
+    for (const plate of ['---', 'ABC123']) {
+      const plan = kakaoInfoCandidatesToSourceBatch([candidate({
+        source: { ...candidate().source, excerpt: '재고 있음' },
+        vehicle: { ...candidate().vehicle!, plate },
+      })], { now: '2026-10-12T01:00:00.000Z' });
+      expect(plan.candidates[0]).toMatchObject({
+        productRef: null,
+        vehicleUnspecified: true,
+        autoPromotable: false,
+      });
+      expect(plan.batch.records[0]?.payload).toMatchObject({
+        normalized: {
+          vehicle: { productRef: null, plate: null, plateUnverified: plate, unspecified: true },
+          autoPromotable: false,
+          needsSupplierConfirm: true,
+        },
+      });
+    }
   });
 
   it('preserves conflicting same-vehicle values as separate candidates instead of overwriting', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
       candidate({ source: { ...candidate().source, msgNo: '100' }, fields: { 요약: '재고', 값: '재고 있음' } }),
       candidate({
-        source: { ...candidate().source, msgNo: '101', excerpt: 'TEST-FAKE-PLATE-1 재고 없음' },
+        source: { ...candidate().source, msgNo: '101', excerpt: '99허0000 재고 없음' },
         vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 101 },
         fields: { 요약: '재고', 값: '재고 없음' },
       }),
@@ -190,9 +228,9 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
 
   it('does not use the oldest message time as freshness now', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
-      source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+      source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
       vehicle: {
-        plate: 'TEST-FAKE-PLATE-1',
+        plate: '99허0000',
         model: 'TEST-FAKE-MODEL',
         plateEvidenceMsgNo: 100,
         plateStatusSameSentence: true,
@@ -208,7 +246,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
   it('marks future sentAt as not fresh when classifying already trusted candidates', () => {
     const soonFuture = new Date(Date.now() + 4 * 60 * 1000).toISOString();
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
-      source: { sentAt: soonFuture, side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+      source: { sentAt: soonFuture, side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
     })], { now: new Date(Date.now() - 2 * 60 * 1000).toISOString() });
     expect(plan.candidates[0]?.isFresh).toBe(false);
     expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);

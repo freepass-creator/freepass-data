@@ -17,7 +17,7 @@ export type KakaoInfoRejectReason =
   | 'PII_DETECTED'
   | 'FUTURE_SENT_AT';
 
-export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELD'; fields: string[] };
+export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELDS_DROPPED'; count: number };
 
 export type KakaoInfoCandidateInput = {
   roomCode: string;
@@ -66,6 +66,8 @@ const nonBlank = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
 const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]/g, '').toUpperCase();
+
+export const isValidKakaoInfoPlate = (value: string) => /^\d{2,3}[가-힣]\d{4}$/.test(normalizePlateText(value));
 
 const parseMsgNo = (value: string) => {
   const trimmed = value.trim();
@@ -154,23 +156,28 @@ const allowedPlateEvidenceFields = new Set(['source']);
 const allowedFieldsFields = new Set(['요약', '값']);
 
 function collectUnknownFields(input: KakaoInfoCandidateInput) {
-  const fields: string[] = [];
+  let count = 0;
+  let hasSensitiveKey = false;
+  const add = (key: string) => {
+    count += 1;
+    if (hasSensitiveKakaoExcerpt(key)) hasSensitiveKey = true;
+  };
   for (const key of Object.keys(input as unknown as Record<string, unknown>)) {
-    if (!allowedInputFields.has(key)) fields.push(key);
+    if (!allowedInputFields.has(key)) add(key);
   }
   for (const key of Object.keys(input.source as unknown as Record<string, unknown> ?? {})) {
-    if (!allowedSourceFields.has(key)) fields.push(`source.${key}`);
+    if (!allowedSourceFields.has(key)) add(key);
   }
   for (const key of Object.keys(input.vehicle as unknown as Record<string, unknown> ?? {})) {
-    if (!allowedVehicleFields.has(key)) fields.push(`vehicle.${key}`);
+    if (!allowedVehicleFields.has(key)) add(key);
   }
   for (const key of Object.keys(input.vehicle?.plateEvidence as unknown as Record<string, unknown> ?? {})) {
-    if (!allowedPlateEvidenceFields.has(key)) fields.push(`vehicle.plateEvidence.${key}`);
+    if (!allowedPlateEvidenceFields.has(key)) add(key);
   }
   for (const key of Object.keys(input.fields as unknown as Record<string, unknown> ?? {})) {
-    if (!allowedFieldsFields.has(key)) fields.push(`fields.${key}`);
+    if (!allowedFieldsFields.has(key)) add(key);
   }
-  return fields;
+  return { count, hasSensitiveKey };
 }
 
 function isValidRoomCode(value: string) {
@@ -225,7 +232,8 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (input.aiInvolved !== true || input.status !== 'CANDIDATE') return { ok: false, reason: 'INVALID_STATUS' };
 
   const unknownFields = collectUnknownFields(input);
-  const warnings = unknownFields.length ? [{ code: 'UNKNOWN_FIELD' as const, fields: unknownFields }] : undefined;
+  if (unknownFields.hasSensitiveKey) return { ok: false, reason: 'PII_DETECTED' };
+  const warnings = unknownFields.count ? [{ code: 'UNKNOWN_FIELDS_DROPPED' as const, count: unknownFields.count }] : undefined;
   const normalized: KakaoInfoCandidateInput = {
     roomCode: input.roomCode.trim(),
     source: {
@@ -244,23 +252,24 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (input.vehicle) {
     const sourceMsgNo = parseMsgNo(input.source.msgNo);
     const plate = input.vehicle.plate?.trim();
+    const validPlate = plate && isValidKakaoInfoPlate(plate) ? plate : undefined;
     const plateEvidenceMsgNo = typeof input.vehicle.plateEvidenceMsgNo === 'number' && Number.isInteger(input.vehicle.plateEvidenceMsgNo)
       ? input.vehicle.plateEvidenceMsgNo
       : undefined;
     const plateEvidenceSource = input.vehicle.plateEvidence?.source;
     const plateDistance = plateEvidenceMsgNo !== undefined ? sourceMsgNo - plateEvidenceMsgNo : Number.NaN;
     const plateHasEvidence =
-      Boolean(plate) &&
+      Boolean(validPlate) &&
       Number.isInteger(plateEvidenceMsgNo) &&
       plateEvidenceSource === 'LITERAL_IN_UTTERANCE' &&
       Number.isInteger(sourceMsgNo) &&
       plateDistance === 0 &&
       plateEvidenceMsgNo === sourceMsgNo &&
       input.vehicle.plateStatusSameSentence === true &&
-      normalizePlateText(input.source.excerpt).includes(normalizePlateText(plate!));
+      normalizePlateText(input.source.excerpt).includes(normalizePlateText(validPlate!));
     const plateUnverified = plateHasEvidence ? input.vehicle.plateUnverified?.trim() : plate || input.vehicle.plateUnverified?.trim();
     normalized.vehicle = {
-      ...(plateHasEvidence && plate ? { plate } : {}),
+      ...(plateHasEvidence && validPlate ? { plate: validPlate } : {}),
       ...(input.vehicle.model ? { model: input.vehicle.model.trim() } : {}),
       ...(plateUnverified ? { plateUnverified } : {}),
       ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo: plateEvidenceMsgNo } : {}),
@@ -305,7 +314,8 @@ export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, '
   const plateEvidenceMsgNo = candidate.vehicle?.plateEvidenceMsgNo;
   const plate = candidate.vehicle?.plate;
   const hasLiteralSameSentencePlate =
-    Boolean(plate) &&
+    typeof plate === 'string' &&
+    isValidKakaoInfoPlate(plate) &&
     candidate.vehicle?.plateEvidence?.source === 'LITERAL_IN_UTTERANCE' &&
     candidate.vehicle?.plateStatusSameSentence === true &&
     Number.isInteger(sourceMsgNo) &&

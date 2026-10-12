@@ -9,10 +9,10 @@ import {
 
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
   type: '재고',
   vehicle: {
-    plate: 'TEST-FAKE-PLATE-1',
+    plate: '99허0000',
     model: 'TEST-FAKE-MODEL',
     plateEvidenceMsgNo: 100,
     plateStatusSameSentence: true,
@@ -56,7 +56,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       {
         fields: { 요약: '계좌', 값: '123456789012' },
       },
-      { vehicle: { plate: 'TEST-FAKE-PLATE-1', model: '010 1234 5678', plateEvidenceMsgNo: 100, plateEvidence: { source: 'LITERAL_IN_UTTERANCE' } } },
+      { vehicle: { plate: '99허0000', model: '010 1234 5678', plateEvidenceMsgNo: 100, plateEvidence: { source: 'LITERAL_IN_UTTERANCE' } } },
     ] satisfies Partial<KakaoInfoCandidateInput>[]) {
       expect(createKakaoInfoCandidate(base(patch))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
@@ -74,13 +74,13 @@ describe('KakaoInfoCandidate/v1 validation', () => {
 
   it('demotes plate to plateUnverified unless nearby message evidence proves it', () => {
     expect(assertKakaoInfoCandidate(base()).vehicle).toMatchObject({
-      plate: 'TEST-FAKE-PLATE-1',
+      plate: '99허0000',
       plateEvidenceMsgNo: 100,
       plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
     });
     for (const input of [
-      base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' } }),
-      base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 } }),
+      base({ vehicle: { plate: '99허0000', model: 'TEST-FAKE-MODEL' } }),
+      base({ vehicle: { plate: '99허0000', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 } }),
       base({ source: { ...base().source, msgNo: '102', excerpt: '다른 발언' } }),
       base({ source: { ...base().source, msgNo: '99' } }),
       base({ source: { ...base().source, msgNo: '103' } }),
@@ -88,7 +88,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     ]) {
       const candidate = assertKakaoInfoCandidate(input);
       expect(candidate.vehicle?.plate).toBeUndefined();
-      expect(candidate.vehicle?.plateUnverified).toBe('TEST-FAKE-PLATE-1');
+      expect(candidate.vehicle?.plateUnverified).toBe('99허0000');
       expect(candidate.needsSupplierConfirm).toBe(true);
     }
   });

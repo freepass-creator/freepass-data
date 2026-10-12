@@ -4,6 +4,7 @@ import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import {
   assertKakaoInfoCandidate,
   classifyKakaoInfoSignal,
+  isValidKakaoInfoPlate,
   isKakaoMoneyInfo,
   isKakaoStateAutoPromotable,
   kakaoInfoFieldsDigest,
@@ -30,7 +31,8 @@ export type KakaoInfoSourceBatchPlan = {
 
 function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolean) {
   const signal = classifyKakaoInfoSignal(candidate, now);
-  const productRef = candidate.vehicle?.plate ? `products/${candidate.vehicle.plate}` : null;
+  const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+  const productRef = plate ? `products/${plate}` : null;
   // Trust boundary: plate literal evidence is extractor-owned. This transformer preserves
   // the evidence metadata but does not inspect neighbor utterances or check products/<plate>.
   // TODO(D2 write): if products/<plate> is absent, downgrade to vehicle-unspecified there.
@@ -52,7 +54,7 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
       value: candidate.fields.값,
       vehicle: {
         productRef,
-        plate: candidate.vehicle?.plate ?? null,
+        plate,
         model: candidate.vehicle?.model ?? null,
         plateUnverified: candidate.vehicle?.plateUnverified ?? null,
         plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
@@ -73,8 +75,9 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
 function conflictKeys(candidates: KakaoInfoCandidate[]) {
   const values = new Map<string, Set<string>>();
   for (const candidate of candidates) {
-    if (!candidate.vehicle?.plate) continue;
-    const key = `${candidate.vehicle.plate}|${candidate.type}`;
+    const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+    if (!plate) continue;
+    const key = `${plate}|${candidate.type}`;
     const set = values.get(key) ?? new Set<string>();
     set.add(kakaoInfoFieldsDigest(candidate));
     values.set(key, set);
@@ -92,7 +95,8 @@ export function kakaoInfoCandidatesToSourceBatch(
   const now = options.now;
   const conflicts = conflictKeys(candidates);
   const records = candidates.map((candidate) => {
-    const key = candidate.vehicle?.plate ? `${candidate.vehicle.plate}|${candidate.type}` : '';
+    const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+    const key = plate ? `${plate}|${candidate.type}` : '';
     const payload = payloadFor(candidate, now, conflicts.has(key));
     return {
       sourceRecordId: candidate.candidateId,
@@ -123,12 +127,13 @@ export function kakaoInfoCandidatesToSourceBatch(
   const prepared = prepareRawSourceBatch(batch);
   const byRecord = new Map(prepared.rawRecords.map((raw) => [raw.sourceRecordId, raw]));
   const planned = candidates.map((candidate) => {
-    const key = candidate.vehicle?.plate ? `${candidate.vehicle.plate}|${candidate.type}` : '';
+    const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+    const key = plate ? `${plate}|${candidate.type}` : '';
     const signal = classifyKakaoInfoSignal(candidate, now);
     return {
       candidate,
-      productRef: candidate.vehicle?.plate ? `products/${candidate.vehicle.plate}` : null,
-      vehicleUnspecified: !candidate.vehicle?.plate,
+      productRef: plate ? `products/${plate}` : null,
+      vehicleUnspecified: !plate,
       autoPromotable: isKakaoMoneyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
       conflict: conflicts.has(key),
       expiresAt: signal.expiresAt,
