@@ -35,6 +35,7 @@ import { readCatalogDataHealth } from '../application/catalog-health.js';
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { renderVehiclePhotoRendition } from '../adapters/vehicle-photo-rendition.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot, CatalogCompatibilityProductSnapshot } from '../infra/erp5-compat-catalog-reader.js';
@@ -494,6 +495,8 @@ export function createConsumerGateway(
     reply.header('Cache-Control', 'no-store');
     if (!publicRouteAllowed(request, reply)) return;
     try {
+      if (Object.hasOwn(request.query, 'size') || Object.hasOwn(request.query, 'rendition'))
+        return reply.code(400).send({ error: '상품 안내 요청이 올바르지 않습니다.' });
       const { p, wl, code } = normalizePublicQuery(request.query, registered);
       if (!code) return reply.code(400).send({ error: '상품 코드가 없습니다.' });
       const consumerId = publicConsumerIdFromWhitelabel(wl);
@@ -518,7 +521,7 @@ export function createConsumerGateway(
   const failedAuthPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.failedAuth);
   const consumerPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.consumer);
   let activePhotoResponses = 0;
-  const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string; ip: string; ips?: string[] | undefined }, reply: import('fastify').FastifyReply) => {
+  const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; query: unknown; headers: { authorization?: string | undefined }; id: string; ip: string; ips?: string[] | undefined }, reply: import('fastify').FastifyReply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
     const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
@@ -537,6 +540,12 @@ export function createConsumerGateway(
         await access.deny('READ', spec, 'FORBIDDEN'); return reply.code(403).send({ code: 'FORBIDDEN' });
       }
       const index = request.params.index === undefined ? undefined : Number(request.params.index);
+      const query = request.query as Record<string, unknown>;
+      const size = query.size;
+      if (Object.keys(query).some(key => key !== 'size') || (index === undefined && Object.keys(query).length > 0)
+        || (size !== undefined && size !== 'list' && size !== 'detail')) {
+        await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
+      }
       if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= 200)
         || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
@@ -564,14 +573,33 @@ export function createConsumerGateway(
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
       if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
-      // access.read has persisted SUCCEEDED; recheck after that await, immediately before sending.
+      let outputBytes = result.bytes, outputType = result.contentType;
+      if (index !== undefined && size !== undefined) {
+        const controller = new AbortController();
+        const abortRender = () => { controller.abort(); };
+        reply.raw.once('close', abortRender); reply.raw.once('error', abortRender);
+        if (reply.raw.destroyed) controller.abort();
+        let rendered: Awaited<ReturnType<typeof renderVehiclePhotoRendition>>;
+        try {
+          rendered = await renderVehiclePhotoRendition({ bytes: result.bytes!, contentType: result.contentType }, size, { signal: controller.signal });
+          if (controller.signal.aborted) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+        } finally {
+          reply.raw.off('close', abortRender); reply.raw.off('error', abortRender);
+        }
+        if (rendered.contentType !== 'image/jpeg' || validateVehiclePhotoMedia(rendered.contentType,
+          Buffer.isBuffer(rendered.bytes) ? rendered.bytes.length : 0, rendered.bytes))
+          return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+        outputBytes = rendered.bytes; outputType = rendered.contentType;
+      }
+      // Raw approval/SHA and success audit precede rendering. Recheck after rendering
+      // too, so a withdrawal during compression cannot reach the response.
       if (!await result.revalidate()) {
         try { await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND'); }
         catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
       }
       if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
-      return reply.type(result.contentType).send(result.bytes);
+      return reply.type(outputType).send(outputBytes);
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
       const code = error instanceof Error ? error.message : '';
