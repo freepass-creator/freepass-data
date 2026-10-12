@@ -330,7 +330,7 @@ export type VehiclePhotoRead = {
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
   connection(product: Rec): string;
-  read(product: Rec, index?: number, fresh?: boolean, expectedPhotoIds?: readonly string[]): Promise<VehiclePhotoRead>;
+  read(product: Rec, index?: number, fresh?: boolean, expectedRegisteredPhotoCount?: number): Promise<VehiclePhotoRead>;
 };
 
 export const PHOTO_READ_FAILURE_PHASES = ['INITIAL_DB', 'INITIAL_GATE', 'SOURCE_AWAIT', 'RESULT_LAYOUT', 'RESULT_MEDIA', 'RESULT_HASH', 'FINAL_DB', 'FINAL_GATE', 'FINAL_SOURCE', 'FINAL_MEMBERSHIP', 'REUSE_TTL'] as const;
@@ -401,42 +401,43 @@ export function createVehiclePhotoReader(
     const gateIds = idGatePhotoIds(product);
     if (consumerId === 'erp5-public-media' && iancarSource && product && gateIds && idGateSuppliers.has('RP031')
       && isPublicIancarPhotoProduct(product) && iancarSource.eligible(product) && !Object.hasOwn(product, 'photo_original_refs')) {
-      // 등록 ID는 기존 producer의 대표 우선 제공 순서다. 사람 검수 증거로 해석하지 않는다.
-      const registeredIds = Object.freeze([...gateIds]);
+      // 등록 배열은 허용 개수만 결속한다. 현재 원천 사진의 내용 동일성이나 사람 검수를 증명하지 않는다.
+      const registeredPhotoCount = gateIds.length;
       const sourceConnection = (value: Rec) => JSON.stringify([iancarSource.connection(value), value.provider_company_code,
         value.iancar_one_vehicle_id, value.car_number]);
       const initialConnection = sourceConnection(product);
-      const registeredLayout = (value: VehiclePhotoRead): string | undefined => {
+      const currentLayoutValid = (value: VehiclePhotoRead): boolean => {
         const served = value.photoIds, upstream = value.upstreamPhotoIds;
         const representatives = value.upstreamRepresentatives, ordinals = value.servingSourceOrdinals;
         if (!Array.isArray(served) || !Array.isArray(upstream) || !Array.isArray(representatives) || !Array.isArray(ordinals)
-          || value.count !== registeredIds.length || served.length !== registeredIds.length || upstream.length !== served.length
+          || value.count !== registeredPhotoCount || served.length !== registeredPhotoCount || upstream.length !== served.length
           || representatives.length !== served.length || ordinals.length !== served.length
           || new Set(served).size !== served.length || new Set(upstream).size !== upstream.length
-          || served.some((id, i) => id !== registeredIds[i]) || !idGatePhotoIds({ iancar_one_photo_ids: upstream })
-          || representatives.some(flag => typeof flag !== 'boolean') || representatives.filter(Boolean).length > 1) return;
+          || !idGatePhotoIds({ iancar_one_photo_ids: served }) || !idGatePhotoIds({ iancar_one_photo_ids: upstream })
+          || representatives.some(flag => typeof flag !== 'boolean') || representatives.filter(Boolean).length > 1) return false;
         const expected = upstream.map((id, ordinal) => ({ id, ordinal, representative: representatives[ordinal] }))
           .sort((a, b) => Number(b.representative) - Number(a.representative));
-        if (expected.some((photo, i) => photo.id !== served[i] || photo.ordinal !== ordinals[i])) return;
-        return JSON.stringify([upstream, representatives, ordinals]);
+        if (expected.some((photo, i) => photo.id !== served[i] || photo.ordinal !== ordinals[i])) return false;
+        return true;
       };
       if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
       active++;
       try {
         enter('SOURCE_AWAIT');
         let result: VehiclePhotoRead;
-        try { result = await iancarSource.read(product, index, true, registeredIds); }
+        try { result = await iancarSource.read(product, index, true, registeredPhotoCount); }
         catch (error) {
           const code = error instanceof Error ? error.message : '';
-          emit(code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || code === 'IANCAR_PHOTO_NOT_FOUND' ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
+          // 원천에서 차량이 사라진 경우(ONE 상세 404)는 일시 오류(503)가 아니라 «사진 없음»(404)으로 정직하게 답한다.
+          const gone = code === 'IANCAR_PHOTO_NOT_FOUND' || code === 'IANCAR_ONE_API_HTTP_404';
+          emit(code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || gone ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
           if (code.startsWith('VEHICLE_PHOTO_')) throw error;
-          if (code === 'IANCAR_PHOTO_NOT_FOUND') throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+          if (gone) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
           if (code === 'IANCAR_PHOTO_BUSY') throw new Error('VEHICLE_PHOTO_BUSY');
           throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
         }
         enter('RESULT_LAYOUT');
-        const initialLayout = registeredLayout(result);
-        if (initialLayout === undefined) {
+        if (!currentLayoutValid(result)) {
           emit('MEMBERSHIP_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND');
         }
         if (!Number.isSafeInteger(result.count) || result.count < 1 || result.count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
@@ -448,16 +449,16 @@ export function createVehiclePhotoReader(
           const currentIds = idGatePhotoIds(current);
           const unchanged = !!current && isPublicIancarPhotoProduct(current) && iancarSource.eligible(current)
             && !Object.hasOwn(current, 'photo_original_refs') && sourceConnection(current) === initialConnection
-            && !!currentIds && currentIds.length === registeredIds.length && currentIds.every((id, i) => id === registeredIds[i]);
+            && !!currentIds && currentIds.length === registeredPhotoCount;
           if (!unchanged) { emit('PROOF_CHANGED'); return false; }
           if (!checkSource) return true;
           enter('FINAL_SOURCE');
           let finalMetadata: VehiclePhotoRead;
-          try { finalMetadata = await iancarSource.read(current!, undefined, true, registeredIds); }
+          try { finalMetadata = await iancarSource.read(current!, undefined, true, registeredPhotoCount); }
           catch { emit('SOURCE_UNAVAILABLE'); return false; }
           enter('FINAL_MEMBERSHIP');
           try {
-            if (registeredLayout(finalMetadata) !== initialLayout) { emit('MEMBERSHIP_MISMATCH'); return false; }
+            if (!currentLayoutValid(finalMetadata)) { emit('MEMBERSHIP_MISMATCH'); return false; }
             return true;
           } catch { emit('UNKNOWN'); return false; }
         };

@@ -417,16 +417,16 @@ export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
   readonly sourceStore = createFirestoreSourceStore();
   private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
-  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean, expectedPhotoIds?: readonly string[]) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
+  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean, expectedRegisteredPhotoCount?: number) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
     approvedPhotoReader?: ApprovedPhotoReader, options: CatalogCompatibilityReaderOptions = {}) {
     this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
     this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
       eligible: isPublicIancarPhotoProduct,
       connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
-      read: async (product, index, fresh, expectedPhotoIds) => {
+      read: async (product, index, fresh, expectedRegisteredPhotoCount) => {
         if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
-        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh, expectedPhotoIds);
+        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh, expectedRegisteredPhotoCount);
       },
     }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
     // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
