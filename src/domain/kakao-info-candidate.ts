@@ -163,6 +163,7 @@ function exceedsResidualDigitBudget(values: string[]) {
   let digits = 0;
   let concat = '';
   let local = '';
+  const seenRuns = new Set<string>();
   // 가려진 금액·단위 숫자는 «그 칸 안에서만» 이어붙여 검사한다(칸을 가로지르면 정상 금액이 우연히 번호 모양이 된다).
   const stripped = (match: string) => { local += match.replace(/\D/g, ''); return ' '; };
   for (const raw of values) {
@@ -171,8 +172,10 @@ function exceedsResidualDigitBudget(values: string[]) {
     // 한 칸 안의 숫자는 번호판 모양을 제외하고 순서 그대로도 검사한다(글자를 사이에 끼워 쪼개는 우회 차단).
     const validDate = /(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.?\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d|T)/g;
     for (const part of raw.replace(validDate, '|').replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, '|').split('|')) {
-      const own = part.replace(/\D/g, '');
-      if (/(?:01[016789]|0[2-6][1-5]?)\d{7,8}/.test(own) || /\d{6}[1-4]\d{6}/.test(own)) return true;
+      // 숫자 사이에 한 글자만 끼워 쪼갠 경우(010가1234나5678)까지 이어붙이되, 말·문장으로 떨어진 숫자(100% 환수, 3~6개월)는 잇지 않는다.
+      for (const own of part.replace(/(?<=\d)\D(?=\d)/g, '').match(/\d+/g) ?? []) {
+        if (/(?:01[016789]|0[2-6][1-5]?)\d{7,8}/.test(own) || /\d{6}[1-4]\d{6}/.test(own)) return true;
+      }
     }
     text = text.replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
@@ -181,7 +184,8 @@ function exceedsResidualDigitBudget(values: string[]) {
     for (const run of text.match(/\d+/g) ?? []) {
       concat += run;
       local += run;
-      if (run.length <= 5 || run.length >= 10) digits += run.length;
+      // 같은 숫자가 발췌·요약·값에 되풀이돼도 한 번만 센다(서로 다른 숫자로 쪼갠 경우만 예산에 쌓는다).
+      if ((run.length <= 5 || run.length >= 10) && !seenRuns.has(run)) { seenRuns.add(run); digits += run.length; }
     }
     if (/01[016789]\d{7,8}/.test(local) || /\d{6}[1-4]\d{6}/.test(local)) return true;
   }

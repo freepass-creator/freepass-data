@@ -153,6 +153,24 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     }));
     expect(r.ok, JSON.stringify(r)).toBe(true);
   });
+  it('does not over-reject return-condition percentages or repeated model digits', () => {
+    const a = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '0~3개월이내 반납시 100% 환수조건! 3~6개월이내 반납시 50%환수조건!' },
+      fields: { 항목: '조건', 요약: '0~3개월이내 반납시 100% 환수, 3~6개월 50% 환수', 값: '0~3개월 100% 환수, 3~6개월 50% 환수' },
+    }));
+    expect(a.ok, JSON.stringify(a)).toBe(true);
+    const b = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: 'K8 2.5가솔린 2WD 베스트셀렉션 → 수수료 140만원' },
+      fields: { 항목: '가격', 요약: 'K8 2.5가솔린 2WD 베스트셀렉션 → 수수료 140만원', 값: '수수료 140만원' },
+      vehicle: { ...base().vehicle, plate: '', model: 'K8 2.5가솔린 2WD 베스트셀렉션' },
+    }));
+    expect(b.ok, JSON.stringify(b)).toBe(true);
+  });
+  it('still rejects account-number-shaped repeated digits even though repeated runs count once in the budget', () => {
+    for (const v of ['5555-5555-5555', '555555555555', '입금 5555 5555 5555']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })), v).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
   it('rejects phone-like digit-heavy room codes', () => {
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });
   });
