@@ -245,11 +245,13 @@ export async function runIancarPublicationWithdrawal(input: {
 
 export async function runIancarPhaseOnePublication(input: {
   capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
+  photoPending?: boolean; keepWithdrawn?: boolean; refreshFacts?: boolean;
 }) {
   const prepared = { products: buildIancarOnePublicationProducts(input.capture),
     sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
     apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
     ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
+    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}), ...(input.refreshFacts ? { refreshFacts: true } : {}),
     ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
     ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
   const runtime = createJobDataAccessRuntime();
@@ -276,6 +278,15 @@ export async function runIancarPhotoPublication(input: Parameters<typeof publish
     summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
   return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
+}
+
+export async function runIancarPhaseOneRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
+  const prepared = { ...input, expectedSchema: 'iancar-phase-one-typed-backup/1' };
+  const runtime = createJobDataAccessRuntime();
+  const spec = { context: { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-phase-one', purpose: 'restore verified RP031 phase-one publication backup' },
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' }, operation: input.apply ? 'RESTORE_IANCAR_PHASE_ONE' : 'READ_IANCAR_PHASE_ONE_RESTORE_PLAN',
+    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
 }
 
 export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {

@@ -171,6 +171,9 @@ const cleanImages = (product: Rec): string[] => {
     ...(Array.isArray(product.images) ? product.images : []),
     ...(Array.isArray(product.photos) ? product.photos : []),
     ...(Array.isArray(product.photo_cache) ? product.photo_cache : []),
+    // 실제 저장 모양은 {src, urls:[...]} 맵이다(드라이브 썸네일). 배열만 보면 이 사진들이 목록에서 빠진다.
+    ...(product.photo_cache && typeof product.photo_cache === 'object' && !Array.isArray(product.photo_cache)
+      && Array.isArray((product.photo_cache as Rec).urls) ? (product.photo_cache as Rec).urls as unknown[] : []),
     product.image_url,
     product.photo_link,
   ];
