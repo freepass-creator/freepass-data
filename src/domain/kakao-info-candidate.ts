@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { stableDigest, stableValue } from '../shared/stable-digest.js';
 
-export type KakaoInfoType = '재고' | '가격' | '조건' | '정책변경' | '계약진행';
+export type KakaoInfoType = '재고' | '가격' | '조건' | '정책변경' | '계약진행' | '서류요구' | '접수가능';
 export type KakaoInfoLayer = 'T0' | 'T1';
 export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_PREVIOUS';
 export type KakaoInfoRejectReason =
@@ -12,6 +12,7 @@ export type KakaoInfoRejectReason =
   | 'INVALID_EXCERPT'
   | 'SENSITIVE_EXCERPT'
   | 'INVALID_TYPE'
+  | 'TYPE_NOT_ACCEPTED'
   | 'INVALID_FIELDS'
   | 'INVALID_CONFIDENCE'
   | 'INVALID_STATUS'
@@ -24,21 +25,15 @@ export type KakaoInfoCandidateInput = {
   roomCode: string;
   source: { sentAt: string; side: string; msgNo: string; excerpt: string };
   type: KakaoInfoType;
-  /**
-   * Plate evidence is extractor-owned trust-boundary proof. This transformer cannot inspect
-   * neighboring utterance text, so it only preserves literal evidence metadata and demotes
-   * missing/out-of-window evidence. D2 write must later verify products/<plate>; if absent,
-   * downgrade to vehicle-unspecified. TODO: implement that check in the D2 write stage only.
-   */
   vehicle?: {
     plate?: string;
     model?: string;
     plateUnverified?: string;
     plateEvidenceMsgNo?: number;
+    plateEvidence?: { source: KakaoInfoPlateEvidenceSource; distance?: 0 | 1 | 2 };
     plateStatusSameSentence?: boolean;
-    plateEvidence?: { source: KakaoInfoPlateEvidenceSource };
   };
-  fields: { 요약: string; 값: string };
+  fields: { 항목: string; 요약: string; 값: string };
   confidence: number;
   needsSupplierConfirm: boolean;
   aiInvolved: true;
@@ -55,8 +50,10 @@ export type KakaoInfoCandidateResult =
   | { ok: true; candidate: KakaoInfoCandidate }
   | { ok: false; reason: KakaoInfoRejectReason };
 
-const validTypes = new Set<KakaoInfoType>(['재고', '가격', '조건', '정책변경', '계약진행']);
+const validTypes = new Set<KakaoInfoType>(['재고', '가격', '조건', '정책변경', '계약진행', '서류요구', '접수가능']);
+const rejectedInputTypes = new Set<string>(['영업요구']);
 const stateTypes = new Set<KakaoInfoType>(['재고', '계약진행']);
+const t0OnlyTypes = new Set<KakaoInfoType>(['서류요구', '접수가능']);
 const moneyTypes = new Set<KakaoInfoType>(['가격', '조건', '정책변경']);
 const stateSignals = ['재고 있음', '재고 없음', '접수 가능', '출고 예정', '예약', '불가'];
 const statePositiveSignals = ['재고 있음', '접수 가능', '출고 가능', '출고 예정', '예약', '가능'];
@@ -148,6 +145,7 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
     input.type,
     input.vehicle?.plate,
     input.source?.excerpt,
+    input.fields?.항목,
     input.fields?.요약,
     input.fields?.값,
     input.vehicle?.model,
@@ -156,22 +154,17 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
   return strings;
 }
 
-/**
- * «숫자 예산» 검사: 금액·단위·날짜·차량번호를 뺀 나머지 숫자가 후보 전체(모든 자유 문자열 + msgNo)에서 8자리 이상이면
- * 칸을 쪼개 숨긴 식별번호(전화·계좌·주민)로 보고 거부한다. 칸 조합 경우의 수를 열거하지 않는 구조적 방어(오탐은 사람 확인).
- */
-function exceedsResidualDigitBudget(values: string[], plateText?: string) {
+function exceedsResidualDigitBudget(values: string[]) {
   let digits = 0;
   let concat = '';
   for (const raw of values) {
     let text = raw;
-    text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' '); // 차량번호 형식은 숫자 예산에서 제외
+    text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
       .replace(/\d{1,3}(?:,\d{3})+\s*원?/g, ' ')
       .replace(/\d+\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
-    // 6~9자리 연속 숫자는 금액(예: 1000000)일 수 있어 예산에서 제외한다(10자리 이상 연속은 다른 규칙이 거부). 짧은 조각만 합산한다.
     for (const run of text.match(/\d+/g) ?? []) {
-      concat += run; // 칸을 가로질러 쪼갠 식별번호를 이어 붙여 검사한다(6자리 조각 포함)
+      concat += run;
       if (run.length <= 5 || run.length >= 10) digits += run.length;
     }
   }
@@ -180,7 +173,6 @@ function exceedsResidualDigitBudget(values: string[], plateText?: string) {
 }
 
 function candidateSensitiveProbeValues(values: string[]) {
-  // 자유 문자열 칸끼리 인접하도록 정렬된 목록에서 인접 결합(양방향)과 전체 이어붙임을 검사한다.
   const adjacent = values.slice(0, -1).flatMap((value, index) => [`${value}${values[index + 1]}`, `${values[index + 1]}${value}`]);
   return [...values, values.join(''), values.join(' '), ...adjacent];
 }
@@ -210,8 +202,8 @@ const allowedInputFields = new Set([
 
 const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt']);
 const allowedVehicleFields = new Set(['plate', 'model', 'plateUnverified', 'plateEvidenceMsgNo', 'plateStatusSameSentence', 'plateEvidence']);
-const allowedPlateEvidenceFields = new Set(['source']);
-const allowedFieldsFields = new Set(['요약', '값']);
+const allowedPlateEvidenceFields = new Set(['source', 'distance']);
+const allowedFieldsFields = new Set(['항목', '요약', '값']);
 
 function collectUnknownFields(input: KakaoInfoCandidateInput) {
   let count = 0;
@@ -281,11 +273,12 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   const stringValues = candidateStringValues(input);
   if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)
-    || exceedsResidualDigitBudget([...stringValues, (input.source.msgNo ?? '').length >= 5 ? input.source.msgNo : ''], input.vehicle?.plate ? normalizePlateText(String(input.vehicle.plate)) : undefined)) {
+    || exceedsResidualDigitBudget([...stringValues, (input.source.msgNo ?? '').length >= 5 ? input.source.msgNo : ''])) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
+  if (rejectedInputTypes.has(String(input.type))) return { ok: false, reason: 'TYPE_NOT_ACCEPTED' };
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
-  if (!nonBlank(input.fields?.요약) || !nonBlank(input.fields?.값)) return { ok: false, reason: 'INVALID_FIELDS' };
+  if (!nonBlank(input.fields?.항목) || !nonBlank(input.fields?.요약) || !nonBlank(input.fields?.값)) return { ok: false, reason: 'INVALID_FIELDS' };
   if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
     return { ok: false, reason: 'INVALID_CONFIDENCE' };
   }
@@ -302,7 +295,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       msgNo: input.source.msgNo.trim(),
       excerpt: input.source.excerpt,
     },
-    fields: { 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
+    fields: { 항목: input.fields.항목.trim(), 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
     confidence: input.confidence,
     needsSupplierConfirm: Boolean(input.needsSupplierConfirm || input.vehicle?.plateUnverified),
     aiInvolved: true,
@@ -317,7 +310,9 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       ? input.vehicle.plateEvidenceMsgNo
       : undefined;
     const plateEvidenceSource = input.vehicle.plateEvidence?.source;
+    const declaredDistance = input.vehicle.plateEvidence?.distance;
     const plateDistance = plateEvidenceMsgNo !== undefined ? sourceMsgNo - plateEvidenceMsgNo : Number.NaN;
+    const plateEvidenceDistanceAccepted = declaredDistance === undefined || declaredDistance === plateDistance;
     const plateHasEvidence =
       Boolean(validPlate) &&
       Number.isInteger(plateEvidenceMsgNo) &&
@@ -326,22 +321,22 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       plateDistance === 0 &&
       plateEvidenceMsgNo === sourceMsgNo &&
       input.vehicle.plateStatusSameSentence === true &&
+      plateEvidenceDistanceAccepted &&
       hasPlateLiteralWithNumericBoundary(input.source.excerpt, validPlate!);
     const plateUnverified = plateHasEvidence ? input.vehicle.plateUnverified?.trim() : plate || input.vehicle.plateUnverified?.trim();
     normalized.vehicle = {
       ...(plateHasEvidence && validPlate ? { plate: validPlate } : {}),
       ...(input.vehicle.model ? { model: input.vehicle.model.trim() } : {}),
       ...(plateUnverified ? { plateUnverified } : {}),
-      ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo: plateEvidenceMsgNo } : {}),
+      ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo } : {}),
       ...(input.vehicle.plateStatusSameSentence === true ? { plateStatusSameSentence: true } : {}),
-      ...(plateHasEvidence && plateEvidenceSource ? { plateEvidence: { source: plateEvidenceSource } } : {}),
+      ...(plateHasEvidence && plateEvidenceSource ? { plateEvidence: { source: plateEvidenceSource, distance: plateDistance as 0 | 1 | 2 } } : {}),
     };
     normalized.needsSupplierConfirm = Boolean(normalized.needsSupplierConfirm || plateUnverified);
   }
-  // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
   const finalValues = candidateStringValues(normalized);
   if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)
-    || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo.length >= 5 ? normalized.source.msgNo : ''], normalized.vehicle?.plate ? normalizePlateText(normalized.vehicle.plate) : undefined)) {
+    || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo.length >= 5 ? normalized.source.msgNo : ''])) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized), ...(warnings ? { warnings } : {}) } };
@@ -355,7 +350,11 @@ export function assertKakaoInfoCandidate(input: KakaoInfoCandidateInput) {
 
 export function classifyKakaoInfoSignal(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source'>, now: string) {
   if (!Number.isFinite(Date.parse(now))) throw new Error('INVALID_KAKAO_INFO_NOW');
-  const ttlMs = stateTypes.has(candidate.type) ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  const ttlMs = candidate.type === '서류요구'
+    ? 30 * 24 * 60 * 60 * 1000
+    : stateTypes.has(candidate.type) || candidate.type === '접수가능'
+      ? 24 * 60 * 60 * 1000
+      : 7 * 24 * 60 * 60 * 1000;
   const sent = Date.parse(candidate.source.sentAt);
   const expiresAt = new Date(sent + ttlMs).toISOString();
   const nowMs = Date.parse(now);
@@ -371,6 +370,10 @@ export function isKakaoMoneyInfo(type: KakaoInfoType) {
   return moneyTypes.has(type);
 }
 
+export function isKakaoT0OnlyInfo(type: KakaoInfoType) {
+  return t0OnlyTypes.has(type);
+}
+
 export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh: boolean) {
   if (typeof isFresh !== 'boolean') throw new Error('INVALID_KAKAO_INFO_FRESHNESS');
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
@@ -384,10 +387,11 @@ export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, '
     typeof plate === 'string' &&
     isValidKakaoInfoPlate(plate) &&
     candidate.vehicle?.plateEvidence?.source === 'LITERAL_IN_UTTERANCE' &&
+    candidate.vehicle.plateEvidence.distance === 0 &&
     candidate.vehicle?.plateStatusSameSentence === true &&
     Number.isInteger(sourceMsgNo) &&
     plateEvidenceMsgNo === sourceMsgNo &&
-    hasPlateLiteralWithNumericBoundary(candidate.source.excerpt, plate!);
+    hasPlateLiteralWithNumericBoundary(candidate.source.excerpt, plate);
   return stateTypes.has(candidate.type)
     && isFresh
     && hasLiteralSameSentencePlate

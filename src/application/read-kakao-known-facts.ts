@@ -1,0 +1,109 @@
+import { isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoPlateEvidenceSource } from '../domain/kakao-info-candidate.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
+
+export type KakaoKnownFactTopic = '재고' | '가격' | '조건' | '정책변경' | '계약진행' | '서류요구' | '접수가능';
+
+export type KakaoKnownFact = {
+  layer: 'T0' | 'T1' | 'T2' | 'T3';
+  topic: KakaoKnownFactTopic;
+  item: string;
+  valueSummary: string;
+  sentAt: string;
+  roomCode: string;
+  expiresAt: string;
+  hasConflict: boolean;
+  plateEvidence: { msgNo: number | null; source: KakaoInfoPlateEvidenceSource | null };
+  signalOnly: boolean;
+};
+
+export type KakaoKnownFactQuery = {
+  vehicleKey?: string;
+  vehicleUid?: string;
+  supplierCode: string;
+  topic: KakaoKnownFactTopic;
+  asOf: string;
+};
+
+const SOURCE_ID = 'kakao-info-candidate';
+const futureToleranceMs = 5 * 60 * 1000;
+
+function text(value: unknown) {
+  return typeof value === 'string' ? value : '';
+}
+
+function maskValue(value: string) {
+  return value.replace(/\d{2,}/g, match => match.length >= 4 ? `${match.slice(0, 2)}***` : match);
+}
+
+function validTime(value: string) {
+  return Number.isFinite(Date.parse(value));
+}
+
+function matchesSupplier(candidate: Record<string, unknown>, info: Record<string, unknown>, supplierCode: string) {
+  const supplier = text(info.supplierCode)
+    || text(info.supplierId)
+    || text(candidate.supplierCode)
+    || text(candidate.supplierId);
+  return Boolean(supplier) && supplier === supplierCode;
+}
+
+function matchesVehicle(vehicle: Record<string, unknown> | undefined, query: KakaoKnownFactQuery) {
+  const productRef = text(vehicle?.productRef);
+  const vehicleUid = text(vehicle?.vehicleUid);
+  const vehicleKeyRef = query.vehicleKey ? `products/${query.vehicleKey}` : '';
+  if (query.vehicleUid) {
+    if (vehicleUid) return vehicleUid === query.vehicleUid;
+    if (query.vehicleKey && productRef) return productRef === vehicleKeyRef;
+    return false;
+  }
+  if (!query.vehicleKey) return false;
+  return productRef === vehicleKeyRef;
+}
+
+function factLayer(topic: KakaoKnownFactTopic): KakaoKnownFact['layer'] {
+  return isKakaoT0OnlyInfo(topic) ? 'T0' : 'T1';
+}
+
+export async function readKakaoKnownFacts(
+  store: Pick<SourceIngestionStore, 'listCandidatesBySource'>,
+  query: KakaoKnownFactQuery,
+): Promise<KakaoKnownFact[]> {
+  if (!query.asOf || !Number.isFinite(Date.parse(query.asOf))) throw new Error('KAKAO_FACT_AS_OF_REQUIRED');
+  if (!query.supplierCode?.trim()) throw new Error('KAKAO_FACT_SUPPLIER_REQUIRED');
+  if (!query.vehicleKey && !query.vehicleUid) throw new Error('KAKAO_FACT_VEHICLE_REQUIRED');
+  const asOfMs = Date.parse(query.asOf);
+  const records = await store.listCandidatesBySource(SOURCE_ID);
+  const facts = records.flatMap(record => {
+    const root = record.candidate as Record<string, unknown>;
+    const info = (record.candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo;
+    if (!info || info.type !== query.topic) return [];
+    if (!matchesSupplier(root, info, query.supplierCode)) return [];
+    const vehicle = info.vehicle as Record<string, unknown> | undefined;
+    if (!matchesVehicle(vehicle, query)) return [];
+    const expiresAt = text(info.expiresAt);
+    const sentAt = text((info as { sentAt?: unknown }).sentAt);
+    if (!validTime(expiresAt) || Date.parse(expiresAt) < asOfMs) return [];
+    if (!validTime(sentAt) || Date.parse(sentAt) - asOfMs > futureToleranceMs) return [];
+    const candidate = (record.candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo!;
+    const plateEvidenceSource: KakaoInfoPlateEvidenceSource | null =
+      vehicle?.plateEvidenceSource === 'LITERAL_IN_UTTERANCE' || vehicle?.plateEvidenceSource === 'LITERAL_IN_PREVIOUS'
+        ? vehicle.plateEvidenceSource
+        : null;
+    return [{
+      layer: factLayer(query.topic),
+      topic: query.topic,
+      item: text(candidate.item || candidate.summary),
+      valueSummary: maskValue(text(candidate.value)),
+      sentAt,
+      roomCode: text(candidate.roomCode),
+      expiresAt,
+      hasConflict: candidate.conflict === true,
+      plateEvidence: {
+        msgNo: typeof vehicle?.plateEvidenceMsgNo === 'number' ? vehicle.plateEvidenceMsgNo : null,
+        source: plateEvidenceSource,
+      },
+      signalOnly: isKakaoMoneyInfo(query.topic),
+    }];
+  });
+  return facts.sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt));
+}

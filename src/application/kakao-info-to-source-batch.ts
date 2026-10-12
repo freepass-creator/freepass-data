@@ -7,6 +7,7 @@ import {
   isValidKakaoInfoPlate,
   isKakaoMoneyInfo,
   isKakaoStateAutoPromotable,
+  isKakaoT0OnlyInfo,
   kakaoInfoFieldsDigest,
   type KakaoInfoCandidate,
   type KakaoInfoCandidateInput,
@@ -33,9 +34,6 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
   const signal = classifyKakaoInfoSignal(candidate, now);
   const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
   const productRef = plate ? `products/${plate}` : null;
-  // Trust boundary: plate literal evidence is extractor-owned. This transformer preserves
-  // the evidence metadata but does not inspect neighbor utterances or check products/<plate>.
-  // TODO(D2 write): if products/<plate> is absent, downgrade to vehicle-unspecified there.
   return {
     ruleVersion: 'kakao-info-candidate/1',
     sourceKind: 'KAKAO',
@@ -50,8 +48,11 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
     },
     normalized: {
       type: candidate.type,
+      item: candidate.fields.항목,
       summary: candidate.fields.요약,
       value: candidate.fields.값,
+      sentAt: candidate.source.sentAt,
+      roomCode: candidate.roomCode,
       vehicle: {
         productRef,
         plate,
@@ -59,12 +60,13 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
         plateUnverified: candidate.vehicle?.plateUnverified ?? null,
         plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
         plateEvidenceSource: candidate.vehicle?.plateEvidence?.source ?? null,
-        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? null,
+        plateEvidenceDistance: candidate.vehicle?.plateEvidence?.distance ?? null,
+        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? false,
         unspecified: productRef == null,
       },
       needsSupplierConfirm: candidate.needsSupplierConfirm || Boolean(candidate.vehicle?.plateUnverified),
       confidence: candidate.confidence,
-      autoPromotable: isKakaoMoneyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
+      autoPromotable: isKakaoMoneyInfo(candidate.type) || isKakaoT0OnlyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
       conflict,
       expiresAt: signal.expiresAt,
       isFresh: signal.isFresh,
@@ -134,7 +136,7 @@ export function kakaoInfoCandidatesToSourceBatch(
       candidate,
       productRef: plate ? `products/${plate}` : null,
       vehicleUnspecified: !plate,
-      autoPromotable: isKakaoMoneyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
+      autoPromotable: isKakaoMoneyInfo(candidate.type) || isKakaoT0OnlyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
       conflict: conflicts.has(key),
       expiresAt: signal.expiresAt,
       isFresh: signal.isFresh,
@@ -173,11 +175,13 @@ export function kakaoInfoCandidatesToSourceBatch(
     };
     const lineage: FieldLineageRecord[] = [
       'type',
+      'item',
       'summary',
       'value',
       'vehicle.productRef',
       'vehicle.plateEvidenceMsgNo',
       'vehicle.plateEvidenceSource',
+      'vehicle.plateEvidenceDistance',
       'vehicle.plateStatusSameSentence',
       'needsSupplierConfirm',
       'autoPromotable',
