@@ -1587,7 +1587,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 기준: main `076d32bb98aa516003435ae3fd8b8fd00c26a162`, 앞 작업 commit `eba195aa495faa6e9ebd34d4a3eae4c8c0a7c793`, 기존 PR #397/같은 작업 가지에 추가.
 - 구현 commit `07f24004bb3548da228444ae94e8f20944a8c094` pushed. 시트 전용99 PASS(신규10), diff 검사 PASS. 실제 게시 목록527키·중복0·제조사17 확인. 비공개 생성 산출물은 이번 작업 PC의 Codex tmp `freepass-cascade-20261006/script-content.json`; 운영 파일 ID·인증을 Git에 복제하지 않는다.
 - 구현: bound Apps Script onEdit/onSelectionChange·선택 행 복구 메뉴, 다중 행 붙여넣기, 값 보존·불일치 경고·정확한 workbook/sheet/header binding, 같은 계층 규칙의 API 검증 계획기. 생성/설치 CLI는 운영 ID를 private artifact에만 넣고 기존 코드·trigger 충돌을 HOLD하며 설치 후 되읽기를 남긴다.
-- 실제 확인: Sheets 연결 `pyh@teamjpk.com`, 40탭/4,383,859칸/조건부 서식309, 숨김 helper15탭/전체 열 참조 XLOOKUP44,955. 설치 CLI는 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 네트워크·시트 쓰기 전 종료. Apps Script 설치가 가능한 인증 경로가 없으며 Sheets 권한을 대체로 쓰지 않는다. 현재 시트 변경 0, 기존 helper 수식 제거 0.
+- 실제 확인: Sheets 연결 `owner@example.com`, 40탭/4,383,859칸/조건부 서식309, 숨김 helper15탭/전체 열 참조 XLOOKUP44,955. 설치 CLI는 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 네트워크·시트 쓰기 전 종료. Apps Script 설치가 가능한 인증 경로가 없으며 Sheets 권한을 대체로 쓰지 않는다. 현재 시트 변경 0, 기존 helper 수식 제거 0.
 - 검증: 신규 Node 테스트 10 PASS(계층 부모·미확인 값 보존·다중 행·범위/ID·동시 값 변경·API 생성·기존 script 충돌 보존·인증 없을 때 무쓰기). 운영 이벤트·seed·helper 참조 제거·속도 개선·API publisher 연결은 미검증 HOLD.
 - next_start_here: 공급사 runbook의 2026-10-06 추가 결정/운영 전환 순서. 기존 pyh Apps Script API 인증 경로를 확보하고 생성된 private bundle로 설치·이벤트·API 입력 검증을 먼저 끝낸다. 보조 수식부터 제거하거나 설치 코드만으로 완료 선언하지 않는다.
 
@@ -1596,7 +1596,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 대표 결정: 속도 때문에 대여료 앞(A:P)만 기존 드롭다운 유지. 첫 대여료 `1개월`(Q)~`비고`(BV)는 자유 입력. `연 20,000km`는 `2만km`. 대화 기억으로만 두지 않고 `supplier-input-sheet-spec.v1.json` 및 `SUPPLIER-INPUT-SHEET-RUNBOOK.md`에 기록한다.
 - 기준 commit: main `076d32bb98aa516003435ae3fd8b8fd00c26a162`; 작업 가지 `codex/shared-sheet-dropdowns-before-rent`.
 - 구현 commit: `81bb2e4f87329b7d8995b82bf73ee3fa0776d3d7`, PR [#397](https://github.com/freepass-creator/freepass-data/pull/397). 15탭 첫 데이터 행과 마지막 행 새 조회에서 Q:BV 검증 0, 첫 데이터 행 A:P 기존 검증 총 105 유지. 화면 확인용 별도 로그인은 사용자에게 요구하지 않는다(대표 10-06: 기존 API 연결로 처리).
-- 실제 적용: Google 연결 계정 `pyh@teamjpk.com`, 현재 공급사 입력 탭 15개 Q2:BV1000 검증 제거(필터 숨김 행 포함). 연주행 AN열에서 명시한 같은 거리 표기 118칸만 `2만km`; 새 조회에서 이전 표기 0·새 표기 118·AN 검증 0. 종합 수식·금액·차종 사실 변경 없음.
+- 실제 적용: Google 연결 계정 `owner@example.com`, 현재 공급사 입력 탭 15개 Q2:BV1000 검증 제거(필터 숨김 행 포함). 연주행 AN열에서 명시한 같은 거리 표기 118칸만 `2만km`; 새 조회에서 이전 표기 0·새 표기 118·AN 검증 0. 종합 수식·금액·차종 사실 변경 없음.
 - 코드: 자유 입력 칸의 과거 목록 정의는 변환 이력용으로 보존하되 드롭다운 설정·탭 일관성 계획기에서는 재적용하지 않는다. 명시한 연주행 별칭은 정규화 계획기에 연결했고 `2만km` 재실행은 변경 0.
 - 검증: 시트 전용 Node 테스트 89 PASS, git diff --check PASS. 운영 쓰기 응답과 새 API 조회 확인. 브라우저 화면 검증·응답 시간 개선 실측·자동 동기화 연결은 미검증이며 이번 완료 주장에 포함하지 않는다.
 - next_start_here: 이 절과 공급사 runbook의 2026-10-06 결정을 먼저 읽고 옛 정책 드롭다운 목록을 복원하지 않는다. 코드 변경의 main 반영은 별도 PR로 추적한다.
