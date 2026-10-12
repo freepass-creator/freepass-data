@@ -347,6 +347,21 @@ describe('EANCAR ONE official partner API', () => {
     expect(buildIancarOneSourceBatch(capture).source.sourceId).toContain('phase-one-facts');
   });
 
+  it.each([['AVAILABLE', '출고가능', true], ['PREPARING', '출고가능', true], ['RESERVED', '계약중', true], ['UNAVAILABLE', '출고불가', false], ['RENTED', '출고불가', false]] as const)(
+    '대표 판매 기준(출고불가가 아니면 판매 가능): 원천 %s → %s(노출 %s), 원천 재고 상태는 증거에 그대로 보존', async (state, display, listable) => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const body = await (await fullFetcher()(input)).json();
+      if (path === '/v1/vehicles') { body.data[0].inventory_status = state; body.data[0].available = state === 'AVAILABLE'; }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    expect(projectIancarOnePhaseOne(capture).vehicles[0]).toMatchObject({ displayStatus: display, sourceInventoryStatus: state });
+    const product = buildIancarOnePublicationProducts(capture)[0]!;
+    expect(product).toMatchObject({ vehicle_status: display, listable });
+    expect((product.evidence as { sourceInventoryStatus?: string }).sourceInventoryStatus).toBe(state);
+  });
+
   it('sync reads detail despite zero list photos, retaining representative IDs and deferred policy', async () => {
     const paths: string[] = [];
     const fetcher = (async (input: string | URL | Request) => {
