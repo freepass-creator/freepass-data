@@ -52,6 +52,8 @@ describe('contract lock release decision', () => {
     expect(parsed(evidence({ otherTabHits: -1 }))).toBeNull();
     expect(parsed(evidence({ otherTabHits: Number.NaN }))).toBeNull();
     expect(parsed(evidence({}, { otherTabsRead: [] }))).toBeNull();
+    expect(parsed(evidence({}, { otherTabsRead: ['분납실적'] }))).toBeNull(); // 완납실적 미조회
+    expect(parsed({ ...evidence(), items: [evidence().items[0], { ...evidence().items[0], otherTabHits: 1 }] })).toBeNull(); // 같은 차량 중복
     expect(parsed(evidence({}, { otherTabsRead: undefined }))).toBeNull();
     expect(parsed(evidence({}, { readAt: 'not-a-date' }))).toBeNull();
     expect(parsed(evidence())).not.toBeNull();
@@ -73,7 +75,7 @@ describe('release-contract-locks job', () => {
   const plan = { planId: 'p', items: [item, second] };
   const ev = {
     readAt: '2026-10-12T04:58:00.000Z',
-    otherTabsRead: ['분납실적'],
+    otherTabsRead: ['분납실적', '완납실적'],
     items: [
       { plate: item.plate, intakeRows: [{ row: 10, cancel: true }], otherTabHits: 0 },
       { plate: second.plate, intakeRows: [{ row: 11, cancel: true }], otherTabHits: 0 },

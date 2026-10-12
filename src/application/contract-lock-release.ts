@@ -32,6 +32,8 @@ export type ContractLockDecision =
 
 export const CONTRACT_LOCK_EVIDENCE_MAX_AGE_MS = 15 * 60 * 1000;
 const RELEASABLE_LOCK_VALUE = 'LEDGER';
+/** 해제 증거는 최소한 이 탭들을 «모두» 조회해 성공했어야 한다(분납·완납에 살아 있는 계약이 있으면 해제하면 안 된다). */
+export const CONTRACT_LOCK_REQUIRED_OTHER_TABS = ['분납실적', '완납실적'] as const;
 
 /** JSON 에서 읽은 증거를 형식까지 검증한다(문자열 "FALSE"·누락·null·음수 등은 증거가 아니다). 틀리면 null. */
 export function parseContractLockSheetEvidence(value: unknown): ContractLockSheetEvidence | null {
@@ -40,12 +42,15 @@ export function parseContractLockSheetEvidence(value: unknown): ContractLockShee
   if (typeof input.readAt !== 'string' || !Number.isFinite(Date.parse(input.readAt))) return null;
   if (!Array.isArray(input.otherTabsRead) || !input.otherTabsRead.length
     || input.otherTabsRead.some(tab => typeof tab !== 'string' || !tab)) return null;
+  if (!CONTRACT_LOCK_REQUIRED_OTHER_TABS.every(tab => (input.otherTabsRead as string[]).includes(tab))) return null;
   if (!Array.isArray(input.items)) return null;
   const items: ContractLockSheetEvidence['items'] = [];
+  const seen = new Set<string>();
   for (const raw of input.items) {
     if (!raw || typeof raw !== 'object') return null;
     const item = raw as Record<string, unknown>;
-    if (typeof item.plate !== 'string' || !item.plate || !Array.isArray(item.intakeRows)) return null;
+    if (typeof item.plate !== 'string' || !item.plate || !Array.isArray(item.intakeRows) || seen.has(item.plate)) return null;
+    seen.add(item.plate);
     if (typeof item.otherTabHits !== 'number' || !Number.isInteger(item.otherTabHits) || item.otherTabHits < 0) return null;
     const intakeRows: Array<{ row: number; cancel: boolean }> = [];
     for (const rawRow of item.intakeRows) {
@@ -83,7 +88,7 @@ export function decideContractLockRelease(
   if (product._ledger_lock_at !== item.expectedLockAt) return hold('LOCK_TIME_CHANGED');
   if (!evidence) return hold('SHEET_EVIDENCE_MISSING');
   if (!isContractLockEvidenceFresh(evidence, now)) return hold('SHEET_EVIDENCE_STALE');
-  if (!Array.isArray(evidence.otherTabsRead) || !evidence.otherTabsRead.length) return hold('SHEET_EVIDENCE_MISSING');
+  if (!Array.isArray(evidence.otherTabsRead) || !CONTRACT_LOCK_REQUIRED_OTHER_TABS.every(tab => evidence.otherTabsRead.includes(tab))) return hold('SHEET_EVIDENCE_MISSING');
   const own = evidence.items.find(entry => entry.plate === item.plate);
   if (!own) return hold('SHEET_EVIDENCE_MISSING');
   const target = own.intakeRows.find(row => row.row === item.sheetRow);
