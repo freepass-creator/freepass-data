@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -37,3 +40,22 @@ jobs:
         run: npm run test:shadow
       - name: Delivery owner fail-closed regressions
         run: npm run test:delivery-owner
+      - name: Validate frozen photo runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha='bd03f33b9bdedfb8f49ad8717062b32784e9a08a'
+          test "$(git rev-parse "$source_sha^{tree}")" = 'f8b0d22400bff1987ae9cf1824302c99afefce05'
+          test "$(git show -s --format=%P "$source_sha")" = 'c9b9a4b31d001c2cbffd43022c9213e01e3d2544'
+          git merge-base --is-ancestor "$source_sha" HEAD
+          source_dir="$(mktemp -d "$RUNNER_TEMP/photo-image.XXXXXX")"
+          probe_file="$(mktemp "$RUNNER_TEMP/photo-image-probe.XXXXXX.mjs")"
+          git show 'HEAD:scripts/verify-photo-rendition-runtime.mjs' > "$probe_file"
+          chmod 0444 "$probe_file"
+          git -c core.autocrlf=false archive "$source_sha" | tar -x -C "$source_dir"
+          local_image="freepass-data-photo-image-check:$source_sha"
+          docker build --pull --build-arg FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js --build-arg "FREEPASS_DATA_SOURCE_SHA=$source_sha" --label "org.opencontainers.image.revision=$source_sha" --tag "$local_image" "$source_dir"
+          test "$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$source_sha"
+          docker image inspect "$local_image" --format '{{json .Config.Env}}' | jq -e 'index("FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js") != null' >/dev/null
+          test "$(docker image inspect "$local_image" --format '{{ .Config.User }}')" = 'node'
+          docker run --rm --network none --memory=512m --cpus=1 --entrypoint node --mount "type=bind,source=$probe_file,target=/tmp/sharp-list-runtime-probe.mjs,readonly" "$local_image" /tmp/sharp-list-runtime-probe.mjs

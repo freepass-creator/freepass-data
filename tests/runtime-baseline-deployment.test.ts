@@ -18,9 +18,18 @@ const photoBaseline = {
   EXPECTED_BASELINE_SOURCE_SHA: '57abb8a978457b87068c3c9c9d76cc8116934bd5',
   EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:e963c5436954d155119fa0d44a3bcc1c67b0cb38d4b996c886b18187d6f3cb42',
 };
+const photoCandidates = [
+  { source: photoSource, baseline: photoBaseline },
+  { source: 'bd03f33b9bdedfb8f49ad8717062b32784e9a08a', baseline: {
+    EXPECTED_BASELINE_REVISION: 'freepass-data-read-00038-phh',
+    EXPECTED_BASELINE_SOURCE_SHA: 'c9b9a4b31d001c2cbffd43022c9213e01e3d2544',
+    EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:6322eb95ab90882f42febd480844c45e400411ccc1a81c99f8601de3e2e6c5b2',
+  } },
+];
 
 describe('selected source deployment baseline guard', () => {
   it('binds the rendition exception to the exact approved baseline before authentication', () => {
+    for (const chosen of photoCandidates) {
     const script = block('Resolve trusted runtime source', 'Validate public approval before deployment effects');
     const mock = 'git() { if [ "$1" = merge-base ]; then return 0; elif [ "$2" = HEAD ]; then echo "$GITHUB_SHA"; else echo "$REQUESTED_RUNTIME_SOURCE_SHA"; fi; }\n';
     const dir = mkdtempSync(join(tmpdir(), 'photo-source-resolve-'));
@@ -31,9 +40,10 @@ describe('selected source deployment baseline guard', () => {
       [{ EXPECTED_BASELINE_REVISION: 'freepass-data-read-00034-abc' }, false],
       [{ EXPECTED_BASELINE_SOURCE_SHA: 'a'.repeat(40) }, false],
       [{ EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:' + 'b'.repeat(64) }, false],
+      [photoCandidates.find(candidate => candidate.source !== chosen.source)!.baseline, false],
     ] as const) {
       const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-        ...process.env, ...photoBaseline, REQUESTED_RUNTIME_SOURCE_SHA: photoSource, GITHUB_SHA: 'a'.repeat(40),
+        ...process.env, ...chosen.baseline, REQUESTED_RUNTIME_SOURCE_SHA: chosen.source, GITHUB_SHA: 'a'.repeat(40),
         GITHUB_REF: 'refs/heads/main', GITHUB_ENV: '/dev/null', GITHUB_OUTPUT: '/dev/null', RUNNER_TEMP: dir,
         USE_CONSUMER_SECRETS: 'true', ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false',
         RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js', IANCAR_PHOTO_ID_GATE_SUPPLIERS: '', ...overrides,
@@ -41,9 +51,11 @@ describe('selected source deployment baseline guard', () => {
       expect(result.status === 0, result.stderr).toBe(pass);
     }
     } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
   });
 
   it('changes only the approved photo gate and captures its exact rollback presence', () => {
+    for (const chosen of photoCandidates) {
     const script = block('Deploy private read-only service', 'Grant public invoker only when requested');
     const gate = { name: 'IANCAR_PHOTO_ID_GATE_SUPPLIERS', value: 'RP031' };
     const env: Array<Record<string, unknown>> = [
@@ -58,32 +70,36 @@ describe('selected source deployment baseline guard', () => {
       spec: { template: { metadata: { annotations: { 'autoscaling.knative.dev/maxScale': '10' } }, spec: {
         serviceAccountName: account, timeoutSeconds: 300, containerConcurrency: 8, volumes: [],
         containers: [{ env: values, ports: [{ containerPort: 8080 }], resources: { limits: { memory: '512Mi' } },
-          image: `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:${photoBaseline.EXPECTED_BASELINE_SOURCE_SHA}@${photoBaseline.EXPECTED_BASELINE_IMAGE_DIGEST}` }],
-      } } }, status: { latestReadyRevisionName: photoBaseline.EXPECTED_BASELINE_REVISION,
-        latestCreatedRevisionName: photoBaseline.EXPECTED_BASELINE_REVISION, conditions: [{ type: 'Ready', status: 'True' }],
-        traffic: [{ revisionName: photoBaseline.EXPECTED_BASELINE_REVISION, percent: 100 }], url: 'https://freepass-data-read-njl7veujva-du.a.run.app' },
+          image: `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:${chosen.baseline.EXPECTED_BASELINE_SOURCE_SHA}@${chosen.baseline.EXPECTED_BASELINE_IMAGE_DIGEST}` }],
+      } } }, status: { latestReadyRevisionName: chosen.baseline.EXPECTED_BASELINE_REVISION,
+        latestCreatedRevisionName: chosen.baseline.EXPECTED_BASELINE_REVISION, conditions: [{ type: 'Ready', status: 'True' }],
+        traffic: [{ revisionName: chosen.baseline.EXPECTED_BASELINE_REVISION, percent: 100 }], url: 'https://freepass-data-read-njl7veujva-du.a.run.app' },
     });
     const mock = `gcloud() { if [ "$2" = deploy ]; then
-      case "$*" in *'@IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031'*) ;; *) return 1 ;; esac
+      if [ "$EXPECTED_SOURCE_SHA" = '${photoSource}' ]; then
+        case "$*" in *'@IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031'*) ;; *) return 1 ;; esac
+      else
+        case "$*" in *IANCAR_PHOTO_ID_GATE_SUPPLIERS*) return 1 ;; esac
+      fi
       echo DEPLOY_REACHED; deployed=true;
       elif [ "\${deployed:-false}" = true ]; then printf '%s' "$MOCK_AFTER"; else printf '%s' "$MOCK_BEFORE"; fi; }\n`;
     const dir = mkdtempSync(join(tmpdir(), 'photo-gate-env-'));
     try {
       for (const [beforeGate, afterEnv, pass, deployed] of [
-        [[], [...env, gate], true, true], [[gate], [...env, gate], true, true],
+        [[], [...env, gate], chosen.source === photoSource, chosen.source === photoSource], [[gate], [...env, gate], true, true],
         [[gate, gate], [...env, gate], false, false], [[{ ...gate, value: '' }], [...env, gate], false, false],
         [[{ ...gate, value: 'RP012' }], [...env, gate], false, false],
         [[{ ...gate, value: null }], [...env, gate], false, false],
         [[{ name: gate.name, valueFrom: { secretKeyRef: { name: 'synthetic', key: '1' } } }], [...env, gate], false, false],
-        [[], env, false, true], [[], [...env, gate, gate], false, true],
-        [[], [...env, { ...gate, value: 'RP012' }], false, true],
-        [[], [...env.filter(v => v.name !== 'EXTRA'), gate], false, true],
-        [[], [...env.map(v => v.name === 'FREEPASS_SHEET_F04_ID' ? { ...v, value: 'changed' } : v), gate], false, true],
-        [[], [...env.map(v => v.name === 'EANCAR_ONE_API_KEY' ? { ...v, valueFrom: { secretKeyRef: { name: 'freepass-data-iancar-one-api', key: '2' } } } : v), gate], false, true],
+        [[gate], env, false, true], [[gate], [...env, gate, gate], false, true],
+        [[gate], [...env, { ...gate, value: 'RP012' }], false, true],
+        [[gate], [...env.filter(v => v.name !== 'EXTRA'), gate], false, true],
+        [[gate], [...env.map(v => v.name === 'FREEPASS_SHEET_F04_ID' ? { ...v, value: 'changed' } : v), gate], false, true],
+        [[gate], [...env.map(v => v.name === 'EANCAR_ONE_API_KEY' ? { ...v, valueFrom: { secretKeyRef: { name: 'freepass-data-iancar-one-api', key: '2' } } } : v), gate], false, true],
       ] as const) {
         const output = join(dir, `env-${Math.random()}`);
         const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-          ...process.env, ...photoBaseline, REQUESTED_RUNTIME_SOURCE_SHA: photoSource, EXPECTED_SOURCE_SHA: photoSource,
+          ...process.env, ...chosen.baseline, REQUESTED_RUNTIME_SOURCE_SHA: chosen.source, EXPECTED_SOURCE_SHA: chosen.source,
           IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP031', USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04',
           CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '5',
           IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api', IANCAR_SECRET_VERSION: '1',
@@ -103,7 +119,8 @@ describe('selected source deployment baseline guard', () => {
         }
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, 15_000);
+    }
+  }, 30_000);
   it('requires the exact baseline triplet before authentication while retaining default-main mode', () => {
     const script = block('Resolve trusted runtime source', 'Validate public approval before deployment effects');
     const mock = 'git() { if [ "$1" = merge-base ]; then return 0; else echo "$GITHUB_SHA"; fi; }\n';
