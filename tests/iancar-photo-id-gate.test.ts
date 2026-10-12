@@ -30,11 +30,17 @@ describe('이안카 사진 ID 기반 서빙 게이트', () => {
     expect(image.contentType).toBe('image/jpeg');
     expect(await image.revalidate()).toBe(true);
   });
-  it('원천 앨범이 등록 집합과 다르면(추가·누락·중복) 서빙하지 않는다', async () => {
-    for (const served of [['id-a', 'id-b'], ['id-a', 'id-b', 'id-c', 'id-z'], ['id-a', 'id-b', 'id-z'], ['id-a', 'id-a', 'id-b']]) {
+  it('원천 앨범 개수가 등록 개수와 다르거나 현재 ID 에 중복이 있으면 서빙하지 않는다', async () => {
+    for (const served of [['id-a', 'id-b'], ['id-a', 'id-b', 'id-c', 'id-z'], ['id-a', 'id-a', 'id-b']]) {
       const read = createVehiclePhotoReader(async () => base(), source(served), undefined, Date.now, undefined, new Set(['RP031']));
       await expect(read('erp5-public-media', 'p1', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
     }
+  });
+  it('ONE 이 사진 ID 를 재발급해도(등록 ID 와 현재 ID 겹침 0) 개수가 같으면 현재 앨범을 순번으로 서빙한다', async () => {
+    const src = source(['new-x', 'new-y', 'new-z']);
+    const read = createVehiclePhotoReader(async () => base(), src, undefined, Date.now, undefined, new Set(['RP031']));
+    expect((await read('erp5-public-media', 'p1')).count).toBe(3);
+    expect((await read('erp5-public-media', 'p1', 2)).bytes).toEqual(jpeg);
   });
   it('비공개·철회·다른 공급사·ID 미등록 상품은 게이트 대상이 아니다', async () => {
     for (const over of [{ listable: false }, { publication_withdrawal: { reason: 'x' } }, { provider_company_code: 'RP012' }, { iancar_one_photo_ids: [] }, { iancar_one_photo_ids: ['a', 'a'] }, { _deleted: true }]) {
