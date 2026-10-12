@@ -15,6 +15,16 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+const isDeprecatedSonokongPickupVehiclePriceFee = (
+  supplierId: string,
+  commercialType: CommercialType | undefined,
+  fee: TermEconomicAmount,
+): boolean =>
+  supplierId === 'RP012' &&
+  fee.calculation?.kind === 'RATE' &&
+  fee.calculation.base === 'VEHICLE_PRICE' &&
+  (commercialType === 'PICKUP_SUBSCRIPTION' || !!fee.ruleId?.startsWith('SONOKONG_PICKUP_'));
+
 const matchesRentReferenceCandidate = (
   target: Parameters<typeof matchesReferenceRentBasisCandidate>[0],
   candidate: Parameters<typeof matchesReferenceRentBasisCandidate>[1],
@@ -180,6 +190,7 @@ export function refreshOfferEconomicsForChangedInputs(
         };
         continue;
       }
+      if (isDeprecatedSonokongPickupVehiclePriceFee(previous.supplierId, commercialType, fee)) continue;
       term[side] = structuredClone(fee);
       const oldPrice = oldPrices.get(term.termKey), newPrice = next.priceTerms.find(price => price.termKey === term.termKey)!;
       if (policyContextChanged || oldPrice?.termMonths !== newPrice.termMonths ||
@@ -302,7 +313,8 @@ export function precomputeOfferEconomics(
       const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
         side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
       // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
-      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE') return structuredClone(saved);
+      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE' &&
+          !isDeprecatedSonokongPickupVehiclePriceFee(offer.supplierId, commercialType, saved)) return structuredClone(saved);
       const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };

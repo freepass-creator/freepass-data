@@ -266,6 +266,42 @@ describe('offer economics recompute', () => {
     expect(savedRerent.channelPayoutFee).not.toHaveProperty('approximate');
     expect(rerentStore.audits).toHaveLength(1);
   });
+  it('replaces deprecated RP012 pickup vehicle-price fees but preserves other suppliers vehicle-price fees', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const staleVehiclePriceFee = (amount: number) => ({
+      state:'KNOWN' as const, amount:{amount,currency:'KRW' as const},
+      calculation:{kind:'RATE' as const,base:'VEHICLE_PRICE' as const,rate:amount / 30000000},
+      sourceRefs:['test:deprecated-vehicle-price-rule'],
+      ruleId:'SONOKONG_PICKUP_12_BILLING_VEHICLE_PRICE',policyId:'test:old-policy',
+      vatTreatment:'EXCLUDED' as const,vatAmount:Math.round(amount * 0.1),totalAmount:amount + Math.round(amount * 0.1),
+    });
+    const pickup={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'m12-pickup',termMonths:12,monthlyRent:{amount:600000,currency:'KRW' as const}},
+    ]};
+    pickup.internalEconomicsTerms=[{
+      termKey:'m12-pickup',termMonths:12,monthlyRent:structuredClone(pickup.priceTerms[0]!.monthlyRent),
+      depositCalculation:{state:'UNKNOWN' as const,amount:null,calculation:null,sourceRefs:[],reasonCode:'DEPOSIT_EVIDENCE_REQUIRED'},
+      supplierBillingFee:staleVehiclePriceFee(1200000),
+      channelPayoutFee:{...staleVehiclePriceFee(900000),ruleId:'SONOKONG_PICKUP_12_PAYOUT_VEHICLE_PRICE'},
+    }];
+    const recomputed=precomputeOfferEconomics(pickup,'PICKUP_SUBSCRIPTION');
+    expect(recomputed[0]!.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    expect(recomputed[0]!.channelPayoutFee).toMatchObject({
+      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    expect(refreshOfferEconomicsForChangedInputs(pickup,pickup,false,'PICKUP_SUBSCRIPTION')).toEqual(recomputed);
+
+    const otherSupplier={...pickup,supplierId:'RP013'};
+    otherSupplier.internalEconomicsTerms=[structuredClone(pickup.internalEconomicsTerms[0]!)];
+    expect(precomputeOfferEconomics(otherSupplier,'USED_RENT')[0]!.channelPayoutFee)
+      .toEqual(otherSupplier.internalEconomicsTerms[0]!.channelPayoutFee);
+    expect(refreshOfferEconomicsForChangedInputs(otherSupplier,otherSupplier,false,'USED_RENT')[0]!.channelPayoutFee)
+      .toEqual(otherSupplier.internalEconomicsTerms[0]!.channelPayoutFee);
+  });
   it('recomputes reference-required unknown fees when a matching basis row is added', async () => {
     const store=await fixture(), original=(await store.listOffers())[0]!;
     const offer={...original,supplierId:'RP012',priceTerms:[
