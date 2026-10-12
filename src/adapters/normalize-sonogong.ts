@@ -148,7 +148,10 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
       if (depositEvidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:m${months}:${depositEvidence.reason}`);
       if (depositEvidence.state === 'UNKNOWN' && (estimate.securityDepositAmount === 0 || estimate.securityDepositAmount === '0'))
         issues.push('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
-      priceTerms.push({ termKey: `m${months}`, termMonths: months, monthlyRent: { amount: monthlyRent, currency: 'KRW' },
+      // 반납형·인수형은 같은 기간이 함께 온다 — 키를 갈라야 계보 ID 가 겹치지 않는다(astra P1). 같은 키가 또 오면 덮지 않고 보류.
+      const termKey = `m${months}${text(estimate.estimateType).endsWith('_BUYOUT') ? '_buyout' : ''}`;
+      if (priceTerms.some(term => term.termKey === termKey)) { issues.push(`DUPLICATE_ESTIMATE_TERM:${termKey}`); continue; }
+      priceTerms.push({ termKey, termMonths: months, monthlyRent: { amount: monthlyRent, currency: 'KRW' },
         depositState: depositEvidence.state, ...(depositEvidence.amount !== null ? { deposit: { amount: depositEvidence.amount, currency: 'KRW' as const } } : {}) });
     }
   }

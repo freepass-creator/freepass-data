@@ -134,4 +134,19 @@ describe('Sonogong RAW to candidate normalizer', () => {
     expect(ambiguous.vehicleFacts?.fields.fuel).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
     expect(ambiguous.issues).toContain('FUEL_UNRESOLVED');
   });
+
+  it('keeps return and buyout terms of the same month apart and flags a duplicate instead of colliding lineage', () => {
+    const base = payload('multi-id');
+    const normalized = normalizeOne({ ...base, detail: { ...base.detail, estimates: [
+      estimate({ estimateType: 'SUBSCRIBE_RETURN', monthly12: 410000 }),
+      estimate({ estimateType: 'SUBSCRIBE_BUYOUT', monthly12: 510000 }),
+      estimate({ estimateType: 'SUBSCRIBE_RETURN', monthly12: 999000 })] } })!;
+    const keys = normalized.record.candidate.priceTerms.map(term => term.termKey);
+    expect(keys).toContain('m12');
+    expect(keys).toContain('m12_buyout');
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(normalized.record.candidate.issues).toContain('DUPLICATE_ESTIMATE_TERM:m12');
+    const ids = normalized.lineage.map(item => item.lineageRecordId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });
