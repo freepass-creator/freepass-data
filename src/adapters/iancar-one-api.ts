@@ -441,7 +441,7 @@ export function projectIancarOnePhaseOne(capture: IancarOneListCapture, now = ne
         monthlyRent: { amount: rate.monthly_rate, currency: 'KRW' as const }, vatIncluded: true as const };
     });
     return { sourceVehicleId: record.vehicleId, plate, sourceInventoryStatus: state,
-      displayStatus: state === 'AVAILABLE' ? '출고가능' : state === 'RESERVED' ? '계약중' : '출고불가',
+      displayStatus: state === 'AVAILABLE' || state === 'PREPARING' ? '출고가능' : state === 'RESERVED' ? '계약중' : '출고불가',
       available: p.available, ratesUpdatedAt: rates.updated_at, terms };
   });
   return { stage: 'PHASE_ONE_REVIEW_ONLY' as const, sourceDigest: capture.sourceDigest,
