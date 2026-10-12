@@ -181,7 +181,7 @@ export function completeness(listableDocs) {
 
 export function f05Suppliers() { return spec.supplierChannels.sharedInputSheet.map(x => ({ code: x.code, tab: x.tab, companyName: x.companyName })); }
 
-const summarize = (code, tab, r, t0) => ({ supplier: code, tab, causes: r.causes, topReasons: r.topReasons, fixCandidateCount: r.fixCandidates?.length ?? 0, rawColumn: r.rawColumn, photoCountZero: r.dataCompleteness?.photoCountZero, sourceReadAt: r.sourceReadAt, dataReadAt: r.dataReadAt, listableTotal: r.listableTotal, listableNotInSource: r.listableNotInSource, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
+const summarize = (code, tab, r, t0) => ({ supplier: code, tab, conditionMismatchVehicles: r.conditionMismatchVehicles, conditionMismatchByType: r.conditionMismatchByType, causes: r.causes, topReasons: r.topReasons, fixCandidateCount: r.fixCandidates?.length ?? 0, rawColumn: r.rawColumn, photoCountZero: r.dataCompleteness?.photoCountZero, sourceReadAt: r.sourceReadAt, dataReadAt: r.dataReadAt, listableTotal: r.listableTotal, listableNotInSource: r.listableNotInSource, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
   commonVehicles: r.commonVehicles, vehicleCoverage: r.vehicleCoverage, fieldMatchRate: r.fieldMatchRate, fieldExactRate: r.fieldExactRate, types: r.types,
   worstFields: Object.entries(r.perField).filter(([, p]) => p.compared).map(([f, p]) => ({ field: f, compared: p.compared, matchRate: p.matchRate }))
     .sort((a, b) => a.matchRate - b.matchRate).slice(0, 5) });

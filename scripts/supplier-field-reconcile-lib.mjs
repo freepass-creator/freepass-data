@@ -78,7 +78,7 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
   };
   for (const d of [...raw.dup, ...data.dup]) add('DUPLICATE_PLATE', d);
   const perField = Object.fromEntries(fields.map(f => [f, { compared: 0, match: 0, formatOnly: 0, valueDiff: 0, emptyInData: 0, emptyInRaw: 0 }]));
-  let both = 0;
+  let both = 0; const priceDiff = new Set(), priceDiffByType = { VALUE_DIFF: 0, EMPTY_IN_DATA: 0, EMPTY_IN_RAW: 0 }; // 기간별 대여료·보증금(조건) 불일치 차량
   for (const [k, r] of raw.m) {
     const d = data.m.get(k);
     if (!d) { add('MISSING_IN_DATA', { plate4: last4(k) }, { rawRec: r }); continue; }
@@ -99,6 +99,7 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
       }
       if (c === 'BOTH_EMPTY') continue;
       pf.compared++;
+      if (f.startsWith('price.') && (c === 'VALUE_DIFF' || c === 'EMPTY_IN_DATA' || c === 'EMPTY_IN_RAW')) { priceDiff.add(k); priceDiffByType[c]++; }
       if (c === 'MATCH') pf.match++;
       else if (c === 'FORMAT_ONLY') { pf.formatOnly++; add('FORMAT_ONLY', { plate4: last4(k), field: f, raw: clip(r[f]), data: clip(d[f]) }); }
       else if (c === 'NEAR_NUMERIC') { pf.formatOnly++; add('NEAR_NUMERIC', { plate4: last4(k), field: f, raw: clip(r[f]), data: clip(d[f]) }); }
@@ -116,6 +117,7 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
     vehicleCoverage: raw.m.size ? both / raw.m.size : null, // 원본 차량 중 데이터에 있는 비율
     fieldMatchRate: compared ? matched / compared : null, // 정규화 후 일치 / 비교한 항목
     fieldExactRate: compared ? (matched - Object.values(perField).reduce((a, p) => a + p.formatOnly, 0)) / compared : null,
+    conditionMismatchVehicles: priceDiff.size, conditionMismatchByType: priceDiffByType,
     comparedFields: compared, perField, types, samples, causes,
     rawColumn: { ...rawColumn, staleRate: rawColumn.compared ? rawColumn.stale / rawColumn.compared : null },
     topReasons: [...reasons].map(([key, n]) => { const [type, field, c] = key.split('|'); return { type, field, cause: c, count: n }; }).sort((a, b) => b.count - a.count).slice(0, 12),

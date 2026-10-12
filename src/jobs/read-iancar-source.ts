@@ -19,7 +19,21 @@ for (let page = 1; page <= 100; page++) {
   records.push(...(body.data ?? [])); syncedAt = body.synced_at; stale = body.stale; total = body.pagination?.total ?? records.length;
   if (!body.data?.length || records.length >= total) break;
 }
-if (plate4) {
+if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보증금(조건) 직접 읽기 — 차량당 getRates 1회, 동시 3
+  const mapOut = arg('--map-out');
+  const rows: Record<string, unknown>[] = []; let next = 0; const keys = new Set<string>();
+  const worker = async () => { for (;;) { const r = records[next++]; if (!r) return;
+    const rates = await client.getRates(String(r.vehicle_id)) as { data?: Array<Record<string, unknown>> };
+    const price: Record<string, { rent: unknown; deposit: unknown }> = {}; const lowest = new Map<number, number>();
+    for (const t of rates.data ?? []) { const m = Number(t.rental_period), km = Number(t.contracted_mileage);
+      const key = `${m}_${t.mileage_period === 'month' ? '월' : '연'}${km}km`; price[key] = { rent: t.monthly_rate, deposit: t.deposit }; keys.add(key);
+      if ((lowest.get(m) ?? Infinity) > km) { lowest.set(m, km); price[String(m)] = { rent: t.monthly_rate, deposit: t.deposit }; keys.add(String(m)); } }
+    rows.push({ plate_number: r.plate_number, status: r.inventory_status, price }); } };
+  await Promise.all([worker(), worker(), worker()]);
+  if (out) writeFileSync(out, JSON.stringify({ readAt, syncedAt, stale, total, records: rows }));
+  if (mapOut) writeFileSync(mapOut, JSON.stringify({ car_number: 'plate_number', ...Object.fromEntries([...keys].flatMap(k => [[`price.${k}.rent`, `price.${k}.rent`], [`price.${k}.deposit`, `price.${k}.deposit`]])) }));
+  console.log(JSON.stringify({ readAt, syncedAt, stale, vehicles: rows.length, termKeys: keys.size }));
+} else if (plate4) {
   const hit = records.filter(r => String(r.plate_number ?? '').replace(/\s/g, '').endsWith(plate4));
   const detail = [];
   for (const r of hit) {
