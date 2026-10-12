@@ -162,13 +162,14 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
 function exceedsResidualDigitBudget(values: string[]) {
   let digits = 0;
   let concat = '';
+  const stripped = (match: string) => { concat += match.replace(/\D/g, ''); return ' '; };
   for (const raw of values) {
     let text = raw;
-    text = text.replace(/\d{2,3}[\s-]*[가-힣][\s-]*\d{4}/g, ' ');
-    text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' ');
+    text = text.replace(/\d{2,3}[\s-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][\s-]*\d{4}/g, ' ');
+    text = text.replace(/\d{2,3}\s*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\s*\d{4}/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
-      .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, ' ')
-      .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
+      .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, stripped)
+      .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, stripped);
     for (const run of text.match(/\d+/g) ?? []) {
       concat += run;
       if (run.length <= 5 || run.length >= 10) digits += run.length;
@@ -242,6 +243,7 @@ function isValidRoomCode(value: string) {
   if (!/^K-[A-Z0-9]{3,12}$/.test(trimmed)) return false;
   const suffix = trimmed.slice(2);
   if (/^\d{10,}$/.test(suffix)) return false;
+  if ((suffix.match(/\d/g) ?? []).length > 6) return false;
   return !hasSensitiveKakaoExcerpt(trimmed);
 }
 
