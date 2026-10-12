@@ -1,5 +1,4 @@
 # 기간별 청구·지급 장부 설계 (2026-10-11)
-
 ## 목적과 결정
 
 대표 승인(2026-10-11): **기간별 청구·지급을 프리패스 데이터(Firestore)에 박제하고 온라인에서 직접 읽는다.**
@@ -430,6 +429,33 @@ PR·시험·일정 반영:
 소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 쓰기 때 계획에서 소유 문서들의 `[문서 키, 문서 digest]` 쌍을 키로 정렬해 `stableDigest`한 `rowContentDigest`와 `historyContentDigest`를 PREPARED run 문서에 기록한다. 되읽기, reader, 이전 run 복원, ACTIVE 재호출 멱등 검증은 접두 조회로 읽은 실제 문서의 키 digest와 내용 digest를 run 문서의 `rowCount/rowKeysDigest/rowContentDigest` 또는 `historyRowCount/historyKeysDigest/historyContentDigest`와 모두 비교할 때만 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
 
 rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서만 찾고, 각 문서의 저장 digest가 삭제 직전 기대 digest와 일치하는 경우에만 삭제한다. 이전 ACTIVE run 복원 전에는 이전 run의 접두 범위 row count와 key digest를 다시 검증한다.
+
+## 손오공 상품 유형별 기간별 매핑표
+
+2026-10-12 대표 확정으로 손오공 `RP012`의 픽업 구독과 오공 구독은 차량가액 기준 수수료를 쓰지 않고 F04 `수수료표`의 기간별 규칙만 쓴다. UNKNOWN은 0이 아니며, 수수료 ledger도 같은 상태와 reasonCode를 보존한다. 오공구독 기준 대여료는 같은 상품 12개월 월 대여료로 확정했고, 청구는 `CALCULATED`와 `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`를 쓴다. 자기 기간 월 대여료 기준 경로와 별도 `OGONG_FEE_BASE` 상수는 없다.
+
+| 유형 | 기간 | 청구 규칙 | 지급 규칙 | 근거 행 | 근사 여부 | 메모 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 정정 | 전체 | 재렌트·중고렌트는 청구만 `CALCULATED_APPROX` | 재렌트·중고렌트 지급은 `CALCULATED` | 5~9 | 청구만 근사 | 보험료 차감 때문에 청구만 근사, 지급은 확정 |
+| 정정 | 전체 | 픽업구독 청구는 `CALCULATED_APPROX` | 픽업구독 지급도 `CALCULATED_APPROX` | 5~8, 191 | 청구·지급 모두 근사 | 12~48개월은 재렌트 대용, 60개월은 191행 잠정 |
+| 재렌트/중고렌트 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 60 | `월대여료 × 2.25% × 기간 - 100,000` | `월대여료 × 1.75% × 기간` | 9 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 오공구독 | 12 | `12개월 월대여료 - 100,000` | `Q12` | 10 | 없음 | sourceRefs `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`; Q12 없으면 `OGONG_12M_BASE_MISSING` |
+| 오공구독 인수형 | 24 | `12개월 월대여료 - 100,000 + 200,000` | `Q12` | 11 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 36 | `12개월 월대여료 - 100,000 + 400,000` | `Q12` | 12 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 48 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 13 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 60 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 14 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 반납형 | 24·36·48·60 | 없음 | 없음 | 173 | 미확정 | `RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED`; 인수/반납 구분 자체가 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 픽업구독 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 재렌트 12개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 재렌트 24개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 재렌트 36개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 재렌트 48개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 60 | `월대여료 × 2.75% × 기간 - 100,000` | `월대여료 × 2.00% × 기간` | 191 | 청구만 근사 | 잠정 행 191, sourceRefs `SONOKONG_PICKUP_60_PROVISIONAL_ROW191`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+
+오공구독의 `q12Basis`는 reference builder가 같은 상품의 같은 정산방식·약정주행 조건에서 12개월 가격행 월 대여료를 찾아 `PRODUCT_12_MONTH_RENT`로 자동 주입한다. 12개월 행 자체는 인수·반납형 공통 기준으로 계산하며, 24~60개월은 원문 가격키나 필드에서 인수형이 확인될 때만 BUYOUT으로 계산한다. 오공구독 최종 청구가 음수이면 0으로 보정하지 않고 `NEGATIVE_BILLING_CONFIRM_REQUIRED`로 둔다.
 
 ## 수수료 저장 구조 — 혼합(C), 최소 보강 (2026-10-12)
 
