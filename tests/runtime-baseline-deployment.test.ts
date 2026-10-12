@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -10,8 +12,98 @@ const baseline = {
   EXPECTED_BASELINE_REVISION: 'freepass-data-read-00030-bfq', EXPECTED_BASELINE_SOURCE_SHA: 'a'.repeat(40),
   EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:' + 'b'.repeat(64), REQUESTED_RUNTIME_SOURCE_SHA: 'c'.repeat(40),
 };
+const photoSource = 'd42c4f58d939d7899457730cd1a82f419b3eade8';
+const photoBaseline = {
+  EXPECTED_BASELINE_REVISION: 'freepass-data-read-00035-n8q',
+  EXPECTED_BASELINE_SOURCE_SHA: '57abb8a978457b87068c3c9c9d76cc8116934bd5',
+  EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:e963c5436954d155119fa0d44a3bcc1c67b0cb38d4b996c886b18187d6f3cb42',
+};
 
 describe('selected source deployment baseline guard', () => {
+  it('binds the rendition exception to the exact approved baseline before authentication', () => {
+    const script = block('Resolve trusted runtime source', 'Validate public approval before deployment effects');
+    const mock = 'git() { if [ "$1" = merge-base ]; then return 0; elif [ "$2" = HEAD ]; then echo "$GITHUB_SHA"; else echo "$REQUESTED_RUNTIME_SOURCE_SHA"; fi; }\n';
+    const dir = mkdtempSync(join(tmpdir(), 'photo-source-resolve-'));
+    try {
+    for (const [overrides, pass] of [
+      [{}, true], [{ IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP031' }, true],
+      [{ IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP012' }, false], [{ IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP031,RP012' }, false],
+      [{ EXPECTED_BASELINE_REVISION: 'freepass-data-read-00034-abc' }, false],
+      [{ EXPECTED_BASELINE_SOURCE_SHA: 'a'.repeat(40) }, false],
+      [{ EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:' + 'b'.repeat(64) }, false],
+    ] as const) {
+      const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
+        ...process.env, ...photoBaseline, REQUESTED_RUNTIME_SOURCE_SHA: photoSource, GITHUB_SHA: 'a'.repeat(40),
+        GITHUB_REF: 'refs/heads/main', GITHUB_ENV: '/dev/null', GITHUB_OUTPUT: '/dev/null', RUNNER_TEMP: dir,
+        USE_CONSUMER_SECRETS: 'true', ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false',
+        RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js', IANCAR_PHOTO_ID_GATE_SUPPLIERS: '', ...overrides,
+      } });
+      expect(result.status === 0, result.stderr).toBe(pass);
+    }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('changes only the approved photo gate and captures its exact rollback presence', () => {
+    const script = block('Deploy private read-only service', 'Grant public invoker only when requested');
+    const gate = { name: 'IANCAR_PHOTO_ID_GATE_SUPPLIERS', value: 'RP031' };
+    const env: Array<Record<string, unknown>> = [
+      { name: 'NODE_ENV', value: 'production' }, { name: 'FREEPASS_DATA_DRIVER', value: 'firestore' },
+      { name: 'FIREBASE_PROJECT_ID', value: 'freepasserp5' }, { name: 'FREEPASS_SHEET_F04_ID', value: 'synthetic-f04' },
+      { name: 'EXTRA', value: 'synthetic-extra' },
+      { name: 'FREEPASS_DATA_CONSUMERS_JSON', valueFrom: { secretKeyRef: { name: 'freepass-data-consumers', key: '5' } } },
+      { name: 'EANCAR_ONE_API_KEY', valueFrom: { secretKeyRef: { name: 'freepass-data-iancar-one-api', key: '1' } } },
+    ];
+    const account = 'freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com';
+    const snapshot = (values: Array<Record<string, unknown>>) => JSON.stringify({
+      spec: { template: { metadata: { annotations: { 'autoscaling.knative.dev/maxScale': '10' } }, spec: {
+        serviceAccountName: account, timeoutSeconds: 300, containerConcurrency: 8, volumes: [],
+        containers: [{ env: values, ports: [{ containerPort: 8080 }], resources: { limits: { memory: '512Mi' } },
+          image: `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:${photoBaseline.EXPECTED_BASELINE_SOURCE_SHA}@${photoBaseline.EXPECTED_BASELINE_IMAGE_DIGEST}` }],
+      } } }, status: { latestReadyRevisionName: photoBaseline.EXPECTED_BASELINE_REVISION,
+        latestCreatedRevisionName: photoBaseline.EXPECTED_BASELINE_REVISION, conditions: [{ type: 'Ready', status: 'True' }],
+        traffic: [{ revisionName: photoBaseline.EXPECTED_BASELINE_REVISION, percent: 100 }], url: 'https://freepass-data-read-njl7veujva-du.a.run.app' },
+    });
+    const mock = `gcloud() { if [ "$2" = deploy ]; then
+      case "$*" in *'@IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031'*) ;; *) return 1 ;; esac
+      echo DEPLOY_REACHED; deployed=true;
+      elif [ "\${deployed:-false}" = true ]; then printf '%s' "$MOCK_AFTER"; else printf '%s' "$MOCK_BEFORE"; fi; }\n`;
+    const dir = mkdtempSync(join(tmpdir(), 'photo-gate-env-'));
+    try {
+      for (const [beforeGate, afterEnv, pass, deployed] of [
+        [[], [...env, gate], true, true], [[gate], [...env, gate], true, true],
+        [[gate, gate], [...env, gate], false, false], [[{ ...gate, value: '' }], [...env, gate], false, false],
+        [[{ ...gate, value: 'RP012' }], [...env, gate], false, false],
+        [[{ ...gate, value: null }], [...env, gate], false, false],
+        [[{ name: gate.name, valueFrom: { secretKeyRef: { name: 'synthetic', key: '1' } } }], [...env, gate], false, false],
+        [[], env, false, true], [[], [...env, gate, gate], false, true],
+        [[], [...env, { ...gate, value: 'RP012' }], false, true],
+        [[], [...env.filter(v => v.name !== 'EXTRA'), gate], false, true],
+        [[], [...env.map(v => v.name === 'FREEPASS_SHEET_F04_ID' ? { ...v, value: 'changed' } : v), gate], false, true],
+        [[], [...env.map(v => v.name === 'EANCAR_ONE_API_KEY' ? { ...v, valueFrom: { secretKeyRef: { name: 'freepass-data-iancar-one-api', key: '2' } } } : v), gate], false, true],
+      ] as const) {
+        const output = join(dir, `env-${Math.random()}`);
+        const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
+          ...process.env, ...photoBaseline, REQUESTED_RUNTIME_SOURCE_SHA: photoSource, EXPECTED_SOURCE_SHA: photoSource,
+          IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP031', USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04',
+          CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '5',
+          IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api', IANCAR_SECRET_VERSION: '1',
+          PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-read',
+          RUNTIME_SERVICE_ACCOUNT: account, MAX_INSTANCES: '10', RUNTIME_CONCURRENCY: '8',
+          IMAGE_REF: 'synthetic-selected-image', GITHUB_ENV: output,
+          MOCK_BEFORE: snapshot([...env, ...beforeGate]), MOCK_AFTER: snapshot([...afterEnv]),
+        } });
+        expect(result.status === 0, result.stderr).toBe(pass);
+        expect(result.stdout.includes('DEPLOY_REACHED')).toBe(deployed);
+        expect(result.stdout + result.stderr).not.toContain('synthetic-extra');
+        if (pass) {
+          const receipt = readFileSync(output, 'utf8');
+          expect(receipt).toContain(`ROLLBACK_PHOTO_ID_GATE_PRESENT=${beforeGate.length === 1}`);
+          expect(receipt).toContain(`ROLLBACK_PHOTO_ID_GATE_VALUE=${beforeGate.length === 1 ? 'RP031' : ''}\n`);
+          expect(receipt).toContain('READ_RUNTIME_ENV_PRESERVED=true');
+        }
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 15_000);
   it('requires the exact baseline triplet before authentication while retaining default-main mode', () => {
     const script = block('Resolve trusted runtime source', 'Validate public approval before deployment effects');
     const mock = 'git() { if [ "$1" = merge-base ]; then return 0; else echo "$GITHUB_SHA"; fi; }\n';
@@ -98,7 +190,8 @@ describe('selected source deployment baseline guard', () => {
     for (const test of cases) {
       const before = structuredClone(service); test.change?.(before);
       const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-        ...process.env, ...baseline, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04',
+        ...process.env, ...baseline, EXPECTED_SOURCE_SHA: baseline.REQUESTED_RUNTIME_SOURCE_SHA,
+        USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04',
         CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '5',
         IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api', IANCAR_SECRET_VERSION: '1',
         PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-read',

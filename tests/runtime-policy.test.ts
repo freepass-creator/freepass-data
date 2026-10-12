@@ -242,7 +242,8 @@ describe('API runtime boundary', () => {
     const snapshot = (values: unknown[]) => JSON.stringify({ spec: { template: { spec: { containers: [{ env: values }] } } } });
     const mock = `gcloud() {
       if [ "$2" = deploy ]; then
-        case "$*" in *--update-env-vars=^@^NODE_ENV=production@FREEPASS_DATA_DRIVER=firestore@FIREBASE_PROJECT_ID=freepasserp5@FREEPASS_SHEET_F04_ID=synthetic-f04@IANCAR_PHOTO_ID_GATE_SUPPLIERS=\${GATE_EXPECT:-}*) ;; *) return 1 ;; esac
+        case "$*" in *--update-env-vars=^@^NODE_ENV=production@FREEPASS_DATA_DRIVER=firestore@FIREBASE_PROJECT_ID=freepasserp5@FREEPASS_SHEET_F04_ID=synthetic-f04*) ;; *) return 1 ;; esac
+        case "$*" in *IANCAR_PHOTO_ID_GATE_SUPPLIERS*) return 1 ;; esac
         case "$*" in *--timeout=300s*) ;; *) return 1 ;; esac
         echo DEPLOY_REACHED
         deployed=true
@@ -262,7 +263,7 @@ describe('API runtime boundary', () => {
       [env, env.map(value => value.name === 'FREEPASS_DATA_DRIVER' ? { ...value, value: 'memory' } : value), false, true],
     ] as const) {
     const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot([...before]), MOCK_AFTER: snapshot([...after]), GITHUB_ENV: '/dev/null',
+      ...process.env, EXPECTED_SOURCE_SHA: 'a'.repeat(40), USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot([...before]), MOCK_AFTER: snapshot([...after]), GITHUB_ENV: '/dev/null',
       CONSUMERS_SECRET_NAME: 'synthetic-consumers', CONSUMERS_SECRET_VERSION: '4',
       IANCAR_SECRET_NAME: 'synthetic-one', IANCAR_SECRET_VERSION: '1', SERVICE_NAME: 'synthetic-service',
       PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', IMAGE_REF: 'synthetic-image',
@@ -273,9 +274,9 @@ describe('API runtime boundary', () => {
     expect(result.stdout).not.toContain('synthetic-f04');
     expect(result.stdout).not.toContain('synthetic-extra');
     }
-    // 이안카 사진 ID 게이트 목록: 요청한 값이 배포 뒤 환경에 그대로 있어야 하고(쉼표 값은 ^@^ 구분자로 전달), 다르면 실패한다.
+    // 허용된 선택 소스 외에는 기존 사진 게이트 환경도 그대로 보존한다.
     const gateRun = (gate: string, after: unknown[]) => spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot(env), MOCK_AFTER: snapshot(after), GITHUB_ENV: '/dev/null',
+      ...process.env, EXPECTED_SOURCE_SHA: 'a'.repeat(40), USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot(env), MOCK_AFTER: snapshot(after), GITHUB_ENV: '/dev/null',
       CONSUMERS_SECRET_NAME: 'synthetic-consumers', CONSUMERS_SECRET_VERSION: '4',
       IANCAR_SECRET_NAME: 'synthetic-one', IANCAR_SECRET_VERSION: '1', SERVICE_NAME: 'synthetic-service',
       PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', IMAGE_REF: 'synthetic-image',
@@ -283,10 +284,10 @@ describe('API runtime boundary', () => {
       IANCAR_PHOTO_ID_GATE_SUPPLIERS: gate, GATE_EXPECT: gate,
     } });
     const withGate = (value: string) => [...env, { name: 'IANCAR_PHOTO_ID_GATE_SUPPLIERS', value }];
-    expect(gateRun('RP031,RP012', withGate('RP031,RP012')).status).toBe(0);
-    expect(gateRun('', withGate('')).status).toBe(0);
-    expect(gateRun('RP031', env).status).not.toBe(0);                       // 요청했는데 배포 뒤 환경에 없음
-    expect(gateRun('RP031', withGate('RP012')).status).not.toBe(0);         // 다른 값으로 반영됨
+    expect(gateRun('RP031', env).status).toBe(0);
+    expect(gateRun('RP031,RP012', withGate('RP031,RP012')).status).not.toBe(0);
+    expect(gateRun('', withGate('')).status).not.toBe(0);
+    expect(gateRun('RP031', withGate('RP012')).status).not.toBe(0);
   });
   it('이안카 사진 ID 게이트: 소비처 비밀 검증이 배포보다 먼저이고, 게이트 변수가 비면 건너뛴다', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
