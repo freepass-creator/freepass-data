@@ -698,7 +698,7 @@ it('--apply-sync 는 건수 승인 설정(IANCAR_SYNC_EXPECT)이 없으면 쓰�
   const argv = process.argv; const exitCode = process.exitCode;
   const log = vi.spyOn(console, 'log').mockImplementation(() => {});
   const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code}`); }) as never);
-  const publish = vi.fn(async () => ({ status: 'DRY_RUN', skippedCount: 0, created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0,
+  const publish = vi.fn(async (_input?: unknown) => ({ status: 'DRY_RUN', skippedCount: 0, created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0,
     deletes: 0, contractChanges: 0, planDigest: 'd' }));
   vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true'); vi.stubEnv('IANCAR_SYNC_EXPECT', '');
   vi.doMock('../src/adapters/iancar-one-api.js', () => ({
