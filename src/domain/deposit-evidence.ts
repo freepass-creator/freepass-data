@@ -102,6 +102,41 @@ function sourceWaiverBasisFromProduct(product: Record<string, unknown>, termMont
   return source.field && source.text === '무보증' ? { field: source.field, text: '무보증' } : undefined;
 }
 
+function sourceRawAmountFromProduct(product: Record<string, unknown>, termMonths: unknown): unknown {
+  const source = sourceWaiverTextFromProduct(product, termMonths);
+  return source.field ? readProductPath(product, source.field) : undefined;
+}
+
+export function parseDepositSourceRawAmount(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const raw = value.trim();
+  const exactWon = /^((?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+))(?:\s*원)?$/.exec(raw);
+  if (exactWon) {
+    const parsed = Number(exactWon[1]!.replaceAll(',', ''));
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** 빈 값(undefined·null·빈 문자열·빈 객체·빈 배열·false)은 «무보증 확인» 근거가 아니다 — Firestore 의 빈 필드는 null 로 오는 일이 흔하다. */
+function hasNonEmptyDepositFreeConfirmation(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
+
+function hasAnyDepositWaiverOrConflictEvidence(input: Parameters<typeof resolveDepositWithRuleNote>[0]): boolean {
+  const zeroEvidence = assessDepositEvidence({ ...input, sourceAmount: 0 });
+  if (zeroEvidence.state === 'ZERO') return true;
+  if (zeroEvidence.reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' || zeroEvidence.reason === 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE') return true;
+  const depositFreeText = typeof input.depositFree === 'string' ? input.depositFree.trim().toLowerCase() : '';
+  return input.depositFree === true || ['true', '예', '무보증', 'y', 'yes'].includes(depositFreeText)
+    || hasNonEmptyDepositFreeConfirmation(input.depositFreeConfirmation);
+}
+
 export function depositEvidenceInputFromProduct(
   product: Record<string, unknown>,
   sourceAmount: unknown,
@@ -120,6 +155,7 @@ export function depositEvidenceInputFromProduct(
     depositFreeConfirmation: product.deposit_free_confirmation,
     depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product, extra.termMonths),
     depositSourceWaiverText: sourceWaiverTextFromProduct(product, extra.termMonths).text,
+    depositSourceRawAmount: sourceRawAmountFromProduct(product, extra.termMonths),
     sourceAmount,
     ...extra,
   };
@@ -212,7 +248,7 @@ export function resolveDepositByRuleNote(input: {
 }
 
 export type DepositWithRuleResolution =
-  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode; differs: true } }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode | 'SOURCE_RAW_AMOUNT'; differs: true } }
   | { state: 'ZERO'; amount: 0; reason: 'EXPLICIT_ZERO_DEPOSIT'; depositEvidenceBasis: DepositEvidenceBasis; rule: { code: 'ZERO_DEPOSIT'; multiplier: 0; label: string; depositEvidenceBasis: DepositEvidenceBasis } }
   | { state: 'UNKNOWN'; amount: null; reason: string; rule: null };
 
@@ -226,12 +262,23 @@ export function resolveDepositWithRuleNote(input: {
   depositFree?: unknown;
   depositFreeConfirmation?: unknown;
   depositSourceWaiverBasis?: unknown;
+  depositSourceWaiverText?: unknown;
+  depositSourceRawAmount?: unknown;
   hasPositivePaidDeposit?: boolean;
   /** 규칙을 거는 범위. 기본 ANY(호환 응답·안내). 표준화 매핑은 기존 정책 그대로 «RP012 구독의 원문 정확히 0 + 연수 규칙»만(근거가 약한 확대 금지). */
   ruleScope?: 'ANY' | 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
 }): DepositWithRuleResolution {
   const evidence = assessDepositEvidence(input);
   const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
+  const sourceRawAmount = parseDepositSourceRawAmount(input.depositSourceRawAmount);
+  const sourceRawCandidate = (input.sourceAmount === 0 || input.sourceAmount === '0' || input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '')
+    && sourceRawAmount !== undefined
+    && !hasAnyDepositWaiverOrConflictEvidence(input);
+  if (sourceRawCandidate && evidence.state === 'UNKNOWN') {
+    return { state: 'KNOWN', amount: sourceRawAmount, reason: 'SOURCE_RAW_AMOUNT',
+      rule: { code: 'SOURCE_RAW_AMOUNT', multiplier: null, label: '원문 보증금' },
+      depositRuleDifference: { ruleAmount: sourceRawAmount, ruleCode: 'SOURCE_RAW_AMOUNT', differs: true } };
+  }
   if (evidence.state === 'KNOWN') {
     const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
     const depositRuleDifference = rule.state === 'KNOWN' && rule.amount !== evidence.amount
