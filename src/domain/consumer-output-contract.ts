@@ -336,8 +336,9 @@ export function iancarAlbumFingerprint(read: { count: number; upstreamRepresenta
 
 export const RENDITION_SOURCE_RECHECK_MS = 10 * 60 * 1000;
 export type VehiclePhotoReadOptions = {
-  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number; albumFingerprint?: string } | undefined;
-  /** 캐시 적중 때 원천 앨범을 다시 확인하는 간격(ms). 기본 RENDITION_SOURCE_RECHECK_MS. */
+  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number; albumFingerprint?: string; sourceSha256?: string } | undefined;
+  /** 캐시 적중 때 원천 사진 «내용»(원본 바이트 sha256)과 앨범 구성을 다시 대조하는 간격(ms). 기본 RENDITION_SOURCE_RECHECK_MS.
+   * 이 간격이 «원천이 개수·대표·순서를 유지한 채 사진 내용만 바꿨을 때» 옛 사진을 서빙할 수 있는 최대 시간이다. */
   renditionSourceRecheckMs?: number;
 };
 
@@ -451,12 +452,14 @@ export function createVehiclePhotoReader(
       };
       if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
       active++;
+      let prefetched: VehiclePhotoRead | undefined;
       try {
         enter('SOURCE_AWAIT');
         if (index !== undefined && options.renditionCacheLookup) {
-          // 줄여 둔 결과물이 있으면 사진 바이트는 원천에서 다시 받지 않는다. 다만 원천 앨범 확인(철회·교체·개수 변경 감지)은
-          // 마지막 확인이 renditionSourceRecheckMs 보다 오래됐을 때 한 번 다시 한다(그동안은 DB 재확인만).
-          // ONE 은 사진 ID 를 호출마다 재발급해 같은 개수 안의 «내용 교체»는 메타데이터로 알 수 없다 — 그 경우는 캐시 시간(TTL)이 상한이다.
+          // 줄여 둔 결과물이 있으면 사진 바이트는 원천에서 다시 받지 않는다. 다만 마지막 원천 확인이 renditionSourceRecheckMs 보다 오래됐으면
+          // 그 순번의 원본을 한 번 다시 받아 앨범 구성(수·대표·순서)과 «원본 바이트 sha256» 을 캐시를 만들 때의 값과 대조한다(철회·교체·내용 변경 감지).
+          // ONE 은 사진 ID 를 호출마다 재발급해 ID 로는 내용 교체를 알 수 없으므로 내용 지문(sha256)을 쓴다. 지문이 없는 옛 항목은 확인 시점에 무조건 다시 받는다.
+          // 다시 확인하기 전 구간(기본 10분)에 일어난 내용 교체는 그 구간 동안 옛 사진이 나갈 수 있다 — 허용 한도 = renditionSourceRecheckMs.
           const hit = options.renditionCacheLookup(cacheTag);
           if (hit) {
             const recheckMs = options.renditionSourceRecheckMs ?? RENDITION_SOURCE_RECHECK_MS;
@@ -464,7 +467,7 @@ export function createVehiclePhotoReader(
             if (now() - checkedAt > recheckMs) {
               enter('FINAL_SOURCE');
               let album: VehiclePhotoRead;
-              try { album = await iancarSource.read(product, undefined, true, registeredPhotoCount); }
+              try { album = await iancarSource.read(product, index, true, registeredPhotoCount); }
               catch (error) {
                 const code = error instanceof Error ? error.message : '';
                 const gone = code === 'IANCAR_PHOTO_NOT_FOUND' || code === 'IANCAR_ONE_API_HTTP_404';
@@ -476,14 +479,20 @@ export function createVehiclePhotoReader(
               if (!currentLayoutValid(album)) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
               // 캐시를 만들 때의 앨범 지문과 달라졌으면(사진 수·대표 표시·순서 변경) 캐시를 쓰지 않는다.
               if (hit.albumFingerprint !== undefined && iancarAlbumFingerprint(album) !== hit.albumFingerprint) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
-              checkedAt = now();
+              if (!Buffer.isBuffer(album.bytes) || validateVehiclePhotoMedia(album.contentType, album.bytes.length, album.bytes)) { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
+              if (index >= album.count) { emit('SELECTED_MISSING', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              if (hit.sourceSha256 === undefined || createHash('sha256').update(album.bytes).digest('hex') !== hit.sourceSha256) {
+                // 내용이 바뀌었다(또는 지문 없는 옛 항목): 캐시를 버리고 방금 받은 원본으로 새로 처리한다(원천을 한 번 더 읽지 않는다).
+                emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP');
+                prefetched = album;
+              } else checkedAt = now();
             }
-            return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const,
-              sourceCheckedAt: checkedAt, ...(hit.albumFingerprint !== undefined ? { albumFingerprint: hit.albumFingerprint } : {}), revalidate: async () => !!(await dbStillValid()) };
+            if (!prefetched) return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const,
+              sourceCheckedAt: checkedAt, ...(hit.albumFingerprint !== undefined ? { albumFingerprint: hit.albumFingerprint } : {}), ...(hit.sourceSha256 !== undefined ? { sourceSha256: hit.sourceSha256 } : {}), revalidate: async () => !!(await dbStillValid()) };
           }
         }
         let result: VehiclePhotoRead;
-        try { result = await iancarSource.read(product, index, true, registeredPhotoCount); }
+        try { result = prefetched ?? await iancarSource.read(product, index, true, registeredPhotoCount); }
         catch (error) {
           const code = error instanceof Error ? error.message : '';
           // 원천에서 차량이 사라진 경우(ONE 상세 404)는 일시 오류(503)가 아니라 «사진 없음»(404)으로 정직하게 답한다.
@@ -524,7 +533,8 @@ export function createVehiclePhotoReader(
           { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const frozenBytes = Buffer.from(bytes);
         await recheckIds(() => revalidateIds(false));
-        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result), revalidate: revalidateIds };
+        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result),
+          sourceSha256: createHash('sha256').update(frozenBytes).digest('hex'), revalidate: revalidateIds };
       } finally { active--; }
     }
     const mediaOnly = consumerId === 'erp5-public-media';

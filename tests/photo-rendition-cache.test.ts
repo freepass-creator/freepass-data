@@ -74,6 +74,7 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     let sourceCalls = 0, metadataCalls = 0, dbReads = 0, clock = 1_000_000;
     let albumCount = 3, sourceError: Error | undefined, failNextMetadata = false, repIndex = 1;
     let current: Record<string, unknown> = { ...product };
+    let photoBytes = jpeg;
     const source: VehiclePhotoSource = {
       eligible: () => true, connection: () => 'c',
       read: async (_p, index) => {
@@ -85,17 +86,17 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
           const upstream = [IDS[1]!, IDS[0]!, IDS[2]!];
           const ordinals = [repIndex, ...[0, 1, 2].filter(o => o !== repIndex)];
           return { count: 3, photoIds: ordinals.map(o => upstream[o]!), upstreamPhotoIds: upstream, upstreamRepresentatives: [0, 1, 2].map(o => o === repIndex), servingSourceOrdinals: ordinals,
-            bytes: index === undefined ? null : jpeg, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+            bytes: index === undefined ? null : photoBytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
         }
         return { count: albumCount, photoIds: ids, upstreamPhotoIds: [ids[1]!, ids[0]!, ids[2]!].filter(Boolean), upstreamRepresentatives: [false, true, false].slice(0, albumCount), servingSourceOrdinals: [1, 0, 2].slice(0, albumCount),
-          bytes: index === undefined ? null : jpeg, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+          bytes: index === undefined ? null : photoBytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
       },
     };
     const readVehiclePhoto = createVehiclePhotoReader(async () => { dbReads++; return { ...current }; }, source, undefined, () => clock, undefined, parseIancarPhotoIdGateSuppliers('RP031'));
     const app = createConsumerGateway(new MemoryDataStore(), [binding], new DataAccessGateway(new MemoryDataAccessLogStore()), undefined,
       { read: async () => { throw new Error('unused'); }, readVehiclePhoto } as never);
     return { app, set: (next: Record<string, unknown>) => { current = next; }, advance: (ms: number) => { clock += ms; },
-      setAlbumCount: (n: number) => { albumCount = n; }, setRepresentative: (i: number) => { repIndex = i; }, failNextMetadata: () => { failNextMetadata = true; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
+      setAlbumCount: (n: number) => { albumCount = n; }, setBytes: (b: Buffer) => { photoBytes = b; }, setRepresentative: (i: number) => { repIndex = i; }, failNextMetadata: () => { failNextMetadata = true; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
       calls: () => ({ sourceCalls, metadataCalls, dbReads }) };
   };
   it('첫 요청은 원천을 읽고, 같은 상품·순번·크기 재요청은 원천을 읽지 않으며 HIT 표시, 바이트 동일, DB 는 다시 읽는다', async () => {
@@ -144,21 +145,20 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     void calls;
     await app.close();
   });
-  it('원천 재확인 간격(10분) 안에는 원천을 전혀 부르지 않고, 지나면 앨범 메타데이터를 한 번만 다시 확인한 뒤 다시 간격 안', async () => {
+  it('원천 재확인 간격(10분) 안에는 원천을 전혀 부르지 않고, 지나면 그 순번 원본을 한 번만 다시 받아 내용·앨범을 대조한 뒤 다시 간격 안', async () => {
     const { app, calls, advance } = await build();
     await app.inject({ url: url('/0?size=list'), headers });
     const base = calls();
     advance(9 * 60 * 1000);
     expect((await app.inject({ url: url('/0?size=list'), headers })).headers['x-photo-cache']).toBe('HIT');
-    expect(calls().metadataCalls).toBe(base.metadataCalls);               // 간격 안: 원천 호출 0
+    expect(calls().sourceCalls).toBe(base.sourceCalls);                    // 간격 안: 원천 호출 0
     advance(2 * 60 * 1000);                                                // 마지막 확인 후 11분
     const rechecked = await app.inject({ url: url('/0?size=list'), headers });
     expect(rechecked.headers['x-photo-cache']).toBe('HIT');
-    expect(calls().metadataCalls).toBe(base.metadataCalls + 1);           // 앨범 재확인 1회
-    expect(calls().sourceCalls).toBe(base.sourceCalls);                    // 사진 바이트는 다시 받지 않음
+    expect(calls().sourceCalls).toBe(base.sourceCalls + 1);               // 원본 대조용 1회 읽기(같은 내용이므로 캐시 유지)
     advance(60 * 1000);
     await app.inject({ url: url('/0?size=list'), headers });
-    expect(calls().metadataCalls).toBe(base.metadataCalls + 1);           // 재확인 시각이 갱신돼 다시 간격 안
+    expect(calls().sourceCalls).toBe(base.sourceCalls + 1);               // 재확인 시각이 갱신돼 다시 간격 안
     await app.close();
   });
   it('재확인에서 원천 앨범 개수가 바뀌었거나 차량이 사라졌으면(ONE 404) 캐시를 쓰지 않고 404, 이후에도 믿지 않는다', async () => {
@@ -189,6 +189,22 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     const again = await app.inject({ url: url('/0?size=list'), headers });                  // 새 지문으로 다시 읽어 서빙
     expect(again.statusCode).toBe(200);
     expect(again.headers['x-photo-cache']).toBeUndefined();
+    await app.close();
+  });
+  it('재확인에서 개수·대표·순서가 그대로여도 사진 내용(바이트)이 교체됐으면 옛 사진을 내보내지 않고 새 내용으로 다시 처리한다', async () => {
+    const { app, advance, setBytes, calls } = await build();
+    const first = await app.inject({ url: url('/0?size=list'), headers });
+    advance(11 * 60 * 1000);
+    setBytes(await sharp({ create: { width: 1200, height: 900, channels: 3, background: '#aa3322' } }).jpeg().toBuffer());   // 같은 앨범 구성, 내용만 교체
+    const before = calls().sourceCalls;
+    const swapped = await app.inject({ url: url('/0?size=list'), headers });
+    expect(swapped.statusCode).toBe(200);
+    expect(swapped.headers['x-photo-cache']).toBeUndefined();                                // 캐시 적중 아님
+    expect(swapped.rawPayload.equals(first.rawPayload)).toBe(false);                         // 옛 사진(A)이 아니라 새 사진(B)
+    expect(calls().sourceCalls).toBe(before + 1);                                            // 원천은 한 번만 읽는다(재확인 읽기를 재사용)
+    const next = await app.inject({ url: url('/0?size=list'), headers });                    // 이후는 새 내용의 캐시 적중
+    expect(next.headers['x-photo-cache']).toBe('HIT');
+    expect(next.rawPayload.equals(swapped.rawPayload)).toBe(true);
     await app.close();
   });
   it('재확인 중 원천이 일시 오류(503 등)면 캐시 사진을 내보내지 않고 503', async () => {
