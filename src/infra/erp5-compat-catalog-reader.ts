@@ -1,3 +1,4 @@
+import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot, type Firestore } from 'firebase-admin/firestore';
@@ -217,7 +218,7 @@ export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
   'car_number', 'vehicle_uid', 'maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant',
   'fuel_type', 'engine_type', 'engine_cc', 'drive_type', 'transmission', 'vehicle_class', 'product_type',
   'year', 'seats', 'mileage', 'annual_mileage', 'ext_color', 'int_color', 'first_registration_date',
-  'price', 'iancar_phase_one',
+  'price', 'iancar_phase_one', 'iancar_policy_terms',
 ] as const);
 
 export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'provider_company_code',
@@ -291,7 +292,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
     const partner = await linked('partner', partnerId, layout.partners, SINGLE_PARTNER_FACT_FIELDS);
     const compatible = withCompatibilityDepositEvidence(raw, readAt);
-    const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== '_key'));
+    const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== 'iancar_policy_terms' && f !== '_key'));
     if (Object.hasOwn(compatible, 'price')) {
       if (compatible.price === null) selected.price = null;
       else {
@@ -327,6 +328,12 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
         }
         selected.iancar_phase_one = result;
       }
+    }
+    if (Object.hasOwn(raw, 'iancar_policy_terms')) {
+      // 이안카 차량별 보험·추가요금 조건: 고정 키·자료형만 통과(수수료·원가·내부 메모 없음). 모양이 다르면 응답하지 않는다.
+      const terms = projectIancarPolicyTerms(raw.iancar_policy_terms);
+      if (terms === undefined) return selectionUnavailable();
+      selected.iancar_policy_terms = terms;
     }
     const snapshot: CatalogCompatibilityProductSnapshot = {
       schema: 'freepass-data.catalog-compat/v1', data: { products: { [productId]: { ...selected, _key: productId } }, policies: policy.rows, partners: partner.rows },
