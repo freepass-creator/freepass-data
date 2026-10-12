@@ -166,6 +166,11 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     }));
     expect(b.ok, JSON.stringify(b)).toBe(true);
   });
+  it('still rejects account-number-shaped repeated digits even though repeated runs count once in the budget', () => {
+    for (const v of ['5555-5555-5555', '555555555555', '입금 5555 5555 5555']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })), v).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
   it('rejects phone-like digit-heavy room codes', () => {
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });
   });
