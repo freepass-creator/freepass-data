@@ -119,13 +119,22 @@ export function parseDepositSourceRawAmount(value: unknown): number | undefined 
   return undefined;
 }
 
+/** 빈 값(undefined·null·빈 문자열·빈 객체·빈 배열·false)은 «무보증 확인» 근거가 아니다 — Firestore 의 빈 필드는 null 로 오는 일이 흔하다. */
+function hasNonEmptyDepositFreeConfirmation(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
+
 function hasAnyDepositWaiverOrConflictEvidence(input: Parameters<typeof resolveDepositWithRuleNote>[0]): boolean {
   const zeroEvidence = assessDepositEvidence({ ...input, sourceAmount: 0 });
   if (zeroEvidence.state === 'ZERO') return true;
   if (zeroEvidence.reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' || zeroEvidence.reason === 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE') return true;
   const depositFreeText = typeof input.depositFree === 'string' ? input.depositFree.trim().toLowerCase() : '';
   return input.depositFree === true || ['true', '예', '무보증', 'y', 'yes'].includes(depositFreeText)
-    || input.depositFreeConfirmation !== undefined;
+    || hasNonEmptyDepositFreeConfirmation(input.depositFreeConfirmation);
 }
 
 export function depositEvidenceInputFromProduct(

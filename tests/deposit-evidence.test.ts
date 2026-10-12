@@ -135,6 +135,19 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
       .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null });
   });
+  it('treats empty deposit_free_confirmation values (null, empty string, empty object) as no evidence for raw amount recovery', () => {
+    for (const empty of [null, '', {}, []]) {
+      const product = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_free: false,
+        deposit_free_confirmation: empty, 원문: { 전체: { 단기보증: '1,000,000' } } };
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, 0, { termMonths: 12, monthlyRent: 500000 })))
+        .toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    }
+    const confirmed = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_free: false,
+      deposit_free_confirmation: { source: '공급사 답변', at: '2026-10-10T12:00:00+09:00', text: '무보증' }, 원문: { 전체: { 단기보증: '1,000,000' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(confirmed, 0, { termMonths: 12, monthlyRent: 500000 })).state)
+      .not.toBe('KNOWN');
+  });
+
   it('uses positive raw warranty cells as SOURCE_RAW_AMOUNT when normalized price is zero or missing', () => {
     const shortRaw = { provider_company_code: 'RP004', product_type: '중고렌트',
       원문: { 전체: { 단기보증: '1,000,000' } } };
