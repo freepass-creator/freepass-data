@@ -126,7 +126,8 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
     digest: sha(JSON.stringify([raw.m.size, data.m.size, both, compared, matched, types])),
   };
 }
-const clip = v => { const s = Array.isArray(v) ? JSON.stringify(v) : String(v); return s.length > 60 ? s.slice(0, 57) + '...' : s; };
+// 값 속 차량번호는 끝 4자리만 남기고 60자로 자른다
+const clip = v => { const s = (Array.isArray(v) ? JSON.stringify(v) : String(v)).replace(/\d{2,3}\s?[가-힣]\s?(\d{4})/g, '…$1'); return s.length > 60 ? s.slice(0, 57) + '...' : s; };
 
 // ── 원인 분류 ────────────────────────────────────────────────────────────────────────────────
 // COLLECTION_LAG   수집 지연: 원천은 바뀌었는데 데이터에 저장된 원문(원문.전체)이 옛 값이거나, 원천에 새로 생긴 차가 아직 없음

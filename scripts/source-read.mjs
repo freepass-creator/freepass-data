@@ -63,7 +63,10 @@ async function readAica(products) {
   // 대표 확정(10-12): 보이는 탭 장기특별이벤트·신차선출고·중고재렌트(월렌트 별도), 숨김 탭·숨긴 줄(행 숨기기·필터 숨김) 제외
   const gwsGet = params => { const o = execFileSync(gwsBin(), ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: id, ...params })], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); return JSON.parse(o.slice(o.indexOf('{'))); };
   const meta = gwsGet({ fields: 'sheets(properties(title,hidden))' });
-  const visibleTabs = ['중고재렌트', '장기특별이벤트', '신차선출고'].filter(t => meta.sheets.some(x => x.properties.title === t && !x.properties.hidden));
+  const expectedTabs = ['중고재렌트', '장기특별이벤트', '신차선출고'];
+  const visibleTabs = expectedTabs.filter(t => meta.sheets.some(x => x.properties.title === t && !x.properties.hidden));
+  // fail-closed: 기대 탭이 하나라도 없거나 숨겨졌으면(이름 변경·구조 변경 의심) 빈 재고로 보지 않고 중단
+  if (visibleTabs.length !== expectedTabs.length) return { ok: false, reason: `아이카 보이는 탭 구성이 기대와 다름(${visibleTabs.join('·') || '없음'}) — 시트 구조 변경 의심` };
   const hiddenRows = visibleTabs.length ? hiddenRowsByTab(gwsGet({ includeGridData: true, ranges: visibleTabs.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })) : new Map();
   let hiddenSkipped = 0;
   for (const tab of visibleTabs) {
@@ -71,6 +74,7 @@ async function readAica(products) {
     // fail-closed: 머리글을 못 찾거나 읽기 상한(1500행)에 닿으면 불완전 — 일부 탭만으로 «없음»을 판정하지 않는다
     if (v.length >= 1500) return { ok: false, reason: `아이카 «${tab}» 탭이 읽기 상한(1500행)에 닿음 — 상한 상향 필요` };
     const hi = v.findIndex(r => r.includes('차량번호')); if (hi < 0) return { ok: false, reason: `아이카 «${tab}» 탭에서 차량번호 머리글을 찾지 못함(시트 구조 변경 의심)` };
+    if (!v[hi].includes('배차상태')) return { ok: false, reason: `아이카 «${tab}» 탭에 배차상태 머리글이 없음(시트 구조 변경 의심)` };
     const idx = Object.fromEntries(v[hi].map((h, i) => [h, i]));
     for (const [ri, r] of v.entries()) {
       if (ri <= hi) continue;
@@ -137,7 +141,7 @@ function readAutoplus(products) {
   const plates = new Set(), notes = [];
   if (sheetId) {
     for (const tab of ['판매차량리스트', '★★★  전기차(EV6,니로EV 등) 프로모션(수수료 150만원) ★★★'] /* ERP4 sheet-autoplus 와 같은 2탭 병합 */) {
-      try { for (const r of sheetRead(sheetId, `'${tab}'!A1:AZ1100`)) for (const c of r) { const m = String(c).replace(/\s/g, '').match(/\d{2,3}[가-힣]\d{4}/); if (m) plates.add(m[0]); } } catch { notes.push(`${tab} 읽기 실패`); }
+      try { const rowsAp = sheetRead(sheetId, `'${tab}'!A1:AZ1100`); if (rowsAp.length >= 1100) throw new Error('ROW_LIMIT'); for (const r of rowsAp) for (const c of r) { const m = String(c).replace(/\s/g, '').match(/\d{2,3}[가-힣]\d{4}/); if (m) plates.add(m[0]); } } catch { notes.push(`${tab} 읽기 실패`); }
     }
   } else notes.push('시트 주소 없음(FREEPASS_AUTOPLUS_SHEET_ID)');
   let hp = null;
@@ -152,14 +156,22 @@ function readAutoplus(products) {
 const BLOCKED = { RP012: { ok: false, reason: '손오공 ERP 계정이 이 PC·freepass-data 에 없음 — 대표 손 한 가지: 손오공 로그인 계정을 비밀 저장소(freepass-data 프로젝트)에 등록' } };
 
 // ── 직접 확인: 차량 하나를 원천에서 «그 순간» 읽어 정규 칸으로(저장 없음) ───────────────────────────
-function ianSingle(plate4) {
+// 끝 4자리가 같은 서로 다른 차량: 데이터 상품이 있으면 그 실번호와 정확히 같은 원천 줄만, 없으면 끝 4자리가 유일할 때만 고른다(애매하면 null)
+function findSourceRecord(records, prod, plate4) {
+  if (prod) return records.find(r => plateKey(r.plate) === plateKey(prod.car_number)) ?? null;
+  const m = records.filter(r => last4(r.plate) === plate4);
+  return m.length === 1 ? m[0] : null;
+}
+function ianSingle(plate4, exactPlate) {
   const tmp = join(process.env.TEMP || '/tmp', `iancar-one-${Date.now()}.json`);
   const tsx = join(ROOT, 'node_modules', '.bin', 'tsx');
   const bin = existsSync(tsx) ? tsx : join(ROOT, '..', '..', '..', 'node_modules', '.bin', 'tsx');
   try { execFileSync(bin, ['src/jobs/read-iancar-source.ts', '--plate4', plate4, '--out', tmp], { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'ignore'] }); }
   catch { return { ok: false, reason: '이안카 ONE API 읽기 실패(비밀 저장소 접근 또는 API 응답)' }; }
   const j = JSON.parse(readFileSync(tmp, 'utf8')); try { require_unlink(tmp); } catch { /* 임시 파일은 남겨도 저장소 밖 */ }
-  const d = j.detail?.[0]; if (!d) return { ok: true, readAt: j.readAt, found: false, sourceSyncedAt: j.syncedAt };
+  const cands = j.detail ?? [];
+  const d = exactPlate ? cands.find(x => plateKey(x.vehicle?.data?.plate_number ?? x.list?.plate_number) === plateKey(exactPlate)) : (cands.length === 1 ? cands[0] : undefined);
+  if (!d) return { ok: true, readAt: j.readAt, found: false, sourceSyncedAt: j.syncedAt };
   const v = d.vehicle?.data ?? d.list, terms = (d.rates?.data ?? []).map(t => ({ 개월: t.rental_period, km: t.contracted_mileage, 주기: t.mileage_period, 월대여료: t.monthly_rate, 보증금: t.deposit }));
   return { ok: true, found: true, readAt: j.readAt, sourceSyncedAt: j.syncedAt, 원천갱신: v.synced_at, 상태: v.inventory_status, 판매가능: v.available, 연식: v.year, 연료: v.fuel, 주행거리: v.mileage, 외장: v.color,
     사진수: Array.isArray(v.photos) ? v.photos.length : null, 차명: v.name, 요금: terms };
@@ -179,7 +191,7 @@ async function compareOne(c, plate4, idx = 0) {
   const row = (항목, 원천, 데이터, 판정) => rows.push({ 항목, 원천: fmt(원천), 데이터: fmt(데이터), 판정: 판정 ?? judge(항목, 원천, 데이터) });
   let readAt, note;
   if (c === 'RP031') {
-    const r = ianSingle(plate4); if (!r.ok) return { ok: false, reason: r.reason };
+    const r = ianSingle(plate4, prod?.car_number); if (!r.ok) return { ok: false, reason: r.reason };
     readAt = r.readAt; if (!r.found) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
     row('원천 갱신 시각', r.원천갱신, prod?._direct_ingest_at ? new Date(prod._direct_ingest_at).toISOString() : null, '참고');
     row('상태', r.상태, prod?.status_label_raw, r.판매가능 ? (prod?.listable ? '원천 가능/데이터 판매중' : '원천 가능인데 데이터 판매 아님') : '원천 불가');
@@ -188,7 +200,7 @@ async function compareOne(c, plate4, idx = 0) {
     for (const t of r.요금.filter(t => t.개월 >= 36 || [12, 24].includes(t.개월))) { const dk = prod?.price?.[periodKey(t)]; row(`${periodKey(t)} 월대여료`, t.월대여료, dk?.rent); row(`${periodKey(t)} 보증금`, t.보증금, dk?.deposit); }
   } else if (c === 'RP004' || c === 'RP006') {
     const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
-    readAt = res.readAt; const hit = res.records.find(r => last4(r.plate) === plate4);
+    readAt = res.readAt; const hit = findSourceRecord(res.records, prod, plate4);
     if (!hit) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
     row('상태', hit.상태, prod?.status_label_raw, hit.상태 ? (prod?.listable ? '데이터 판매중' : '데이터 판매 아님') : undefined);
     row('연료', hit.연료, prod?.fuel_type); row('주행거리', hit.주행거리, prod?.mileage); row('외장', hit.외장, prod?.ext_color);
@@ -197,7 +209,8 @@ async function compareOne(c, plate4, idx = 0) {
     row('사진 수', hit.사진수, (Array.isArray(prod?.image_urls) ? prod.image_urls.length : 0) + (prod?.photo_link ? 1 : 0), hit.사진수 == null ? '원천 칸 없음' : undefined);
   } else if (c === 'RP023') {
     const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
-    readAt = res.readAt; const hit = res.records.find(r => last4(r.plate) === plate4);
+    readAt = res.readAt; const hit = findSourceRecord(res.records, prod, plate4);
+    if (res.partial) return { ok: true, readAt, 판정: '홈페이지 목록 없음 — 부재 판정 불가(시트만으로는 공개 보류를 판단하지 않는다)', 원천: hit?.원천 ?? null, note: res.note };
     return { ok: true, readAt, 원천에있음: !!hit, 원천: hit?.원천 ?? null, 데이터: prod ? { 상태: prod.status, 사유: prod.status_reason, 판매중: prod.listable === true } : null,
       판정: hit ? (prod?.listable ? '원천에 있고 데이터 판매중' : '원천에 있으나 데이터 판매 아님') : (prod?.listable ? '원천(시트+홈페이지)에 없는데 데이터 판매중 → 공개 보류 후보' : '원천에 없고 데이터도 판매 아님'), note: res.note };
   } else return { ok: false, reason: c === 'RP012' ? BLOCKED.RP012.reason : '지원하지 않는 공급사' };

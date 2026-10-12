@@ -85,7 +85,7 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
   for (const tab of [...new Set(sup.map(x => x.tab))].filter(t => !globalThis.__visibleTabs || globalThis.__visibleTabs.has(t))) {
     let v; try { const o = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', process.env.FREEPASS_SHEET_F05_ID, '--range', `'${tab}'!A1:BX1500`], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); v = JSON.parse(o.slice(o.indexOf('{'))).values ?? []; } catch { blockers.push(`F05_TAB_READ_FAILED:${tab}`); continue; }
     if (v.length >= 1500) blockers.push(`F05_TAB_ROW_LIMIT:${tab}`); // 읽기 상한에 닿으면 불완전
-    const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null) { blockers.push(`F05_TAB_HEADER_MISSING:${tab}`); continue; }
+    const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null || ix['차량상태'] == null) { blockers.push(`F05_TAB_HEADER_MISSING:${tab}`); continue; } // 차량상태 머리글이 없으면 전 줄이 빈 상태 = 판매 가능으로 오인된다
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
     for (const [ri, r] of v.slice(1).entries()) {
       const rowHidden = hiddenRows.get(tab)?.has(ri + 2) === true;
@@ -119,7 +119,8 @@ for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/
   // 오토플러스는 홈페이지 목록이 정본이다. 목록 파일이 없거나(자동 읽기 길 없음) 비정상적으로 작으면 계획을 만들지 않는다 — 빈 목록이면 판매 중 전부가 하향 대상이 된다.
   const hpPath = opt('homepage-plates'), hpCount = hpPath && existsSync(hpPath) ? readFileSync(hpPath, 'utf8').split(/\r?\n/).filter(x => x.trim()).length : 0;
   if (!process.env.FREEPASS_AUTOPLUS_SHEET_ID) blockers.push('AUTOPLUS_SHEET_ID_MISSING');
-  if (hpCount < 10) blockers.push(`AUTOPLUS_HOMEPAGE_LIST_MISSING_OR_TOO_SMALL:${hpCount}`); }
+  const hpUnique = hpPath && existsSync(hpPath) ? new Set(readFileSync(hpPath, 'utf8').split(/\r?\n/).map(x => key(x)).filter(x => /\d{2,3}[가-힣]\d{4}/.test(x))).size : 0; // 같은 번호 반복·번호 형식 아닌 줄은 세지 않는다
+  if (hpCount < 10 || hpUnique < 10) blockers.push(`AUTOPLUS_HOMEPAGE_LIST_MISSING_OR_TOO_SMALL:${hpUnique}`); }
 { const mine = docs.filter(d => d.code === 'RP012' && d.listable), last = Math.max(0, ...mine.map(d => d.upd ?? 0)); // 수집기가 읽어 온 결과를 원천 기준으로 본다(대표 10-12)
   src.RP012 = { set: new Set(mine.map(d => d.plate)), all: new Set(docs.filter(d => d.code === 'RP012').map(d => d.plate)), 읽힘: true, 비고: `ERP4 매시 수집기 반영 결과 기준(마지막 수정 ${last ? new Date(last).toISOString().slice(0, 16) + 'Z' : '-'})` }; }
 

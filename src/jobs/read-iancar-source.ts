@@ -55,7 +55,9 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
   const detail = [];
   for (const r of hit) {
     const id = String(r.vehicle_id);
-    const [vehicle, rates] = await Promise.all([client.getVehicle(id), client.getRates(id)]);
+    const [vehicle, rates] = await Promise.all([client.getVehicle(id), client.getRates(id)]) as [{ success?: boolean; data?: unknown }, { success?: boolean; data?: unknown }];
+    // fail-closed: 상세·요금이 실패 응답이면 목록값·빈 요금으로 대체하지 않고 중단
+    if (vehicle.success !== true || typeof vehicle.data !== 'object' || vehicle.data === null || rates.success !== true || !Array.isArray(rates.data)) { console.error('IANCAR_DETAIL_OR_RATES_RESPONSE_INVALID'); process.exit(3); }
     detail.push({ list: r, vehicle, rates });
   }
   if (out) writeFileSync(out, JSON.stringify({ readAt, syncedAt, stale, detail }));
