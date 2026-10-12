@@ -156,6 +156,23 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
   return strings;
 }
 
+/**
+ * «숫자 예산» 검사: 금액·단위·날짜·차량번호를 뺀 나머지 숫자가 후보 전체(모든 자유 문자열 + msgNo)에서 8자리 이상이면
+ * 칸을 쪼개 숨긴 식별번호(전화·계좌·주민)로 보고 거부한다. 칸 조합 경우의 수를 열거하지 않는 구조적 방어(오탐은 사람 확인).
+ */
+function exceedsResidualDigitBudget(values: string[], plateText?: string) {
+  let digits = 0;
+  for (const raw of values) {
+    let text = raw;
+    if (plateText) text = text.split(plateText).join(' ');
+    text = text.replace(/d{4}-d{2}-d{2}(?:T[d:.]+Z?)?/g, ' ')
+      .replace(/d{1,3}(?:,d{3})+s*원?/g, ' ')
+      .replace(/d+s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
+    digits += (text.match(/d/g) ?? []).length;
+  }
+  return digits >= 8;
+}
+
 function candidateSensitiveProbeValues(values: string[]) {
   // 자유 문자열 칸끼리 인접하도록 정렬된 목록에서 인접 결합(양방향)과 전체 이어붙임을 검사한다.
   const adjacent = values.slice(0, -1).flatMap((value, index) => [`${value}${values[index + 1]}`, `${values[index + 1]}${value}`]);
@@ -257,7 +274,8 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     return { ok: false, reason: 'INVALID_EXCERPT' };
   }
   const stringValues = candidateStringValues(input);
-  if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)) {
+  if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)
+    || exceedsResidualDigitBudget([...stringValues, input.source.msgNo ?? ''], input.vehicle?.plate ? normalizePlateText(String(input.vehicle.plate)) : undefined)) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
@@ -316,7 +334,8 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
   const finalValues = candidateStringValues(normalized);
-  if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)) {
+  if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)
+    || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo], normalized.vehicle?.plate ? normalizePlateText(normalized.vehicle.plate) : undefined)) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized), ...(warnings ? { warnings } : {}) } };

@@ -83,6 +83,14 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     const input = base({ fields: { 요약: '재고', 값: 'user@' }, vehicle: { ...base().vehicle, model: ' example.com' } });
     expect(createKakaoInfoCandidate(input)).toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
+  it('rejects identifiers split across non-adjacent fields or msgNo using a residual digit budget while allowing amounts', () => {
+    expect(createKakaoInfoCandidate(base({ fields: { 요약: '010-1234', 값: '재고 있음' }, vehicle: { ...base().vehicle, model: '5678' } })))
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: '345678', excerpt: '99허0000 010-12' } })))
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
+    const ok = createKakaoInfoCandidate(base({ fields: { 요약: '월 대여료 1,000,000원', 값: '24개월 보증금 500,000원' } }));
+    expect(ok.ok).toBe(true);
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });
