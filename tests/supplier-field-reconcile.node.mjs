@@ -63,3 +63,13 @@ test('원인 분류: 저장된 원문이 원천과 다르면 수집 지연, 같�
   assert.equal(c({ type: 'VALUE_DIFF', field: 'mileage', raw: 'abc', data: '1', dataRec: { stored: {} } }), 'SOURCE_ANOMALY');
   assert.equal(rawAnomaly('price.36.rent', '0'), true);
 });
+
+import { dossierToProduct } from '../scripts/supplier-origin-verify.mjs';
+test('ProductDossier/v1 → 대조용 상품 문서', () => {
+  const doc = dossierToProduct({ schema: 'ProductDossier/v1', productId: '11가1111', status: 'OK', fields: [
+    { path: 'product.maker', group: 'BASIC', normalizedValue: '기아', rawValue: '기아', rawRef: { supplierCode: 'RP004', rawPath: '원문.전체.제조사' }, source: 'REFINED', asOf: 't' },
+    { path: 'priceRow[source:36].monthlyRent', group: 'PRICE_ROW', normalizedValue: 700000, source: 'REFINED', asOf: 't' },
+    { path: 'priceRow[source:36].deposit', group: 'PRICE_ROW', normalizedValue: 1000000, source: 'REFINED', asOf: 't' }] });
+  assert.equal(doc.maker, '기아'); assert.equal(doc.price['36'].rent, 700000); assert.equal(doc.provider_company_code, 'RP004'); assert.equal(doc.원문.전체['제조사'], '기아');
+  assert.equal(dossierToProduct({ schema: 'x' }), null);
+});

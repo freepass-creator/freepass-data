@@ -94,7 +94,31 @@ export function aicaRecords(values) {
 const AICA_FIELDS = [...Object.values(AICA_HEADER_TO_FIELD).filter(f => f !== 'car_number' && f !== 'int_color'),
   ...['1', '36', '48', '60'].flatMap(p => [`price.${p}.rent`, `price.${p}.deposit`])];
 
+// ProductDossier/v1 (contracts/product-dossier-v1.schema.json) → products 문서 모양. 입력: 배열 또는 JSONL 아님(배열/{dossiers:[…]}).
+// path: product.<칸> → <칸>, priceRow[source:N].monthlyRent|deposit → price.N.rent|deposit. rawValue + rawRef.rawPath 의 마지막 이름 → 원문.전체[이름](저장된 원문).
+export function dossierToProduct(d) {
+  if (d?.schema !== 'ProductDossier/v1' || !d.productId) return null;
+  const doc = { car_number: d.productId, listable: d.status === 'OK', price: {}, 원문: { 전체: {} }, __dossierAsOf: {} };
+  let photos = 0;
+  for (const f of d.fields ?? []) {
+    const price = f.path.match(/^priceRow\[source:(\d+)\]\.(monthlyRent|deposit)$/);
+    const prod = f.path.match(/^product\.(.+)$/);
+    if (price) (doc.price[price[1]] ??= {})[price[2] === 'monthlyRent' ? 'rent' : 'deposit'] = f.normalizedValue;
+    else if (prod) doc[prod[1]] = f.normalizedValue;
+    else if (f.group === 'PHOTO') photos += Array.isArray(f.normalizedValue) ? f.normalizedValue.length : (f.normalizedValue ? 1 : 0);
+    if (f.rawRef?.supplierCode) doc.provider_company_code ??= f.rawRef.supplierCode;
+    if (f.rawValue !== undefined && f.rawRef?.rawPath) doc.원문.전체[f.rawRef.rawPath.split('.').pop()] = f.rawValue;
+    doc.__dossierAsOf[f.path] = f.asOf;
+  }
+  if (photos) doc.image_urls = new Array(photos).fill('');
+  return doc;
+}
+
 async function readProducts(token) {
+  if (opt('dossier-json')) {
+    const j = JSON.parse(readFileSync(opt('dossier-json'), 'utf8'));
+    return (Array.isArray(j) ? j : (j.dossiers ?? [])).map(dossierToProduct).filter(Boolean);
+  }
   if (opt('data-json')) { // 상품 전수 조회(읽기) 출력 JSON: 배열 또는 {products:[...]} — 각 항목은 products 문서 필드(디코딩된 값)
     const j = JSON.parse(readFileSync(opt('data-json'), 'utf8'));
     return Array.isArray(j) ? j : (j.products ?? j.items ?? []);
