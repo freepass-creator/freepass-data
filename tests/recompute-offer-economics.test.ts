@@ -227,6 +227,29 @@ describe('offer economics recompute', () => {
     expect(refreshOfferEconomicsForChangedInputs(offer,removed,false,'OGONG_SUBSCRIPTION',null,undefined,evidence)[0]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
   });
+  it('does not preserve a stored Sonokong Q12 fee when its basis row changed but the target settlement now conflicts', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    const evidence={ '12_인수형':{subscriptionForm:'BUYOUT' as const}, '24_인수형':{subscriptionForm:'BUYOUT' as const} };
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION',null,evidence);
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
+
+    const conflictEvidence={...evidence,'24_인수형':{subscriptionForm:'RETURN' as const}};
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const changedResult=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION',null,undefined,conflictEvidence)[1]!.supplierBillingFee;
+    expect(changedResult).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'SUBSCRIPTION_FORM_CONFLICT'});
+    expect(changedResult).not.toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+
+    const removed={...structuredClone(offer),priceTerms:offer.priceTerms.filter(term=>term.termKey!=='12_인수형')};
+    const removedResult=refreshOfferEconomicsForChangedInputs(offer,removed,false,'OGONG_SUBSCRIPTION',null,undefined,conflictEvidence)[0]!.supplierBillingFee;
+    expect(removedResult).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'SUBSCRIPTION_FORM_CONFLICT'});
+    expect(removedResult).not.toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+  });
   it('preserves Sonokong buyout fees when an unrelated return Q12 row changes', async () => {
     const store=await fixture(), original=(await store.listOffers())[0]!;
     const offer={...original,supplierId:'RP012',priceTerms:[
