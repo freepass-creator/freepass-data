@@ -156,4 +156,23 @@ describe('Sonogong RAW to candidate normalizer', () => {
     expect(normalized.record.candidate.vehicleFacts?.fields.firstRegistration).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
     expect(normalized.record.candidate.issues).toContain('INVALID_FIRST_REGISTRATION');
   });
+
+  it('holds a candidate whose list and detail are not the same vehicle and attaches no detail money', () => {
+    const base = payload('id-mismatch', '900가0000');
+    const differentPlate = normalizeOne({ ...base, detail: { ...base.detail, carNumber: '900나1111' } })!.record.candidate;
+    expect(differentPlate.issues).toContain('IDENTITY_MISMATCH');
+    expect(differentPlate.priceTerms).toEqual([]);
+    const sameVinDifferent = normalizeOne({ ...base, list: { ...base.list, vin: 'FAKEVIN0000000001' },
+      detail: { ...base.detail, vin: 'FAKEVIN0000000002' } })!.record;
+    expect(sameVinDifferent.candidate.issues).toContain('IDENTITY_MISMATCH');
+    expect(sameVinDifferent.candidate.priceTerms).toEqual([]);
+    expect(sameVinDifferent.status).toBe('REJECTED');
+    const noDetailPlate = normalizeOne({ ...base, detail: { ...base.detail, carNumber: undefined } })!.record.candidate;
+    expect(noDetailPlate.issues).toContain('NO_DETAIL_IDENTITY');
+    expect(noDetailPlate.priceTerms).toEqual([]);
+    const allMatch = normalizeOne({ ...base, list: { ...base.list, vin: 'fakevin0000000001' },
+      detail: { ...base.detail, vin: 'FAKEVIN0000000001' } })!.record;
+    expect(allMatch.candidate.issues).not.toContain('IDENTITY_MISMATCH');
+    expect(allMatch.status).toBe('VALID');
+  });
 });

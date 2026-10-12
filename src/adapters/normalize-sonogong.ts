@@ -69,6 +69,19 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
   const plate = plateIdentityKey(list.carNumber);
   if (!plate) issues.push('PLATE_MISSING');
   else if (!isAssignedPlate(plate)) issues.push('PLATE_NOT_ASSIGNED');
+  // 목록과 상세가 «같은 차»임이 확인돼야 상세의 요금·보증금을 붙인다(개발 2 P1). 번호가 같아도 양쪽 차대번호가 다르면 다른 차다.
+  const detailPlate = plateIdentityKey(detail.carNumber);
+  const vinOf = (record: Record<string, unknown>) => {
+    for (const key of ['vin', 'vinNumber', 'carVin', 'chassisNumber', 'vehicleIdentificationNumber']) {
+      const value = text(record[key]).toUpperCase();
+      if (value) return value;
+    }
+    return '';
+  };
+  const listVin = vinOf(list), detailVin = vinOf(detail);
+  let identityHold = false;
+  if (!detailPlate) { issues.push('NO_DETAIL_IDENTITY'); identityHold = true; }
+  else if (detailPlate !== plate || (listVin && detailVin && listVin !== detailVin)) { issues.push('IDENTITY_MISMATCH'); identityHold = true; }
   const modelYear = parseFact('modelYear', list.carManufactureDate, value => {
     const m = text(value).match(/^(?:19|20)?(\d{2})/);
     if (!m) return null;
@@ -131,7 +144,7 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
 
   const priceTerms: PriceTerm[] = [];
   const estimates = Array.isArray(detail.estimates) ? detail.estimates.filter(object) : [];
-  for (const estimate of estimates) {
+  for (const estimate of identityHold ? [] : estimates) {
     if (estimate.creditType !== 'LOW') continue;
     if (!allowedEstimateTypes.has(text(estimate.estimateType))) {
       issues.push('ESTIMATE_TYPE_UNSUPPORTED');
