@@ -158,7 +158,9 @@ export function redactMismatchKeys(mismatchKeys: string[], salt: string) {
   });
 }
 
-type LookupStatus = 'OK' | 'OK_ENGINE_ONLY_NOT_IN_LEDGER' | 'NOT_LISTABLE' | 'NO_PRICE_ROWS' | 'PRODUCT_NOT_FOUND';
+export const MAX_LOOKUP_CANDIDATES = 20;
+
+type LookupStatus = 'TOO_MANY_CANDIDATES' | 'OK' | 'OK_ENGINE_ONLY_NOT_IN_LEDGER' | 'NOT_LISTABLE' | 'NO_PRICE_ROWS' | 'PRODUCT_NOT_FOUND';
 
 const label = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null);
 
@@ -166,6 +168,9 @@ const label = (value: unknown) => (typeof value === 'string' && value.trim() ? v
 export function lookupFeeWithReason(inputs: FeeCoverageInputs, ledgerRows: PeriodFeeLedgerRow[], plateOrLast4: string) {
   const keys = Object.keys(inputs.products).filter(key => key === plateOrLast4 || (plateOrLast4.length === 4 && key.endsWith(plateOrLast4)));
   if (!keys.length) return [{ plateLast4: plateOrLast4.slice(-4), status: 'PRODUCT_NOT_FOUND' as LookupStatus, reason: '프리패스 데이터 상품에 없는 번호', rows: [] }];
+  if (keys.length > MAX_LOOKUP_CANDIDATES) {
+    return [{ plateLast4: plateOrLast4.slice(-4), status: 'TOO_MANY_CANDIDATES' as LookupStatus, reason: `후보가 너무 많음(${keys.length}대), 더 긴 번호로 재조회`, rows: [] }];
+  }
   return keys.sort().map((key) => {
     const product = inputs.products[key]!;
     const base = {

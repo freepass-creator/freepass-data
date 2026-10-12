@@ -45,4 +45,12 @@ describe('period fee coverage audit', () => {
     expect(lookupFeeWithReason(inputs, [], '9999')[0]).toMatchObject({ status: 'PRODUCT_NOT_FOUND', rows: [] });
     expect(lookupFeeWithReason(inputs, [], '0001')[0]).toMatchObject({ status: 'NOT_LISTABLE', supplierId: 'RP001', rows: [] });
   });
+
+  it('caps last-4 candidates and asks for a longer number', () => {
+    const products = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`${10 + i}가0001`, { listable: false }]));
+    const inputs = { products, policies: {}, newCarTrim: {}, observedAt: '2026-10-12T00:00:00.000Z' };
+    const result = lookupFeeWithReason(inputs, [], '0001');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ status: 'TOO_MANY_CANDIDATES', rows: [] });
+  });
 });
