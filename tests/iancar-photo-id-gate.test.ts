@@ -142,7 +142,7 @@ describe('이안카 사진 ID 기반 서빙 게이트', () => {
     const manifest = await read('erp5-public-media', 'p1');
     expect(manifest.count).toBe(3);
     // 내부 결과 객체에는 캐시 표지(cacheTag, 연결 해시)가 있으나 HTTP 응답에는 실리지 않는다(photo-rendition-cache 시험·ID 게이트 HTTP 시험이 확인)
-    expect(Object.keys(manifest).sort()).toEqual(['bytes', 'cacheTag', 'contentType', 'count', 'revalidate']);
+    expect(Object.keys(manifest).sort()).toEqual(['bytes', 'cacheTag', 'contentType', 'count', 'revalidate', 'sourceCheckedAt']);
     const image = await read('erp5-public-media', 'p1', 1);
     expect(image.bytes).toEqual(jpeg);
     expect(image.contentType).toBe('image/jpeg');
