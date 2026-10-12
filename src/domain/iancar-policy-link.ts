@@ -124,9 +124,12 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
   if (policyPatch.basic_driver_age && policyPatch.basic_driver_age !== '만 26세 이상') blockers.push('SOURCE_MINIMUM_AGE_NOT_26');   // 원천이 대표 정책(만 26세 이상)과 다르면 계획을 막는다
 
   // 원천 조회 실패(401·429·시간 초과·형식 불일치 등)는 «원천에 없음(404)» 과 다르다 — 근거 없이 연결하지 않도록 계획을 막는다.
-  const lookupFailures = targets.filter(p => !input.vehicleTerms[p.id] && (input.vehicleTermsErrors?.[p.id] ?? 'NOT_IN_SOURCE') !== 'NOT_IN_SOURCE');
+  const lookupFailures = targets.filter(p => !input.vehicleTerms[p.id] && (input.vehicleTermsErrors?.[p.id] ?? 'NOT_LOOKED_UP') !== 'NOT_IN_SOURCE');
   if (lookupFailures.length) blockers.push(`SOURCE_LOOKUP_FAILED(${lookupFailures.length})`);
   if (targets.length && !terms.length) blockers.push('NO_SOURCE_TERMS_READ');
+  // 공통 필수 조건(연령·면허·대인/대물 면책·자차 포함)이 차량마다 다르면 공통 정책 하나로 연결할 수 없다 — 기존 공통 값이 남은 채 전 차량이 연결되는 것을 막는다.
+  const commonVaries = ['minimumDriverAge', 'maximumDriverAge', 'minimumLicenseMonths', 'personalInjuryDeductible', 'propertyDamageDeductible', 'ownDamageIncluded'].filter(k => k in varies);
+  for (const key of commonVaries) blockers.push(`COMMON_CONDITION_VARIES(${key})`);
   const unexpectedPolicyFields = Object.keys(policyPatch).filter(k => !IANCAR_POLICY_PATCH_FIELDS.includes(k));
   if (unexpectedPolicyFields.length) blockers.push('POLICY_PATCH_FIELD_NOT_ALLOWED');
 
@@ -145,7 +148,7 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
   }
   const before: Record<string, number> = {};
   for (const p of targets) { const k = String(p.data.policy_code ?? 'null'); before[k] = (before[k] ?? 0) + 1; }
-  const noTerms = targets.filter(p => !input.vehicleTerms[p.id]).map(p => ({ id: p.id, reason: input.vehicleTermsErrors?.[p.id] ?? 'NOT_IN_SOURCE' }));
+  const noTerms = targets.filter(p => !input.vehicleTerms[p.id]).map(p => ({ id: p.id, reason: input.vehicleTermsErrors?.[p.id] ?? 'NOT_LOOKED_UP' }));
 
   const planBody = { commonPolicy: { code: IANCAR_COMMON_POLICY_CODE, updateTimeMs: input.policy.updateTimeMs, patch: policyPatch }, products: productPatches };
   return {

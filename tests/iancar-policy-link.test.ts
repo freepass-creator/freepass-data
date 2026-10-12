@@ -79,6 +79,17 @@ describe('이안카 정책 연결 계획', () => {
     expect(same.counts.policyDocumentChanges).toBe(0);
     expect(settled.blockers).not.toContain('POLICY_PATCH_FIELD_NOT_ALLOWED');
   });
+  it('공통 필수 조건(연령 상한·면허 기간 등)이 차량마다 다르면 연결을 막는다(기존 공통 값이 남은 채 전 차량 연결 금지)', () => {
+    const plan = buildPolicyLinkPlan(input({ vehicleTerms: { a: terms({ maximumDriverAge: 65, minimumLicenseMonths: 12 }), b: terms({ maximumDriverAge: 60, minimumLicenseMonths: 24 }) } }));
+    expect(plan.blockers).toEqual(expect.arrayContaining(['COMMON_CONDITION_VARIES(maximumDriverAge)', 'COMMON_CONDITION_VARIES(minimumLicenseMonths)']));
+    expect(buildPolicyLinkPlan(input()).blockers).toEqual([]);   // 차량별로 달라도 되는 값(면책금·수리 한도 등)만 다르면 막지 않는다
+  });
+  it('조회하지 않은 노출 차량(오류 기록 없음)·차량 ID 누락은 404(NOT_IN_SOURCE)로 취급하지 않고 막는다', () => {
+    const missing = buildPolicyLinkPlan(input({ vehicleTerms: { a: terms() }, vehicleTermsErrors: {} }));
+    expect(missing.blockers).toContain('SOURCE_LOOKUP_FAILED(1)');
+    expect(missing.withoutSourceTerms).toEqual([{ id: 'b', reason: 'NOT_LOOKED_UP' }]);
+    expect(buildPolicyLinkPlan(input({ vehicleTerms: { a: terms() }, vehicleTermsErrors: { b: 'ID_MISSING' } })).blockers).toContain('SOURCE_LOOKUP_FAILED(1)');
+  });
   it('이미 연결·조건이 같은 상품은 계획에서 빠지고, 보존 칸이 없으면 연결 전 policy_code 를 남긴다', () => {
     const same = terms();
     const plan = buildPolicyLinkPlan(input({ products: [

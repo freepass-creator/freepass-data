@@ -20,7 +20,9 @@ async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: Fetch
   const products = productsSnap.docs.map(doc => ({ id: doc.id, updateTimeMs: doc.updateTime.toMillis(), data: doc.data() }));
   const vehicleTerms: Record<string, VehicleTerms | undefined> = {}, vehicleTermsErrors: Record<string, string> = {};
   // 원천 요금 조회는 동시 3개까지(ONE 429 방지) — 결과는 상품 순서와 무관하게 상품 ID 로 모은다.
-  const queue = products.filter(product => product.data.listable === true && typeof product.data.iancar_one_vehicle_id === 'string');
+  const listed = products.filter(product => product.data.listable === true);
+  for (const product of listed) if (typeof product.data.iancar_one_vehicle_id !== 'string' || !product.data.iancar_one_vehicle_id.trim()) vehicleTermsErrors[product.id] = 'ID_MISSING';   // 조회 못 한 노출 차량은 침묵하지 않고 오류로 남긴다
+  const queue = listed.filter(product => !(product.id in vehicleTermsErrors));
   let cursor = 0;
   await Promise.all(Array.from({ length: 3 }, async () => {
     while (cursor < queue.length) {
