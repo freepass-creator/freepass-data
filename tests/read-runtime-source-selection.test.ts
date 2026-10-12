@@ -20,7 +20,8 @@ describe('trusted read runtime source selection', () => {
     ] as const) {
     const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo "$MOCK_TREE"; else echo '${selected}'; fi;; show) if [ "$2" = -s ]; then echo "$MOCK_PARENT"; else echo PROBE_FROM_TRUSTED_MAIN; fi;; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
       `tar() { :; }\n` +
-      `npm() { echo "NPM $*"; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
+      `npm() { echo "NPM $*"; if [ "$1" = test ]; then test -z "\${IANCAR_PHOTO_ID_GATE_SUPPLIERS+x}" || return 1; fi; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
+      `env() { test "$1/$2" = '-u/IANCAR_PHOTO_ID_GATE_SUPPLIERS' || return 1; shift 2; (unset IANCAR_PHOTO_ID_GATE_SUPPLIERS; "$@"); }\n` +
       `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; if [ "$1" = run ]; then test -r "$probe_file" || return 1; if [ "$MOCK_NATIVE_FAIL" = true ]; then return 1; fi; fi; fi; }\n` +
       `jq() { cat >/dev/null; }\n`;
     const dir = mkdtempSync(join(tmpdir(), 'selected-photo-check-'));
@@ -34,10 +35,11 @@ describe('trusted read runtime source selection', () => {
         ['false', selected, 'false', tree, 'f'.repeat(40), 'false', false],
         ...(selected !== '57abb8a978457b87068c3c9c9d76cc8116934bd5' ? [['false', selected, 'false', tree, parent, 'true', false] as const] : []),
       ] as const) {
-        const result = spawnSync(bash, ['-s'], { input: mocks + validationScript + '\necho PUBLICATION_ALLOWED\n', encoding: 'utf8', env: {
+        const result = spawnSync(bash, ['-s'], { input: mocks + validationScript + '\ntest "$IANCAR_PHOTO_ID_GATE_SUPPLIERS" = RP031\necho PUBLICATION_ALLOWED\n', encoding: 'utf8', env: {
           ...process.env, EXPECTED_SOURCE_SHA: selected, WORKFLOW_SOURCE_SHA: 'a'.repeat(40), RUNNER_TEMP: dir,
           MOCK_FAILED_CHECK: failed, MOCK_LABEL: label, MOCK_FILE_MISMATCH: mismatch, RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js',
           MOCK_TREE: actualTree as string, MOCK_PARENT: actualParent as string, MOCK_NATIVE_FAIL: nativeFail as string,
+          IANCAR_PHOTO_ID_GATE_SUPPLIERS: 'RP031',
           GITHUB_ENV: '/dev/null', GITHUB_STEP_SUMMARY: '/dev/null',
         } });
         expect(result.status === 0, result.stderr).toBe(pass);
