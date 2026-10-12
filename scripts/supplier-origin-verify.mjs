@@ -219,7 +219,14 @@ async function main() {
     if (t.rawJson) {
       const map = JSON.parse(readFileSync(opt('map'), 'utf8')), stored = opt('stored-map') ? JSON.parse(readFileSync(opt('stored-map'), 'utf8')) : {};
       const rows = JSON.parse(readFileSync(opt('raw-json'), 'utf8'));
-      raw = (Array.isArray(rows) ? rows : rows.items ?? rows.vehicles ?? rows.records ?? []).map(r => Object.fromEntries(Object.entries(map).map(([f, k]) => [f, pick(r, k)])));
+      // fail-closed: 실패 응답·지원하지 않는 구조·차량번호 매핑 누락·0대는 «원천 0대»로 대조하지 않는다(0대가 맞으면 --allow-empty)
+      if (rows && rows.success === false) throw new Error('RAW_JSON_FAILURE_RESPONSE');
+      const list = Array.isArray(rows) ? rows : (rows?.items ?? rows?.vehicles ?? rows?.records);
+      if (!Array.isArray(list)) throw new Error('RAW_JSON_UNSUPPORTED_SHAPE');
+      if (!map.car_number) throw new Error('RAW_JSON_MAP_CAR_NUMBER_REQUIRED');
+      if (!list.length && !argv.includes('--allow-empty')) throw new Error('RAW_JSON_EMPTY');
+      raw = list.map(r => Object.fromEntries(Object.entries(map).map(([f, k]) => [f, pick(r, k)])));
+      if (raw.some(r => !String(r.car_number ?? '').trim())) throw new Error('RAW_JSON_ROW_WITHOUT_CAR_NUMBER'); // 번호 없는 행이 섞이면 부분 매핑 — 중단
       fields = Object.keys(map).filter(f => f !== 'car_number');
       headerOf = f => stored[f];
     } else if (t.aica) { raw = AICA_TABS.flatMap(tab => aicaRecords(readTab(tab, AICA))); fields = AICA_FIELDS; }

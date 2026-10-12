@@ -111,7 +111,7 @@ async function readIron() {
       let url = `https://ironrentcar.com/vehicles?condition=${cond}`; const seen = new Set();
       while (url && seen.size < 10 && !seen.has(url)) {
         seen.add(url); const html = await get(url);
-        if (seen.size === 1 && !/<article\b/.test(html)) return { ok: false, reason: `아이언 «${cond}» 첫 목록 페이지에서 차량을 한 건도 읽지 못함(점검 페이지·구조 변경 의심)` }; // fail-closed
+        if (!/<article\b/.test(html)) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록 페이지에서 차량을 한 건도 읽지 못함(점검 페이지·구조 변경 의심)` }; // fail-closed
         for (const a of html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)) { const id = a[0].match(/href="\/vehicles\/([^"?/#]+)/)?.[1]; if (id) items.push({ id, cond, sold: /rental-product-card--sold/.test(a[0]) }); }
         const more = html.match(/<a[^>]*href="([^"]+)"[^>]*>\s*더보기\s*<\/a>/)?.[1];
         url = more ? new URL(more.replace(/&amp;/g, '&'), 'https://ironrentcar.com').href : null;
@@ -155,7 +155,7 @@ function readAutoplus(products) {
     note: `시트 차량 ${plates.size}대${hp ? ` · 홈페이지 ${hp.size}대` : ' · 홈페이지는 목록 API 가 화면 스크립트 전용이라 브라우저로 읽은 파일(--homepage-plates) 필요'}${notes.length ? ' · ' + notes.join(',') : ''}`, partial: !hp || !sheetId };
 }
 
-const BLOCKED = { RP012: { ok: false, reason: '손오공 ERP 계정이 이 PC·freepass-data 에 없음 — 대표 손 한 가지: 손오공 로그인 계정을 비밀 저장소(freepass-data 프로젝트)에 등록' } };
+const BLOCKED = { RP012: { ok: false, reason: "손오공은 직접 읽기 없음 — ERP4 매시 수집기 반영 결과를 원천 기준으로 본다(판매가능대수 명령 참고)" } };
 
 // ── 직접 확인: 차량 하나를 원천에서 «그 순간» 읽어 정규 칸으로(저장 없음) ───────────────────────────
 // 끝 4자리가 같은 서로 다른 차량: 데이터 상품이 있으면 그 실번호와 정확히 같은 원천 줄만, 없으면 끝 4자리가 유일할 때만 고른다(애매하면 null)
@@ -173,7 +173,8 @@ function ianSingle(plate4, exactPlate) {
   catch { return { ok: false, reason: '이안카 ONE API 읽기 실패(비밀 저장소 접근 또는 API 응답)' }; }
   const j = JSON.parse(readFileSync(tmp, 'utf8')); try { require_unlink(tmp); } catch { /* 임시 파일은 남겨도 저장소 밖 */ }
   const cands = j.detail ?? [];
-  const d = exactPlate ? cands.find(x => plateKey(x.vehicle?.data?.plate_number ?? x.list?.plate_number) === plateKey(exactPlate)) : (cands.length === 1 ? cands[0] : undefined);
+  if (!exactPlate && cands.length > 1) return { ok: true, readAt: j.readAt, found: false, ambiguous: cands.length, sourceSyncedAt: j.syncedAt };
+  const d = exactPlate ? cands.find(x => plateKey(x.vehicle?.data?.plate_number ?? x.list?.plate_number) === plateKey(exactPlate)) : cands[0];
   if (!d) return { ok: true, readAt: j.readAt, found: false, sourceSyncedAt: j.syncedAt };
   const v = d.vehicle?.data ?? d.list, terms = (d.rates?.data ?? []).map(t => ({ 개월: t.rental_period, km: t.contracted_mileage, 주기: t.mileage_period, 월대여료: t.monthly_rate, 보증금: t.deposit }));
   return { ok: true, found: true, readAt: j.readAt, sourceSyncedAt: j.syncedAt, 원천갱신: v.synced_at, 상태: v.inventory_status, 판매가능: v.available, 연식: v.year, 연료: v.fuel, 주행거리: v.mileage, 외장: v.color,
@@ -195,7 +196,8 @@ async function compareOne(c, plate4, idx = 0) {
   let readAt, note;
   if (c === 'RP031') {
     const r = ianSingle(plate4, prod?.car_number); if (!r.ok) return { ok: false, reason: r.reason };
-    readAt = r.readAt; if (!r.found) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
+    readAt = r.readAt; if (r.ambiguous) return { ok: true, readAt, 식별불가: `끝 4자리가 같은 원천 차량 ${r.ambiguous}대 — 번호 전체가 필요(부재로 판정하지 않음)` };
+    if (!r.found) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
     row('원천 갱신 시각', r.원천갱신, prod?._direct_ingest_at ? new Date(prod._direct_ingest_at).toISOString() : null, '참고');
     row('상태', r.상태, prod?.status_label_raw, r.판매가능 ? (prod?.listable ? '원천 가능/데이터 판매중' : '원천 가능인데 데이터 판매 아님') : '원천 불가');
     row('연식', r.연식, prod?.year); row('연료', r.연료, prod?.fuel_type); row('주행거리', r.주행거리, prod?.mileage); row('외장', r.외장, prod?.ext_color);

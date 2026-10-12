@@ -30,6 +30,9 @@ for (let page = 1; page <= 100; page++) {
   // fail-closed: 실패 응답·배열 아님·오래된(stale) 응답·총수 없음은 정상 원천으로 쓰지 않는다
   if (body.success !== true || !Array.isArray(body.data) || typeof body.pagination?.total !== 'number') { console.error('IANCAR_LIST_RESPONSE_INVALID'); process.exit(3); }
   if (body.stale === true) { console.error('IANCAR_LIST_STALE'); process.exit(3); }
+  // 원천 갱신 시각이 유효하고 신선도 한도(이안카 60분) 안이어야 한다 — 오래된 AVAILABLE 목록으로 편입·재노출을 계획하지 않는다
+  const syncedMs = Date.parse(String(body.synced_at ?? ''));
+  if (!Number.isFinite(syncedMs) || syncedMs > Date.now() + 60_000 || Date.now() - syncedMs > 60 * 60_000) { console.error('IANCAR_LIST_SYNCED_AT_INVALID_OR_OLD'); process.exit(3); }
   records.push(...(body.data ?? [])); syncedAt = body.synced_at; stale = body.stale; total = body.pagination?.total ?? records.length;
   if (!body.data?.length || records.length >= total) break;
 }
