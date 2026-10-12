@@ -828,3 +828,33 @@ export async function createContractLockRuntime() {
     }, () => releaseContractLock(input)),
   };
 }
+
+export async function createIancarPhotoStoreRuntime(bucket: string | null) {
+  const { readIancarProducts, publishIancarPhotoPointer } = await import('../infra/iancar-photo-pointer-firestore.js');
+  const context = {
+    actor: { id: 'service:freepass-data-iancar-photo-store', kind: 'SERVICE' as const },
+    clientId: 'job:replicate-iancar-photos',
+    purpose: 'replicate Iancar ONE vehicle photos into the private photo store and publish verified manifest pointers',
+  };
+  const readGateway = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const writeGateway = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  let store: import('../ports/photo-object-store.js').PhotoObjectStore;
+  if (bucket) {
+    const { createGcsPhotoObjectStore } = await import('../infra/photo-object-store-gcs.js');
+    store = createGcsPhotoObjectStore(bucket);
+  } else {
+    const { MemoryPhotoObjectStore } = await import('../infra/photo-object-store-memory.js');
+    store = new MemoryPhotoObjectStore();
+  }
+  return {
+    store,
+    readProducts: () => readGateway.read({
+      context, operation: 'READ_IANCAR_PRODUCTS_FOR_PHOTO_STORE', resource: { kind: 'SOURCE' as const, name: 'products' },
+      summarize: (value) => ({ count: Object.keys(value).length, digest: stableDigest(Object.keys(value).sort().map(key => stableDigest(key))) }),
+    }, readIancarProducts),
+    publish: (requestDigest: string, productId: string, pointer: Parameters<typeof publishIancarPhotoPointer>[1], previous: string | null, vehicleId: string) => writeGateway.write({
+      context, operation: 'WRITE_IANCAR_PHOTO_STORE_POINTER', resource: { kind: 'SOURCE' as const, name: 'products' }, requestDigest,
+      summarize: (value) => ({ count: value === 'PUBLISHED' ? 1 : 0, digest: stableDigest({ requestDigest, value }) }),
+    }, () => publishIancarPhotoPointer(productId, pointer, previous, vehicleId)),
+  };
+}

@@ -344,6 +344,8 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
 export type CatalogCompatibilityReaderOptions = {
   readCollections?: readonly CatalogCompatibilityReadCollection[];
   photoReadFailureObserver?: VehiclePhotoReadFailureObserver;
+  /** 저장본 우선 사진 읽기(없으면 null → 기존 원천 경로). 버킷이 설정된 환경에서만 주입된다. */
+  storedIancarPhotoReader?: (product: Record<string, unknown>, index?: number) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead | null>;
 };
 
 const jsonSafe = (value: unknown): unknown => {
@@ -424,6 +426,11 @@ export class FirestoreCatalogCompatibilityReader {
       eligible: isPublicIancarPhotoProduct,
       connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
       read: async (product, index, fresh, expectedRegisteredPhotoCount) => {
+        // 저장본이 검증을 통과하면 원천 호출 없이 바로 준다. 어긋나면 null 이라 아래 원천 경로로 대체한다.
+        if (options.storedIancarPhotoReader) {
+          const stored = await options.storedIancarPhotoReader(product, index);
+          if (stored) return stored;
+        }
         if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
         return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh, expectedRegisteredPhotoCount);

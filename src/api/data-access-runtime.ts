@@ -7,6 +7,10 @@ import { createFirestoreCatalogCompatibilityReader, type ApprovedPhotoReader } f
 import { createFirestoreProjectionReader } from '../infra/firestore-projection-reader.js';
 import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
 import { createIancarOneApiClient, createIancarPhotoByteCache, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
+import { createPhotoRequestLimiter } from '../application/photo-request-limiter.js';
+import { createStoredIancarPhotoReader } from '../application/stored-iancar-photo-reader.js';
+import { IANCAR_PHOTO_STORE_BUCKET } from '../domain/iancar-photo-store.js';
+import { createGcsPhotoObjectStore } from '../infra/photo-object-store-gcs.js';
 import { logPhotoMetadataFailure } from './vehicle-photo-metadata-diagnostic.js';
 import { createVehiclePhotoReadFailureObserver } from './vehicle-photo-read-diagnostic.js';
 export { isPublicIancarPhotoProduct } from '../infra/erp5-compat-catalog-reader.js';
@@ -20,6 +24,12 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
   // The reader rechecks public eligibility before either private cache is used.
   const photoSets = new Map<string, { expiresAt: number; ids: Promise<string[]> }>();
   const photoBytes = createIancarPhotoByteCache();
+  // 원천(ONE) 대체 경로도 복제 작업과 같은 방식의 제한기를 거친다(저장본 없는 차가 몰려도 429 폭주 방지).
+  const oneLimiter = createPhotoRequestLimiter({ maxConcurrent: 4, minIntervalMs: 100 });
+  // 버킷 이름이 정확히 설정된 환경에서만 저장본 우선을 켠다(기본 꺼짐 — 동작 변화 없음).
+  const storedIancarPhotoReader = process.env.IANCAR_PHOTO_STORE_BUCKET === IANCAR_PHOTO_STORE_BUCKET
+    ? createStoredIancarPhotoReader({ store: createGcsPhotoObjectStore(IANCAR_PHOTO_STORE_BUCKET) })
+    : undefined;
   return {
     access,
     projection: createFirestoreProjectionReader(),
@@ -45,7 +55,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       }
       if (fresh) {
         let detail: Awaited<ReturnType<typeof client.getVehicle>>;
-        try { detail = await client.getVehicle(vehicleId); }
+        try { detail = await oneLimiter.run(() => client.getVehicle(vehicleId)); }
         catch (error) {
           if (observeMetadata) logPhotoMetadataFailure('FETCH_DETAIL', error, true);
           throw error;
@@ -69,13 +79,13 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         const id = photoIds[index];
         if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
         // A reviewed album must not serve cached bytes after the same source ID changes content.
-        return { ...metadata, ...await readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id)) };
+        return { ...metadata, ...await oneLimiter.run(async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
       }
       const key = JSON.stringify([vehicleId, plate]);
       let cached = photoSets.get(key);
       if (!cached || cached.expiresAt <= Date.now()) {
         if (photoSets.size >= 128) photoSets.delete(photoSets.keys().next().value!);
-        const ids = client.getVehicle(vehicleId).then(detail => iancarOnePhotoIds(detail, vehicleId, plate));
+        const ids = oneLimiter.run(() => client.getVehicle(vehicleId)).then(detail => iancarOnePhotoIds(detail, vehicleId, plate));
         cached = { expiresAt: Date.now() + VEHICLE_PHOTO_CACHE_TTL_MS, ids };
         photoSets.set(key, cached);
         const entry = cached;
@@ -85,8 +95,8 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       if (index === undefined) return { count: ids.length, photoIds: ids, bytes: null, contentType: 'application/json' };
       const id = ids[index];
       if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-      return { count: ids.length, photoIds: ids, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
-    }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver() }),
+      return { count: ids.length, photoIds: ids, ...await photoBytes(vehicleId, id, async () => oneLimiter.run(async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id)))) };
+    }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver(), ...(storedIancarPhotoReader ? { storedIancarPhotoReader } : {}) }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()
   };
