@@ -11,6 +11,7 @@ import {
 } from '../adapters/iancar-one-api.js';
 import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 import { createHash } from 'node:crypto';
+import { checkIancarSyncExpect } from '../domain/iancar-sync-gate.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 // Strict isolated entrypoint. Never reaches legacy reports, DB access or private raw capture.
@@ -305,15 +306,11 @@ if (requested.has('--sync')) {
     // 같은 수집으로 «해제 제외» 판을 함께 계획한다(승인 전 두 digest).
     report.publicationPlanKeepWithdrawn = await runIancarPhaseOnePublication({ ...input, keepWithdrawn: true });
   }
-  if (requested.has('--apply-sync') && process.env.IANCAR_SYNC_EXPECT) {
-    // 승인된 계획 건수 관문: {"created":[5,6],"absenceHeld":[12,12],...} 범위를 벗어나면 쓰기 전에 멈춘다.
-    const expect = JSON.parse(process.env.IANCAR_SYNC_EXPECT) as Record<string, [number, number]>;
-    const bad = Object.entries(expect).filter(([key, [lo, hi]]) => {
-      const value = (plan as Record<string, unknown>)[key];
-      return typeof value !== 'number' || value < lo! || value > hi!;
-    }).map(([key]) => `${key}=${(plan as Record<string, unknown>)[key]}`);
-    if (bad.length) {
-      console.log(JSON.stringify({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', outOfRange: bad, publicationPlan: plan, writeExecuted: false }, null, 2));
+  if (requested.has('--apply-sync')) {
+    // 승인된 계획 건수 관문(fail-closed): 설정 누락·형식 오류·필수 항목 누락·범위 밖이면 쓰기 전에 멈춘다.
+    const gate = checkIancarSyncExpect(process.env.IANCAR_SYNC_EXPECT, plan as unknown as Record<string, unknown>);
+    if (!gate.ok) {
+      console.log(JSON.stringify({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', reasons: gate.reasons, publicationPlan: plan, writeExecuted: false }, null, 2));
       process.exit(3);
     }
   }
