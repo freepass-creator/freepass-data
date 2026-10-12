@@ -151,6 +151,46 @@ describe('applyKakaoInfoCandidates', () => {
       .rejects.toThrow('KAKAO_INFO_READBACK_MISMATCH');
   });
 
+  it('fails readback when stored derived safety fields drift', async () => {
+    const baseStore = writeStore();
+    const inputs = [candidate({ type: '가격', fields: { 항목: '월렌탈', 요약: '가격', 값: 'TEST-FAKE-AMOUNT-12345' } })];
+    const listCandidates = baseStore.listCandidates.bind(baseStore);
+    const corruptingStore = Object.assign(baseStore, {
+      listCandidates: async (runId: string) => (await listCandidates(runId)).map(record => ({
+        ...record,
+        candidate: {
+          ...record.candidate,
+          kakaoInfo: {
+            ...((record.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo),
+            autoPromotable: true,
+          },
+        },
+      })),
+    });
+    await expect(applyKakaoInfoCandidates(corruptingStore, inputs, options(inputs, true)))
+      .rejects.toThrow('KAKAO_INFO_READBACK_MISMATCH');
+  });
+
+  it('treats same immutable body as conflict when skipped stored derived fields are corrupted', async () => {
+    const store = writeStore();
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const stored = (await store.listCandidatesBySource('kakao-info-candidate'))[0]!;
+    const corrupted = {
+      ...stored,
+      candidate: {
+        ...stored.candidate,
+        kakaoInfo: {
+          ...((stored.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo),
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        },
+      },
+    };
+    const corruptingStore = Object.assign(store, { getCandidate: async () => corrupted });
+    await expect(applyKakaoInfoCandidates(corruptingStore, inputs, options(inputs, true)))
+      .rejects.toThrow('KAKAO_INFO_CANDIDATE_CONFLICT');
+  });
+
   it('downgrades missing product plates to vehicle-unspecified before writing', async () => {
     const store = Object.assign(new MemorySourceStore(), { productExists: async () => false });
     const inputs = [candidate()];
@@ -266,5 +306,29 @@ describe('readKakaoKnownFacts', () => {
       topic: '서류요구',
       asOf: '2026-10-12T01:00:00.000Z',
     })).toEqual([]);
+  });
+
+  it('excludes and counts corrupted persisted derived expiry fields during reads', async () => {
+    const store = writeStore();
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const stored = (await store.listCandidatesBySource('kakao-info-candidate'))[0]!;
+    const result = await readKakaoKnownFacts({ listCandidatesBySource: async () => [{
+      ...stored,
+      candidate: {
+        ...stored.candidate,
+        kakaoInfo: {
+          ...((stored.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo),
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        },
+      },
+    }] }, {
+      vehicleKey: '123가4567',
+      supplierCode: 'RP001',
+      topic: inputs[0]!.type,
+      asOf: '2026-10-12T01:00:00.000Z',
+    });
+    expect(result).toEqual([]);
+    expect(result.warningCount).toBe(1);
   });
 });

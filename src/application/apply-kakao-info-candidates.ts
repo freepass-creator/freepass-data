@@ -78,8 +78,24 @@ function candidateDigest(record: { sourceFingerprint: string; candidate: unknown
   return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: stableCandidateForDigest(record.candidate) });
 }
 
-function plannedCandidateDigest(record: { sourceFingerprint: string; candidate: unknown }) {
-  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: stableCandidateForDigest(record.candidate) });
+function fullCandidateDigest(record: { sourceFingerprint: string; candidate: unknown }) {
+  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: record.candidate });
+}
+
+function derivedSafetyFields(candidate: unknown) {
+  const info = candidate && typeof candidate === 'object'
+    ? (candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo
+    : undefined;
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return null;
+  return {
+    expiresAt: info.expiresAt,
+    conflict: info.conflict,
+    layer: info.layer,
+  };
+}
+
+function hasExpectedDerivedSafetyFields(existing: unknown, expected: unknown) {
+  return stableDigest(derivedSafetyFields(existing)) === stableDigest(derivedSafetyFields(expected));
 }
 
 async function downgradeMissingProducts(port: KakaoInfoApplyPort, inputs: readonly KakaoInfoCandidateInput[], writesEnabled: boolean) {
@@ -141,10 +157,13 @@ export async function applyKakaoInfoCandidates(
     item.candidate.candidateId,
     productExistenceByInput.get(index) ?? (item.productRef ? 'UNKNOWN' : 'NOT_APPLICABLE'),
   ] as const));
-  const expectedDigestById = new Map(plan.candidates.map(item => {
+  const expectedStableDigestById = new Map<string, string>();
+  const expectedFullDigestById = new Map<string, string>();
+  const expectedCandidateById = new Map<string, unknown>();
+  for (const item of plan.candidates) {
     const expectedFingerprint = plan.batch.records.find(record => record.sourceRecordId === item.candidate.candidateId)?.sourceFingerprint;
     if (!expectedFingerprint) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
-    return [item.candidate.candidateId, plannedCandidateDigest({ sourceFingerprint: expectedFingerprint, candidate: plan.normalize({
+    const expectedCandidate = plan.normalize({
       firstObservedAt: options.now,
       firstRunId: null,
       rawRecordId: `readback-plan/${item.candidate.candidateId}`,
@@ -154,8 +173,11 @@ export async function applyKakaoInfoCandidates(
       sourceFingerprint: expectedFingerprint,
       observedAt: options.now,
       payload: plan.batch.records.find(record => record.sourceRecordId === item.candidate.candidateId)!.payload,
-    }).record.candidate })] as const;
-  }));
+    }).record.candidate;
+    expectedCandidateById.set(item.candidate.candidateId, expectedCandidate);
+    expectedStableDigestById.set(item.candidate.candidateId, candidateDigest({ sourceFingerprint: expectedFingerprint, candidate: expectedCandidate }));
+    expectedFullDigestById.set(item.candidate.candidateId, fullCandidateDigest({ sourceFingerprint: expectedFingerprint, candidate: expectedCandidate }));
+  }
   const receipts: KakaoInfoCandidateReceipt[] = [];
   let created = 0, skippedSame = 0, conflict = 0;
   const createdCandidateIds = new Set<string>();
@@ -164,11 +186,15 @@ export async function applyKakaoInfoCandidates(
     const existing = await port.getCandidate(item.candidate.candidateId);
     const expectedFingerprint = plan.batch.records.find(record => record.sourceRecordId === item.candidate.candidateId)?.sourceFingerprint;
     if (!expectedFingerprint) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
-    const expectedDigest = expectedDigestById.get(item.candidate.candidateId);
+    const expectedDigest = expectedStableDigestById.get(item.candidate.candidateId);
+    const expectedCandidate = expectedCandidateById.get(item.candidate.candidateId);
     if (!expectedDigest) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
+    if (!expectedCandidate) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
     const existingDigest = existing ? candidateDigest(existing) : null;
     const result: KakaoInfoApplyOutcome = !existing ? 'CREATED'
-      : existing.sourceFingerprint === expectedFingerprint && existingDigest === expectedDigest ? 'SKIPPED_SAME'
+      : existing.sourceFingerprint === expectedFingerprint
+        && existingDigest === expectedDigest
+        && hasExpectedDerivedSafetyFields(existing.candidate, expectedCandidate) ? 'SKIPPED_SAME'
         : 'CONFLICT';
     if (result === 'CREATED') {
       created++;
@@ -212,8 +238,8 @@ export async function applyKakaoInfoCandidates(
     if (receipt.result !== 'CREATED') continue;
     const record = persistedById.get(receipt.candidateId);
     if (!record) throw new Error('KAKAO_INFO_READBACK_MISSING');
-    receipt.readbackDigest = candidateDigest(record);
-    if (receipt.readbackDigest !== expectedDigestById.get(receipt.candidateId)) {
+    receipt.readbackDigest = fullCandidateDigest(record);
+    if (receipt.readbackDigest !== expectedFullDigestById.get(receipt.candidateId)) {
       throw new Error('KAKAO_INFO_READBACK_MISMATCH');
     }
   }

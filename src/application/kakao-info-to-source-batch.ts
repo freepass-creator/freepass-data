@@ -48,6 +48,7 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
       excerpt: candidate.source.excerpt,
     },
     normalized: {
+      layer: isKakaoT0OnlyInfo(candidate.type) ? 'T0' : signal.layer,
       type: candidate.type,
       supplierCode: candidate.supplierCode,
       item: candidate.fields.항목,
@@ -93,6 +94,7 @@ function fingerprintPayloadFor(candidate: KakaoInfoCandidate) {
       excerpt: candidate.source.excerpt,
     },
     normalized: {
+      layer: isKakaoT0OnlyInfo(candidate.type) ? 'T0' : 'T1',
       type: candidate.type,
       supplierCode: candidate.supplierCode,
       item: candidate.fields.항목,
@@ -218,6 +220,7 @@ export function kakaoInfoCandidatesToSourceBatch(
     };
     const lineage: FieldLineageRecord[] = [
       'type',
+      'layer',
       'item',
       'summary',
       'value',

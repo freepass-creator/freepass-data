@@ -1,4 +1,4 @@
-import { isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoPlateEvidenceSource } from '../domain/kakao-info-candidate.js';
+import { classifyKakaoInfoSignal, isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoPlateEvidenceSource } from '../domain/kakao-info-candidate.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 
 export type KakaoKnownFactTopic = '재고' | '가격' | '조건' | '정책변경' | '계약진행' | '서류요구' | '접수가능';
@@ -15,6 +15,8 @@ export type KakaoKnownFact = {
   plateEvidence: { msgNo: number | null; source: KakaoInfoPlateEvidenceSource | null };
   signalOnly: boolean;
 };
+
+export type KakaoKnownFactReadResult = KakaoKnownFact[] & { warningCount: number };
 
 export type KakaoKnownFactQuery = {
   vehicleKey?: string;
@@ -64,15 +66,27 @@ function factLayer(topic: KakaoKnownFactTopic): KakaoKnownFact['layer'] {
   return isKakaoT0OnlyInfo(topic) ? 'T0' : 'T1';
 }
 
+function recomputedSignal(info: Record<string, unknown>, asOf: string) {
+  const sentAt = text(info.sentAt);
+  const type = info.type as KakaoKnownFactTopic;
+  if (!validTime(sentAt)) return null;
+  return classifyKakaoInfoSignal({
+    type,
+    fields: { 항목: text(info.item), 요약: text(info.summary), 값: text(info.value) },
+    source: { sentAt, side: '', msgNo: '', excerpt: '' },
+  }, asOf);
+}
+
 export async function readKakaoKnownFacts(
   store: Pick<SourceIngestionStore, 'listCandidatesBySource'>,
   query: KakaoKnownFactQuery,
-): Promise<KakaoKnownFact[]> {
+): Promise<KakaoKnownFactReadResult> {
   if (!query.asOf || !Number.isFinite(Date.parse(query.asOf))) throw new Error('KAKAO_FACT_AS_OF_REQUIRED');
   if (!query.supplierCode?.trim()) throw new Error('KAKAO_FACT_SUPPLIER_REQUIRED');
   if (!query.vehicleKey && !query.vehicleUid) throw new Error('KAKAO_FACT_VEHICLE_REQUIRED');
   const asOfMs = Date.parse(query.asOf);
   const records = await store.listCandidatesBySource(SOURCE_ID);
+  let warningCount = 0;
   const facts = records.flatMap(record => {
     const root = record.candidate as Record<string, unknown>;
     const info = (record.candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo;
@@ -80,9 +94,15 @@ export async function readKakaoKnownFacts(
     if (!matchesSupplier(root, info, query.supplierCode)) return [];
     const vehicle = info.vehicle as Record<string, unknown> | undefined;
     if (!matchesVehicle(vehicle, query)) return [];
-    const expiresAt = text(info.expiresAt);
     const sentAt = text((info as { sentAt?: unknown }).sentAt);
-    if (!validTime(expiresAt) || Date.parse(expiresAt) < asOfMs) return [];
+    const signal = recomputedSignal(info, query.asOf);
+    const expectedLayer = factLayer(query.topic);
+    if (!signal || text(info.expiresAt) !== signal.expiresAt || text(info.layer) !== expectedLayer) {
+      warningCount++;
+      return [];
+    }
+    const expiresAt = signal.expiresAt;
+    if (Date.parse(expiresAt) < asOfMs) return [];
     if (!validTime(sentAt) || Date.parse(sentAt) - asOfMs > futureToleranceMs) return [];
     const candidate = (record.candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo!;
     const plateEvidenceSource: KakaoInfoPlateEvidenceSource | null =
@@ -90,7 +110,7 @@ export async function readKakaoKnownFacts(
         ? vehicle.plateEvidenceSource
         : null;
     return [{
-      layer: factLayer(query.topic),
+      layer: expectedLayer,
       topic: query.topic,
       item: text(candidate.item || candidate.summary),
       valueSummary: maskValue(text(candidate.value)),
@@ -105,5 +125,7 @@ export async function readKakaoKnownFacts(
       signalOnly: isKakaoMoneyInfo(query.topic),
     }];
   });
-  return facts.sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt));
+  const sorted = facts.sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt)) as KakaoKnownFactReadResult;
+  Object.defineProperty(sorted, 'warningCount', { value: warningCount, enumerable: false });
+  return sorted;
 }
