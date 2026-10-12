@@ -24,6 +24,7 @@ if (process.argv.slice(2).includes('--source-only')) {
       summary = await inspectIancarSourceOnly(iancarOneApiConfigFromEnv());
     } catch { /* Fixed summary only; no provider exception or credentials leave memory. */ }
   }
+  process.stdout.on('error', () => { /* Broken output pipe must never produce a stderr stack. */ });
   const printed = await new Promise<boolean>(resolve => process.stdout.write(`${JSON.stringify(summary)}\n`,
     error => resolve(!error)));
   if (!printed) process.exit(2);

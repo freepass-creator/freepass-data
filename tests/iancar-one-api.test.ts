@@ -1,5 +1,5 @@
 import { readIancarPublishedDeposit } from '../src/domain/deposit-evidence.js';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
@@ -28,6 +28,16 @@ import {
 } from '../src/adapters/iancar-one-api.js';
 
 describe('finite SOURCE_ONLY transport', () => {
+  it('actual CLI exits quietly when the output pipe is already closed', async () => {
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'src/jobs/collect-iancar-one-api.ts',
+        '--source-only', '--phase-one', '--apply-raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = ''; child.stdout.destroy();
+      child.stderr.on('data', bytes => { stderr += String(bytes); });
+      child.on('error', reject); child.on('close', code => resolve({ code, stderr }));
+    });
+    expect(result).toEqual({ code: 2, stderr: '' });
+  });
   it('actual CLI rejects mixed write modes before auth and flushes only fixed summary with empty stderr', () => {
     const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/jobs/collect-iancar-one-api.ts',
       '--source-only', '--phase-one', '--apply-raw'], { encoding: 'utf8' });
