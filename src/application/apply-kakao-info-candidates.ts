@@ -56,12 +56,30 @@ function assertDigest(inputs: readonly KakaoInfoCandidateInput[], expectedDigest
   if (!expectedDigest || stableDigest(inputs) !== expectedDigest) throw new Error('KAKAO_INFO_DIGEST_MISMATCH');
 }
 
+function stableCandidateForDigest(candidate: unknown) {
+  if (!candidate || typeof candidate !== 'object') return candidate;
+  const copy = structuredClone(candidate) as Record<string, unknown>;
+  if (Array.isArray(copy.issues)) {
+    copy.issues = copy.issues.filter(issue => issue !== 'KAKAO_INFO_CONFLICT' && issue !== 'KAKAO_INFO_EXPIRED');
+  }
+  const info = copy.kakaoInfo;
+  if (info && typeof info === 'object' && !Array.isArray(info)) {
+    const kakaoInfo = { ...(info as Record<string, unknown>) };
+    delete kakaoInfo.autoPromotable;
+    delete kakaoInfo.conflict;
+    delete kakaoInfo.expiresAt;
+    delete kakaoInfo.isFresh;
+    copy.kakaoInfo = kakaoInfo;
+  }
+  return copy;
+}
+
 function candidateDigest(record: { sourceFingerprint: string; candidate: unknown }) {
-  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: record.candidate });
+  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: stableCandidateForDigest(record.candidate) });
 }
 
 function plannedCandidateDigest(record: { sourceFingerprint: string; candidate: unknown }) {
-  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: record.candidate });
+  return stableDigest({ sourceFingerprint: record.sourceFingerprint, candidate: stableCandidateForDigest(record.candidate) });
 }
 
 async function downgradeMissingProducts(port: KakaoInfoApplyPort, inputs: readonly KakaoInfoCandidateInput[], writesEnabled: boolean) {
@@ -145,6 +163,7 @@ export async function applyKakaoInfoCandidates(
   for (const item of plan.candidates) {
     const existing = await port.getCandidate(item.candidate.candidateId);
     const expectedFingerprint = plan.batch.records.find(record => record.sourceRecordId === item.candidate.candidateId)?.sourceFingerprint;
+    if (!expectedFingerprint) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
     const expectedDigest = expectedDigestById.get(item.candidate.candidateId);
     if (!expectedDigest) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
     const existingDigest = existing ? candidateDigest(existing) : null;

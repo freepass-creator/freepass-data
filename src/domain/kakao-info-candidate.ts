@@ -22,6 +22,7 @@ export type KakaoInfoRejectReason =
 export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELDS_DROPPED'; count: number };
 
 export type KakaoInfoCandidateInput = {
+  supplierCode: string;
   roomCode: string;
   source: { sentAt: string; side: string; msgNo: string; excerpt: string };
   type: KakaoInfoType;
@@ -72,6 +73,9 @@ const isStrictIsoUtc = (value: unknown): value is string => {
 
 const isValidMsgNo = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9]{1,6}$/.test(value.trim());
+
+const isValidSupplierCode = (value: unknown): value is string =>
+  typeof value === 'string' && /^(RP|PT-)\d+$/.test(value.trim());
 
 const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]/g, '').toUpperCase();
 
@@ -189,6 +193,7 @@ function hasCrossFieldAccountEvidence(values: string[]) {
 }
 
 const allowedInputFields = new Set([
+  'supplierCode',
   'roomCode',
   'source',
   'type',
@@ -250,6 +255,7 @@ export function kakaoInfoCandidateId(input: KakaoInfoCandidateInput) {
     .digest('hex');
   return createHash('sha256')
     .update([
+      input.supplierCode.trim(),
       input.roomCode.trim(),
       new Date(input.source.sentAt).toISOString(),
       input.source.msgNo.trim(),
@@ -262,6 +268,7 @@ export function kakaoInfoCandidateId(input: KakaoInfoCandidateInput) {
 
 export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoInfoCandidateResult {
   if (!isValidRoomCode(input.roomCode)) return { ok: false, reason: 'INVALID_ROOM_CODE' };
+  if (!isValidSupplierCode(input.supplierCode)) return { ok: false, reason: 'INVALID_FIELDS' };
   if (!isStrictIsoUtc(input.source?.sentAt)) {
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
@@ -288,6 +295,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (unknownFields.hasSensitiveKey) return { ok: false, reason: 'PII_DETECTED' };
   const warnings = unknownFields.count ? [{ code: 'UNKNOWN_FIELDS_DROPPED' as const, count: unknownFields.count }] : undefined;
   const normalized: KakaoInfoCandidateInput = {
+    supplierCode: input.supplierCode.trim(),
     roomCode: input.roomCode.trim(),
     source: {
       sentAt: new Date(input.source.sentAt).toISOString(),

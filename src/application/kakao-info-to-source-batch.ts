@@ -41,6 +41,7 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
     aiInvolved: true,
     candidate,
     raw: {
+      supplierCode: candidate.supplierCode,
       roomCode: candidate.roomCode,
       sentAt: candidate.source.sentAt,
       msgNo: candidate.source.msgNo,
@@ -48,6 +49,7 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
     },
     normalized: {
       type: candidate.type,
+      supplierCode: candidate.supplierCode,
       item: candidate.fields.항목,
       summary: candidate.fields.요약,
       value: candidate.fields.값,
@@ -70,6 +72,47 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
       conflict,
       expiresAt: signal.expiresAt,
       isFresh: signal.isFresh,
+    },
+  };
+}
+
+function fingerprintPayloadFor(candidate: KakaoInfoCandidate) {
+  const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+  const productRef = plate ? `products/${plate}` : null;
+  return {
+    ruleVersion: 'kakao-info-candidate/1',
+    sourceKind: 'KAKAO',
+    authority: 'CANDIDATE',
+    aiInvolved: true,
+    candidate,
+    raw: {
+      supplierCode: candidate.supplierCode,
+      roomCode: candidate.roomCode,
+      sentAt: candidate.source.sentAt,
+      msgNo: candidate.source.msgNo,
+      excerpt: candidate.source.excerpt,
+    },
+    normalized: {
+      type: candidate.type,
+      supplierCode: candidate.supplierCode,
+      item: candidate.fields.항목,
+      summary: candidate.fields.요약,
+      value: candidate.fields.값,
+      sentAt: candidate.source.sentAt,
+      roomCode: candidate.roomCode,
+      vehicle: {
+        productRef,
+        plate,
+        model: candidate.vehicle?.model ?? null,
+        plateUnverified: candidate.vehicle?.plateUnverified ?? null,
+        plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
+        plateEvidenceSource: candidate.vehicle?.plateEvidence?.source ?? null,
+        plateEvidenceDistance: candidate.vehicle?.plateEvidence?.distance ?? null,
+        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? false,
+        unspecified: productRef == null,
+      },
+      needsSupplierConfirm: candidate.needsSupplierConfirm || Boolean(candidate.vehicle?.plateUnverified),
+      confidence: candidate.confidence,
     },
   };
 }
@@ -102,7 +145,7 @@ export function kakaoInfoCandidatesToSourceBatch(
     const payload = payloadFor(candidate, now, conflicts.has(key));
     return {
       sourceRecordId: candidate.candidateId,
-      sourceFingerprint: stableDigest(payload),
+      sourceFingerprint: stableDigest(fingerprintPayloadFor(candidate)),
       payload,
     };
   });

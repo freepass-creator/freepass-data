@@ -6,6 +6,7 @@ import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
+  supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '123가4567 재고 확인' },
   type: '재고',
@@ -85,6 +86,38 @@ describe('applyKakaoInfoCandidates', () => {
     expect(await store.listCandidatesBySource('kakao-info-candidate')).toHaveLength(2);
   });
 
+  it('treats the same stock candidate as idempotent after freshness expiry', async () => {
+    const store = writeStore();
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+
+    const expiredOptions = {
+      ...options(inputs, true),
+      now: '2026-10-13T01:00:00.001Z',
+    };
+    const same = await applyKakaoInfoCandidates(store, inputs, expiredOptions);
+    expect(same).toMatchObject({
+      status: 'APPLIED',
+      counts: { input: 1, skippedSame: 1, created: 0, conflict: 0, writes: 0 },
+    });
+    expect(same.receipts[0]?.result).toBe('SKIPPED_SAME');
+  });
+
+  it('treats a previously saved candidate as idempotent when a later batch adds another candidate', async () => {
+    const store = writeStore();
+    const first = candidate();
+    const second = secondCandidate();
+    await applyKakaoInfoCandidates(store, [first], options([first], true));
+
+    const mixedOptions = {
+      ...options([first, second], true),
+      now: '2026-10-13T01:00:00.001Z',
+    };
+    const mixed = await applyKakaoInfoCandidates(store, [first, second], mixedOptions);
+    expect(mixed.counts).toMatchObject({ input: 2, skippedSame: 1, created: 1, conflict: 0, writes: 1 });
+    expect(mixed.receipts.map(receipt => receipt.result)).toEqual(['SKIPPED_SAME', 'CREATED']);
+  });
+
   it('succeeds with zero writes when every approved candidate is already identical', async () => {
     const store = writeStore();
     const inputs = [candidate()];
@@ -142,32 +175,35 @@ describe('readKakaoKnownFacts', () => {
     const store = writeStore();
     const price = [candidate({ type: '가격', fields: { 항목: '월렌트', 요약: '가격', 값: 'TEST-FAKE-AMOUNT-12345' } })];
     await applyKakaoInfoCandidates(store, price, options(price, true));
-    await expect(readKakaoKnownFacts(store, { vehicleKey: '123가4567', supplierCode: 'TEST-FAKE-SUPPLIER', topic: '가격', asOf: '' }))
+    await expect(readKakaoKnownFacts(store, { vehicleKey: '123가4567', supplierCode: 'RP001', topic: '가격', asOf: '' }))
       .rejects.toThrow('KAKAO_FACT_AS_OF_REQUIRED');
-    expect(await readKakaoKnownFacts({ listCandidatesBySource: async () => (await store.listCandidatesBySource('kakao-info-candidate')).map(record => {
-      const kakaoInfo = (record.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo;
-      return { ...record, candidate: { ...record.candidate, kakaoInfo: { ...kakaoInfo, supplierCode: 'TEST-FAKE-SUPPLIER' } } };
-    }) }, {
+    expect(await readKakaoKnownFacts(store, {
       vehicleKey: '123가4567',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '가격',
       asOf: '2026-10-18T23:59:59.999Z',
     })).toMatchObject([{ item: '월렌트', signalOnly: true, valueSummary: 'TEST-FAKE-AMOUNT-12***' }]);
     expect(await readKakaoKnownFacts(store, {
       vehicleKey: '123가4567',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '가격',
       asOf: '2026-10-19T00:00:00.001Z',
     })).toEqual([]);
   });
 
-  it('excludes candidates without supplier identity from supplier-specific reads', async () => {
+  it('uses persisted supplier identity for supplier-specific reads', async () => {
     const store = writeStore();
     const inputs = [candidate()];
     await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
     expect(await readKakaoKnownFacts(store, {
       vehicleKey: '123가4567',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
+      topic: inputs[0]!.type,
+      asOf: '2026-10-12T01:00:00.000Z',
+    })).toMatchObject([{ topic: inputs[0]!.type, roomCode: 'K-TESTFAKE' }]);
+    expect(await readKakaoKnownFacts(store, {
+      vehicleKey: '123가4567',
+      supplierCode: 'RP999',
       topic: inputs[0]!.type,
       asOf: '2026-10-12T01:00:00.000Z',
     })).toEqual([]);
@@ -189,12 +225,12 @@ describe('readKakaoKnownFacts', () => {
           ...record.candidate,
           kakaoInfo: {
             ...kakaoInfo,
-            supplierCode: index === 0 ? 'TEST-FAKE-SUPPLIER' : 'OTHER-SUPPLIER',
+            supplierCode: kakaoInfo.type === '서류요구' ? 'RP001' : 'RP999',
             vehicle: {
               ...(kakaoInfo.vehicle as Record<string, unknown>),
-              vehicleUid: index === 0 ? 'vehicle-uid-1' : 'vehicle-uid-2',
+              vehicleUid: kakaoInfo.type === '서류요구' ? 'vehicle-uid-1' : 'vehicle-uid-2',
             },
-            ...(index === 0 ? { roomCode: 'K-TOPROOM' } : {}),
+            ...(kakaoInfo.type === '서류요구' ? { roomCode: 'K-TOPROOM' } : {}),
           },
         },
       };
@@ -202,13 +238,13 @@ describe('readKakaoKnownFacts', () => {
     const fakeStore = { listCandidatesBySource: async () => withFacts };
     expect(await readKakaoKnownFacts(fakeStore, {
       vehicleUid: 'vehicle-uid-1',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '서류요구',
       asOf: '2026-10-12T01:00:00.000Z',
     })).toMatchObject([{ layer: 'T0', signalOnly: false, roomCode: 'K-TOPROOM' }]);
     expect(await readKakaoKnownFacts(fakeStore, {
       vehicleUid: 'vehicle-uid-2',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '조건',
       asOf: '2026-10-12T01:00:00.000Z',
     })).toEqual([]);
@@ -217,7 +253,7 @@ describe('readKakaoKnownFacts', () => {
       candidate: { ...withFacts[0]!.candidate, kakaoInfo: { ...(withFacts[0]!.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo, expiresAt: 'bad' } },
     }] }, {
       vehicleUid: 'vehicle-uid-1',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '서류요구',
       asOf: '2026-10-12T01:00:00.000Z',
     })).toEqual([]);
@@ -226,7 +262,7 @@ describe('readKakaoKnownFacts', () => {
       candidate: { ...withFacts[0]!.candidate, kakaoInfo: { ...(withFacts[0]!.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo, sentAt: '2026-10-12T01:06:00.001Z' } },
     }] }, {
       vehicleUid: 'vehicle-uid-1',
-      supplierCode: 'TEST-FAKE-SUPPLIER',
+      supplierCode: 'RP001',
       topic: '서류요구',
       asOf: '2026-10-12T01:00:00.000Z',
     })).toEqual([]);

@@ -9,6 +9,7 @@ import {
 } from '../src/domain/kakao-info-candidate.js';
 
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
+  supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
   type: '재고',
