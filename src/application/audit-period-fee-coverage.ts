@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { buildKakaoCatalogReferenceProduct } from './kakao-catalog-reference.js';
 import { planPeriodFeeLedger, type PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 
@@ -147,4 +148,12 @@ export function lookupFeeTable(ledgerRows: PeriodFeeLedgerRow[], plateOrLast4: s
       payoutReason: row.channelPayoutFee.reasonCode,
       sonokongRulePending: isSonokong(row),
     }));
+}
+
+/** 파일에 남기는 불일치 키는 차량번호 대신 실행마다 다른 salt 의 해시 앞 12자(복원 불가)만 쓴다. */
+export function redactMismatchKeys(mismatchKeys: string[], salt: string) {
+  return mismatchKeys.map((key) => {
+    const [plate, ...rest] = key.split('|');
+    return [createHash('sha256').update(`${salt}:${plate}`).digest('hex').slice(0, 12), ...rest].join('|');
+  });
 }

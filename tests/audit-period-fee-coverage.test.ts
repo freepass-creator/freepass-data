@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lookupFeeTable, sampleFeeAuditPlates } from '../src/application/audit-period-fee-coverage.js';
+import { lookupFeeTable, redactMismatchKeys, sampleFeeAuditPlates } from '../src/application/audit-period-fee-coverage.js';
 import type { PeriodFeeLedgerRow } from '../src/application/period-fee-ledger-plan.js';
 
 const fee = (state: string, amount: number | null, reasonCode: string | null = null) =>
@@ -32,5 +32,11 @@ describe('period fee coverage audit', () => {
     expect(sample.matched).toBe(1);
     expect(sample.mismatchLast4).toEqual(['0001']);
     expect(sampleFeeAuditPlates(rows, [], 2)).toEqual(sampleFeeAuditPlates(rows, [], 2));
+  });
+
+  it('keeps no plate numbers in the redacted mismatch keys', () => {
+    const redacted = redactMismatchKeys(['00가0001|source:12|OTHER:BILLING'], 'salt');
+    expect(redacted[0]).toMatch(/^[0-9a-f]{12}|source:12|OTHER:BILLING$/);
+    expect(JSON.stringify(redacted)).not.toMatch(/d{2,3}[가-힣]d{4}/);
   });
 });

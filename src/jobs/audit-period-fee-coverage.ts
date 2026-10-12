@@ -1,7 +1,8 @@
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildFeeCoverageAudit, lookupFeeTable, sampleFeeAuditPlates } from '../application/audit-period-fee-coverage.js';
+import { randomBytes } from 'node:crypto';
+import { buildFeeCoverageAudit, lookupFeeTable, redactMismatchKeys, sampleFeeAuditPlates } from '../application/audit-period-fee-coverage.js';
 import { createPeriodFeeCoverageRuntime } from './data-access-runtime.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 
@@ -21,7 +22,7 @@ export async function main() {
   const sample = sampleFeeAuditPlates(_scopedRows, _mismatchKeys, 20);
   const dir = resolve(outDir);
   await mkdir(dir, { recursive: true });
-  await writePrivateArtifact(join(dir, 'detail.json'), { summary, sample, mismatchKeys: _mismatchKeys });
+  await writePrivateArtifact(join(dir, 'detail.json'), { summary, mismatchKeys: redactMismatchKeys(_mismatchKeys, randomBytes(16).toString('hex')) });
   console.log(JSON.stringify({ summary, sample }, null, 2));
 }
 
