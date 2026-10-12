@@ -11,10 +11,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeValue } from './supplier-freshness-lib.mjs';
 import { reconcile, MISMATCH_TYPES, makeCauseClassifier, CAUSES } from './supplier-field-reconcile-lib.mjs';
+import { assertPrivateOutputPath } from './sellable-lib.mjs';
 
 const spec = JSON.parse(readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+assertPrivateOutputPath(opt('out')); assertPrivateOutputPath(opt('out-dir')); // 결과 파일(표본에 끝4자리 포함)은 저장소 밖에만
 const PROJECT = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const F05 = process.env.FREEPASS_SHEET_F05_ID;
 const AICA = process.env.FREEPASS_AICA_SHEET_ID; // 아이카 별도 원본 시트(대표 10-12: 재고가 수시로 바뀌어 매번 직접 읽는다)
@@ -42,12 +44,15 @@ function gwsBin() {
 }
 function readTab(tab, sheetId = F05) {
   const out = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', sheetId, '--range', `'${tab}'!A1:BX3000`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
-  return JSON.parse(out.slice(out.indexOf('{'))).values ?? [];
+  const values = JSON.parse(out.slice(out.indexOf('{'))).values ?? [];
+  if (values.length >= 3000) throw new Error(`TAB_ROW_LIMIT:${tab}`); // fail-closed: 읽기 상한에 닿으면 불완전
+  return values;
 }
 
 // 탭 머리글 행 + 데이터 행 → 대조용 원본 레코드(칸 이름은 프리패스 데이터 기준). companyName 이 있으면 회사명 칸으로 거른다.
 export function f05Records(values, companyName) {
   const [head = [], ...rows] = values;
+  if (!head.includes('차량번호')) throw new Error('TAB_HEADER_MISSING'); // fail-closed: 머리글이 없으면 빈 배열로 «원천 0대» 처리하지 않는다
   const idx = Object.fromEntries(head.map((h, i) => [h, i]));
   const get = (r, h) => (idx[h] == null ? '' : (r[idx[h]] ?? ''));
   const out = [];
@@ -76,7 +81,7 @@ export const AICA_HEADER_TO_FIELD = { 차량번호: 'car_number', 제조사: 'ma
   배기량: 'engine_cc', 배차상태: 'status_label_raw', 옵션: 'options' };
 export function aicaRecords(values) {
   const hi = values.findIndex(r => r.includes('차량번호'));
-  if (hi < 0) return [];
+  if (hi < 0) throw new Error('AICA_TAB_HEADER_MISSING');
   const head = values[hi], idx = Object.fromEntries(head.map((h, i) => [h, i]));
   const get = (r, h) => (idx[h] == null ? '' : (r[idx[h]] ?? ''));
   const out = [];
@@ -220,8 +225,8 @@ async function main() {
       raw = f05Records(tabCache.get(t.tab), sharedTab ? t.companyName : undefined);
     }
     const data = products.filter(p => (p.provider_company_code || p.partner_code) === t.code).map(d => ({ ...flatten(d), ...Object.fromEntries(fields.map(f => [f, pick(d, f)])) }));
-    const rawPlates = new Set(raw.map(r => String(r.car_number).replace(/s+/g, '')));
-    const listableNotInSource = data.filter(d => d.listable && !rawPlates.has(String(d.car_number).replace(/s+/g, ''))).length;
+    const rawPlates = new Set(raw.map(r => String(r.car_number).replace(/\s+/g, '')));
+    const listableNotInSource = data.filter(d => d.listable && !rawPlates.has(String(d.car_number).replace(/\s+/g, ''))).length;
     const cause = makeCauseClassifier({ storedRaw: storedFor(headerOf) });
     const rep = { supplier: t.code, tab: t.tab, sourceReadAt: readStarted, dataReadAt, listableTotal: data.filter(d => d.listable).length, listableNotInSource, observedAt: new Date().toISOString(),
       dataCompleteness: completeness(data.filter(d => d.listable).map(d => d.__orig)), ...reconcile(raw, data, { fields, cause, storedRaw: storedFor(headerOf) }) };

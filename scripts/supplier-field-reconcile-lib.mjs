@@ -16,7 +16,7 @@ const isEmpty = v => v == null || (typeof v === 'string' && (v.trim() === '' || 
 export function normalize(v) {
   if (isEmpty(v)) return '';
   if (Array.isArray(v)) return v.map(normalize).filter(Boolean).sort().join('|');
-  if (typeof v === 'object') return JSON.stringify(v);
+  if (typeof v === 'object') return stableJson(v);
   let s = String(v).trim();
   const num = s.replace(/[,\s]/g, '').replace(/(원|km|㎞|cc|CC)$/u, '');
   if (/^-?\d+(\.\d+)?$/.test(num)) return String(Number(num)); // 숫자가 먼저: 1,300,000 = 1300000 (날짜로 오해하지 않는다)
@@ -24,7 +24,8 @@ export function normalize(v) {
   if (date) return `${date[1].length === 2 ? '20' + date[1] : date[1]}${date[2].padStart(2, '0')}${date[3] ? date[3].padStart(2, '0') : ''}`;
   return s.replace(/\s+/g, '').toLowerCase();
 }
-const exact = v => isEmpty(v) ? '' : Array.isArray(v) ? JSON.stringify(v) : String(v).trim();
+const stableJson = v => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x));
+const exact = v => isEmpty(v) ? '' : (Array.isArray(v) || typeof v === 'object') ? stableJson(v) : String(v).trim(); // 객체를 String() 으로 비교하면 모두 [object Object] 로 같아진다
 
 // 정상 정리 변환(별칭): 원천 표기를 우리 표준 이름으로 바꾸는 것은 오류가 아니다. 키는 normalize() 결과.
 export const ALIASES = {

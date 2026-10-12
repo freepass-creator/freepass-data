@@ -7,6 +7,24 @@ export function f05RowSellable({ status, hidden = false }) {
   return String(status ?? '').trim() !== F05_NOT_SELLABLE_STATUS;
 }
 
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
+/** 차량번호 전체가 들어갈 수 있는 증거 파일은 저장소(.git 이 있는 폴더 아래) 밖에만 쓴다. 안이면 즉시 중단. */
+export function assertPrivateOutputPath(path) {
+  if (!path) return;
+  for (let dir = dirname(resolve(path)); ; dir = dirname(dir)) {
+    if (existsSync(resolve(dir, '.git'))) throw new Error('OUTPUT_PATH_INSIDE_REPOSITORY');
+    if (dirname(dir) === dir) break;
+  }
+}
+
+/** 화면·로그 출력에서 차량번호(예 123가4567)를 끝 4자리만 남긴다. 중첩 객체도 문자열로 바꿔 한 번에 가린다. */
+export function maskPlates(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 1);
+  return text.replace(/\d{2,3}\s?[가-힣]\s?(\d{4})/g, '…$1');
+}
+
 /** 읽기 전용 도구의 fail-closed: 불완전·실패한 읽기(blockers)가 하나라도 있으면 계획 생성을 중단한다. 오류 메시지는 고정 코드만. */
 export function assertPlanComplete(blockers) {
   if (!blockers || blockers.length === 0) return;

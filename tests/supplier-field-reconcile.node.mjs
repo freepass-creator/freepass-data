@@ -86,3 +86,8 @@ test('원문 칸 낡음: 정리값은 원천과 맞고 보존된 원문만 옛 �
   const r = reconcile(raw, data, { fields: ['mileage'], storedRaw: (d, f) => d.stored[f] });
   assert.equal(r.fieldMatchRate, 1); assert.equal(r.rawColumn.stale, 1); assert.equal(r.rawColumn.staleWhileRefinedMatches, 1); assert.equal(r.causes.RAW_COLUMN_STALE, 1);
 });
+
+test('객체(가격 행)는 내용으로 비교한다', () => {
+  assert.equal(classifyField({ rent: 100 }, { rent: 200 }), 'VALUE_DIFF');
+  assert.equal(classifyField({ rent: 100, deposit: 5 }, { deposit: 5, rent: 100 }), 'MATCH');
+});

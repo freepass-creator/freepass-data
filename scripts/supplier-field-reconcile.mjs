@@ -11,10 +11,12 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { decodeValue } from './supplier-freshness-lib.mjs';
+import { assertPrivateOutputPath } from './sellable-lib.mjs';
 import { DEFAULT_FIELDS, MISMATCH_TYPES, reconcile } from './supplier-field-reconcile-lib.mjs';
 
 const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+assertPrivateOutputPath(opt('out'));
 const supplier = opt('supplier'), rawPath = opt('raw');
 if (!supplier || !rawPath) { console.error('필수: --supplier <코드> --raw <원본.json>'); process.exit(2); }
 const map = opt('map') ? JSON.parse(readFileSync(opt('map'), 'utf8')) : {};
@@ -29,7 +31,7 @@ const rawRecords = rawRows.map(r => Object.fromEntries(['car_number', ...fields]
 const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
 async function readSupplier() {
   const out = []; let pageToken = '';
-  const q0 = ['car_number', 'provider_company_code', 'partner_code', 'listable', ...fields];
+  const q0 = [...new Set(['car_number', 'provider_company_code', 'partner_code', 'listable', ...fields.map(f => f.split('.')[0])])]; // 중첩 경로(price.12.rent)는 맨 앞 칸만 마스크로 요청
   do {
     const q = new URLSearchParams({ pageSize: '300' });
     for (const f of q0) q.append('mask.fieldPaths', /^[A-Za-z_][A-Za-z0-9_]*$/.test(f) ? f : '`' + f + '`');
@@ -39,7 +41,7 @@ async function readSupplier() {
     const body = await res.json();
     for (const d of body.documents ?? []) {
       const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)]));
-      if ((f.provider_company_code || f.partner_code) === supplier) out.push(f);
+      if ((f.provider_company_code || f.partner_code) === supplier) out.push({ car_number: f.car_number, listable: f.listable, ...Object.fromEntries(fields.map(x => [x, pick(f, x)])) }); // 점 경로를 평탄화해 대조 칸과 맞춘다
     }
     pageToken = body.nextPageToken ?? '';
   } while (pageToken);

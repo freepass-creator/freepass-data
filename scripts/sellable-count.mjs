@@ -10,10 +10,11 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { decodeValue } from './supplier-freshness-lib.mjs';
-import { assertPlanComplete, f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
+import { assertPlanComplete, assertPrivateOutputPath, f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
 
 const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+for (const o of ['plan-out', 'json', 'alert-file']) assertPrivateOutputPath(opt(o)); // 차량번호 전체가 든 파일은 저장소 밖에만
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const key = p => String(p ?? '').replace(/\s+/g, '');
 const l4 = p => key(p).slice(-4);
@@ -51,7 +52,11 @@ do {
   for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ upd: Date.parse(d.updateTime) || null, id: d.name.split('/').pop(), pin: f._pin_state ?? null, status: f.status ?? null, plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
   pageToken = body.nextPageToken ?? '';
 } while (pageToken);
-const erp5 = new Set(((await (await fetch('https://freepasserp5.vercel.app/api/catalog', { signal: AbortSignal.timeout(90000) })).json()).vehicles ?? []).map(v => key(v.plate)));
+const erp5Res = await fetch('https://freepasserp5.vercel.app/api/catalog', { signal: AbortSignal.timeout(90000) });
+if (!erp5Res.ok) { console.error(`ERP5_CATALOG_READ_FAILED ${erp5Res.status}`); process.exit(3); } // fail-closed: 노출 0대로 오인 금지
+const erp5Body = await erp5Res.json();
+if (!Array.isArray(erp5Body.vehicles)) { console.error('ERP5_CATALOG_SHAPE_INVALID'); process.exit(3); }
+const erp5 = new Set(erp5Body.vehicles.map(v => key(v.plate)));
 const plateCode = new Map(docs.map(d => [d.plate, d.code]));
 
 // 원천별 판매가능 차량번호 집합 { code: { set:Set, 읽힘, 비고, 분포 } }
@@ -79,6 +84,7 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
   global.__hiddenOk = hiddenOk; global.__hiddenCount = [...hiddenRows.values()].reduce((n, set) => n + set.size, 0);
   for (const tab of [...new Set(sup.map(x => x.tab))].filter(t => !globalThis.__visibleTabs || globalThis.__visibleTabs.has(t))) {
     let v; try { const o = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', process.env.FREEPASS_SHEET_F05_ID, '--range', `'${tab}'!A1:BX1500`], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); v = JSON.parse(o.slice(o.indexOf('{'))).values ?? []; } catch { blockers.push(`F05_TAB_READ_FAILED:${tab}`); continue; }
+    if (v.length >= 1500) blockers.push(`F05_TAB_ROW_LIMIT:${tab}`); // 읽기 상한에 닿으면 불완전
     const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null) { blockers.push(`F05_TAB_HEADER_MISSING:${tab}`); continue; }
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
     for (const [ri, r] of v.slice(1).entries()) {

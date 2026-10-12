@@ -14,11 +14,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeValue } from './supplier-freshness-lib.mjs';
 import { classifyField } from './supplier-field-reconcile-lib.mjs';
-import { hiddenRowsByTab } from './sellable-lib.mjs';
+import { assertPrivateOutputPath, hiddenRowsByTab, maskPlates } from './sellable-lib.mjs';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0], code = argv[1];
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+assertPrivateOutputPath(opt('out')); assertPrivateOutputPath(opt('json')); // 차량번호 전체가 든 증거 파일은 저장소 밖에만
 const PROJECT = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const last4 = p => String(p ?? '').replace(/\s+/g, '').slice(-4);
@@ -67,7 +68,9 @@ async function readAica(products) {
   let hiddenSkipped = 0;
   for (const tab of visibleTabs) {
     const v = sheetRead(id, `'${tab}'!A1:Y1500`);
-    const hi = v.findIndex(r => r.includes('차량번호')); if (hi < 0) continue;
+    // fail-closed: 머리글을 못 찾거나 읽기 상한(1500행)에 닿으면 불완전 — 일부 탭만으로 «없음»을 판정하지 않는다
+    if (v.length >= 1500) return { ok: false, reason: `아이카 «${tab}» 탭이 읽기 상한(1500행)에 닿음 — 상한 상향 필요` };
+    const hi = v.findIndex(r => r.includes('차량번호')); if (hi < 0) return { ok: false, reason: `아이카 «${tab}» 탭에서 차량번호 머리글을 찾지 못함(시트 구조 변경 의심)` };
     const idx = Object.fromEntries(v[hi].map((h, i) => [h, i]));
     for (const [ri, r] of v.entries()) {
       if (ri <= hi) continue;
@@ -108,6 +111,7 @@ async function readIron() {
         const more = html.match(/<a[^>]*href="([^"]+)"[^>]*>\s*더보기\s*<\/a>/)?.[1];
         url = more ? new URL(more.replace(/&amp;/g, '&'), 'https://ironrentcar.com').href : null;
       }
+      if (url) return { ok: false, reason: `아이언 «${cond}» 목록이 페이지 상한(10)에 닿았거나 순환 — 불완전` }; // fail-closed
     }
   } catch (e) { return { ok: false, reason: `아이언 목록 읽기 실패(${e.message})` }; }
   const only = opt('plate4');
@@ -237,15 +241,15 @@ if (cmd === 'status') {
   if (!res.ok) { console.error(`막힘: ${res.reason}`); process.exit(3); }
   if (opt('out')) writeFileSync(opt('out'), JSON.stringify(res.records));
   const p4 = opt('plate4');
-  if (p4) { const r = res.records.filter(x => last4(x.plate) === p4); console.log(JSON.stringify({ readAt: res.readAt, 찾음: r.length, 레코드: r.map(x => ({ ...x, plate: `…${last4(x.plate)}` })) }, null, 1)); }
-  else console.log(JSON.stringify({ 공급사: code, readAt: res.readAt, 원천대수: res.records.length, ...crossCheck(code, res, products), note: res.note, 필드: Object.keys(res.records[0] ?? {}) }, null, 1));
+  if (p4) { const r = res.records.filter(x => last4(x.plate) === p4); console.log(maskPlates({ readAt: res.readAt, 찾음: r.length, 레코드: r.map(x => ({ ...x, plate: `…${last4(x.plate)}` })) })); }
+  else console.log(maskPlates({ 공급사: code, readAt: res.readAt, 원천대수: res.records.length, ...crossCheck(code, res, products), note: res.note, 필드: Object.keys(res.records[0] ?? {}) }));
 } else if (cmd === 'compare' && code && opt('plate4')) {
   const n = Math.max(1, products.filter(p => (p.provider_company_code || p.partner_code) === code && last4(p.car_number) === opt('plate4')).length);
   for (let i = 0; i < n; i++) {
   const r = await compareOne(code, opt('plate4'), i);
   if (!r.ok) { console.error(`막힘: ${r.reason}`); process.exit(3); }
   const tag = n > 1 ? ` (끝4자리 같은 상품 ${i + 1}/${n}: ${(products.filter(p => (p.provider_company_code || p.partner_code) === code && last4(p.car_number) === opt('plate4'))[i]?.model ?? '?')})` : '';
-  if (argv.includes('--json')) console.log(JSON.stringify(r, null, 1));
+  if (argv.includes('--json')) console.log(maskPlates(r));
   else if (r.항목) {
     console.log(`[${NAMES[code]} …${opt('plate4')}]${tag} 원천 읽은 시각 ${r.readAt} · 데이터 마지막 반영 ${r.데이터마지막반영 ?? '-'} · 마지막 폴링 ${r.데이터마지막폴링 ?? '-'} · 차이 ${r.차이건수}건${r.note ? ' · ' + r.note : ''}`);
     console.log('항목 | 원천(정답) | 프리패스 데이터 | 판정'); for (const x of r.항목) console.log([x.항목, x.원천, x.데이터, x.판정].join(' | '));

@@ -23,3 +23,16 @@ test('fail-closed: 읽기 불완전(blockers)이 있으면 계획 생성을 중�
   const origError = console.error; console.error = () => {};
   try { assert.throws(() => assertPlanComplete(['HIDDEN_ROW_METADATA_READ_FAILED']), /PLAN_BLOCKED/); } finally { console.error = origError; }
 });
+
+import { assertPrivateOutputPath, maskPlates } from '../scripts/sellable-lib.mjs';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+test('차량번호는 끝 4자리만, 증거 파일은 저장소 밖에만', () => {
+  assert.equal(maskPlates('차 123가4567 와 98 나 1234'), '차 …4567 와 …1234');
+  assert.equal(maskPlates({ a: { b: '12가3456' } }).includes('12가3456'), false);
+  const repoFile = join(fileURLToPath(new URL('..', import.meta.url)), 'evidence.json');
+  assert.throws(() => assertPrivateOutputPath(repoFile), /OUTPUT_PATH_INSIDE_REPOSITORY/);
+  assert.doesNotThrow(() => assertPrivateOutputPath(join(tmpdir(), 'evidence.json')));
+  assert.doesNotThrow(() => assertPrivateOutputPath(undefined));
+});
