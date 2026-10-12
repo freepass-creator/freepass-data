@@ -1,9 +1,12 @@
 import { readIancarPublishedDeposit } from '../src/domain/deposit-evidence.js';
+import { spawnSync } from 'node:child_process';
 import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  createIancarSourceOnlyFetcher,
+  inspectIancarSourceOnly,
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
   collectIancarOneFullFacts,
@@ -23,6 +26,64 @@ import {
   compareIancarOnePhaseOneParity,
   summarizeJsonShape
 } from '../src/adapters/iancar-one-api.js';
+
+describe('finite SOURCE_ONLY transport', () => {
+  it('actual CLI rejects mixed write modes before auth and flushes only fixed summary with empty stderr', () => {
+    const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/jobs/collect-iancar-one-api.ts',
+      '--source-only', '--phase-one', '--apply-raw'], { encoding: 'utf8' });
+    expect(result.status).toBe(2); expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({ stage: 'SOURCE_ONLY', status: 'STOP', count: 0,
+      logicalCalls: 0, fresh: false, writes: 0, photoBytes: 0 });
+  });
+  const at = Date.parse('2026-10-12T00:00:00Z');
+  const url = `${IANCAR_ONE_API_ORIGIN}/v1/vehicles?page=1&page_size=100`;
+  const list = (total = 1, stale = false) => new Response(JSON.stringify({
+    synced_at: new Date(at).toISOString(), stale, pagination: { total, page_size: 100 }
+  }), { headers: { 'content-type': 'application/json' } });
+  it('stops before GET 613 and never retries', async () => {
+    const network = vi.fn(async () => new Response('{}'));
+    const bounded = createIancarSourceOnlyFetcher(network, () => at);
+    const rate = `${IANCAR_ONE_API_ORIGIN}/v1/vehicles/private-test/rates`;
+    for (let n = 0; n < 612; n++) await bounded.fetcher(rate);
+    await expect(bounded.fetcher(rate)).rejects.toThrow('SOURCE_ONLY_BUDGET_EXCEEDED');
+    expect(network).toHaveBeenCalledTimes(612);
+  });
+  it.each([201, 100001])('rejects initial scope %s before next page/rates', async total => {
+    const network = vi.fn(async () => list(total));
+    const bounded = createIancarSourceOnlyFetcher(network, () => at);
+    await expect(bounded.fetcher(url)).rejects.toThrow('SOURCE_ONLY_SCOPE_EXCEEDED');
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+  it.each([401, 403, 429, 500])('stops on HTTP %s without retry', async status => {
+    const network = vi.fn(async () => new Response('private upstream text', { status }));
+    const bounded = createIancarSourceOnlyFetcher(network, () => at);
+    await expect(bounded.fetcher(url)).rejects.toThrow('SOURCE_ONLY_HTTP_REJECTED');
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+  it('rejects stale sources, photos, foreign origin and page 3', async () => {
+    const network = vi.fn(async () => list(1, true));
+    const bounded = createIancarSourceOnlyFetcher(network, () => at);
+    await expect(bounded.fetcher(url)).rejects.toThrow('SOURCE_ONLY_NOT_FRESH');
+    for (const forbidden of [url.replace('page=1', 'page=3'), `${IANCAR_ONE_API_ORIGIN}/v1/vehicles/x/photos/y`, 'https://invalid.example/v1/vehicles'])
+      await expect(bounded.fetcher(forbidden)).rejects.toThrow();
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+  it('returns only fixed summary, never provider errors or raw identifiers', async () => {
+    const result = await inspectIancarSourceOnly(config, async () => { throw Error('private-ID-price-secret'); });
+    expect(result).toEqual({ stage: 'SOURCE_ONLY', status: 'STOP', count: 0, logicalCalls: 1, fresh: false, writes: 0, photoBytes: 0 });
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+  it('rejects oversized response before JSON parsing', async () => {
+    const bounded = createIancarSourceOnlyFetcher(async () => new Response('x'.repeat(1_048_577)), () => at);
+    await expect(bounded.fetcher(url)).rejects.toThrow('SOURCE_ONLY_BODY_LIMIT');
+  });
+  it('rejects malformed schema and expired source immediately', async () => {
+    const malformed = createIancarSourceOnlyFetcher(async () => new Response('{}'), () => at);
+    await expect(malformed.fetcher(url)).rejects.toThrow('SOURCE_ONLY_SCOPE_EXCEEDED');
+    const expired = createIancarSourceOnlyFetcher(async () => list(), () => at + 900_001);
+    await expect(expired.fetcher(url)).rejects.toThrow('SOURCE_ONLY_NOT_FRESH');
+  });
+});
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 it('supplier model illustrations use exact full variants, never actual photo counts or guessed trims', () => {
@@ -209,6 +270,53 @@ describe('EANCAR ONE official partner API', () => {
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
+  it('SOURCE_ONLY succeeds with list/rates/list only and no raw output', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    try {
+      const paths: string[] = [];
+      const result = await inspectIancarSourceOnly(config, async input => {
+        paths.push(new URL(String(input)).pathname);
+        return fullFetcher()(input);
+      });
+      expect(result).toEqual({ stage: 'SOURCE_ONLY', status: 'COMPLETE', count: 1, logicalCalls: 3, fresh: true, writes: 0, photoBytes: 0 });
+      expect(paths).toEqual(['/v1/vehicles', '/v1/vehicles/veh1/rates', '/v1/vehicles']);
+      expect(JSON.stringify(result)).not.toMatch(/veh1|500000|700000|123가/);
+    } finally { vi.useRealTimers(); }
+  });
+  it('SOURCE_ONLY stops at first unstable ending list without another pass', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    try {
+      let calls = 0;
+      const result = await inspectIancarSourceOnly(config, async input => {
+        calls++; const body = await (await fullFetcher()(input)).json();
+        if (calls === 3) { body.data[0].available = false; body.data[0].inventory_status = 'RESERVED'; }
+        return new Response(JSON.stringify(body));
+      });
+      expect(result.status).toBe('STOP'); expect(calls).toBe(3);
+    } finally { vi.useRealTimers(); }
+  });
+  it('SOURCE_ONLY stops immediately on invalid rate identity before the ending list', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    try {
+      let calls = 0;
+      const result = await inspectIancarSourceOnly(config, async input => {
+        calls++; return fullFetcher('wrong-rate-id')(input);
+      });
+      expect(result.status).toBe('STOP'); expect(calls).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+  it('SOURCE_ONLY rejects removal from a complete ending list without another pass', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    try {
+      let calls = 0;
+      const result = await inspectIancarSourceOnly(config, async input => {
+        calls++; const body = await (await fullFetcher()(input)).json();
+        if (calls === 3) { body.data = []; body.pagination.total = 0; }
+        return new Response(JSON.stringify(body));
+      });
+      expect(result.status).toBe('STOP'); expect(calls).toBe(3);
+    } finally { vi.useRealTimers(); }
+  });
   it('phase one reads only list/rates and reconciles a reservation without mixing policy facts', async () => {
     let lists = 0;
     const paths: string[] = [];
