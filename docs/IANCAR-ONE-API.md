@@ -85,7 +85,7 @@ Authorization: Bearer <API key>
 - **공급사 문의:** 갱신 주기·공백 사유 문의를 확인 동선용으로 준비했다. 발송은 대표 확인 뒤(2026-10-04 기준 미발송). 답을 받으면 신선도 기준을 다시 판단한다.
 - **실패 원인 구분:** 사진 상세 검증 오류를 `IANCAR_PHOTO_IDENTITY_MISMATCH` / `IANCAR_PHOTO_DETAIL_STALE` / `IANCAR_PHOTO_LIST_MISSING` / `IANCAR_PHOTO_LIMIT_EXCEEDED` 네 코드로 나눴다([#293](https://github.com/freepass-creator/freepass-data/pull/293)). 운영 로그에 찍히려면 ERP4가 고정한 Data 실행기 버전을 올려야 한다.
 
-재고 상태는 `AVAILABLE / RESERVED / RENTED / PREPARING / UNAVAILABLE`을 그대로 보존한다. `available_from=null` 등 미확인 값은 추정하지 않는다.
+재고 상태는 `AVAILABLE / RESERVED / RENTED / PREPARING / UNAVAILABLE`을 그대로 보존한다. 판매 노출 매핑(대표 10-12 «출고불가 아니면 판매 가능»): AVAILABLE·PREPARING → 출고가능(노출), RESERVED → 계약중(노출), UNAVAILABLE·RENTED → 출고불가. 원천 상태는 증거 `sourceInventoryStatus` 에 그대로 남는다. `available_from=null` 등 미확인 값은 추정하지 않는다.
 
 2026-10-01 사용자 직접 결정: 예약 `RESERVED`의 ERP·Admin·F01/F86 공통 표시값은 **계약중**이다. 호환 projection은 `vehicle_status/status=계약중`, `status_kind=선점`, `available=false`, `source_inventory_status=RESERVED`로 보존한다. 출고가능으로 표시하지 않으며 실제 계약 레코드·계약 ID·계약 잠금을 만들어내지 않는다. 기존 adapter의 `projectIancarOneReservation(payload, capture)`은 이 표시 규칙만 준비하며, 신선도 검증된 source를 소비처에 발행하는 writer는 아직 미연결이다. 수집기가 계산한 `readyForRawIngest=true`와 envelope `stale=false`를 모두 요구하며 행의 자체 stale 값으로 신선도 검증을 대체하지 않는다. 미검증 capture 또는 available 모순은 HOLD다. 이 규칙 확정으로 현재 withdrawal guard나 전량 검증 HOLD를 해제하지 않는다.
 

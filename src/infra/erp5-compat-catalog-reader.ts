@@ -1,3 +1,4 @@
+import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot, type Firestore } from 'firebase-admin/firestore';
@@ -9,7 +10,7 @@ import { logRouteError } from '../shared/route-error-log.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
 
-import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader, type VehiclePhotoReadFailureObserver } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
@@ -217,7 +218,7 @@ export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
   'car_number', 'vehicle_uid', 'maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant',
   'fuel_type', 'engine_type', 'engine_cc', 'drive_type', 'transmission', 'vehicle_class', 'product_type',
   'year', 'seats', 'mileage', 'annual_mileage', 'ext_color', 'int_color', 'first_registration_date',
-  'price', 'iancar_phase_one',
+  'price', 'iancar_phase_one', 'iancar_policy_terms',
 ] as const);
 
 export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'provider_company_code',
@@ -262,8 +263,8 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const product = await tx.get(db.collection(layout.products).doc(productId));
     if (!product.exists) throw new CatalogCompatibilityProductReadError('PRODUCT_NOT_FOUND', 404);
     const raw = product.data()!;
-    const readAt = product.readTime?.toDate().toISOString();
-    const version = product.updateTime?.toDate().toISOString();
+    const readAt = product.readTime && new Date(product.readTime.toMillis()).toISOString();
+    const version = product.updateTime && new Date(product.updateTime.toMillis()).toISOString();
     if (product.id !== productId || !readAt || !version) return selectionUnavailable();
     if (raw._key != null && raw._key !== '' && raw._key !== productId) return selectionUnavailable();
     const policyCode = selectedDocId(raw.policy_code);
@@ -280,7 +281,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       const doc = await tx.get(db.collection(collection).doc(id));
       if (!doc.readTime || !doc.readTime.isEqual(product.readTime)) return selectionUnavailable();
       if (!doc.exists) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
-      const updateTime = doc.updateTime?.toDate().toISOString();
+      const updateTime = doc.updateTime && new Date(doc.updateTime.toMillis()).toISOString();
       if (!updateTime || doc.id !== id) return selectionUnavailable();
       const facts = doc.data()!;
       const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
@@ -291,7 +292,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
     const partner = await linked('partner', partnerId, layout.partners, SINGLE_PARTNER_FACT_FIELDS);
     const compatible = withCompatibilityDepositEvidence(raw, readAt);
-    const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== '_key'));
+    const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== 'iancar_policy_terms' && f !== '_key'));
     if (Object.hasOwn(compatible, 'price')) {
       if (compatible.price === null) selected.price = null;
       else {
@@ -328,6 +329,12 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
         selected.iancar_phase_one = result;
       }
     }
+    if (Object.hasOwn(raw, 'iancar_policy_terms')) {
+      // 이안카 차량별 보험·추가요금 조건: 고정 키·자료형만 통과(수수료·원가·내부 메모 없음). 모양이 다르면 응답하지 않는다.
+      const terms = projectIancarPolicyTerms(raw.iancar_policy_terms);
+      if (terms === undefined) return selectionUnavailable();
+      selected.iancar_policy_terms = terms;
+    }
     const snapshot: CatalogCompatibilityProductSnapshot = {
       schema: 'freepass-data.catalog-compat/v1', data: { products: { [productId]: { ...selected, _key: productId } }, policies: policy.rows, partners: partner.rows },
       meta: { consumerId, authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE', sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
@@ -343,6 +350,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
 
 export type CatalogCompatibilityReaderOptions = {
   readCollections?: readonly CatalogCompatibilityReadCollection[];
+  photoReadFailureObserver?: VehiclePhotoReadFailureObserver;
 };
 
 const jsonSafe = (value: unknown): unknown => {
@@ -407,22 +415,29 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
  * It must never become a write API or a fallback around the canonical release gate.
  */
 
+/** Explicit RP031 opt-in only; missing or malformed configuration stays off. */
+export function parseIancarPhotoIdGateSuppliers(raw: unknown): ReadonlySet<string> {
+  return new Set(typeof raw === 'string' && raw.trim() === 'RP031' ? ['RP031'] : []);
+}
+
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
   readonly sourceStore = createFirestoreSourceStore();
   private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
-  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
+  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean, expectedRegisteredPhotoCount?: number) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
     approvedPhotoReader?: ApprovedPhotoReader, options: CatalogCompatibilityReaderOptions = {}) {
     this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
     this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
       eligible: isPublicIancarPhotoProduct,
       connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
-      read: async (product, index, fresh) => {
+      read: async (product, index, fresh, expectedRegisteredPhotoCount) => {
         if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
-        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
+        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh, expectedRegisteredPhotoCount);
       },
-    }, approvedPhotoReader);
+    }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
+    // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
+    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS));
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 

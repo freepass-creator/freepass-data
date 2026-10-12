@@ -314,7 +314,9 @@ describe('period fee ledger apply', () => {
 
     const result = await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: false });
 
-    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0 } });
+    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0, historyCreated: 0 } });
+    // 시험 실행도 적용 시 만들 baseline 이력 건수를 보여야 한다(적용 결과와 불일치 방지).
+    expect(result.counts.plannedHistoryRows).toBeGreaterThan(0);
     expect(store.ledger.size).toBe(0);
     expect(store.history.size).toBe(0);
     expect(store.runs.size).toBe(0);
@@ -332,7 +334,7 @@ describe('period fee ledger apply', () => {
   it('rejects a second apply or rollback while the snapshot write lock is held', async () => {
     const plan = makePlan();
     const store = new MemoryPeriodFeeStore();
-    await store.acquireSnapshotWriteLock('TEST-FAKE-OWNER', observedAt, '2026-10-12T00:15:00.000Z');
+    await store.acquireSnapshotWriteLock('TEST-FAKE-OWNER', observedAt, '2099-01-01T00:00:00.000Z');
 
     await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
       .rejects.toThrow('LOCK_HELD');
@@ -344,7 +346,7 @@ describe('period fee ledger apply', () => {
   it('uses a per-execution apply lock owner so the same plan cannot re-enter an active lease', async () => {
     const plan = makePlan();
     const store = new MemoryPeriodFeeStore();
-    await store.acquireSnapshotWriteLock(`apply:${runIdFor(plan)}`, observedAt, '2026-10-12T00:15:00.000Z');
+    await store.acquireSnapshotWriteLock(`apply:${runIdFor(plan)}`, observedAt, '2099-01-01T00:00:00.000Z');
 
     await expect(applyPeriodFeeLedgerPlan(store, plan, {
       expectedDigest: plan.planDigest,
@@ -1156,7 +1158,7 @@ describe('period fee ledger apply', () => {
     };
 
     store.runs.set(runIdFor(second), { ...staleRun, status: 'PREPARED', active: false, activatedAt: null });
-    await store.acquireSnapshotWriteLock('TEST-FAKE-ACTIVATOR', observedAt, '2026-10-12T00:15:00.000Z');
+    await store.acquireSnapshotWriteLock('TEST-FAKE-ACTIVATOR', observedAt, '2099-01-01T00:00:00.000Z');
     await store.activateSnapshotRun(runIdFor(second), staleRun, {
       lockOwnerId: 'TEST-FAKE-ACTIVATOR',
       checkedAt: observedAt,

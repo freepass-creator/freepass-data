@@ -50,7 +50,7 @@ import type {
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
 import { createVehicleUidMigrationFirestoreWriter } from '../infra/vehicle-uid-migration-firestore-writer.js';
-import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
+import { readPeriodFeeLedgerPlanInputs, listActivePeriodFeeLedgerRows } from '../infra/period-fee-ledger-firestore-reader.js';
 import { PeriodFeeLedgerFirestoreWriter } from '../infra/period-fee-ledger-firestore-writer.js';
 import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
@@ -245,11 +245,13 @@ export async function runIancarPublicationWithdrawal(input: {
 
 export async function runIancarPhaseOnePublication(input: {
   capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
+  photoPending?: boolean; keepWithdrawn?: boolean; refreshFacts?: boolean;
 }) {
   const prepared = { products: buildIancarOnePublicationProducts(input.capture),
     sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
     apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
     ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
+    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}), ...(input.refreshFacts ? { refreshFacts: true } : {}),
     ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
     ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
   const runtime = createJobDataAccessRuntime();
@@ -276,6 +278,15 @@ export async function runIancarPhotoPublication(input: Parameters<typeof publish
     summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
   return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
+}
+
+export async function runIancarPhaseOneRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
+  const prepared = { ...input, expectedSchema: 'iancar-phase-one-typed-backup/1' };
+  const runtime = createJobDataAccessRuntime();
+  const spec = { context: { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-phase-one', purpose: 'restore verified RP031 phase-one publication backup' },
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' }, operation: input.apply ? 'RESTORE_IANCAR_PHASE_ONE' : 'READ_IANCAR_PHASE_ONE_RESTORE_PLAN',
+    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
 }
 
 export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
@@ -690,6 +701,31 @@ export async function createSourceIngestDataAccessRuntime() {
   };
 }
 
+export async function createKakaoInfoSourceDataAccessRuntime() {
+  const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
+  const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  const sourceStore = createFirestoreSourceStore();
+  return {
+    sourceStore,
+    dryRun: <T>(requestDigest: string, run: () => Promise<T>) => new DataAccessGateway(new MemoryDataAccessLogStore()).read({
+      context: { actor: { id: 'service:freepass-data-kakao-info', kind: 'SERVICE' as const },
+        clientId: 'job:apply-kakao-info-candidates', purpose: 'dry-run Kakao info source evidence write plan' },
+      operation: 'READ_KAKAO_INFO_CANDIDATE_APPLY_PLAN',
+      resource: { kind: 'SOURCE' as const, name: 'kakao-info-candidate' },
+      requestDigest,
+      summarize: (value) => ({ digest: stableDigest(value) }),
+    }, run),
+    write: <T>(requestDigest: string, run: () => Promise<T>) => access.write({
+      context: { actor: { id: 'service:freepass-data-kakao-info', kind: 'SERVICE' as const },
+        clientId: 'job:apply-kakao-info-candidates', purpose: 'persist digest-approved Kakao info source evidence only' },
+      operation: 'WRITE_KAKAO_INFO_SOURCE_INGEST',
+      resource: { kind: 'SOURCE' as const, name: 'kakao-info-candidate' },
+      requestDigest,
+      summarize: (value) => ({ digest: stableDigest(value) }),
+    }, run),
+  };
+}
+
 export async function createCentralDiagnosticDataAccessRuntime() {
   const {
     CENTRAL_ACTIVE_PROJECTION_COLLECTION,
@@ -741,5 +777,54 @@ export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
         inputDigest: value.summary.inputDigest
       })
     }, () => buildEstimateMasterFromCanonicalVehicleMaster(store, { bridge }))
+  };
+}
+
+export function createPeriodFeeCoverageRuntime() {
+  const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const context = {
+    actor: { id: 'service:freepass-data-period-fee', kind: 'SERVICE' as const },
+    clientId: 'job:audit-period-fee-coverage',
+    purpose: 'read-only coverage audit and lookup of the ACTIVE period fee ledger against listable products',
+  };
+  return {
+    readInputs: () => access.read({
+      context,
+      operation: 'READ_PERIOD_FEE_LEDGER_PLAN_INPUTS',
+      resource: { kind: 'SOURCE', name: 'products+policy' },
+      summarize: (value) => ({
+        products: Object.keys(value.products).length,
+        policies: Object.keys(value.policies).length,
+        settlementRowsAccessCount: 0,
+        digest: stableDigest({ productKeys: Object.keys(value.products).sort(), observedAt: value.observedAt }),
+      }),
+    }, readPeriodFeeLedgerPlanInputs),
+    readActiveLedgerRows: () => access.read({
+      context,
+      operation: 'READ_ACTIVE_PERIOD_FEE_LEDGER_ROWS',
+      resource: { kind: 'SOURCE', name: 'period_fee_ledger' },
+      summarize: (rows) => ({ count: rows.length, digest: stableDigest(rows.map(row => row.documentKey).sort()) }),
+    }, listActivePeriodFeeLedgerRows),
+  };
+}
+
+export async function createContractLockRuntime() {
+  const { readProductsByIds, releaseContractLock } = await import('../infra/contract-lock-firestore.js');
+  const context = {
+    actor: { id: 'service:freepass-data-contract-lock', kind: 'SERVICE' as const },
+    clientId: 'job:release-contract-locks',
+    purpose: 'release approved stale contract locks on products (cancelled intake); status fields untouched',
+  };
+  const read = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const write = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  return {
+    readProducts: (ids: string[]) => read.read({
+      context, operation: 'READ_PRODUCTS_FOR_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' },
+      summarize: (value) => ({ count: Object.keys(value).length, digest: stableDigest(Object.keys(value).sort().map(key => stableDigest(key))) }),
+    }, () => readProductsByIds(ids)),
+    release: (requestDigest: string, input: Parameters<typeof releaseContractLock>[0]) => write.write({
+      context, operation: 'WRITE_CONTRACT_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' }, requestDigest,
+      summarize: (value) => ({ count: value === 'RELEASED' ? 1 : 0, digest: stableDigest({ requestDigest, value }) }),
+    }, () => releaseContractLock(input)),
   };
 }

@@ -108,9 +108,35 @@ describe('existing private runtime verification', () => {
       .split('\n').map(line => line.slice(10)).join('\n');
     const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
     const base = { VERIFY_JOB_STATUS: 'success', READ_RUNTIME_UNAUTHENTICATED_STATUS: '403', READ_RUNTIME_AUTHENTICATED_STATUS: '200',
-      READ_RUNTIME_READBACK_OK: 'true', READ_RUNTIME_MIGRATION_SIGNAL_OK: 'true', GITHUB_STEP_SUMMARY: '/dev/null' };
+      READ_RUNTIME_READBACK_OK: 'true', READ_RUNTIME_MIGRATION_SIGNAL_OK: 'true', GITHUB_STEP_SUMMARY: '/dev/null',
+      EXPECTED_SOURCE_SHA: 'a'.repeat(40), SINGLE_PRODUCT_READBACK_OK: '' };
+    const singleSource = '8af86d3b84020a402e21ec3c34a8498bd3066148';
+    const fixedSource = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8';
+    const diagnosticSource = '2ebdb18822416847b2019f6506b7b0d65daf0ee2';
+    const observerSource = '57abb8a978457b87068c3c9c9d76cc8116934bd5';
+    const renditionSource = 'd42c4f58d939d7899457730cd1a82f419b3eade8';
+    const runtime38Source = 'bd03f33b9bdedfb8f49ad8717062b32784e9a08a';
     for (const [overrides, pass] of [[{}, true], [{ READ_RUNTIME_AUTHENTICATED_STATUS: 'UNVERIFIED' }, false],
-      [{ READ_RUNTIME_READBACK_OK: 'false' }, false], [{ READ_RUNTIME_MIGRATION_SIGNAL_OK: 'false' }, false]] as const) {
+      [{ READ_RUNTIME_READBACK_OK: 'false' }, false], [{ READ_RUNTIME_MIGRATION_SIGNAL_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ EXPECTED_SOURCE_SHA: fixedSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: fixedSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: fixedSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ EXPECTED_SOURCE_SHA: diagnosticSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: diagnosticSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: diagnosticSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ EXPECTED_SOURCE_SHA: observerSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: observerSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: observerSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ EXPECTED_SOURCE_SHA: renditionSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: renditionSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: renditionSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ EXPECTED_SOURCE_SHA: runtime38Source, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: runtime38Source, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: runtime38Source, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ SINGLE_PRODUCT_READBACK_OK: 'false' }, true]] as const) {
       const result = spawnSync(bash, ['-s'], { input: summary, encoding: 'utf8', env: { ...process.env, ...base, ...overrides } });
       expect(result.status === 0, result.stderr).toBe(pass);
     }

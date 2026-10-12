@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -37,3 +40,61 @@ jobs:
         run: npm run test:shadow
       - name: Delivery owner fail-closed regressions
         run: npm run test:delivery-owner
+      - name: Validate frozen photo runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha='bd03f33b9bdedfb8f49ad8717062b32784e9a08a'
+          test "$(git rev-parse "$source_sha^{tree}")" = 'f8b0d22400bff1987ae9cf1824302c99afefce05'
+          test "$(git show -s --format=%P "$source_sha")" = 'c9b9a4b31d001c2cbffd43022c9213e01e3d2544'
+          git merge-base --is-ancestor "$source_sha" HEAD
+          source_dir="$(mktemp -d "$RUNNER_TEMP/photo-image.XXXXXX")"
+          probe_file="$(mktemp "$RUNNER_TEMP/photo-image-probe.XXXXXX.mjs")"
+          git show 'HEAD:scripts/verify-photo-rendition-runtime.mjs' > "$probe_file"
+          chmod 0444 "$probe_file"
+          source_files="$(mktemp "$RUNNER_TEMP/photo-image-files.XXXXXX")"
+          git ls-tree -r --name-only -z "$source_sha" > "$source_files"
+          git -c core.autocrlf=false archive "$source_sha" | tar -x -C "$source_dir"
+          (
+            cd "$source_dir"
+            git init --quiet
+            git -c core.autocrlf=false --literal-pathspecs add --force --pathspec-from-file="$source_files" --pathspec-file-nul
+            git ls-files --cached -z | cmp - "$source_files"
+            test "$(git write-tree)" = 'f8b0d22400bff1987ae9cf1824302c99afefce05'
+            export IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031 REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" EXPECTED_SOURCE_SHA="$source_sha"
+            export EXPECTED_BASELINE_REVISION=freepass-data-read-00038-phh EXPECTED_BASELINE_SOURCE_SHA=c9b9a4b31d001c2cbffd43022c9213e01e3d2544
+            export EXPECTED_BASELINE_IMAGE_DIGEST=sha256:6322eb95ab90882f42febd480844c45e400411ccc1a81c99f8601de3e2e6c5b2
+            npm ci
+            npm run build
+            report_unit_log() {
+              sed -E 's/\x1B\[[0-9;]*m//g' "$1" | grep -E 'FAIL |AssertionError|Expected|Received|^[[:space:]]*[+-] |Test Files|Tests.*(failed|passed)|Error:' | tail -n 60 || true
+            }
+            regression='stops before deploy on any changed baseline|deployment preserves bindings'
+            if IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031 REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-inherited-env.log" 2>&1; then
+              echo 'EXPECTED_FROZEN_UNIT_ENV_FAILURE_NOT_OBSERVED' >&2
+              report_unit_log "$RUNNER_TEMP/photo-unit-inherited-env.log"
+              exit 1
+            fi
+            grep -q '2 failed' "$RUNNER_TEMP/photo-unit-inherited-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-inherited-env.log"; exit 1; }
+            echo 'FROZEN_SOURCE_TWO_ENV_EXPECTED_FAILURE_COUNT=2'
+            if REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log" 2>&1; then
+              echo 'EXPECTED_FROZEN_SELECTOR_ENV_FAILURE_NOT_OBSERVED' >&2
+              report_unit_log "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log"
+              exit 1
+            fi
+            grep -q '1 failed' "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log"; exit 1; }
+            echo 'FROZEN_SOURCE_GATE_ONLY_EXPECTED_FAILURE_COUNT=1'
+            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-clean-env.log" 2>&1 || { report_unit_log "$RUNNER_TEMP/photo-unit-clean-env.log"; exit 1; }
+            grep -q '2 passed' "$RUNNER_TEMP/photo-unit-clean-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-clean-env.log"; exit 1; }
+            echo 'FROZEN_SOURCE_TWO_ENV_ISOLATED_PASS_COUNT=2'
+            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm test > "$RUNNER_TEMP/photo-unit-representative-env.log" 2>&1 || { report_unit_log "$RUNNER_TEMP/photo-unit-representative-env.log"; exit 1; }
+            grep 'Tests .*passed' "$RUNNER_TEMP/photo-unit-representative-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-representative-env.log"; exit 1; }
+            echo 'FROZEN_SOURCE_REPRESENTATIVE_ENV_FULL_UNIT_OK=true'
+            echo 'FROZEN_SOURCE_UNIT_ENV_ISOLATION_REPRODUCED=true'
+          )
+          local_image="freepass-data-photo-image-check:$source_sha"
+          docker build --pull --build-arg FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js --build-arg "FREEPASS_DATA_SOURCE_SHA=$source_sha" --label "org.opencontainers.image.revision=$source_sha" --tag "$local_image" "$source_dir"
+          test "$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$source_sha"
+          docker image inspect "$local_image" --format '{{json .Config.Env}}' | jq -e 'index("FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js") != null' >/dev/null
+          test "$(docker image inspect "$local_image" --format '{{ .Config.User }}')" = 'node'
+          docker run --rm --network none --memory=512m --cpus=1 --entrypoint node --mount "type=bind,source=$probe_file,target=/tmp/sharp-list-runtime-probe.mjs,readonly" "$local_image" /tmp/sharp-list-runtime-probe.mjs

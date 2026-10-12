@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import sharp from '/app/node_modules/sharp/lib/index.js';
+import { renderVehiclePhotoRendition } from '/app/dist/src/adapters/vehicle-photo-rendition.js';
+const synthetic = await sharp({create:{width:1200,height:800,channels:3,background:{r:55,g:95,b:135}}}).jpeg({quality:90}).toBuffer();
+const result = await renderVehiclePhotoRendition({bytes:synthetic,contentType:'image/jpeg'},'list');
+assert.equal(result.contentType,'image/jpeg');
+assert.ok(Buffer.isBuffer(result.bytes) && result.bytes.length > 0 && result.bytes.length <= 8*1024*1024);
+const decoded = await sharp(result.bytes,{limitInputPixels:24000000}).raw().toBuffer({resolveWithObject:true});
+assert.ok(decoded.info.width <= 480 && decoded.info.height <= 480);
+assert.ok(decoded.info.width > 0 && decoded.info.height > 0 && decoded.data.length > 0);
+const metadata = await sharp(result.bytes).metadata();
+assert.equal(metadata.format,'jpeg');
+assert.equal(metadata.exif,undefined);
+assert.equal(metadata.icc,undefined);
+process.stdout.write('SELECTED_LINUX_RUNTIME_SHARP_LIST_RASTER_OK=true\n');
