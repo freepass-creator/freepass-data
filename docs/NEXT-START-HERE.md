@@ -290,6 +290,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - revision34 실검증과 한계(20 안전 영수증): IAM무인증403/fullcompat200/schema/migrationheaders PASS. 같은IDtoken·consumerJSON1회·고정상품1의 fact200→소비자무인증401→photos-only403 총3GET을검사해helper OK=true/PHASE=SUCCESS/REQUEST_COUNT=3/LAST_STATUS=403/REASON=NONE이다. products1/SINGLE_PRODUCT/exactID/nano시각·versions/order/linkedFacts/count/shape/deposit state/1MiB/private-no-store/nosniff/directmigration 실검증 PASS. [활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6114645755),07:33:56 KST. 이 fact검증은새사진실패event/stage/reason의실관측을증명하지않으며 manifest503원인/적용timeout/사진복구/전체cutover·성능은HOLD이다. 승인dispatch외재dispatch/retry/rollback/사진bytesGET/새원천metadata probe/워밍/newauth·IAM·secret/사업DB쓰기0,민감원문출력0이다.
 - next_start_here: 현재34/source2eb/image6bec를고정하고ERP5root가별도후속GO로유한재진입·안전진단읽기를관리한다. 원래요청binding과실upstream사유는실관측근거전UNKNOWN이며관측enum을확정원인으로확대하지않는다. ERP5/각소비처owner는기존cataloggate·조건·공급사·정책판정을보존하고실UI/서버readback을결속하며 fact를사진binary의필수의존으로추가하지않는다. 견적HOLD·preview한도FAIL·사진503원인UNKNOWN 및전체cutover/모든상품동등성/성능/전체Data완료HOLD와이전32두FAIL/33성공이력을보존한다. 01은이번문서결속에서운영조회·사진GET·원천probe·워밍·DB·권한·배포0,QA pin해제는새배포승인이아니며원본checkout dirty185줄은계속보존한다.
 
+### 2026-10-12 손오공 RAW→후보 정규화 1차 연결
+
+- 목적/대상: RP012 손오공 원본 API RAW를 기존 SourceIngestionStore 후보 단계에 연결한다. 변경은 `normalize-sonogong` 신규 adapter, `ingestRawSourceBatch`의 normalize-null skip, `collect-sonogong --apply-raw` normalizer 주입과 문서/가짜 payload 테스트에 한정한다. 공급사 원문·RTDB·운영 배포·commit/push 없음. next_start_here: 실제 계정/실호출/15분 예약/수수료 기준은 HOLD로 남기고, 운영 적용 전 Vehicle Master snapshot과 RAW readback을 다시 고정한다.
+
 ### 2026-10-12 수집 마스터 충돌 보강 — 배기량 명목값·연식±1 (보류 153→101행, 식별 보류 144→75행)
 
 - 대상: 공통 시트 수동 시험 실행 38156566502(175행)의 비공개 계획·수집 원문을 읽기만 해 같은 175행을 재판정(쓰기 0, 로컬 재생). 보류 원인 분류: 규칙으로 풀림 = ①공급사 명목 배기량(2000·1600·2500)과 마스터 정확값(1999·1598·2497) 불일치(사양 충돌 대부분), ②연식과 최초등록연도가 1년 어긋남(정상 범위). 원문 확인 필요 = 이름이 마스터에 없음(확인 필요 문자 5행·마스터에 없는 세부트림 약 20행), 같은 이름 트림이 인승·구동만 다른데 시트에 사양이 없는 경우, 연식 2년 이상 차이, 마스터 사양 값이 비어 있음.
