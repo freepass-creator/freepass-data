@@ -42,6 +42,18 @@ export async function gcloudUserToken(): Promise<string> {
   if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_REQUIRED');
   return token;
 }
+/** 가격 맵 정규화: null·undefined·키 누락을 같게 보고(해당 키 제거) 키를 정렬한다. digest 계산·비교·되읽기 대조 공통 기준. */
+export function normalizePrice(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizePrice);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== null && v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b, 'en-US')).map(([k, v]) => [k, normalizePrice(v)]));
+  }
+  return value;
+}
+export const priceDigest = (price: unknown) => stableDigest(normalizePrice(price ?? {}));
+const fieldDigest = (key: string, value: unknown) => key === 'price' ? priceDigest(value) : stableDigest(value);
 export function productRecord(uid: string, f: Fields, observedAt: string): SourceProductRecord {
   return { sourceId: String(f.provider_company_code ?? ''), uid, plate: typeof f.car_number === 'string' ? f.car_number : null,
     vehicleText: String(f.car_name ?? (f.원문 as Fields | undefined)?.차명 ?? f.model ?? ''),
@@ -52,12 +64,20 @@ export function productRecord(uid: string, f: Fields, observedAt: string): Sourc
       ...(f.source_tab !== undefined ? { source_tab: f.source_tab } : {}),
       ...(f.product_group !== undefined ? { product_group: f.product_group } : {}) }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
 }
+/** 저장 digest 와 현재 price 대조. 정규화(null=누락) 일치, 또는 다른 쓰기 주체가 표시용 mileage 만 지운 경우(저장 digest 는 기록의 terms 와 일치하고 현재 price 는 mileage 를 뺀 terms 와 같음)를 허용한다. rent·deposit 변경은 여전히 DRIFT. */
+export function priceMatchesRecord(price: unknown, storedDigest: unknown, record: SourceProductRecord): boolean {
+  if (priceDigest(price) === storedDigest || stableDigest(price ?? {}) === storedDigest) return true;
+  const derived = Object.fromEntries(record.terms.map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
+  if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
+  const withoutMileage = Object.fromEntries(Object.entries(derived).map(([m, v]) => [m, { rent: v.rent, deposit: v.deposit }]));
+  return priceDigest(price) === priceDigest(withoutMileage);
+}
 function envelope(d: Doc): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
   if (f.source_cycle_record) {
-    if (stableDigest(f.price ?? {}) !== f.source_cycle_price_digest || f.car_number !== record.plate)
+    if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate)
       throw new Error('CATALOG_SOURCE_RECORD_DRIFT');
   }
   return { record, ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
@@ -74,7 +94,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),
-    price, source_cycle_price_digest: stableDigest(price),
+    price, source_cycle_price_digest: priceDigest(price),
     listable: p.listable, status: p.listable ? display : '출고불가', status_kind: p.listable ? '가용' : '불가',
     vehicle_status: p.listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,
@@ -188,7 +208,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       const result = await request(docPath(after.record.uid) + '?' + query, 'PATCH', { fields: encodeFields(fields) });
       const reread = await getDoc(after.record.uid);
       if (!reread || reread.updateTime !== result.updateTime || Object.entries(fields).some(([k, v]) =>
-        stableDigest(decodeFields(reread.fields)[k]) !== stableDigest(v))) throw new Error('READBACK_UNCERTAIN');
+        fieldDigest(k, decodeFields(reread.fields)[k]) !== fieldDigest(k, v))) throw new Error('READBACK_UNCERTAIN');
       await immutable(join(options.directory, `${stableDigest(key)}.receipt.json`), { project, key, after: reread });
     },
   };
