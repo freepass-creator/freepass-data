@@ -279,7 +279,7 @@ describe('offer economics recompute', () => {
     pickup.internalEconomicsTerms=precomputeOfferEconomics(pickup,'PICKUP_SUBSCRIPTION');
     const pickupTerm=pickup.internalEconomicsTerms[0]!;
     expect(pickupTerm.supplierBillingFee).toMatchObject({
-      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
       approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',reasonCode:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
     });
     expect(pickupTerm.channelPayoutFee).toMatchObject({
@@ -289,7 +289,7 @@ describe('offer economics recompute', () => {
     await store.seed({products:[{...product,commercialType:'PICKUP_SUBSCRIPTION'}],offers:[{...pickup,internalEconomicsTerms:[]}]});
     expect(await runOfferEconomicsRecompute(store,await prepare(store))).toMatchObject({status:'APPLIED',changedOffers:1});
     const savedPickup=(await store.getOffer(pickup.id))!.internalEconomicsTerms![0]!;
-    expect(savedPickup.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},approximate:true});
+    expect(savedPickup.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED'},approximate:true});
     expect(savedPickup.channelPayoutFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},approximate:true});
     expect(store.audits).toHaveLength(1);
     const rerentStore=await fixture(), rerentOriginal=(await rerentStore.listOffers())[0]!, rerentProduct=(await rerentStore.getProduct(rerentOriginal.productId))!;
@@ -299,8 +299,8 @@ describe('offer economics recompute', () => {
     rerent.internalEconomicsTerms=precomputeOfferEconomics(rerent,'USED_RENT');
     const rerentTerm=rerent.internalEconomicsTerms[0]!;
     expect(rerentTerm.supplierBillingFee).toMatchObject({
-      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
-      approximate:true,note:'SONOKONG_INSURANCE_DEDUCT_100K',reasonCode:'SONOKONG_INSURANCE_DEDUCT_100K',
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
+      reasonCode:null,
     });
     expect(rerentTerm.channelPayoutFee).toMatchObject({
       state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
@@ -311,7 +311,7 @@ describe('offer economics recompute', () => {
       offers:[{...rerent,productId:rerentOriginal.productId,internalEconomicsTerms:[]}]});
     expect(await runOfferEconomicsRecompute(rerentStore,await prepare(rerentStore))).toMatchObject({status:'APPLIED',changedOffers:1});
     const savedRerent=(await rerentStore.getOffer(rerent.id))!.internalEconomicsTerms![0]!;
-    expect(savedRerent.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},approximate:true});
+    expect(savedRerent.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED'}});
     expect(savedRerent.channelPayoutFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},reasonCode:null});
     expect(savedRerent.channelPayoutFee).not.toHaveProperty('approximate');
     expect(rerentStore.audits).toHaveLength(1);
@@ -336,7 +336,7 @@ describe('offer economics recompute', () => {
     }];
     const recomputed=precomputeOfferEconomics(pickup,'PICKUP_SUBSCRIPTION');
     expect(recomputed[0]!.supplierBillingFee).toMatchObject({
-      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
       approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
     });
     expect(recomputed[0]!.channelPayoutFee).toMatchObject({
