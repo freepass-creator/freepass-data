@@ -455,6 +455,15 @@ export async function main(args = process.argv.slice(2)) {
   console.log(JSON.stringify(result.report, null, 2));
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
+export async function runSharedSheetCli(args = process.argv.slice(2)) {
+  await main(args).catch(() => {
+    // CI redirects stdout to apply.json and reads it even after a nonzero exit.
+    // A business/system HOLD must never produce an empty JSON artifact.
+    console.log(JSON.stringify({ mode: args.includes('--apply') ? 'APPLY' : 'DRY_RUN',
+      status: 'HOLD', reason: 'SHARED_SHEET_JOB_HOLD' }));
+    console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1;
+  });
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1; });
+  void runSharedSheetCli();
 }

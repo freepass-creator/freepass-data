@@ -231,6 +231,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-12 원천 엔진 골격 — 오프라인 작업
+
+- 정본/목적: `SOURCE-ENGINE-SPEC-20261012.md` 및 설계 사본, source-engine-core 작업선. 시작 revision `62906b2f2cc997aaba7dde2f1c6cdce2d08b1d93`.
+- 변경: UID 기반 공통 계약·원천별 만료·source_runs heartbeat 투영·F05 기존 수집/정제 adapter·행별 반영 계획/백업/CAS/되읽기 골격·CLI HOLD JSON. [결과와 정확한 적용 경계](SOURCE-ENGINE-RESULT-20261012.md).
+- 검증: 최종 관련 170/170 PASS, build/architecture/data-access/diff PASS. 전체는 3171 PASS/20 FAIL/18 SKIP(후속 시험1개 추가 전). 환경 제약 실패를 PASS로 세지 않음.
+- 남음: BLOCKED_NETWORK — 실제 F05/Firestore 103건 대조; UID live 열·binding 이행·실제 CatalogStore command adapter 및 소비처 연결 미완료. Claude UNAVAILABLE. 운영 쓰기/push0.
+- 커밋 BLOCKED_FILESYSTEM: Git metadata가 허용 범위 밖 `C:/dev/freepass-data/.git/worktrees/fd-engine`이라 index.lock 권한 거부. 새 커밋 없음, 작업 트리 보존. next_start_here: 결과 문서의 9파일 diff를 검토하고 Git metadata 쓰기가 허용된 환경에서 커밋 후 명시된 연결·실측 순서로 진행.
+
 <a id="limited-open-readiness-20261012"></a>
 
 ### 2026-10-12 비UI 한정 오픈 readiness / 권위 설명 정착 / 최종 QA HOLD
