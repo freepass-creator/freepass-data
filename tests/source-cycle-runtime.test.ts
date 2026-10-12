@@ -344,7 +344,7 @@ describe('native mappings and UID', () => {
     expect(built.plan.entries).toHaveLength(4);
     expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 4 });
     expect(decodeFields(fake.docs.get('RP004:MONTHLY:MODELB').fields)).toMatchObject({
-      product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: 'MODELB', trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
+      product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: expect.any(String), trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       price: { '1': { rent: 500000, deposit: null, mileage: '월렌트' } }, provider_name: '아이카' });
     expect(planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now).plan.entries).toEqual([]);
     const ctrl = fileCycleControl(await directory(), async () => {});

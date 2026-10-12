@@ -194,20 +194,20 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       const cached = before ? cache.get(`${before.record.sourceId}:${before.record.uid}`) : null;
       const document = before ? await getDoc(before.record.uid) : null;
       if (before && (!document || !cached || cached.updateTime !== document.updateTime ||
-        stableDigest(envelope(document)) !== stableDigest(before))) throw new Error('BACKUP_SNAPSHOT_MISSING');
+        stableDigest(envelope(document, accept)) !== stableDigest(before))) throw new Error('BACKUP_SNAPSHOT_MISSING');
       await immutable(path(key), { project, key, before, document: document ?? null });
     },
     async readBackup(key) {
       const b = await load(key);
-      if (stableDigest(b.document ? envelope(b.document) : null) !== stableDigest(b.before)) throw new Error('BACKUP_MISMATCH');
+      if (stableDigest(b.document ? envelope(b.document, accept) : null) !== stableDigest(b.before)) throw new Error('BACKUP_MISMATCH');
       return b.before;
     },
     async compareAndApply(beforeDigest, after, key) {
       if (options.observationSources?.includes(after.record.sourceId)) throw new Error('OBSERVATION_ONLY');
       const b = await load(key), current = await getDoc(after.record.uid);
       if (stableDigest(b.before) !== beforeDigest || stableDigest(current) !== stableDigest(b.document) ||
-        (current && envelope(current).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
-      if (current && envelope(current).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
+        (current && envelope(current, accept).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
+      if (current && envelope(current, accept).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
       if (!current && (!after.supplierFields?.provider_name.trim() ||
         stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
         throw new Error('SUPPLIER_NAME_REQUIRED');
@@ -228,8 +228,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       if (receipt.project !== project || receipt.key !== key || approval !== stableDigest({ backup: b, receipt })) throw new Error('ROLLBACK_APPROVAL_REQUIRED');
       const uid = decodeURIComponent(receipt.after.name.split('/').at(-1));
       const current = await getDoc(uid);
-      if (!current || stableDigest(current) !== stableDigest(receipt.after) || envelope(current).locked_by_contract) throw new Error('CAS_CONFLICT');
-      if (options.observationSources?.includes(envelope(current).record.sourceId)) throw new Error('OBSERVATION_ONLY');
+      if (!current || stableDigest(current) !== stableDigest(receipt.after) || envelope(current, accept).locked_by_contract) throw new Error('CAS_CONFLICT');
+      if (options.observationSources?.includes(envelope(current, accept).record.sourceId)) throw new Error('OBSERVATION_ONLY');
       // Newly enrolled documents are withdrawn, never deleted.
       const fields = b.document?.fields ?? { ...current.fields, ...encodeFields({ listable: false, status: '출고불가', status_kind: '불가',
         vehicle_status: '출고불가', publication_withdrawal: { reason: 'ROLLBACK_ENROLL', deleteAuthorized: false } }) };
