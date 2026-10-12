@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeValue } from './supplier-freshness-lib.mjs';
-import { reconcile, MISMATCH_TYPES } from './supplier-field-reconcile-lib.mjs';
+import { reconcile, MISMATCH_TYPES, makeCauseClassifier, CAUSES } from './supplier-field-reconcile-lib.mjs';
 
 const spec = JSON.parse(readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const argv = process.argv.slice(2);
@@ -95,12 +95,15 @@ const AICA_FIELDS = [...Object.values(AICA_HEADER_TO_FIELD).filter(f => f !== 'c
   ...['1', '36', '48', '60'].flatMap(p => [`price.${p}.rent`, `price.${p}.deposit`])];
 
 async function readProducts(token) {
+  if (opt('data-json')) { // 상품 전수 조회(읽기) 출력 JSON: 배열 또는 {products:[...]} — 각 항목은 products 문서 필드(디코딩된 값)
+    const j = JSON.parse(readFileSync(opt('data-json'), 'utf8'));
+    return Array.isArray(j) ? j : (j.products ?? j.items ?? []);
+  }
   const out = []; let pageToken = '';
   const top = ['car_number', 'provider_company_code', 'partner_code', 'listable', 'maker', 'model', 'sub_model', 'trim_name', 'ext_color', 'year', 'mileage',
     'engine_cc', 'int_color', 'fuel_type', 'first_registration_date', 'status_label_raw', 'options', 'price', '원문', 'sheet_source_tab', 'source'];
   do {
     const q = new URLSearchParams({ pageSize: '300' });
-    for (const f of top) q.append('mask.fieldPaths', /^[A-Za-z_][A-Za-z0-9_]*$/.test(f) ? f : '`' + f + '`');
     if (pageToken) q.set('pageToken', pageToken);
     const res = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/products?${q}`, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`FIRESTORE_READ_${res.status}`);
@@ -110,11 +113,43 @@ async function readProducts(token) {
   } while (pageToken);
   return out;
 }
-const flatten = d => ({ car_number: d.car_number, listable: d.listable === true, ...Object.fromEntries([...new Set([...FIELDS, ...AICA_FIELDS])].map(f => [f, pick(d, f)])) });
+const flatten = d => ({ __orig: d, car_number: d.car_number, listable: d.listable === true, ...Object.fromEntries([...new Set([...FIELDS, ...AICA_FIELDS])].map(f => [f, pick(d, f)])) });
+
+// 칸 → 원천 머리글(데이터의 원문.전체 에 보존된 원천 행에서 같은 머리글을 찾아 «저장된 원문»을 얻는다)
+const f05Header = f => {
+  const inv = Object.fromEntries(Object.entries(HEADER_TO_FIELD).map(([h, x]) => [x, h]));
+  const m = f.match(/^price\.(\d+)\.(rent|deposit)$/);
+  if (m) return m[2] === 'rent' ? m[1] + '개월' : (Number(m[1]) <= 6 ? '단기보증' : '장기보증');
+  return f === '원문.차명' ? '차명 원문' : inv[f];
+};
+const aicaHeader = f => {
+  const inv = Object.fromEntries(Object.entries(AICA_HEADER_TO_FIELD).map(([h, x]) => [x, h]));
+  const m = f.match(/^price\.(\d+)\.(rent|deposit)$/);
+  if (m) return m[2] === 'deposit' ? '장기보증' : (m[1] === '1' ? '월렌트' : m[1] + '개월');
+  return inv[f];
+};
+const storedFor = headerOf => (d, field) => { const h = field && headerOf(field); const row = d?.__orig?.원문?.전체; return h && row && h in row ? row[h] : undefined; };
+
+// 전 필드 완전성 — 데이터가 가진 상품별 칸(기본·제원·상태·가격 행·보증금·사진 수·정책 연결·원문)의 채움률
+const COMPLETENESS = { 기본: ['maker', 'model', 'sub_model', 'trim_name', 'year', 'ext_color'], 제원: ['engine_cc', 'fuel_type', 'seats', 'first_registration_date', 'mileage'],
+  상태: ['status', 'status_label_raw', 'vehicle_status'], 정책연결: ['policy_code'], 식별: ['vehicle_uid'] };
+export function completeness(listableDocs) {
+  const n = listableDocs.length, empty = v => v == null || v === '' || (Array.isArray(v) && !v.length);
+  const out = { listable: n, fields: {} };
+  for (const [group, fs_] of Object.entries(COMPLETENESS)) for (const f of fs_) out.fields[`${group}.${f}`] = n ? listableDocs.filter(d => !empty(d[f])).length / n : null;
+  const rows = d => Object.values(d.price ?? {}).filter(x => x && Number(x.rent) > 0);
+  out.fields['가격.행있음'] = n ? listableDocs.filter(d => rows(d).length > 0).length / n : null;
+  out.fields['가격.보증금있음'] = n ? listableDocs.filter(d => rows(d).some(x => Number(x.deposit) > 0)).length / n : null;
+  out.fields['원문.보존'] = n ? listableDocs.filter(d => d.원문 && Object.keys(d.원문.전체 ?? {}).length > 0).length / n : null;
+  const photos = d => (Array.isArray(d.image_urls) ? d.image_urls.length : 0) + (d.photo_link ? 1 : 0);
+  out.photoCountZero = listableDocs.filter(d => photos(d) === 0).length;
+  out.photoCountAvg = n ? listableDocs.reduce((a, d) => a + photos(d), 0) / n : null;
+  return out;
+}
 
 export function f05Suppliers() { return spec.supplierChannels.sharedInputSheet.map(x => ({ code: x.code, tab: x.tab, companyName: x.companyName })); }
 
-const summarize = (code, tab, r, t0) => ({ supplier: code, tab, sourceReadAt: r.sourceReadAt, dataReadAt: r.dataReadAt, listableTotal: r.listableTotal, listableNotInSource: r.listableNotInSource, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
+const summarize = (code, tab, r, t0) => ({ supplier: code, tab, causes: r.causes, topReasons: r.topReasons, fixCandidateCount: r.fixCandidates?.length ?? 0, photoCountZero: r.dataCompleteness?.photoCountZero, sourceReadAt: r.sourceReadAt, dataReadAt: r.dataReadAt, listableTotal: r.listableTotal, listableNotInSource: r.listableNotInSource, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
   commonVehicles: r.commonVehicles, vehicleCoverage: r.vehicleCoverage, fieldMatchRate: r.fieldMatchRate, fieldExactRate: r.fieldExactRate, types: r.types,
   worstFields: Object.entries(r.perField).filter(([, p]) => p.compared).map(([f, p]) => ({ field: f, compared: p.compared, matchRate: p.matchRate }))
     .sort((a, b) => a.matchRate - b.matchRate).slice(0, 5) });
@@ -147,7 +182,9 @@ async function main() {
     const data = products.filter(p => (p.provider_company_code || p.partner_code) === t.code).map(flatten);
     const rawPlates = new Set(raw.map(r => String(r.car_number).replace(/s+/g, '')));
     const listableNotInSource = data.filter(d => d.listable && !rawPlates.has(String(d.car_number).replace(/s+/g, ''))).length;
-    const rep = { supplier: t.code, tab: t.tab, sourceReadAt: readStarted, dataReadAt, listableTotal: data.filter(d => d.listable).length, listableNotInSource, observedAt: new Date().toISOString(), ...reconcile(raw, data, { fields }) };
+    const cause = makeCauseClassifier({ storedRaw: storedFor(t.aica ? aicaHeader : f05Header) });
+    const rep = { supplier: t.code, tab: t.tab, sourceReadAt: readStarted, dataReadAt, listableTotal: data.filter(d => d.listable).length, listableNotInSource, observedAt: new Date().toISOString(),
+      dataCompleteness: completeness(data.filter(d => d.listable).map(d => d.__orig)), ...reconcile(raw, data, { fields, cause }) };
     results.push({ rep, sum: summarize(t.code, t.tab, rep, t0) });
     if (opt('out-dir')) { mkdirSync(opt('out-dir'), { recursive: true }); writeFileSync(join(opt('out-dir'), `${t.code}.json`), JSON.stringify(rep, null, 2)); }
   }

@@ -46,3 +46,20 @@ test('날짜 자리수·배기량 반올림', () => {
   assert.equal(classifyField('3,500', '3470', 'engine_cc'), 'NEAR_NUMERIC');
   assert.equal(classifyField('3,500', '2000', 'engine_cc'), 'VALUE_DIFF');
 });
+
+import { makeCauseClassifier, rawAnomaly } from '../scripts/supplier-field-reconcile-lib.mjs';
+test('별칭·무보증은 일치로 본다', () => {
+  assert.equal(classifyField('HEV', '하이브리드', 'fuel_type'), 'FORMAT_ONLY');
+  assert.equal(classifyField('검정색', '블랙', 'ext_color'), 'FORMAT_ONLY');
+  assert.equal(classifyField('무보증', '', 'price.48.deposit'), 'MATCH');
+  assert.equal(classifyField('무보증', 2000000, 'price.48.deposit'), 'VALUE_DIFF');
+});
+test('원인 분류: 저장된 원문이 원천과 다르면 수집 지연, 같으면 정제 오류', () => {
+  const c = makeCauseClassifier({ storedRaw: (d, f) => d.stored[f] });
+  assert.equal(c({ type: 'VALUE_DIFF', field: 'mileage', raw: '100', data: '90', dataRec: { stored: { mileage: '90' } } }), 'COLLECTION_LAG');
+  assert.equal(c({ type: 'VALUE_DIFF', field: 'model', raw: 'A', data: 'B', dataRec: { stored: { model: 'A' } } }), 'REFINEMENT_ERROR');
+  assert.equal(c({ type: 'ONLY_IN_DATA' }), 'SOURCE_CHANGE');
+  assert.equal(c({ type: 'MISSING_IN_DATA' }), 'COLLECTION_LAG');
+  assert.equal(c({ type: 'VALUE_DIFF', field: 'mileage', raw: 'abc', data: '1', dataRec: { stored: {} } }), 'SOURCE_ANOMALY');
+  assert.equal(rawAnomaly('price.36.rent', '0'), true);
+});
