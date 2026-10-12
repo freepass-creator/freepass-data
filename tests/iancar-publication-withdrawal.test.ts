@@ -666,6 +666,8 @@ it('collector finishes successfully and reports lock warnings without changing i
   const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('unexpected exit'); });
   const warnings = ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'];
   vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true');
+  vi.stubEnv('IANCAR_SYNC_EXPECT', JSON.stringify({ created: [0, 0], absenceHeld: [0, 0], withdrawalHoldsReleased: [0, 0], open: [0, 0],
+    deletes: [0, 0], contractChanges: [0, 0], skippedCount: [1, 1] }));
   vi.doMock('../src/adapters/iancar-one-api.js', () => ({
     iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
     collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
@@ -676,6 +678,7 @@ it('collector finishes successfully and reports lock warnings without changing i
   vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: async () => ({
     status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 },
     skippedRatio: 0.2, maxSkippedRatio: 0.2, warnings,
+    created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0, deletes: 0, contractChanges: 0,
   }) }));
   try {
     process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync']; process.exitCode = 0;
@@ -688,6 +691,36 @@ it('collector finishes successfully and reports lock warnings without changing i
     log.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
     vi.doUnmock('../src/adapters/iancar-one-api.js'); vi.doUnmock('../src/domain/source-intake.js');
     vi.doUnmock('../src/jobs/data-access-runtime.js');
+  }
+});
+
+it('--apply-sync 는 건수 승인 설정(IANCAR_SYNC_EXPECT)이 없으면 쓰기 없이 종료 코드 3 으로 멈춘다', async () => {
+  const argv = process.argv; const exitCode = process.exitCode;
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code}`); }) as never);
+  const publish = vi.fn(async () => ({ status: 'DRY_RUN', skippedCount: 0, created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0,
+    deletes: 0, contractChanges: 0, planDigest: 'd' }));
+  vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true'); vi.stubEnv('IANCAR_SYNC_EXPECT', '');
+  vi.doMock('../src/adapters/iancar-one-api.js', () => ({
+    iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
+    collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
+    buildIancarOneSourceBatch: () => ({ source: { sourceId: 'synthetic' } }),
+    projectIancarOnePhaseOne: () => ({ vehicles: [] }),
+  }));
+  vi.doMock('../src/domain/source-intake.js', () => ({ inspectSupplierSourceBatch: () => ({}) }));
+  vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: publish }));
+  try {
+    process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync'];
+    vi.resetModules();
+    await expect(import('../src/jobs/collect-iancar-one-api.js')).rejects.toThrow('exit:3');
+    expect(publish).toHaveBeenCalledTimes(1); // 계획 한 번뿐, 적용 호출 없음
+    expect(publish.mock.calls[0]![0]).toMatchObject({ apply: false });
+    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', writeExecuted: false, reasons: ['EXPECT_MISSING'] });
+  } finally {
+    process.argv = argv; process.exitCode = exitCode;
+    log.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
+    vi.doUnmock('../src/adapters/iancar-one-api.js'); vi.doUnmock('../src/domain/source-intake.js');
+    vi.doUnmock('../src/jobs/data-access-runtime.js'); vi.resetModules();
   }
 });
 
