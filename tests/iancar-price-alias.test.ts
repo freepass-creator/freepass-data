@@ -14,7 +14,7 @@ const build = () => {
     tiers(months).forEach((suffix, index) => { price[`${months}_${suffix}`] = { rent: rentBase[months]! + index * 41000, deposit: deposit[months]! }; });
     // 실제 문서와 같은 형식: 별칭 값은 ONE 조건 키(기간:주행:구분)
     priceAliases[String(months)] = months < 12 ? `${months}:2000:month` : `${months}:20000:year`;
-    price[String(months)] = { ...price[`${months}_${tiers(months)[0]}`]! };            // 호환용 별칭 키 = 최저 주행 구간 복사
+    price[String(months)] = { ...price[`${months}_${tiers(months)[0]}`]! };            // 호환용 별칭 키 = 이안카 기본 조건(연 2만km, 1~5개월 월 2,000km) 구간 복사
   }
   return { listable: true, provider_company_code: 'RP031', price, iancar_phase_one: { priceAliases } } as Record<string, any>;
 };
