@@ -387,6 +387,14 @@ describe('readKakaoKnownFacts', () => {
     })).toEqual([]);
   });
 
+  it('fails closed when a vehicleUid is requested but none is stored', async () => {
+    const store = writeStore();
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const q = { supplierCode: 'RP001', topic: inputs[0]!.type, asOf: '2026-10-12T01:00:00.000Z' };
+    expect(await readKakaoKnownFacts(store, { ...q, vehicleKey: '123가4567', vehicleUid: 'va_OTHER' })).toEqual([]);
+    expect((await readKakaoKnownFacts(store, { ...q, vehicleKey: '123가4567' })).length).toBe(1);
+  });
   it('applies supplier, vehicle uid, invalid time, future sentAt, roomCode, and layer policies', async () => {
     const store = writeStore();
     const inputs = [

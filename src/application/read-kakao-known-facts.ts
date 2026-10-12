@@ -59,10 +59,8 @@ function matchesVehicle(root: Record<string, unknown>, vehicle: Record<string, u
   const vehicleUid = text(vehicle?.vehicleUid);
   const vehicleKeyRef = query.vehicleKey ? `products/${query.vehicleKey}` : '';
   if (query.vehicleUid) {
-    if (vehicleUid) return vehicleUid === query.vehicleUid;
-    if (query.vehicleKey && bodyPlate) return bodyPlate === query.vehicleKey;
-    if (query.vehicleKey && productRef) return productRef === vehicleKeyRef;
-    return false;
+    // 저장된 UID 가 있어야만 UID 로 확인한다 — UID–번호 연결을 확인할 수 없으면 반환하지 않는다(fail-closed).
+    return Boolean(vehicleUid) && vehicleUid === query.vehicleUid;
   }
   if (!query.vehicleKey) return false;
   return bodyPlate === query.vehicleKey || productRef === vehicleKeyRef;
