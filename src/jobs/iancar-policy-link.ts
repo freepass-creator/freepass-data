@@ -2,7 +2,7 @@
 // 원천(ONE 요금 원문의 보험·추가요금)에서 연령·면허·보험·초과 주행 요금을 당겨 공통 정책 FP-RP031-RENT 에 반영하고(모든 차량이 같은 값일 때만),
 // 차량마다 다른 값은 상품 문서 iancar_policy_terms 에 차량별 보존한 뒤 노출 이안카 상품을 공통 정책에 연결한다.
 //   계획: EANCAR_ONE_API_KEY=… tsx src/jobs/iancar-policy-link.ts
-//   적용: IANCAR_POLICY_LINK_APPROVED=true EANCAR_ONE_API_KEY=… tsx src/jobs/iancar-policy-link.ts --apply --expected-digest=<계획 digest>
+//   적용: IANCAR_POLICY_LINK_APPROVED=true EANCAR_ONE_API_KEY=… tsx src/jobs/iancar-policy-link.ts --apply --expected-digest=<계획 digest> --expect-policy-document-changes=<0|1>
 //   복원: IANCAR_POLICY_LINK_RESTORE_APPROVED=true tsx src/jobs/iancar-policy-link.ts --restore=<백업파일> --expected-digest=<계획 digest> [--apply]   (--apply 없으면 복원 계획만)
 import { applyIancarPolicyLink, planIancarPolicyLinkFromFirestore, restoreIancarPolicyLink, type FetchVehicleTerms } from '../infra/iancar-policy-link-firestore.js';
 import { createIancarOneApiClient, iancarOneApiConfigFromEnv } from '../adapters/iancar-one-api.js';
@@ -12,7 +12,7 @@ import { createJobDataAccessRuntime } from './data-access-runtime.js';
 
 const args = process.argv.slice(2);
 const arg = (name: string) => args.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-for (const a of args) if (a !== '--apply' && !/^--(expected-digest|restore)=/.test(a)) throw new Error(`UNKNOWN_OPTION ${a.split('=')[0]}`);
+for (const a of args) if (a !== '--apply' && !/^--(expected-digest|restore|expect-policy-document-changes)=/.test(a)) throw new Error(`UNKNOWN_OPTION ${a.split('=')[0]}`);
 const expected = arg('expected-digest');
 if (expected !== undefined && !/^[a-f0-9]{64}$/.test(expected)) throw new Error('EXPECTED_DIGEST_INVALID');
 
@@ -55,8 +55,10 @@ const fetchTerms: FetchVehicleTerms = async vehicleId => {
 if (args.includes('--apply')) {
   if (process.env.IANCAR_POLICY_LINK_APPROVED !== 'true') throw new Error('IANCAR_POLICY_LINK_APPROVAL_REQUIRED');
   if (!expected) throw new Error('EXPECTED_DIGEST_REQUIRED');
-  const result = await runtime.access.write({ context, operation: 'WRITE_IANCAR_POLICY_LINK', resource, requestDigest: stableDigest({ expected }),
-    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => applyIancarPolicyLink({ expectedPlanDigest: expected, fetchTerms }));
+  const policyChanges = arg('expect-policy-document-changes');
+  if (policyChanges !== '0' && policyChanges !== '1') throw new Error('EXPECT_POLICY_DOCUMENT_CHANGES_REQUIRED');
+  const result = await runtime.access.write({ context, operation: 'WRITE_IANCAR_POLICY_LINK', resource, requestDigest: stableDigest({ expected, policyChanges }),
+    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => applyIancarPolicyLink({ expectedPlanDigest: expected, expectedPolicyDocumentChanges: Number(policyChanges), fetchTerms }));
   console.log(JSON.stringify(result, null, 2));
 } else {
   const plan = await runtime.access.read({ context, operation: 'READ_IANCAR_POLICY_LINK_PLAN', resource,

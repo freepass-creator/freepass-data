@@ -63,6 +63,22 @@ describe('이안카 정책 연결 계획', () => {
     expect(plan.withoutSourceTerms).toEqual([{ id: 'b', reason: 'NOT_IN_SOURCE' }]);
     expect('iancar_policy_terms' in plan.productPatches[1]!.patch).toBe(false);
   });
+  it('원천 조회가 401·429·형식 오류로 실패하면(404 아님) 계획을 막고, 전부 못 읽어도 막는다(fail-closed)', () => {
+    for (const reason of ['IANCAR_ONE_API_HTTP_401', 'IANCAR_ONE_API_HTTP_429', 'ROWS_INCONSISTENT']) {
+      const partial = buildPolicyLinkPlan(input({ vehicleTerms: { a: terms() }, vehicleTermsErrors: { b: reason } }));
+      expect(partial.blockers).toContain('SOURCE_LOOKUP_FAILED(1)');
+    }
+    const none = buildPolicyLinkPlan(input({ vehicleTerms: {}, vehicleTermsErrors: { a: 'IANCAR_ONE_API_HTTP_401', b: 'IANCAR_ONE_API_HTTP_401' } }));
+    expect(none.blockers).toEqual(expect.arrayContaining(['SOURCE_LOOKUP_FAILED(2)', 'NO_SOURCE_TERMS_READ']));
+    expect(buildPolicyLinkPlan(input({ vehicleTerms: {}, vehicleTermsErrors: {} })).blockers).toContain('NO_SOURCE_TERMS_READ');
+  });
+  it('정책 문서 변경 건수를 계획에 싣고(변경 있으면 1, 없으면 0), 허용 목록 밖 칸이 바뀌면 막는다', () => {
+    expect(buildPolicyLinkPlan(input()).counts.policyDocumentChanges).toBe(1);
+    const settled = buildPolicyLinkPlan(input());
+    const same = buildPolicyLinkPlan(input({ policy: policy({ ...settled.policyPatch }) }));
+    expect(same.counts.policyDocumentChanges).toBe(0);
+    expect(settled.blockers).not.toContain('POLICY_PATCH_FIELD_NOT_ALLOWED');
+  });
   it('이미 연결·조건이 같은 상품은 계획에서 빠지고, 보존 칸이 없으면 연결 전 policy_code 를 남긴다', () => {
     const same = terms();
     const plan = buildPolicyLinkPlan(input({ products: [

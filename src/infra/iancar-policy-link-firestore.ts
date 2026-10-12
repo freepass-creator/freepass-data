@@ -39,7 +39,7 @@ export async function planIancarPolicyLinkFromFirestore(options: { fetchTerms: F
 }
 
 /** 승인된 digest 와 같은 계획만 적용한다: 비공개 백업(로컬+버킷) → 조건부 트랜잭션(문서 updateTime 일치) → 되읽기. 삭제 없음. */
-export async function applyIancarPolicyLink(options: { expectedPlanDigest: string; fetchTerms: FetchVehicleTerms }) {
+export async function applyIancarPolicyLink(options: { expectedPlanDigest: string; expectedPolicyDocumentChanges: number; fetchTerms: FetchVehicleTerms }) {
   const app = getTargetFirebaseApp();
   if (app.options.projectId !== 'freepasserp5') throw new Error('IANCAR_POLICY_LINK_WRONG_PROJECT');
   const db = getFirestore(app);
@@ -47,6 +47,8 @@ export async function applyIancarPolicyLink(options: { expectedPlanDigest: strin
   const plan = buildPolicyLinkPlan(inputs);
   if (plan.blockers.length) throw Object.assign(new Error('IANCAR_POLICY_LINK_BLOCKED'), { blockers: plan.blockers });
   if (plan.planDigest !== options.expectedPlanDigest) throw new Error('IANCAR_POLICY_LINK_PLAN_CHANGED');
+  // 정책 문서 변경 건수 관문: 승인 범위(기대 건수)와 다르면 쓰기 전에 중단한다.
+  if (plan.counts.policyDocumentChanges !== options.expectedPolicyDocumentChanges) throw Object.assign(new Error('IANCAR_POLICY_LINK_POLICY_DOCUMENT_CHANGES_MISMATCH'), { planned: plan.counts.policyDocumentChanges, expected: options.expectedPolicyDocumentChanges });
 
   const policyRef = db.collection('policy').doc(IANCAR_COMMON_POLICY_CODE);
   const policyBeforeData = inputs.policy.data;

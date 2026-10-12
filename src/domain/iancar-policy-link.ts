@@ -8,6 +8,9 @@ import { stableDigest } from '../shared/stable-digest.js';
 
 export const IANCAR_COMMON_POLICY_CODE = 'FP-RP031-RENT';
 export const IANCAR_BASE_ANNUAL_MILEAGE = '연 20,000km';
+/** 공통 정책 문서에서 이 계획이 바꿀 수 있는 칸(그 밖의 칸 변경은 계획을 막는다). */
+export const IANCAR_POLICY_PATCH_FIELDS = ['basic_driver_age', 'driver_age_upper_limit', 'license_period', 'injury_deductible', 'property_deductible',
+  'own_damage_min_deductible', 'own_damage_max_deductible', 'annual_mileage', 'iancar_source_terms'];
 
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -120,6 +123,13 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
   if (text(policyBefore.basic_driver_age) !== '만 26세 이상' && !('basic_driver_age' in policyPatch)) blockers.push('BASIC_DRIVER_AGE_NOT_26');
   if (policyPatch.basic_driver_age && policyPatch.basic_driver_age !== '만 26세 이상') blockers.push('SOURCE_MINIMUM_AGE_NOT_26');   // 원천이 대표 정책(만 26세 이상)과 다르면 계획을 막는다
 
+  // 원천 조회 실패(401·429·시간 초과·형식 불일치 등)는 «원천에 없음(404)» 과 다르다 — 근거 없이 연결하지 않도록 계획을 막는다.
+  const lookupFailures = targets.filter(p => !input.vehicleTerms[p.id] && (input.vehicleTermsErrors?.[p.id] ?? 'NOT_IN_SOURCE') !== 'NOT_IN_SOURCE');
+  if (lookupFailures.length) blockers.push(`SOURCE_LOOKUP_FAILED(${lookupFailures.length})`);
+  if (targets.length && !terms.length) blockers.push('NO_SOURCE_TERMS_READ');
+  const unexpectedPolicyFields = Object.keys(policyPatch).filter(k => !IANCAR_POLICY_PATCH_FIELDS.includes(k));
+  if (unexpectedPolicyFields.length) blockers.push('POLICY_PATCH_FIELD_NOT_ALLOWED');
+
   const skipped: { id: string; reason: string }[] = [];
   const productPatches: { id: string; updateTimeMs: number; patch: Rec }[] = [];
   for (const product of targets) {
@@ -142,7 +152,7 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
     schema: 'iancar-policy-link-plan/2',
     blockers,
     counts: { listableTargets: targets.length, toLink: productPatches.length, termsFromSource: withTerms.length, withoutSourceTerms: noTerms.length, skipped: skipped.length,
-      policyFieldsChanged: Object.keys(policyPatch).length, deletes: 0 },
+      policyFieldsChanged: Object.keys(policyPatch).length, policyDocumentChanges: Object.keys(policyPatch).length ? 1 : 0, deletes: 0 },
     policyCodeBefore: before,
     skipped, withoutSourceTerms: noTerms,
     policyPatch,
