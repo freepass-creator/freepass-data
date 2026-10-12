@@ -110,6 +110,18 @@ if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
   console.log(JSON.stringify(await runIancarPhotoRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
   process.exit(0);
 }
+if ([...requested].some(arg => arg.startsWith('--restore-sync='))) {
+  // 1차 발행(--apply-sync) 백업 복원. 기본은 계획만, --apply 는 IANCAR_SYNC_RESTORE_APPROVED=true 필요. 문서는 삭제하지 않는다.
+  const args = [...requested];
+  if (args.some(arg => !arg.startsWith('--restore-sync=') && !arg.startsWith('--expected-digest=') && arg !== '--apply')) throw new Error('IANCAR_RESTORE_OPTIONS_MIXED');
+  const backupPath = args.find(arg => arg.startsWith('--restore-sync='))!.slice('--restore-sync='.length);
+  const expectedSourceDigest = args.find(arg => arg.startsWith('--expected-digest='))?.slice('--expected-digest='.length);
+  if (!backupPath || !expectedSourceDigest) throw new Error('IANCAR_RESTORE_BACKUP_INVALID');
+  if (requested.has('--apply') && process.env.IANCAR_SYNC_RESTORE_APPROVED !== 'true') throw new Error('IANCAR_SYNC_RESTORE_APPROVAL_REQUIRED');
+  const { runIancarPhaseOneRestore } = await import('./data-access-runtime.js');
+  console.log(JSON.stringify(await runIancarPhaseOneRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
+  process.exit(0);
+}
 const allowed = new Set(['--photos-pending', '--keep-withdrawn', '--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos', '--sync', '--apply-sync']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
