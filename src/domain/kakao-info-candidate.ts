@@ -74,7 +74,7 @@ const isStrictIsoUtc = (value: unknown): value is string => {
 };
 
 const isValidMsgNo = (value: unknown): value is string =>
-  typeof value === 'string' && /^[0-9]{1,12}$/.test(value.trim());
+  typeof value === 'string' && /^[0-9]{1,6}$/.test(value.trim());
 
 const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]/g, '').toUpperCase();
 
