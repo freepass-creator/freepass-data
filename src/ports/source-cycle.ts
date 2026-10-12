@@ -1,13 +1,15 @@
 import type { SourceFamily, SourceProductRecord } from '../domain/source-engine.js';
 
+export type SupplierFields = { provider_name: string; policy_code: string | null };
 export type CycleProduct = {
+  supplierFields?: SupplierFields;
   record: SourceProductRecord;
   locked_by_contract: boolean;
   listable: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
-export type CycleSnapshot = { products: CycleProduct[]; complete: boolean };
+export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

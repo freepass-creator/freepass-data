@@ -53,12 +53,12 @@ describe('source contract and expiry', () => {
     expect(sourceSaleAvailable(record(), family, now + ttl * 1000)).toBe(true);
     expect(sourceSaleAvailable(record(), family, now + ttl * 1000 + 1)).toBe(false);
   });
-  it('fails closed for future time, invalid TTL, unknown state, unknown deposit', () => {
+  it('fails closed for future time and invalid TTL while preserving permitted UNKNOWN deposit', () => {
     expect(sourceSaleAvailable(record(), 'SHARED_SHEET', now - 1)).toBe(false);
     expect(sourceSaleAvailable(record(), 'SHARED_SHEET', now, NaN)).toBe(false);
     const r = record(); r.terms[0]!.deposit = { state: 'UNKNOWN', value: null };
-    expect(sourceSaleAvailable(r, 'SHARED_SHEET', now)).toBe(false);
-    expect(validateSourceRecord(r)).toContain('TERMS_HOLD');
+    expect(sourceSaleAvailable(r, 'SHARED_SHEET', now)).toBe(true);
+    expect(validateSourceRecord(r)).not.toContain('TERMS_HOLD');
   });
   it('does not turn a failed or partial attempt into a complete heartbeat', () => {
     const base: SourceRun = { runId: 'one', sourceId: 'SYNTHETIC', status: 'COMPLETED', startedAt: time,

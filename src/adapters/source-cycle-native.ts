@@ -15,8 +15,10 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
   return { ...plugin, toRecords(read) {
     const result = plugin.toRecords(read), seen = new Set<string>(), records: SourceProductRecord[] = [];
     for (const r of result.records) {
-      const uid = sourceUid(r.plate, r.raw.sheet_uid);
-      if (!uid) { result.held.push({ row: 0, reasons: ['UID_REQUIRED', 'UNASSIGNED_PLATE'] }); continue; }
+      const uid = r.sourceId === 'RP004' && r.raw.product_group === 'MONTHLY_RENT'
+        ? r.uid : sourceUid(r.plate, r.raw.sheet_uid);
+      if (!uid) { result.held.push({ row: 0, reasons: r.raw.product_group === 'MONTHLY_RENT'
+        ? ['MONTHLY_MODEL_REQUIRED'] : ['UID_REQUIRED', 'UNASSIGNED_PLATE'] }); continue; }
       if (seen.has(uid)) { result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }); continue; }
       seen.add(uid); records.push({ ...r, uid });
     }
@@ -92,11 +94,26 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
       ['배차상태', '구분', '차량번호', '차급', '차종분류', '트림', '연료', '외장', '내장', 'Km', '월렌트', '장기보증',
         '36개월', '48개월', '60개월', '옵션', '최초등록', '소비자가격', '제조사', '배기량', '연주행', '대인', '대물', '자차', '자손'];
     if (required.some(h => headers.filter(v => v === h).length !== 1)) continue;
+    if (title === '월렌트' && (headers[0] !== '차종' || headers[1] !== '1개월')) continue;
     completedScopes.push(title);
     for (const [index, cells] of table.values.slice(1).entries()) {
       if (grid.rowMetadata[index + 1]?.hiddenByUser || grid.rowMetadata[index + 1]?.hiddenByFilter ||
           cells.every(v => v === '' || v == null)) continue;
-      if (title === '월렌트') { observationOnlyCount++; continue; }
+      if (title === '월렌트') {
+        if (typeof cells[1] === 'string' && cells[1].trim() === '무보증') continue;
+        const rent = money(cells[1]), name = typeof cells[0] === 'string' ? cells[0] : '';
+        if (rent.state === 'UNKNOWN') continue;
+        const normalized = name.normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
+        const note = cells.slice(2).map(v => String(v ?? '')).join(' ');
+        const deposit = note.includes('무보증') ? amount(0) : amount(null);
+        rows.push({ scope: title, record: { sourceId: 'RP004', uid: normalized ? `RP004:MONTHLY:${normalized}` : '',
+          plate: null, vehicleText: name, status: { raw: '출고가능', saleAvailable: true },
+          terms: [{ months: 1, monthlyRent: rent, deposit, mileage: '월렌트', raw: { rent: cells[1], note,
+            ...(deposit.state === 'UNKNOWN' ? { deposit_review_required: '보증금 확인 필요' } : {}) } }],
+          observedAt, raw: { cells: structuredClone(cells), headers, source: 'aica-sheet', source_tab: title,
+            source_row: index + 2, product_group: 'MONTHLY_RENT' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
+        continue;
+      }
       const get = (header: string) => cells[headers.indexOf(header)];
       const plate = isAssignedPlate(get('차량번호')) ? plateIdentityKey(get('차량번호')) : null;
       const deposit = get('장기보증');

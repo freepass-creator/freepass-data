@@ -19,9 +19,10 @@ const facts = (r: SourceProductRecord) => withoutObservationClocks(r);
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
-  // Monthly model offers are observations, never vehicle identities or absence candidates.
+  // Preserve legacy monthly observations; SPEC3D typed monthly offers participate in the cycle.
   if (config.family === 'AICA') {
-    const vehicle = (r: SourceProductRecord) => r.raw.source_tab !== '월렌트' && r.raw.product_group !== 'MONTHLY';
+    const vehicle = (r: SourceProductRecord) => r.raw.product_group === 'MONTHLY_RENT' ||
+      (r.raw.source_tab !== '월렌트' && r.raw.product_group !== 'MONTHLY');
     evidence = { ...evidence, records: evidence.records.filter(vehicle) };
     snapshot = { ...snapshot, products: snapshot.products.filter(p => vehicle(p.record)) };
   }
@@ -77,6 +78,14 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     if (!sale) {
       if (!before) { plan.held++; continue; }
       after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
+    }
+    if (!before && Object.hasOwn(snapshot, 'enrollmentSupplier')) {
+      if (!snapshot.enrollmentSupplier?.provider_name.trim()) {
+        plan.held++;
+        if (!plan.warnings.includes('SUPPLIER_NAME_REQUIRED')) plan.warnings.push('SUPPLIER_NAME_REQUIRED');
+        continue;
+      }
+      after.supplierFields = structuredClone(snapshot.enrollmentSupplier);
     }
     // Vehicle master review stays attached; source facts/conditions may enroll without inventing a model.
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&

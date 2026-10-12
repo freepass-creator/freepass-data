@@ -55,7 +55,7 @@ function fakeFirestore(initial: CycleProduct[] = []) {
 async function setup(initial: CycleProduct[] = []) {
   const dir = await directory(), fake = fakeFirestore(initial);
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
-    observationSources: ['OBSERVE'] });
+    observationSources: ['OBSERVE'], supplierDefaults: { SYNTHETIC: { provider_name: '합성공급사', policy_code: 'SYNTHETIC_POLICY' } } });
   return { dir, fake, commands };
 }
 async function prepare(commands: Awaited<ReturnType<typeof setup>>['commands'], records = [product().record]) {
@@ -66,6 +66,51 @@ const apply = (commands: Awaited<ReturnType<typeof setup>>['commands'], built: R
   applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
 
 describe('Firestore REST runtime offline', () => {
+  it('SPEC3E enrolls independent modes from all supplier documents, including non-listable', async () => {
+    const existing = ['A', 'B', 'C'].map(uid => ({ ...product(uid), listable: false }));
+    const { commands, fake } = await setup(existing);
+    for (const [index, uid] of ['A', 'B', 'C'].entries()) Object.assign(fake.docs.get(uid).fields,
+      encodeFields({ provider_name: index < 2 ? 'Mode name' : 'Other name', policy_code: index > 0 ? 'MODE_POLICY' : 'OTHER_POLICY' }));
+    const built = await prepare(commands);
+    expect(built.plan.entries[0]!.after.supplierFields).toEqual({ provider_name: 'Mode name', policy_code: 'MODE_POLICY' });
+    expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 1 });
+    expect(decodeFields(fake.docs.get('TEST1001').fields)).toMatchObject({ provider_name: 'Mode name', policy_code: 'MODE_POLICY' });
+    expect((await prepare(commands)).plan.entries).toEqual([]);
+    expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toEqual(expect.arrayContaining(['provider_name', 'policy_code']));
+  });
+  it('SPEC3E holds an unconfigured supplier without any existing name and makes no writes', async () => {
+    const fake = fakeFirestore();
+    const commands = firestoreCycleCommands({ directory: await directory(), env: { FIREBASE_PROJECT_ID: 'synthetic-test' },
+      token: async () => 'synthetic-token', fetcher: fake.fetcher });
+    const built = await prepare(commands);
+    expect(built.plan).toMatchObject({ held: 1, entries: [], warnings: ['SUPPLIER_NAME_REQUIRED'] });
+    expect(await apply(commands, built)).toMatchObject({ writes: 0 });
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
+  it('SPEC3E falls back to the existing supplier name configuration without inventing a policy', async () => {
+    const { commands } = await setup();
+    expect((await commands.list('RP004')).enrollmentSupplier).toEqual({ provider_name: '아이카', policy_code: null });
+  });
+  it('SPEC3E UPDATE preserves both original supplier fields and omits them from the patch', async () => {
+    const { commands, fake } = await setup([product()]);
+    Object.assign(fake.docs.get('TEST1001').fields, encodeFields({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' }));
+    const next = product(); next.record.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    const built = await prepare(commands, [next.record]);
+    expect(built.plan.entries[0]!.kind).toBe('UPDATE');
+    expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 1 });
+    expect(decodeFields(fake.docs.get('TEST1001').fields)).toMatchObject({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' });
+    expect(fake.calls.find(c => c.method === 'PATCH')!.url.searchParams.getAll('updateMask.fieldPaths'))
+      .not.toEqual(expect.arrayContaining(['provider_name']));
+    expect(fake.calls.find(c => c.method === 'PATCH')!.body.fields).not.toHaveProperty('policy_code');
+  });
+  it('SPEC3E supplier mode changes invalidate an approved enrollment plan', async () => {
+    const { commands, fake } = await setup([ { ...product('A'), listable: false } ]);
+    Object.assign(fake.docs.get('A').fields, encodeFields({ provider_name: 'Before', policy_code: 'P' }));
+    const built = await prepare(commands);
+    Object.assign(fake.docs.get('A').fields, encodeFields({ provider_name: 'After', policy_code: 'P' }));
+    await expect(apply(commands, built)).rejects.toThrow('CYCLE_REPLAN_REQUIRED');
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
   it('dry-run makes no PATCH or backup', async () => {
     const { commands, fake, dir } = await setup(); const built = await prepare(commands);
     expect((await applySourceCycle(commands, built.plan, { now })).status).toBe('DRY_RUN');
@@ -249,7 +294,7 @@ describe('native mappings and UID', () => {
     ...overrides } as Record<string, unknown>)[h]);
   function aicaFixture(rows = [aicaRow(), aicaRow({ 차량번호: 'TEST2002', 장기보증: '1,234,000', 배차상태: '배차중' })]) {
     const tables = AICA_SCOPES.map((title, i) => ({ title, values: title === '월렌트' ?
-      [['모델명', '1개월 월 요금'], ['합성 월상품', '345,678']] : [aicaHeaders, ...(i === 0 ? rows : [])] }));
+      [['차종', '1개월']] : [aicaHeaders, ...(i === 0 ? rows : [])] }));
     const meta = { sheets: tables.map(t => ({ properties: { title: t.title, hidden: false, gridProperties: { rowCount: t.values.length } },
       data: [{ startRow: 0, rowMetadata: t.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false })) }] })) };
     return { tables, meta };
@@ -259,6 +304,40 @@ describe('native mappings and UID', () => {
     const plugin = aicaNativePlugin(async () => capture, 1), read = await plugin.read();
     return { capture, plugin, read, ...plugin.toRecords(read) };
   }
+  it('SPEC3D monthly numeric offers normalize identity, preserve raw and flag duplicates separately', async () => {
+    const f = aicaFixture();
+    f.tables[3]!.values = [['차종', '1개월', '비고'], [' Model a ', '345,678', '월렌트 무보증'],
+      ['MODEL A', 456789], ['Model B', 500000], ['Unavailable', 'x'], ['Blank', ''], ['Empty', null],
+      ['Non numeric', '무보증'], ['Invalid', -1]];
+    f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
+    f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
+    const before = structuredClone(f), out = await aicaRead(f);
+    expect(out.read.complete).toBe(true); expect(f).toEqual(before);
+    expect(out.held).toEqual([{ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }]);
+    const monthly = out.records.filter(r => r.raw.product_group === 'MONTHLY_RENT');
+    expect(monthly.map(r => r.uid)).toEqual(['RP004:MONTHLY:MODELA', 'RP004:MONTHLY:MODELB']);
+    expect(new Set(out.records.map(r => r.uid)).size).toBe(4);
+    expect(monthly[0]).toMatchObject({ plate: null, vehicleText: ' Model a ', status: { saleAvailable: true },
+      terms: [{ months: 1, monthlyRent: { value: 345678 }, deposit: { state: 'ZERO', value: 0 }, mileage: '월렌트' }] });
+    expect(monthly[1]!.terms[0]!.deposit).toEqual({ state: 'UNKNOWN', value: null });
+    const { commands, fake } = await setup();
+    const evidence = { records: out.records, complete: true, observedAt: time, heldCount: out.held.length };
+    const built = planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now);
+    expect(built.plan.entries).toHaveLength(4);
+    expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 4 });
+    expect(decodeFields(fake.docs.get('RP004:MONTHLY:MODELB').fields)).toMatchObject({
+      product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
+      price: { '1': { rent: 500000, deposit: null, mileage: '월렌트' } }, provider_name: '아이카' });
+    expect(planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now).plan.entries).toEqual([]);
+    const ctrl = fileCycleControl(await directory(), async () => {});
+    const result = await runSourceCycle(out.plugin, commands, ctrl, { now: () => now });
+    expect(result.status).toBe('DRY_RUN');
+    expect(result.summary).toContain('장기 2 · 월렌트 2'); expect(result.summary).toContain('번호미배정 0');
+    // Reordering changes row provenance, never the model identity.
+    f.tables[3]!.values = [f.tables[3]!.values[0]!, ...f.tables[3]!.values.slice(1).reverse()];
+    expect((await aicaRead(f)).records.filter(r => r.raw.product_group === 'MONTHLY_RENT').map(r => r.uid).sort())
+      .toEqual(monthly.map(r => r.uid).sort());
+  });
   it.each(['', '  ', null, undefined])('SPEC3C creates only the populated 48-month period (blank=%s)', async blank => {
     const out = await aicaRead(aicaFixture([aicaRow({ '36개월': blank, '48개월': '456,789', '60개월': blank })]));
     expect(out.records[0]!.terms.map(t => t.months)).toEqual([48]);
@@ -343,9 +422,9 @@ describe('native mappings and UID', () => {
     expect(out.records[0]!.status.saleAvailable).toBe(status !== '출고불가');
     if (status === '수리중') expect(out.records[0]!.raw.sourceCycleDisplayStatus).toBe('상품화중');
   });
-  it('Aica monthly models are observations only, including existing monthly products', async () => {
-    const out = await aicaRead(); expect(out.capture.observationOnlyCount).toBe(1);
-    expect(out.plugin.observationCountOfRead!(out.read)).toBe(1);
+  it('Aica preserves legacy monthly observations outside the new typed monthly group', async () => {
+    const out = await aicaRead(); expect(out.capture.observationOnlyCount).toBe(0);
+    expect(out.plugin.observationCountOfRead!(out.read)).toBe(0);
     const monthly = product('MONTHLY'); monthly.record.sourceId = 'RP004'; monthly.record.raw.source_tab = '월렌트';
     const plan = planSourceCycle(out.plugin, { records: out.records, complete: true, observedAt: time, heldCount: 0 },
       { complete: true, products: [monthly] }, now).plan;
@@ -361,7 +440,7 @@ describe('native mappings and UID', () => {
     old[0] = plan.entries[0]!.after;
     expect(planSourceCycle(out.plugin, evidence, { complete: true, products: old }, now).plan.entries).toEqual([]);
   });
-  it('Aica legacy Firestore monthly documents stay outside dry-run; summary counts observations', async () => {
+  it('Aica legacy Firestore monthly documents stay outside dry-run; summary separates product groups', async () => {
     const out = await aicaRead(), { commands, fake } = await setup();
     fake.docs.set('MONTHLY', { name: 'projects/synthetic-test/databases/(default)/documents/products/MONTHLY',
       updateTime: time, fields: encodeFields({ provider_company_code: 'RP004', listable: true, status: '가용',
@@ -369,8 +448,8 @@ describe('native mappings and UID', () => {
     const ctrl = fileCycleControl(await directory(), async () => {});
     const result = await runSourceCycle(out.plugin, commands, ctrl, { now: () => now });
     expect(result.status).toBe('DRY_RUN'); expect(result.summary).toContain('하향 0');
-    expect(result.summary).toContain('월렌트 관측 1'); expect(result.summary).toContain('번호미배정 0');
-    expect((await ctrl.load('RP004')).observationOnlyCount).toBe(1);
+    expect(result.summary).toContain('장기 2 · 월렌트 0'); expect(result.summary).toContain('번호미배정 0');
+    expect((await ctrl.load('RP004')).observationOnlyCount).toBe(0);
     expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
     expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toContain('source_tab');
     expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toContain('`원문`');

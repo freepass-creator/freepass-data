@@ -231,6 +231,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 SOURCE-ENGINE SPEC3D + 3E 오프라인 구현
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3D-20261012.md`; 시작 revision `a044f43f60bc9172ef343154ab9fc93f2324d955`, 기존 WIP 보정 보존. SPEC 영수증으로 사전점검 갈음, 외부 도구 미사용.
+- 변경: 아이카 MONTHLY_RENT 1개월 상품·차종 기반 UID·중복 보류 표시·장기/월렌트 별도 요약. 신규 편입 provider_name/policy_code 최빈값 및 기존 이름 설정 fallback, 이름 없으면 SUPPLIER_NAME_REQUIRED. UPDATE 두 필드 보존.
+- 검증: 관련 5파일 260 PASS, build/architecture/data-access/diff-check PASS. 코드·시험·문서만 변경, 미커밋, 운영 쓰기0. 전체 시험/라이브/외부 독립 검토 미실행.
+- 남음/next_start_here: [RESULT3D](SOURCE-ENGINE-RESULT3D-20261012.md) → SPEC3D → diff. 새 digest 계획 필요. 라이브 담당이 실제 월렌트 수·공급사 메타데이터·ERP5 출력을 확인한다. 정책코드 근거 없으면 null이며 운영 완료로 세지 않는다.
+
 ### 2026-10-13 SOURCE-ENGINE SPEC3C 빈 기간·번호미배정 보정
 
 - 목적/정본: `SOURCE-ENGINE-SPEC3C-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`. SPEC 사전점검 영수증 사용, 기존 미커밋 변경 보존, 커밋 없음.

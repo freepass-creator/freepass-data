@@ -62,7 +62,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
       for (const [i, row] of read.raw.rows.entries()) {
         if (!def.scopes.includes(row.scope) || row.scope === '종합') continue;
         if (row.record.sourceId !== def.sourceId) { held.push({ row: i + 1, reasons: ['SOURCE_MISMATCH'] }); continue; }
-        if (def.kind === 'AICA' && (row.scope === '월렌트' || row.hiddenTab || row.hiddenByUser || row.hiddenByFilter)) continue;
+        if (def.kind === 'AICA' && (row.hiddenTab || row.hiddenByUser || row.hiddenByFilter)) continue;
         const r = structuredClone(row.record), status = r.status.raw.trim();
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
         switch (def.kind) {

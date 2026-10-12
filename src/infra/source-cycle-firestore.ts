@@ -1,10 +1,11 @@
+import supplierSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import type { CycleCommands, CycleProduct } from '../ports/source-cycle.js';
+import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
 
 type Fields = Record<string, unknown>;
@@ -59,7 +60,8 @@ function envelope(d: Doc): CycleProduct {
     if (stableDigest(f.price ?? {}) !== f.source_cycle_price_digest || f.car_number !== record.plate)
       throw new Error('CATALOG_SOURCE_RECORD_DRIFT');
   }
-  return { record, listable: f.listable === true,
+  return { record, ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
+    provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
     publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
@@ -70,7 +72,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
   const price = !p.listable && original.price ? original.price :
     Object.fromEntries(r.terms.map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
-    ...(!Object.keys(original).length ? { maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
+    ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),
     price, source_cycle_price_digest: stableDigest(price),
     listable: p.listable, status: p.listable ? display : '출고불가', status_kind: p.listable ? '가용' : '불가',
@@ -84,7 +86,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; observationSources?: string[] }) {
+  token?: () => Promise<string>; observationSources?: string[]; supplierDefaults?: Record<string, SupplierFields> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>();
   const docPath = (uid: string) => {
@@ -112,6 +114,22 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST' ||
       stableDigest(JSON.parse(await readFile(file, 'utf8'))) !== stableDigest(value)) throw new Error('BACKUP_IMMUTABLE'); }
   };
+  const supplierFields = (source: string): SupplierFields | null => {
+    const fields = [...cache.values()].map(d => decodeFields(d.fields)).filter(f => f.provider_company_code === source);
+    const mode = (key: string): string | null => {
+      const counts = new Map<string, number>();
+      for (const f of fields) if (typeof f[key] === 'string' && (f[key] as string).trim()) {
+        const value = (f[key] as string).trim(); counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+      // Ties are deterministic and independent of Firestore page/order.
+      return [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0]?.[0] ?? null;
+    };
+    const configured = options.supplierDefaults?.[source];
+    const name = mode('provider_name') ?? configured?.provider_name ??
+      supplierSpec.supplierChannels.sharedInputSheet.find(s => s.code === source)?.companyName ??
+      supplierSpec.supplierChannels.notInSharedSheet.find(s => s.code === source)?.name;
+    return name?.trim() ? { provider_name: name, policy_code: mode('policy_code') ?? configured?.policy_code ?? null } : null;
+  };
   const commands: CycleCommands = {
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
@@ -119,7 +137,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       do {
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
-        for (const field of ['provider_company_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
+        for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract',
           'publication_withdrawal', 'publication_withdrawal_prior']) query.append('mask.fieldPaths', fieldPath(field));
         const result = await request('/products?' + query);
@@ -134,7 +152,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
-      return { products, complete: true };
+      return { products, complete: true, enrollmentSupplier: supplierFields(source) };
     },
     async read(source, uid) {
       const d = await getDoc(uid);
@@ -161,6 +179,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       if (stableDigest(b.before) !== beforeDigest || stableDigest(current) !== stableDigest(b.document) ||
         (current && envelope(current).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
       if (current && envelope(current).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
+      if (!current && (!after.supplierFields?.provider_name.trim() ||
+        stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
+        throw new Error('SUPPLIER_NAME_REQUIRED');
       const fields = nativeCycleFields(after, current ? decodeFields(current.fields) : {});
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));

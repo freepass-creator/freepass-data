@@ -77,7 +77,10 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
-      if (plugin.family === 'AICA') summary += ` · 월렌트 관측 ${state.observationOnlyCount}`;
+      if (plugin.family === 'AICA') {
+        const monthly = converted.records.filter(r => r.raw.product_group === 'MONTHLY_RENT' && r.status.saleAvailable === true).length;
+        summary += ` · 장기 ${state.observedSellableCount - monthly} · 월렌트 ${monthly}`;
+      }
       if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
       state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
       // A dry-run must never consume the change token for a later authorized apply.
