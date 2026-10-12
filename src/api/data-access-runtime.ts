@@ -8,6 +8,7 @@ import { createFirestoreProjectionReader } from '../infra/firestore-projection-r
 import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
 import { createIancarOneApiClient, createIancarPhotoByteCache, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
 import { logPhotoMetadataFailure } from './vehicle-photo-metadata-diagnostic.js';
+import { createVehiclePhotoReadFailureObserver } from './vehicle-photo-read-diagnostic.js';
 export { isPublicIancarPhotoProduct } from '../infra/erp5-compat-catalog-reader.js';
 
 /**
@@ -23,7 +24,14 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
     access,
     projection: createFirestoreProjectionReader(),
     health: createFirestoreDataHealthReader(),
-    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index, fresh) => {
+    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index, fresh, expectedRegisteredPhotoCount) => {
+      // Capture only the published count; current source handles may be reissued.
+      const expected = expectedRegisteredPhotoCount;
+      if (expected !== undefined) {
+        if (fresh !== true || !Number.isSafeInteger(expected) || expected < 1 || expected > 200
+          || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= expected)))
+          throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+      }
       // Also covers a byte request's final fresh-membership recheck; no caller binding is inferred.
       const observeMetadata = fresh === true && index === undefined;
       let client: ReturnType<typeof createIancarOneApiClient>;
@@ -45,6 +53,9 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         let photoIds: string[], metadata: { count: number; photoIds: string[]; upstreamPhotoIds: string[]; upstreamRepresentatives: boolean[]; servingSourceOrdinals: number[] };
         try {
           photoIds = iancarOnePhotoIds(detail, vehicleId, plate);
+          // Validate count before fetching this same fresh detail's selected handle.
+          if (expected !== undefined && photoIds.length !== expected)
+            throw new Error('VEHICLE_PHOTO_NOT_FOUND');
           const raw = (detail as any)?.data ?? detail;
           const upstreamPhotoIds = raw.photos.map((photo: any) => String(photo.photo_id).trim()) as string[];
           const upstreamRepresentatives = raw.photos.map((photo: any) => photo.representative) as boolean[];
@@ -71,11 +82,11 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         void ids.catch(() => { if (photoSets.get(key) === entry) photoSets.delete(key); });
       }
       const ids = await cached.ids;
-      if (index === undefined) return { count: ids.length, bytes: null, contentType: 'application/json' };
+      if (index === undefined) return { count: ids.length, photoIds: ids, bytes: null, contentType: 'application/json' };
       const id = ids[index];
       if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-      return { count: ids.length, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
-    }, approvedPhotoReader),
+      return { count: ids.length, photoIds: ids, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
+    }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver() }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()
   };

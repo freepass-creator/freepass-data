@@ -7,6 +7,7 @@ export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_
 export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
+  | 'INVALID_CHANNEL'
   | 'INVALID_MSG_NO'
   | 'INVALID_PLATE_EVIDENCE'
   | 'SENDER_UNVERIFIED'
@@ -22,10 +23,22 @@ export type KakaoInfoRejectReason =
 
 export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELDS_DROPPED'; count: number };
 
+export type KakaoInfoChannel = 'KAKAO_RAW' | 'EN1_SUMMARY' | 'KAKAO_NOTICE';
+const kakaoInfoChannels = new Set<string>(['KAKAO_RAW', 'EN1_SUMMARY', 'KAKAO_NOTICE']);
+const NOTICE_FIXED_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 export type KakaoInfoCandidateInput = {
   supplierCode: string;
   roomCode: string;
-  source: { sentAt: string; side: string; msgNo: string; excerpt: string };
+  source: {
+    sentAt: string; side: string; msgNo: string; excerpt: string;
+    /** 출처 채널(필수). KAKAO_RAW 만 대화 원문 — EN1_SUMMARY·KAKAO_NOTICE 는 T0 고정·자동 승격 없음. 누락은 거부. */
+    channel: KakaoInfoChannel;
+    /** 발언 시각이 근사일 때(true) 또는 날짜만 추정(dateInferred). 자동 승격 금지. */
+    sentAtApprox?: true | 'dateInferred';
+    /** 고정 공지(KAKAO_NOTICE 만): 게시일 기준 90일 유효. */
+    noticeFixed?: true;
+  };
   type: KakaoInfoType;
   vehicle?: {
     plate?: string;
@@ -162,23 +175,32 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
 function exceedsResidualDigitBudget(values: string[]) {
   let digits = 0;
   let concat = '';
-  const stripped = (match: string) => { concat += match.replace(/\D/g, ''); return ' '; };
+  let local = '';
+  const seenRuns = new Set<string>();
+  // 가려진 금액·단위 숫자는 «그 칸 안에서만» 이어붙여 검사한다(칸을 가로지르면 정상 금액이 우연히 번호 모양이 된다).
+  const stripped = (match: string) => { local += match.replace(/\D/g, ''); return ' '; };
   for (const raw of values) {
     let text = raw;
+    local = '';
     // 한 칸 안의 숫자는 번호판 모양을 제외하고 순서 그대로도 검사한다(글자를 사이에 끼워 쪼개는 우회 차단).
-    const validDate = /(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.?\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d)/g;
+    const validDate = /(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.?\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d|T)/g;
     for (const part of raw.replace(validDate, '|').replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, '|').split('|')) {
-      const own = part.replace(/\D/g, '');
-      if (/(?:01[016789]|0[2-6][1-5]?)\d{7,8}/.test(own) || /\d{6}[1-4]\d{6}/.test(own)) return true;
+      // 숫자 사이에 한 글자만 끼워 쪼갠 경우(010가1234나5678)까지 이어붙이되, 말·문장으로 떨어진 숫자(100% 환수, 3~6개월)는 잇지 않는다.
+      for (const own of part.replace(/(?<=\d)\D(?=\d)/g, '').match(/\d+/g) ?? []) {
+        if (/(?:01[016789]|0[2-6][1-5]?)\d{7,8}/.test(own) || /\d{6}[1-4]\d{6}/.test(own)) return true;
+      }
     }
     text = text.replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
       .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, stripped)
-      .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, stripped);
+      .replace(/(?<!\d)\d{1,9}(?:\s*[~∼-]\s*\d{1,9})?\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%|세|살|명|인|년|회|번|배)/g, stripped);
     for (const run of text.match(/\d+/g) ?? []) {
       concat += run;
-      if (run.length <= 5 || run.length >= 10) digits += run.length;
+      local += run;
+      // 같은 숫자가 발췌·요약·값에 되풀이돼도 한 번만 센다(서로 다른 숫자로 쪼갠 경우만 예산에 쌓는다).
+      if ((run.length <= 5 || run.length >= 10) && !seenRuns.has(run)) { seenRuns.add(run); digits += run.length; }
     }
+    if (/01[016789]\d{7,8}/.test(local) || /\d{6}[1-4]\d{6}/.test(local)) return true;
   }
   if (/01[016789]\d{7,8}/.test(concat) || /\d{6}[1-4]\d{6}/.test(concat)) return true;
   return digits >= 8;
@@ -213,7 +235,7 @@ const allowedInputFields = new Set([
   'status',
 ]);
 
-const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt']);
+const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt', 'channel', 'sentAtApprox', 'noticeFixed']);
 const allowedVehicleFields = new Set(['plate', 'model', 'plateUnverified', 'plateEvidenceMsgNo', 'plateStatusSameSentence', 'plateEvidence']);
 const allowedPlateEvidenceFields = new Set(['source', 'distance']);
 const allowedFieldsFields = new Set(['항목', '요약', '값']);
@@ -245,7 +267,7 @@ function collectUnknownFields(input: KakaoInfoCandidateInput) {
 
 function isValidRoomCode(value: string) {
   const trimmed = value.trim();
-  if (!/^K-[A-Z0-9]{3,12}$/.test(trimmed)) return false;
+  if (!/^K-[A-Za-z0-9]{3,12}$/.test(trimmed)) return false;
   const suffix = trimmed.slice(2);
   if (/^\d{10,}$/.test(suffix)) return false;
   if ((suffix.match(/\d/g) ?? []).length > 6) return false;
@@ -306,6 +328,21 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     return { ok: false, reason: 'INVALID_CONFIDENCE' };
   }
   if (input.aiInvolved !== true || input.status !== 'CANDIDATE') return { ok: false, reason: 'INVALID_STATUS' };
+  const channel = input.source.channel;
+  if (typeof channel !== 'string' || !kakaoInfoChannels.has(channel)) return { ok: false, reason: 'INVALID_CHANNEL' };
+  if (input.source.sentAtApprox !== undefined && input.source.sentAtApprox !== true && input.source.sentAtApprox !== 'dateInferred') {
+    return { ok: false, reason: 'INVALID_SOURCE' };
+  }
+  if (input.source.noticeFixed !== undefined && (input.source.noticeFixed !== true || channel !== 'KAKAO_NOTICE')) {
+    return { ok: false, reason: 'INVALID_SOURCE' };
+  }
+  if (channel === 'EN1_SUMMARY') {
+    // 요약 채널: 공급사 확인 필수, 차량은 미특정(글자 근거를 만들 수 없는 요약이라 번호·근거를 받지 않는다).
+    if (input.needsSupplierConfirm !== true) return { ok: false, reason: 'INVALID_FIELDS' };
+    if (input.vehicle?.plate?.trim() || input.vehicle?.plateEvidence || input.vehicle?.plateEvidenceMsgNo !== undefined) {
+      return { ok: false, reason: 'INVALID_PLATE_EVIDENCE' };
+    }
+  }
 
   const unknownFields = collectUnknownFields(input);
   if (unknownFields.hasSensitiveKey) return { ok: false, reason: 'PII_DETECTED' };
@@ -318,6 +355,9 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       side: '상대',
       msgNo: input.source.msgNo.trim(),
       excerpt: input.source.excerpt,
+      channel,
+      ...(input.source.sentAtApprox !== undefined ? { sentAtApprox: input.source.sentAtApprox } : {}),
+      ...(input.source.noticeFixed === true ? { noticeFixed: true as const } : {}),
     },
     fields: { 항목: input.fields.항목.trim(), 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
     confidence: Math.round(input.confidence * 100) / 100,
@@ -375,7 +415,9 @@ export function assertKakaoInfoCandidate(input: KakaoInfoCandidateInput) {
 
 export function classifyKakaoInfoSignal(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source'>, now: string) {
   if (!Number.isFinite(Date.parse(now))) throw new Error('INVALID_KAKAO_INFO_NOW');
-  const ttlMs = candidate.type === '서류요구'
+  const ttlMs = candidate.source.noticeFixed === true && candidate.source.channel === 'KAKAO_NOTICE'
+    ? NOTICE_FIXED_TTL_MS
+    : candidate.type === '서류요구'
     ? 30 * 24 * 60 * 60 * 1000
     : stateTypes.has(candidate.type) || candidate.type === '접수가능'
       ? 24 * 60 * 60 * 1000
@@ -401,6 +443,8 @@ export function isKakaoT0OnlyInfo(type: KakaoInfoType) {
 
 export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh: boolean) {
   if (typeof isFresh !== 'boolean') throw new Error('INVALID_KAKAO_INFO_FRESHNESS');
+  if (candidate.source.channel !== 'KAKAO_RAW') return false;
+  if (candidate.source.sentAtApprox !== undefined) return false;
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
   const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));
   const hasNegative = stateNegativeSignals.some((signal) => text.includes(signal));

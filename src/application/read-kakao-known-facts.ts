@@ -66,8 +66,8 @@ function matchesVehicle(root: Record<string, unknown>, vehicle: Record<string, u
   return bodyPlate === query.vehicleKey || productRef === vehicleKeyRef;
 }
 
-function factLayer(topic: KakaoKnownFactTopic, vehicleResolution: string): KakaoKnownFact['layer'] {
-  return vehicleResolution === 'LINKED' && !isKakaoT0OnlyInfo(topic) ? 'T1' : 'T0';
+function factLayer(topic: KakaoKnownFactTopic, vehicleResolution: string, channel: string): KakaoKnownFact['layer'] {
+  return vehicleResolution === 'LINKED' && !isKakaoT0OnlyInfo(topic) && channel === 'KAKAO_RAW' ? 'T1' : 'T0'; // 채널이 없거나 알 수 없으면 안전 기본값 T0
 }
 
 function recomputedSignal(info: Record<string, unknown>, asOf: string) {
@@ -77,7 +77,11 @@ function recomputedSignal(info: Record<string, unknown>, asOf: string) {
   return classifyKakaoInfoSignal({
     type,
     fields: { 항목: text(info.item), 요약: text(info.summary), 값: text(info.value) },
-    source: { sentAt, side: '', msgNo: '', excerpt: '' },
+    source: {
+      sentAt, side: '', msgNo: '', excerpt: '',
+      channel: text(info.channel) as 'KAKAO_RAW' | 'EN1_SUMMARY' | 'KAKAO_NOTICE',
+      ...(info.noticeFixed === true ? { noticeFixed: true as const } : {}),
+    },
   }, asOf);
 }
 
@@ -104,7 +108,7 @@ export async function readKakaoKnownFacts(
     if (!matchesVehicle(root, vehicle, query)) return [];
     const sentAt = text((info as { sentAt?: unknown }).sentAt);
     const signal = recomputedSignal(info, query.asOf);
-    const expectedLayer = factLayer(query.topic, vehicleResolution);
+    const expectedLayer = factLayer(query.topic, vehicleResolution, text(info.channel));
     if (!query.vehicleKey && !query.vehicleUid && expectedLayer !== 'T0') return [];
     if (!signal || text(info.expiresAt) !== signal.expiresAt || text(info.layer) !== expectedLayer) {
       warningCount++;

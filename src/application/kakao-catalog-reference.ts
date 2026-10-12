@@ -1,3 +1,4 @@
+import { priceWithoutIancarAliases } from '../domain/iancar-price-alias.js';
 import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
@@ -829,12 +830,12 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
       const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding);
       if (base.state !== 'CALCULATED' || base.amount === null) return base;
       return billing
-        ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT', rounding)
+        ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT', rounding)
         : approximateCommission(`SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER`, base.amount, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT', rounding);
     }
     if (termMonths !== 60) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     return billing
-      ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000 - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', rounding)
+      ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', rounding)
       : approximateCommission('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', rounding);
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
@@ -877,11 +878,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
     return resolveTermLadder(termMonths, monthlyRent, side);
   }
-  if (supplierId === 'RP012' && rerent && SONOKONG_RERENT_TERM_MONTHS.includes(termMonths as never)) {
-    const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding);
-    if (!billing || base.state !== 'CALCULATED' || base.amount === null) return base;
-    return approximateCommission(`SONOKONG_RERENT_${termMonths}_BILLING_INSURANCE_DEDUCT`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_INSURANCE_DEDUCT_100K', rounding);
-  }
+  // 손오공 재렌트·중고렌트는 F04 기간표 값 그대로(보험료 −100,000 차감은 오공구독 청구에만 — 지휘통제실 2026-10-12).
   if (rerent) return resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding);
   if (/^신차/.test(productType) && !subscription) {
     if (supplierId === 'RP022' && input.depositTierPercent !== 5 && input.depositTierPercent !== 10) return unknownCommission('DEPOSIT_TIER_REQUIRED');
@@ -934,8 +931,6 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   const notes = [
     ...(id.startsWith('SONOKONG_SUBSCRIPTION_') && side === 'BILLING' ? ['OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12'] : []),
     ...(result.note ? [result.note] : []),
-    ...(result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' ? ['SONOKONG_INSURANCE_DEDUCT_100K'] : []),
-    ...(result.note === 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191' ? ['SONOKONG_INSURANCE_DEDUCT_100K'] : []),
   ];
   return { ...result, sourceRefs: [...new Set([...new Set(rows)].map(f04Ref).concat(notes))] };
 }
@@ -1053,7 +1048,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!collected && source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!collected && !supplierId) return null;
-  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price) ? source.price as Rec : {};
+  // 이안카 별칭 키(기간만 있는 복사본)는 조건이 아니므로 뺀다 — 6087 60개월이 4행(별칭+3구간)이 아니라 3행(주행 3종)으로 나오게.
+  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price) ? priceWithoutIancarAliases(source) : {};
   if (!collected && !Object.keys(price).length) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];

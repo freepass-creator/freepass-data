@@ -11,7 +11,7 @@ import {
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '99허0000 재고 확인' },
   type: '재고',
   vehicle: {
     plate: '99허0000',
@@ -138,9 +138,74 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     for (const v of ['2026-10-12T01:00:00Z', '2026-10-12', '출고 2026-10-12T01:00:00.000Z']) {
       expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })).ok).toBe(true);
     }
-    for (const v of ['9001-01-12T3:4567', '9001011234567']) {
+    for (const v of ['9001-01-12T3:4567', '2001-01-12T3:4567', '9001011234567']) {
       expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
+  });
+  it('accepts lowercase hex room codes like the real collection ones', () => {
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-59ca74' })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-d5b7fe' })).ok).toBe(true);
+  });
+  it('allows natural insurance and age wording with ranges and units', () => {
+    const r = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '만26세이상 대인,대물 30만원 / 자차면책금 50~100만원 차량수리비가액 30%입니다.' },
+      fields: { 항목: '조건', 요약: '대인·대물 30만원 / 자차면책금 50~100만원 / 차량수리비 30%', 값: '만26세이상 50~100만원' },
+    }));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+  });
+  it('does not over-reject return-condition percentages or repeated model digits', () => {
+    const a = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '0~3개월이내 반납시 100% 환수조건! 3~6개월이내 반납시 50%환수조건!' },
+      fields: { 항목: '조건', 요약: '0~3개월이내 반납시 100% 환수, 3~6개월 50% 환수', 값: '0~3개월 100% 환수, 3~6개월 50% 환수' },
+    }));
+    expect(a.ok, JSON.stringify(a)).toBe(true);
+    const b = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: 'K8 2.5가솔린 2WD 베스트셀렉션 → 수수료 140만원' },
+      fields: { 항목: '가격', 요약: 'K8 2.5가솔린 2WD 베스트셀렉션 → 수수료 140만원', 값: '수수료 140만원' },
+      vehicle: { ...base().vehicle, plate: '', model: 'K8 2.5가솔린 2WD 베스트셀렉션' },
+    }));
+    expect(b.ok, JSON.stringify(b)).toBe(true);
+  });
+  it('still rejects account-number-shaped repeated digits even though repeated runs count once in the budget', () => {
+    for (const v of ['5555-5555-5555', '555555555555', '입금 5555 5555 5555']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })), v).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
+  it('accepts EN1_SUMMARY only as a confirm-needed, vehicle-unspecified summary and never as raw proof', () => {
+    const summary = (patch: Record<string, unknown> = {}, vehicle: Record<string, unknown> = { plate: '', model: 'TEST-FAKE-MODEL' }) => base({
+      source: { ...base().source, channel: 'EN1_SUMMARY', sentAtApprox: true, excerpt: '담당자 요약: 재고 있음', ...patch } as never,
+      vehicle: vehicle as never,
+      needsSupplierConfirm: true,
+    });
+    const ok = createKakaoInfoCandidate(summary());
+    expect(ok.ok, JSON.stringify(ok)).toBe(true);
+    expect(ok.ok && ok.candidate.source).toMatchObject({ channel: 'EN1_SUMMARY', sentAtApprox: true });
+    expect(createKakaoInfoCandidate({ ...summary(), needsSupplierConfirm: false })).toEqual({ ok: false, reason: 'INVALID_FIELDS' });
+    expect(createKakaoInfoCandidate(summary({}, { plate: '99허0000', plateEvidence: { source: 'LITERAL_IN_UTTERANCE', distance: 0 } }))).toEqual({ ok: false, reason: 'INVALID_PLATE_EVIDENCE' });
+    expect(createKakaoInfoCandidate(summary({ sentAtApprox: 'before' }))).toEqual({ ok: false, reason: 'INVALID_SOURCE' });
+    expect(createKakaoInfoCandidate(summary({ channel: 'UNKNOWN_CHANNEL' }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
+    const { channel: _omit, ...noChannelSource } = base().source;
+    expect(createKakaoInfoCandidate(base({ source: noChannelSource as never }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, channel: undefined } as never }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
+    const dateInferred = createKakaoInfoCandidate(summary({ sentAtApprox: 'dateInferred' }));
+    expect(dateInferred.ok && dateInferred.candidate.source.sentAtApprox).toBe('dateInferred');
+  });
+  it('gives fixed notices a 90-day validity, but only for KAKAO_NOTICE', () => {
+    const notice = createKakaoInfoCandidate(base({ source: { ...base().source, channel: 'KAKAO_NOTICE', noticeFixed: true } as never, type: '조건', vehicle: undefined as never }));
+    expect(notice.ok, JSON.stringify(notice)).toBe(true);
+    if (!notice.ok) return;
+    const signal = classifyKakaoInfoSignal(notice.candidate, '2026-10-20T00:00:00.000Z');
+    expect(signal.ttlSeconds).toBe(90 * 24 * 60 * 60);
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, channel: 'KAKAO_RAW', noticeFixed: true } as never }))).toEqual({ ok: false, reason: 'INVALID_SOURCE' });
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, noticeFixed: false } as never }))).toEqual({ ok: false, reason: 'INVALID_SOURCE' });
+  });
+  it('never auto-promotes non-raw channels or approximate send times', () => {
+    const plain = createKakaoInfoCandidate(base());
+    expect(plain.ok && isKakaoStateAutoPromotable(plain.candidate, true)).toBe(true);
+    const approx = createKakaoInfoCandidate(base({ source: { ...base().source, sentAtApprox: true } as never }));
+    expect(approx.ok && isKakaoStateAutoPromotable(approx.candidate, true)).toBe(false);
+    const notice = createKakaoInfoCandidate(base({ source: { ...base().source, channel: 'KAKAO_NOTICE' } as never }));
+    expect(notice.ok && isKakaoStateAutoPromotable(notice.candidate, true)).toBe(false);
   });
   it('rejects phone-like digit-heavy room codes', () => {
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });

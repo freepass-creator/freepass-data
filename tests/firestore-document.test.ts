@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentSnapshot } from 'firebase-admin/firestore';
 import { GeoPoint, Timestamp } from 'firebase-admin/firestore';
-import { encodeIancarBackupValue, decodeIancarBackupValue, iancarAbsencePatch, iancarPhotoPatch } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { encodeIancarBackupValue, decodeIancarBackupValue, iancarAbsencePatch, iancarPhotoPatch, iancarPhotoPendingPatch, iancarFactsRefreshPatch } from '../src/infra/iancar-publication-withdrawal-firestore.js';
 import {
   decodeFirestoreDocument,
   decodeFirestoreIdentityDocument
@@ -76,5 +76,43 @@ describe('Firestore document decoding', () => {
         snapshot('encoded-source', { sourceId: 'source/one' })
       )
     ).toEqual({ sourceId: 'source/one' });
+  });
+});
+
+describe('iancarPhotoPendingPatch — 죽은 ERP4 별칭만 «사진 확인 중» 으로', () => {
+  const alias = (n: number) => `https://freepasserp.com/api/img?product=P1&photo=${n}&format=.jpg`;
+  it('별칭 주소만 있으면 비우고 원래 값을 보존한다', () => {
+    const old = { image_url: alias(0), image_urls: [alias(0), alias(1)], image_kind: 'VEHICLE_PHOTO' };
+    const patch = iancarPhotoPendingPatch(old) as any;
+    expect(patch).toMatchObject({ image_url: '', image_urls: [], image_kind: 'PHOTO_PENDING' });
+    expect(patch.iancar_photo_source_original).toEqual({ image_urls: old.image_urls, image_url: old.image_url, photo_link: null, image_kind: 'VEHICLE_PHOTO' });
+  });
+  it('이미 보존 칸이 있으면 덮지 않는다', () => {
+    const saved = { image_urls: null, image_url: null, photo_link: 'https://drive.example/f' };
+    expect((iancarPhotoPendingPatch({ image_url: alias(0), image_urls: [alias(0)], iancar_photo_source_original: saved }) as any).iancar_photo_source_original).toBe(saved);
+  });
+  it('드라이브 캐시·폴더 링크·별칭이 아닌 주소가 있으면 건드리지 않는다', () => {
+    expect(iancarPhotoPendingPatch({ image_url: alias(0), image_urls: [alias(0)], photo_cache: { urls: ['https://drive.example/t'] } })).toEqual({});
+    expect(iancarPhotoPendingPatch({ image_url: alias(0), image_urls: [alias(0)], photo_link: 'https://drive.example/f' })).toEqual({});
+    expect(iancarPhotoPendingPatch({ image_url: 'https://eancarone.com/catalog-images/neutral/x.webp', image_urls: ['https://eancarone.com/catalog-images/neutral/x.webp'] })).toEqual({});
+  });
+  it('사진이 전혀 없는 새 문서는 «사진 확인 중»', () => {
+    expect(iancarPhotoPendingPatch({})).toMatchObject({ image_kind: 'PHOTO_PENDING', image_urls: [] });
+  });
+});
+
+describe('iancarFactsRefreshPatch — 주행거리는 ONE 값, 연식은 모델연식 출처로 따로', () => {
+  it('문자열 주행거리 형식을 유지하고 옛 값을 보존한다', () => {
+    const patch = iancarFactsRefreshPatch({ mileage: '10', year: '2026' }, { mileage: 1380, year: '2027' }, 'T') as any;
+    expect(patch).toMatchObject({ mileage: '1,380', mileage_source_original: '10', model_year_source: '2027', iancar_mileage_observed_at: 'T' });
+    expect('year' in patch).toBe(false);
+  });
+  it('숫자 형식·같은 값·옛 보존 칸은 건드리지 않는다', () => {
+    expect((iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toMatchObject({ mileage: 7 });
+    expect('mileage_source_original' in (iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toBe(false);
+    expect('mileage' in (iancarFactsRefreshPatch({ mileage: '1,380' }, { mileage: 1380 }, 'T') as any)).toBe(false);
+  });
+  it('ONE 값이 없으면 주행거리를 지우지 않는다', () => {
+    expect(iancarFactsRefreshPatch({ mileage: '10' }, { mileage: null, year: null }, 'T')).toEqual({});
   });
 });
