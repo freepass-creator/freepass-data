@@ -126,8 +126,13 @@ test('죽은 프로세스의 잠금도 자동으로 넘겨받지 않는다(인�
   const taken = spawnSync(process.execPath, [script, '--once', '--lock-root', root], { encoding: 'utf8', timeout: 20000, env: { PATH: empty, TEMP: tmpdir(), TMP: tmpdir() } });
   assert.notEqual(taken.status, 75);
 });
-test('--lock-root 는 시스템 임시 폴더 아래만 허용(운영에서 잠금 위치를 바꿔 배타를 우회하지 못함)', () => {
+test('--lock-root 는 시스템 임시 폴더 아래의 시험(적용 없음)에서만 — 적용 모드와 함께 쓰면 거부', () => {
   assert.equal(run(['--once', '--lock-root', join(process.cwd(), 'elsewhere')], {}).status, 64);
+  const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
+  const env = { EANCAR_ONE_SYNC_APPROVED: 'true', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'freepasserp5-data-audit-evidence' };
+  const result = run(['--apply', '--once', '--lock-root', root], env);
+  assert.equal(result.status, 64);
+  assert.match(result.stderr, /적용은 고정 잠금만/);
 });
 test('잠금 위치는 LOCALAPPDATA/TMPDIR 같은 환경변수에 의존하지 않는다(환경이 달라도 같은 잠금을 본다)', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));

@@ -22,6 +22,8 @@ const apply = argv.includes('--apply'), once = argv.includes('--once'), resetHal
 // 시험용으로만 `--lock-root <경로>` 를 받으며 경로가 시스템 임시 폴더 아래일 때만 허용한다.
 const requestedRoot = argv.includes('--lock-root') ? resolvePath(argv[argv.indexOf('--lock-root') + 1]) : null;
 if (requestedRoot && !requestedRoot.startsWith(resolvePath(tmpdir()))) { console.error('--lock-root 는 시험용(시스템 임시 폴더 아래)만 허용'); process.exit(64); }
+// 적용(--apply)은 항상 고정된 공통 잠금만 쓴다 — 시험용 잠금 위치로 운영 적용의 배타를 우회하지 못하게 한다.
+if (requestedRoot && apply) { console.error('--lock-root 는 시험(적용 없음)에서만 허용 — 적용은 고정 잠금만 사용'); process.exit(64); }
 const root = requestedRoot ?? join(userInfo().homedir, '.freepass-data');
 const stateDir = argv.includes('--state-dir') ? argv[argv.indexOf('--state-dir') + 1] : join(root, 'iancar-sync-watch');
 mkdirSync(stateDir, { recursive: true });
