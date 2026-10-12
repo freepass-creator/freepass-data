@@ -96,7 +96,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
   const price = !p.listable && original.price ? original.price :
     Object.fromEntries(r.terms.map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
-    ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
+    ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),
     price, source_cycle_price_digest: priceDigest(price),
     listable: p.listable, status: p.listable ? display : '출고불가', status_kind: p.listable ? '가용' : '불가',
@@ -106,6 +106,11 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
     source_observed_at: r.observedAt, source_cycle_record: r, source_cycle_raw: r.raw,
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
+/** ERP5 제목은 maker·(sub_model||model)·trim_name 만 읽는다(차량 정보 확인 필요 방지). 마스터로 특정되기 전 신규 편입은 maker·model 을 비워 두고 원문 차명을 sub_model 에 임시로 둔다(vehicle_review_required 가 true 인 동안만; 마스터 정리 때 덮어쓴다). */
+export const rawTitleBackfillFields = (f: Fields): Fields | null =>
+  f.vehicle_review_required === true && ['maker', 'model', 'sub_model', 'trim_name'].every(k => !String(f[k] ?? '').trim()) &&
+  String((f.원문 as Fields | undefined)?.차명 ?? f.car_name ?? '').trim()
+    ? { sub_model: String((f.원문 as Fields | undefined)?.차명 ?? f.car_name).trim(), vehicle_title_source: 'RAW_VEHICLE_TEXT' } : null;
 /** Firestore field paths with non-ASCII or special characters must be backtick-quoted. */
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */

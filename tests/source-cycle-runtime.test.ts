@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -344,7 +344,7 @@ describe('native mappings and UID', () => {
     expect(built.plan.entries).toHaveLength(4);
     expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 4 });
     expect(decodeFields(fake.docs.get('RP004:MONTHLY:MODELB').fields)).toMatchObject({
-      product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true,
+      product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: 'MODELB', trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       price: { '1': { rent: 500000, deposit: null, mileage: '월렌트' } }, provider_name: '아이카' });
     expect(planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now).plan.entries).toEqual([]);
     const ctrl = fileCycleControl(await directory(), async () => {});
@@ -429,7 +429,11 @@ describe('native mappings and UID', () => {
     expect(out.records[1]!.terms.every(t => t.deposit.state === 'KNOWN' && t.deposit.value === 1234000)).toBe(true);
     expect(out.records[0]!.raw.cells).toEqual(f.tables[0]!.values[1]); expect(f).toEqual(before);
     expect(nativeCycleFields({ ...product(), record: out.records[0]! })).toMatchObject({
-      maker: '', model: '', sub_model: '', trim_name: '', vehicle_review_required: true });
+      maker: '', model: '', sub_model: out.records[0]!.vehicleText, trim_name: '', vehicle_review_required: true });
+    expect(rawTitleBackfillFields({ vehicle_review_required: true, maker: '', model: '', sub_model: '', trim_name: '', car_name: 'G80 (18년식)' }))
+      .toEqual({ sub_model: 'G80 (18년식)', vehicle_title_source: 'RAW_VEHICLE_TEXT' });
+    expect(rawTitleBackfillFields({ vehicle_review_required: true, maker: '현대', model: '', sub_model: '', trim_name: '', car_name: 'x' })).toBeNull();
+    expect(rawTitleBackfillFields({ vehicle_review_required: false, car_name: 'x' })).toBeNull();
   });
   it.each(['', '협의', null, -1, '12,34'])('Aica ambiguous deposit %s remains UNKNOWN', async deposit => {
     const out = await aicaRead(aicaFixture([aicaRow({ 장기보증: deposit })]));
