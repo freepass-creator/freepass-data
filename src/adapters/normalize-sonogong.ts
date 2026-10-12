@@ -80,7 +80,8 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
     const m = rawValue.match(/^(\d{4})[-./]?(\d{2})[-./]?(\d{2})/);
     if (!m) return null;
     const iso = `${m[1]}-${m[2]}-${m[3]}`;
-    return Number.isFinite(Date.parse(iso)) ? iso : null;
+    const d = new Date(`${iso}T00:00:00Z`);  // 2025-02-30 같은 없는 날짜는 거른다
+    return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === iso ? iso : null;
   }, 'INVALID_FIRST_REGISTRATION');
   parseFact('fuel', list.carFuel, fuelName, 'FUEL_UNRESOLVED');
   parseFact('displacementCc', zeroAsAbsent(list.engineDisplacement), int, 'INVALID_DISPLACEMENT_CC');

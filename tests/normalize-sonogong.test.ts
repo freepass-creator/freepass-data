@@ -149,4 +149,11 @@ describe('Sonogong RAW to candidate normalizer', () => {
     const ids = normalized.lineage.map(item => item.lineageRecordId);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it('rejects a first-registration date that does not exist on the calendar', () => {
+    const base = payload('date-id');
+    const normalized = normalizeOne({ ...base, detail: { ...base.detail, firstRegistrationDate: '2025-02-30' } })!;
+    expect(normalized.record.candidate.vehicleFacts?.fields.firstRegistration).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
+    expect(normalized.record.candidate.issues).toContain('INVALID_FIRST_REGISTRATION');
+  });
 });
