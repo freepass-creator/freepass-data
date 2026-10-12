@@ -287,6 +287,18 @@ if (requested.has('--sync')) {
     // 같은 수집으로 «해제 제외» 판을 함께 계획한다(승인 전 두 digest).
     report.publicationPlanKeepWithdrawn = await runIancarPhaseOnePublication({ ...input, keepWithdrawn: true });
   }
+  if (requested.has('--apply-sync') && process.env.IANCAR_SYNC_EXPECT) {
+    // 승인된 계획 건수 관문: {"created":[5,6],"absenceHeld":[12,12],...} 범위를 벗어나면 쓰기 전에 멈춘다.
+    const expect = JSON.parse(process.env.IANCAR_SYNC_EXPECT) as Record<string, [number, number]>;
+    const bad = Object.entries(expect).filter(([key, [lo, hi]]) => {
+      const value = (plan as Record<string, unknown>)[key];
+      return typeof value !== 'number' || value < lo! || value > hi!;
+    }).map(([key]) => `${key}=${(plan as Record<string, unknown>)[key]}`);
+    if (bad.length) {
+      console.log(JSON.stringify({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', outOfRange: bad, publicationPlan: plan, writeExecuted: false }, null, 2));
+      process.exit(3);
+    }
+  }
   if (requested.has('--apply-sync')) {
     const result = await runIancarPhaseOnePublication({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
     // Only redacted counts/references leave the private evidence boundary.
