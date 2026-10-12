@@ -614,6 +614,7 @@ export function createConsumerGateway(
       // Raw approval/SHA and success audit precede rendering. Recheck after rendering
       // too, so a withdrawal during compression cannot reach the response.
       if (!await result.revalidate()) {
+        renditionCache.dropProduct(request.params.productId);   // 최종 재확인 실패(원천 철회·개수 변경·DB 변경)이면 같은 상품의 다른 크기 캐시도 믿지 않는다
         try { await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND'); }
         catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });

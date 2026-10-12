@@ -72,12 +72,13 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
   const build = async () => {
     const jpeg = await sharp({ create: { width: 1200, height: 900, channels: 3, background: '#778899' } }).jpeg().toBuffer();
     let sourceCalls = 0, metadataCalls = 0, dbReads = 0, clock = 1_000_000;
-    let albumCount = 3, sourceError: Error | undefined;
+    let albumCount = 3, sourceError: Error | undefined, failNextMetadata = false;
     let current: Record<string, unknown> = { ...product };
     const source: VehiclePhotoSource = {
       eligible: () => true, connection: () => 'c',
       read: async (_p, index) => {
         if (sourceError) throw sourceError;
+        if (index === undefined && failNextMetadata) { failNextMetadata = false; throw new Error('IANCAR_ONE_API_HTTP_404'); }
         if (index !== undefined) sourceCalls++; else metadataCalls++;
         const ids = IDS.slice(0, albumCount);
         return { count: albumCount, photoIds: ids, upstreamPhotoIds: [ids[1]!, ids[0]!, ids[2]!].filter(Boolean), upstreamRepresentatives: [false, true, false].slice(0, albumCount), servingSourceOrdinals: [1, 0, 2].slice(0, albumCount),
@@ -88,7 +89,7 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     const app = createConsumerGateway(new MemoryDataStore(), [binding], new DataAccessGateway(new MemoryDataAccessLogStore()), undefined,
       { read: async () => { throw new Error('unused'); }, readVehiclePhoto } as never);
     return { app, set: (next: Record<string, unknown>) => { current = next; }, advance: (ms: number) => { clock += ms; },
-      setAlbumCount: (n: number) => { albumCount = n; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
+      setAlbumCount: (n: number) => { albumCount = n; }, failNextMetadata: () => { failNextMetadata = true; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
       calls: () => ({ sourceCalls, metadataCalls, dbReads }) };
   };
   it('첫 요청은 원천을 읽고, 같은 상품·순번·크기 재요청은 원천을 읽지 않으며 HIT 표시, 바이트 동일, DB 는 다시 읽는다', async () => {
@@ -179,6 +180,16 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     const res = await app.inject({ url: url('/0?size=list'), headers });
     expect(res.statusCode).toBe(503);
     expect(res.headers['x-photo-cache']).toBeUndefined();
+    await app.close();
+  });
+  it('다른 크기 요청의 최종 재확인이 실패(원천 철회)하면 같은 상품의 기존 캐시도 버린다', async () => {
+    const { app, failNextMetadata } = await build();
+    await app.inject({ url: url('/0?size=list'), headers });                                  // list 캐시 생성
+    failNextMetadata();                                                                         // 다음 원천 앨범 확인(= detail 요청의 최종 재확인)이 «차량 소멸»
+    const detail = await app.inject({ url: url('/0?size=detail'), headers });
+    expect(detail.statusCode).toBe(404);
+    const list = await app.inject({ url: url('/0?size=list'), headers });                       // 10분 이내여도 이전 list 캐시를 내보내지 않는다
+    expect(list.headers['x-photo-cache']).toBeUndefined();
     await app.close();
   });
   it('size 없는 원본 요청은 캐시하지 않는다', async () => {
