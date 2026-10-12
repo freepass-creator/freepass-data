@@ -39,6 +39,9 @@ for (let page = 1; page <= 100; page++) {
   if (!body.data?.length || records.length >= total) break;
 }
 // fail-closed: 목록이 응답한 총수와 읽은 수가 다르면 불완전 — 쓰기 전 계획의 입력으로 쓰지 못하게 종료한다.
+// 차량별 상태 검증(어댑터 규칙과 같음): 상태 enum·available boolean·서로 일관 — 누락·불일치는 판매 불가/가능으로 추정하지 않고 중단
+const STATUSES = ['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'];
+if (records.some(r => !STATUSES.includes(String(r.inventory_status)) || typeof r.available !== 'boolean' || r.available !== (r.inventory_status === 'AVAILABLE'))) { console.error('IANCAR_VEHICLE_STATUS_INVALID'); process.exit(3); }
 const idSeen = new Set(records.map(r => String(r.vehicle_id ?? ''))), plateSeen = new Set(records.map(r => String(r.plate_number ?? '').replace(/\s+/g, '')));
 if (idSeen.size !== records.length || idSeen.has('') || plateSeen.size !== records.length || plateSeen.has('')) { console.error('IANCAR_LIST_DUPLICATE_OR_MISSING_ID'); process.exit(3); } // 페이지 중복·식별자 누락은 완전 수집이 아니다
 if (records.length !== total) { console.error(`IANCAR_LIST_INCOMPLETE read=${records.length} total=${total}`); process.exit(3); }
