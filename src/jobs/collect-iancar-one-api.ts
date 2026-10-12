@@ -13,6 +13,24 @@ import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 import { createHash } from 'node:crypto';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 
+// Strict isolated entrypoint. Never reaches legacy reports, DB access or private raw capture.
+if (process.argv.slice(2).includes('--source-only')) {
+  const args = process.argv.slice(2);
+  let summary: Record<string, unknown> = { stage: 'SOURCE_ONLY', status: 'STOP', count: 0,
+    logicalCalls: 0, fresh: false, writes: 0, photoBytes: 0 };
+  if (args.length === 2 && args.includes('--phase-one')) {
+    try {
+      const { inspectIancarSourceOnly } = await import('../adapters/iancar-one-api.js');
+      summary = await inspectIancarSourceOnly(iancarOneApiConfigFromEnv());
+    } catch { /* Fixed summary only; no provider exception or credentials leave memory. */ }
+  }
+  process.stdout.on('error', () => { /* Broken output pipe must never produce a stderr stack. */ });
+  const printed = await new Promise<boolean>(resolve => process.stdout.write(`${JSON.stringify(summary)}\n`,
+    error => resolve(!error)));
+  if (!printed) process.exit(2);
+  process.exit(summary.status === 'COMPLETE' ? 0 : 2);
+}
+
 // Exact reviewed input is separate from full collection and never bootstraps a new identity.
 if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
   let applyRequested = false;

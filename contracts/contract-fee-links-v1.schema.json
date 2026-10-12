@@ -170,6 +170,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -201,6 +210,15 @@
           ]
         },
         "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
           "type": [
             "string",
             "null"

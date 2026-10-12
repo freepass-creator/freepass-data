@@ -9,7 +9,7 @@ import { logRouteError } from '../shared/route-error-log.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
 
-import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader, type VehiclePhotoReadFailureObserver } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
@@ -262,8 +262,8 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const product = await tx.get(db.collection(layout.products).doc(productId));
     if (!product.exists) throw new CatalogCompatibilityProductReadError('PRODUCT_NOT_FOUND', 404);
     const raw = product.data()!;
-    const readAt = product.readTime?.toDate().toISOString();
-    const version = product.updateTime?.toDate().toISOString();
+    const readAt = product.readTime && new Date(product.readTime.toMillis()).toISOString();
+    const version = product.updateTime && new Date(product.updateTime.toMillis()).toISOString();
     if (product.id !== productId || !readAt || !version) return selectionUnavailable();
     if (raw._key != null && raw._key !== '' && raw._key !== productId) return selectionUnavailable();
     const policyCode = selectedDocId(raw.policy_code);
@@ -280,7 +280,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       const doc = await tx.get(db.collection(collection).doc(id));
       if (!doc.readTime || !doc.readTime.isEqual(product.readTime)) return selectionUnavailable();
       if (!doc.exists) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
-      const updateTime = doc.updateTime?.toDate().toISOString();
+      const updateTime = doc.updateTime && new Date(doc.updateTime.toMillis()).toISOString();
       if (!updateTime || doc.id !== id) return selectionUnavailable();
       const facts = doc.data()!;
       const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
@@ -343,6 +343,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
 
 export type CatalogCompatibilityReaderOptions = {
   readCollections?: readonly CatalogCompatibilityReadCollection[];
+  photoReadFailureObserver?: VehiclePhotoReadFailureObserver;
 };
 
 const jsonSafe = (value: unknown): unknown => {
@@ -422,7 +423,7 @@ export class FirestoreCatalogCompatibilityReader {
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
         return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
       },
-    }, approvedPhotoReader);
+    }, approvedPhotoReader, undefined, options.photoReadFailureObserver);
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 

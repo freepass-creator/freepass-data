@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessDepositEvidence, auditDepositEvidence, depositEvidenceInputFromProduct, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote, resolveDepositWithRuleNote } from '../src/domain/deposit-evidence.js';
+import { buildZeroDepositCandidateAudit } from '../src/application/audit-zero-deposit-candidates.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
@@ -126,13 +127,89 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const longFreeShortPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000', 장기보증: '무보증' } } };
     const shortFreeLongPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '무보증', 장기보증: '별도 확인' } } };
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
-      .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null });
+      .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null, depositRule: null });
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
       .toMatchObject({ depositState: 'ZERO', depositAmount: 0, depositRule: { depositEvidenceBasis: { field: '원문.전체.장기보증' } } });
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
       .toMatchObject({ depositState: 'ZERO', depositAmount: 0, depositRule: { depositEvidenceBasis: { field: '원문.전체.단기보증' } } });
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
       .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null });
+  });
+  it('treats empty deposit_free_confirmation values (null, empty string, empty object) as no evidence for raw amount recovery', () => {
+    for (const empty of [null, '', {}, []]) {
+      const product = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_free: false,
+        deposit_free_confirmation: empty, 원문: { 전체: { 단기보증: '1,000,000' } } };
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, 0, { termMonths: 12, monthlyRent: 500000 })))
+        .toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    }
+    const confirmed = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_free: false,
+      deposit_free_confirmation: { source: '공급사 답변', at: '2026-10-10T12:00:00+09:00', text: '무보증' }, 원문: { 전체: { 단기보증: '1,000,000' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(confirmed, 0, { termMonths: 12, monthlyRent: 500000 })).state)
+      .not.toBe('KNOWN');
+  });
+
+  it('uses positive raw warranty cells as SOURCE_RAW_AMOUNT when normalized price is zero or missing', () => {
+    const shortRaw = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: '1,000,000' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(shortRaw, 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({
+      state: 'KNOWN',
+      amount: 1000000,
+      reason: 'SOURCE_RAW_AMOUNT',
+      rule: { code: 'SOURCE_RAW_AMOUNT' },
+      depositRuleDifference: { ruleAmount: 1000000, ruleCode: 'SOURCE_RAW_AMOUNT', differs: true },
+    });
+    const longRaw = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 장기보증: '500,000' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(longRaw, 0, {
+      termMonths: 48, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 500000, reason: 'SOURCE_RAW_AMOUNT' });
+  });
+  it('promotes raw warranty amount only when no waiver evidence exists anywhere', () => {
+    const confirmation = { source: '공급사 확인', at: '2026-10-10T12:00:00+09:00', text: '무보증' };
+    const base = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: '1,000,000' } } };
+    for (const patch of [{ deposit_free_confirmation: confirmation }, { deposit_note: '무보증' }, { deposit_free: true }, { deposit_free: 'true' }, { deposit_free: '예' }]) {
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct({ ...base, ...patch }, 0, {
+        termMonths: 12, monthlyRent: 500000,
+      }))).toMatchObject({ state: 'UNKNOWN', amount: null });
+    }
+    for (const deposit_free of [false, '아니오', '아님', '불가', 'N']) {
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct({ ...base, deposit_free }, 0, {
+        termMonths: 12, monthlyRent: 500000,
+      }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    }
+  });
+  it('accepts exact won-unit raw warranty amounts but keeps manwon shorthand UNKNOWN', () => {
+    const product = (raw: string) => ({ provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: raw } } });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('1,000,000원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('1,000,000 원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('100만원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'UNKNOWN', amount: null });
+  });
+  it('keeps existing positive, raw waiver, and missing raw warranty behavior unchanged', () => {
+    const paid = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: '1,000,000' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(paid, 700000, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 700000, reason: 'SOURCE_AMOUNT' });
+    const waiver = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: '무보증' } } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(waiver, 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT' });
+    const missingRaw = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: {} } };
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(missingRaw, undefined, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'MISSING_DEPOSIT_AMOUNT' });
   });
   it('accepts deposit_note when the matching period source cell is absent, but rejects matching-cell conflict and negative flags', () => {
     const identity = { supplierId: 'RP004', productType: '중고렌트', sourceAmount: 0 };
@@ -171,6 +248,75 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const before = structuredClone(products);
     expect(auditDepositEvidence(products)).toMatchObject({ productCount: 3, paidTermCount: 3, counts: { KNOWN: 1, ZERO: 1, UNKNOWN: 1 }, writeAuthorized: false });
     expect(products).toEqual(before);
+  });
+  it('audits zero deposit candidates with reason-specific question templates and raw/doc exclusions', () => {
+    const products = {
+      rawShort: { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', 원문: { 전체: { 단기보증: '1,000,000' } },
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-109호1780': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: false, 원문: { 전체: { 단기보증: '1,000,000' } },
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-109호3432': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: 'N', 원문: { 전체: { 장기보증: '500,000' } },
+        price: { '48': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-conflicting-waiver-note': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000' } },
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      noWaiver: { listable: true, provider_company_code: 'RP004', product_type: '중고렌트',
+        price: { '24': { rent: 500000, deposit: 0 } } },
+      forbidden: { listable: true, provider_company_code: 'RP012', product_type: '중고구독',
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      ruleMissing: { listable: true, provider_company_code: 'RP012', product_type: '오공구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+        price: { '18': { rent: 500000, deposit: 0 } } },
+      incompleteWaiver: { listable: true, provider_company_code: 'RP004', deposit_note: '무보증',
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      knownPositive: { listable: true, provider_company_code: 'RP004', product_type: '중고렌트',
+        price: { '12': { rent: 500000, deposit: 1000000 } } },
+    };
+    const audit = buildZeroDepositCandidateAudit({ products, expectedProductIds: ['rawShort', 'missingProduct'], readAt: '2026-10-12T00:00:00.000Z' });
+    expect(audit.publicSummary.countsByReason).toMatchObject({
+      RAW_AMOUNT_NOT_REFLECTED: 3,
+      DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE: 1,
+      CONFLICTING_ZERO_DEPOSIT_EVIDENCE: 1,
+      ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: 1,
+      MISSING: 1,
+      INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE: 1,
+      PRODUCT_DOC_MISSING: 1,
+    });
+    expect(audit.publicSummary.questionTemplateIdsByReason).toMatchObject({
+      DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE: 'zero-or-missing-without-waiver-evidence',
+      ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: 'zero-deposit-forbidden-by-product-policy',
+      MISSING: 'unknown-deposit-needs-review',
+      INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE: 'unknown-deposit-needs-review',
+    });
+    expect(audit.report.details.find(row => row.productId === 'ruleMissing')).toMatchObject({
+      classification: 'UNKNOWN_DEPOSIT_NEEDS_REVIEW',
+      reasonCode: 'MISSING',
+      questionTemplateId: 'unknown-deposit-needs-review',
+    });
+    expect(audit.report.details.find(row => row.productId === 'incompleteWaiver')).toMatchObject({
+      classification: 'UNKNOWN_DEPOSIT_NEEDS_REVIEW',
+      reasonCode: 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE',
+      questionTemplateId: 'unknown-deposit-needs-review',
+    });
+    expect(audit.report.details.some(row => row.productId === 'knownPositive')).toBe(false);
+    expect(audit.report.details.find(row => row.classification === 'RAW_AMOUNT_NOT_REFLECTED')).toMatchObject({
+      productId: 'rawShort',
+      questionTemplateId: null,
+      rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-conflicting-waiver-note')).toMatchObject({
+      classification: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE',
+      questionTemplateId: 'conflicting-zero-deposit-evidence',
+      rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호1780')).toMatchObject({
+      classification: 'RAW_AMOUNT_NOT_REFLECTED',
+      questionTemplateId: null,
+      rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호3432')).toMatchObject({
+      classification: 'RAW_AMOUNT_NOT_REFLECTED',
+      questionTemplateId: null,
+      rawDepositAmount: 500000,
+    });
   });
 
   it('derives the RP012 subscription deposit from the supplier note rule (1 / 2 / 3 months of rent, capped at 3), never from a zero placeholder', () => {
@@ -249,7 +395,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const compat = (withCompatibilityDepositEvidence(source).price as Record<string, Record<string, unknown>>)['24']!;
     const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: 'positive-rule-note',
       sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
-      data: { car_number: '000가0000', maker: '제조사', model: '모델', vehicle_status: '출고가능',
+      data: { car_number: 'TEST-FAKE-POSITIVE-RULE', maker: '제조사', model: '모델', vehicle_status: '출고가능',
         status_kind: '가용', listable: true, ...source } });
     expect(reference).toMatchObject({ depositState: 'KNOWN', depositAmount: 1500000,
       depositRuleDifference: { ruleAmount: 1400000, ruleCode: 'RENT_X_2', differs: true } });
@@ -296,7 +442,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
         price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } }).price as Record<string, Record<string, unknown>>)[String(c.termMonths)]!;
       const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: `p-${c.termMonths}-${c.productType}`,
         sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
-        data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+        data: { car_number: 'TEST-FAKE-RP012-SCOPE', maker: '제조사', model: '모델', provider_company_code: 'RP012',
           product_type: c.productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
           deposit_note: c.note, price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } } });
       const term = mapped.candidate.priceTerms[0]!;
@@ -318,7 +464,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       .price as Record<string, Record<string, unknown>>)['24']!;
     const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: 'verified-free',
       sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
-      data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP004',
+      data: { car_number: 'TEST-FAKE-DEPOSIT-FREE', maker: '제조사', model: '모델', provider_company_code: 'RP004',
         product_type: '중고렌트', vehicle_status: '출고가능', status_kind: '가용', listable: true,
         deposit_free: true, deposit_free_confirmation: confirmation, price: { '24': { rent: 500000, deposit: 0 } } } });
     expect([reference.depositState, reference.depositAmount]).toEqual(['ZERO', 0]);
@@ -348,7 +494,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
         const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products',
           documentId: `p-${productType}-${note || 'none'}-${termMonths}-${String(sourceAmount)}-${String(rent)}`.replace(/[^\w.-]/g, '_'),
           sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
-          data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+          data: { car_number: 'TEST-FAKE-EQUIVALENCE', maker: '제조사', model: '모델', provider_company_code: 'RP012',
             product_type: productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
             deposit_note: note, price: { [priceKey]: sourceRow } } });
         const term = mapped.candidate.priceTerms[0]!;

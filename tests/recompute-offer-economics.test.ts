@@ -135,6 +135,16 @@ describe('offer economics recompute', () => {
       .toMatchObject({amount:{amount:39},calculation:{kind:'RATE',rate:0.05}});
     expect(roundtrip.internalEconomicsTerms![0]!.supplierBillingFee.calculation!.kind).toBe('FIXED');
   });
+  it('refreshes legacy Billin fees without referenceRentBasis when the 36-month reference rent changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP021',priceTerms:[36,60].map(months=>({...original.priceTerms[0]!,termKey:`m${months}`,termMonths:months,monthlyRent:{amount:800000,currency:'KRW' as const}}))};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_SUBSCRIPTION');
+    for (const term of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee','channelPayoutFee'] as const) delete (term[side] as { referenceRentBasis?: unknown }).referenceRentBasis;
+    const next=structuredClone(offer);next.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,false,'USED_SUBSCRIPTION');
+    expect(refreshed.map(term=>term.supplierBillingFee.amount!.amount)).toEqual([900000,900000]);
+  });
+
   it('does not change an apply plan scope through API options', async () => {
     const store=await fixture(), options=await prepare(store), tx=vi.spyOn(store,'transact');
     await expect(runOfferEconomicsRecompute(store,{...options,offerIds:[]})).rejects.toThrow('reviewed plan');
@@ -155,6 +165,213 @@ describe('offer economics recompute', () => {
     const ambiguous={...next,priceTerms:[...next.priceTerms,{...next.priceTerms[0]!,termKey:'m36-extra'}]};
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
+    const addedReference={...offer,priceTerms:[...offer.priceTerms,{...offer.priceTerms[0]!,termKey:'m36-extra',monthlyRent:{amount:900000,currency:'KRW' as const}}]};
+    expect(refreshOfferEconomicsForChangedInputs(offer,addedReference,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
+  });
+  it('refreshes Sonokong subscription fees when the referenced 12-month Q12 rent changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    expect(offer.internalEconomicsTerms[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:800000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}
+    });
+    const unchanged=structuredClone(offer);
+    unchanged.priceTerms[1]!.monthlyRent.amount=750000;
+    expect(refreshOfferEconomicsForChangedInputs(offer,unchanged,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:1000000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    expect(refreshed[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    const ambiguous=structuredClone(offer);
+    ambiguous.priceTerms.push({...ambiguous.priceTerms[0]!,monthlyRent:{amount:900000,currency:'KRW'}});
+    expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+  });
+  it('refreshes Sonokong fees when an explicit BUYOUT reference row with an opaque key changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'q24',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    const evidence={q12:{subscriptionForm:'BUYOUT' as const},q24:{subscriptionForm:'BUYOUT' as const}};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION',null,evidence);
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    expect(offer.internalEconomicsTerms[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:800000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION',null,undefined,evidence);
+    expect(refreshed[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:1000000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    expect(refreshed[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    const removed={...structuredClone(offer),priceTerms:offer.priceTerms.filter(term=>term.termKey!=='q12')};
+    expect(refreshOfferEconomicsForChangedInputs(offer,removed,false,'OGONG_SUBSCRIPTION',null,undefined,evidence)[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+  });
+  it('does not preserve a stored Sonokong Q12 fee when its basis row changed but the target settlement now conflicts', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    const evidence={ '12_인수형':{subscriptionForm:'BUYOUT' as const}, '24_인수형':{subscriptionForm:'BUYOUT' as const} };
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION',null,evidence);
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
+
+    const conflictEvidence={...evidence,'24_인수형':{subscriptionForm:'RETURN' as const}};
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const changedResult=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION',null,undefined,conflictEvidence)[1]!.supplierBillingFee;
+    expect(changedResult).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'SUBSCRIPTION_FORM_CONFLICT'});
+    expect(changedResult).not.toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+
+    const removed={...structuredClone(offer),priceTerms:offer.priceTerms.filter(term=>term.termKey!=='12_인수형')};
+    const removedResult=refreshOfferEconomicsForChangedInputs(offer,removed,false,'OGONG_SUBSCRIPTION',null,undefined,conflictEvidence)[0]!.supplierBillingFee;
+    expect(removedResult).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'SUBSCRIPTION_FORM_CONFLICT'});
+    expect(removedResult).not.toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+  });
+  it('preserves Sonokong buyout fees when an unrelated return Q12 row changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}
+    });
+    const next={...structuredClone(offer),priceTerms:[
+      ...structuredClone(offer.priceTerms),
+      {...original.priceTerms[0]!,termKey:'12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW' as const}},
+    ]};
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.channelPayoutFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.channelPayoutFee);
+  });
+  it('stores Sonokong pickup and rerent 12-month fixed fees without losing approximate notes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const product=(await store.getProduct(original.productId))!;
+    const pickup={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'m12-pickup',termMonths:12,monthlyRent:{amount:600000,currency:'KRW' as const}},
+    ]};
+    pickup.internalEconomicsTerms=precomputeOfferEconomics(pickup,'PICKUP_SUBSCRIPTION');
+    const pickupTerm=pickup.internalEconomicsTerms[0]!;
+    expect(pickupTerm.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',reasonCode:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    expect(pickupTerm.channelPayoutFee).toMatchObject({
+      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',reasonCode:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    await store.seed({products:[{...product,commercialType:'PICKUP_SUBSCRIPTION'}],offers:[{...pickup,internalEconomicsTerms:[]}]});
+    expect(await runOfferEconomicsRecompute(store,await prepare(store))).toMatchObject({status:'APPLIED',changedOffers:1});
+    const savedPickup=(await store.getOffer(pickup.id))!.internalEconomicsTerms![0]!;
+    expect(savedPickup.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED'},approximate:true});
+    expect(savedPickup.channelPayoutFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},approximate:true});
+    expect(store.audits).toHaveLength(1);
+    const rerentStore=await fixture(), rerentOriginal=(await rerentStore.listOffers())[0]!, rerentProduct=(await rerentStore.getProduct(rerentOriginal.productId))!;
+    const rerent={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'m12-rerent',termMonths:12,monthlyRent:{amount:600000,currency:'KRW' as const}},
+    ]};
+    rerent.internalEconomicsTerms=precomputeOfferEconomics(rerent,'USED_RENT');
+    const rerentTerm=rerent.internalEconomicsTerms[0]!;
+    expect(rerentTerm.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
+      reasonCode:null,
+    });
+    expect(rerentTerm.channelPayoutFee).toMatchObject({
+      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      reasonCode:null,
+    });
+    expect(rerentTerm.channelPayoutFee).not.toHaveProperty('approximate');
+    await rerentStore.seed({products:[{...rerentProduct,commercialType:'USED_RENT'}],
+      offers:[{...rerent,productId:rerentOriginal.productId,internalEconomicsTerms:[]}]});
+    expect(await runOfferEconomicsRecompute(rerentStore,await prepare(rerentStore))).toMatchObject({status:'APPLIED',changedOffers:1});
+    const savedRerent=(await rerentStore.getOffer(rerent.id))!.internalEconomicsTerms![0]!;
+    expect(savedRerent.supplierBillingFee).toMatchObject({state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED'}});
+    expect(savedRerent.channelPayoutFee).toMatchObject({state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED'},reasonCode:null});
+    expect(savedRerent.channelPayoutFee).not.toHaveProperty('approximate');
+    expect(rerentStore.audits).toHaveLength(1);
+  });
+  it('replaces deprecated RP012 pickup vehicle-price fees but preserves other suppliers vehicle-price fees', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const staleVehiclePriceFee = (amount: number) => ({
+      state:'KNOWN' as const, amount:{amount,currency:'KRW' as const},
+      calculation:{kind:'RATE' as const,base:'VEHICLE_PRICE' as const,rate:amount / 30000000},
+      sourceRefs:['test:deprecated-vehicle-price-rule'],
+      ruleId:'SONOKONG_PICKUP_12_BILLING_VEHICLE_PRICE',policyId:'test:old-policy',
+      vatTreatment:'EXCLUDED' as const,vatAmount:Math.round(amount * 0.1),totalAmount:amount + Math.round(amount * 0.1),
+    });
+    const pickup={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'m12-pickup',termMonths:12,monthlyRent:{amount:600000,currency:'KRW' as const}},
+    ]};
+    pickup.internalEconomicsTerms=[{
+      termKey:'m12-pickup',termMonths:12,monthlyRent:structuredClone(pickup.priceTerms[0]!.monthlyRent),
+      depositCalculation:{state:'UNKNOWN' as const,amount:null,calculation:null,sourceRefs:[],reasonCode:'DEPOSIT_EVIDENCE_REQUIRED'},
+      supplierBillingFee:staleVehiclePriceFee(1200000),
+      channelPayoutFee:{...staleVehiclePriceFee(900000),ruleId:'SONOKONG_PICKUP_12_PAYOUT_VEHICLE_PRICE'},
+    }];
+    const recomputed=precomputeOfferEconomics(pickup,'PICKUP_SUBSCRIPTION');
+    expect(recomputed[0]!.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:600000},calculation:{kind:'FIXED',amount:{amount:600000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    expect(recomputed[0]!.channelPayoutFee).toMatchObject({
+      state:'KNOWN',amount:{amount:500000},calculation:{kind:'FIXED',amount:{amount:500000,currency:'KRW'}},
+      approximate:true,note:'SONOKONG_PICKUP_TERM_PROXY_RERENT',
+    });
+    expect(refreshOfferEconomicsForChangedInputs(pickup,pickup,false,'PICKUP_SUBSCRIPTION')).toEqual(recomputed);
+
+    const otherSupplier={...pickup,supplierId:'RP013'};
+    otherSupplier.internalEconomicsTerms=[structuredClone(pickup.internalEconomicsTerms[0]!)];
+    expect(precomputeOfferEconomics(otherSupplier,'USED_RENT')[0]!.channelPayoutFee)
+      .toEqual(otherSupplier.internalEconomicsTerms[0]!.channelPayoutFee);
+    expect(refreshOfferEconomicsForChangedInputs(otherSupplier,otherSupplier,false,'USED_RENT')[0]!.channelPayoutFee)
+      .toEqual(otherSupplier.internalEconomicsTerms[0]!.channelPayoutFee);
+  });
+  it('recomputes reference-required unknown fees when a matching basis row is added', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+    const unchanged=structuredClone(offer);
+    expect(refreshOfferEconomicsForChangedInputs(offer,unchanged,false,'OGONG_SUBSCRIPTION')[0]!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[0]!.supplierBillingFee);
+    const added={...offer,priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      ...offer.priceTerms,
+    ]};
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,added,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.supplierBillingFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.channelPayoutFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:800000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;

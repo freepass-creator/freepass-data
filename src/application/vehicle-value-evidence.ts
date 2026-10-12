@@ -52,6 +52,8 @@ function newCarTrimVehicleValue(product: Rec, newCarTrim: NewCarTrimEvidenceInpu
 
 export function resolveVehicleValueEvidence(product: Rec, newCarTrim: NewCarTrimEvidenceInput): VehicleValueEvidence | null {
   if (text(product.provider_company_code) !== 'RP012') return null;
+  const productType = text(product.product_type)?.replace(/\s+/g, '') ?? '';
+  if (productType.includes('픽업구독') || productType.includes('오공구독')) return null;
   const raw = rawVehicleValue(product);
   const consumer = consumerVehicleValue(product);
   if (raw !== null) {

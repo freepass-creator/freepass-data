@@ -167,7 +167,7 @@ jobs:
           echo "sha=$resolved" >> "$GITHUB_OUTPUT"
           echo "EXPECTED_SOURCE_SHA=$resolved" >> "$GITHUB_ENV"
           echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
-          if [ "$resolved" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$resolved" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$resolved" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$resolved" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ] || [ "$resolved" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
             helper_file="$(mktemp "$RUNNER_TEMP/single-product-readback.XXXXXX.mjs")"
             git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs" > "$helper_file"
             echo "SINGLE_PRODUCT_HELPER_FILE=$helper_file" >> "$GITHUB_ENV"
@@ -207,7 +207,50 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.runtime-source.outputs.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: ${{ env.EXPECTED_SOURCE_SHA == '57abb8a978457b87068c3c9c9d76cc8116934bd5' }}
+        with:
+          node-version: 22
+
+      - name: Validate selected photo source before publication
+        if: ${{ env.EXPECTED_SOURCE_SHA == '57abb8a978457b87068c3c9c9d76cc8116934bd5' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '57abb8a978457b87068c3c9c9d76cc8116934bd5'
+          test "$(git rev-parse 'HEAD^{tree}')" = '712c286a842dea616e7360b421fdd5e068540a40'
+          test "$(git show -s --format=%P HEAD)" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2'
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$WORKFLOW_SOURCE_SHA"
+          source_dir="$(mktemp -d "$RUNNER_TEMP/photo-source.XXXXXX")"
+          source_files="$(mktemp "$RUNNER_TEMP/photo-files.XXXXXX")"
+          git ls-tree -r --name-only -z "$EXPECTED_SOURCE_SHA" > "$source_files"
+          git -c core.autocrlf=false archive "$EXPECTED_SOURCE_SHA" | tar -x -C "$source_dir"
+          cd "$source_dir"
+          # Existing public-file checks require a Git index; no remotes or credentials.
+          git init --quiet
+          git -c core.autocrlf=false --literal-pathspecs add --force --pathspec-from-file="$source_files" --pathspec-file-nul
+          git ls-files --cached -z | cmp - "$source_files"
+          test "$(git write-tree)" = '712c286a842dea616e7360b421fdd5e068540a40'
+          npm ci
+          npm run check:arch
+          npm run check:standards
+          npm run check:data-access-boundary
+          npm run check:sheets
+          npm run build
+          npm test
+          npm run test:read-runtime-smoke
+          npm run test:shadow
+          npm run test:delivery-owner
+          npm exec -- vitest run tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-read-diagnostic.test.ts tests/iancar-publication-withdrawal.test.ts
+          local_image="freepass-data-selected-check:$EXPECTED_SOURCE_SHA"
+          docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --build-arg "FREEPASS_DATA_SOURCE_SHA=$EXPECTED_SOURCE_SHA" --label "org.opencontainers.image.revision=$EXPECTED_SOURCE_SHA" --tag "$local_image" .
+          test "$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$EXPECTED_SOURCE_SHA"
+          docker image inspect "$local_image" --format '{{json .Config.Env}}' | jq -e 'index("FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js") != null' >/dev/null
+          echo "SELECTED_PHOTO_SOURCE_CHECKED=true" >> "$GITHUB_ENV"
+          echo "Selected source/tree Linux checks and local image verified: $EXPECTED_SOURCE_SHA / 712c286a842dea616e7360b421fdd5e068540a40" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Authenticate deploy identity
         uses: google-github-actions/auth@v2
@@ -238,6 +281,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$EXPECTED_SOURCE_SHA" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
+            test "${SELECTED_PHOTO_SOURCE_CHECKED:-false}" = 'true'
+          fi
           registry="$REGION-docker.pkg.dev"
           # 진입점이 기본(소비자 서버)이 아니면 이미지 이름을 서비스 이름으로 분리한다 — 같은 SHA 태그를 재사용하다 다른 진입점 이미지가 배포되는 사고 방지.
           image_name="freepass-data-read"
@@ -251,6 +297,7 @@ jobs:
           else
             gcloud auth configure-docker "$registry" --quiet
             docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --build-arg "FREEPASS_DATA_SOURCE_SHA=$EXPECTED_SOURCE_SHA" --label "org.opencontainers.image.revision=$EXPECTED_SOURCE_SHA" --tag "$image" .
+            test "$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$EXPECTED_SOURCE_SHA"
             docker push "$image"
           fi
           digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
@@ -470,7 +517,7 @@ jobs:
             (.data.partners | type == "object")
           ' "$response_file" >/dev/null
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
-          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ] || [ "$EXPECTED_SOURCE_SHA" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
             test "$SINGLE_PRODUCT_HELPER_SHA" = "$WORKFLOW_SOURCE_SHA"
             READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file" \
               node "$SINGLE_PRODUCT_HELPER_FILE" >> "$GITHUB_ENV"
@@ -541,6 +588,10 @@ jobs:
             echo "- authenticated compatibility readback status: **${READ_RUNTIME_AUTHENTICATED_STATUS:-unknown}**"
             echo "- authenticated compatibility readback passed: **${READ_RUNTIME_READBACK_OK:-false}**"
             echo "- bounded single-product 200/401/403 readback passed: **${SINGLE_PRODUCT_READBACK_OK:-false}**"
+            echo "- single-product diagnostic phase: **${SINGLE_PRODUCT_READBACK_PHASE:-NOT_RUN}**"
+            echo "- single-product requests attempted: **${SINGLE_PRODUCT_READBACK_REQUEST_COUNT:-0}**"
+            echo "- single-product last observed HTTP status: **${SINGLE_PRODUCT_READBACK_LAST_STATUS:-0}**"
+            echo "- single-product safe diagnostic reason: **${SINGLE_PRODUCT_READBACK_REASON:-NONE}**"
             echo "- direct Firestore migration headers verified: **${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}**"
             if [ -n "${READ_RUNTIME_REVISION:-}" ]; then
               echo "- Cloud Run revision: \`${READ_RUNTIME_REVISION}\`"
@@ -578,6 +629,20 @@ jobs:
       IANCAR_SECRET_VERSION: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_VERSION }}
     steps:
       - uses: actions/checkout@v4
+      - name: Preserve trusted verification helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ] || [ "$EXPECTED_SOURCE_SHA" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
+            test "$GITHUB_REF" = 'refs/heads/main'
+            [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            helper_file="$(mktemp "$RUNNER_TEMP/single-product-readback.XXXXXX.mjs")"
+            git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs" > "$helper_file"
+            echo "SINGLE_PRODUCT_HELPER_FILE=$helper_file" >> "$GITHUB_ENV"
+            echo "SINGLE_PRODUCT_HELPER_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+            echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+          fi
       - name: Validate verification scope before authentication
         shell: bash
         env:
@@ -618,14 +683,14 @@ jobs:
           echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
 
           cloud_run_token="$CLOUD_RUN_ID_TOKEN"
-          consumer_token="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
+          consumers_json="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
             --project="$PROJECT_ID" \
-            --secret="$CONSUMERS_SECRET_NAME" \
-            | jq -er '.[] | select(.id == "erp-com") | .token')"
+            --secret="$CONSUMERS_SECRET_NAME")"
+          consumer_token="$(jq -er '[.[] | select(.id == "erp-com")] | select(length == 1) | .[0].token' <<< "$consumers_json")"
           echo "::add-mask::$consumer_token"
           response_file="$(mktemp)"
           headers_file="$(mktemp)"
-          trap 'rm -f "$response_file" "$headers_file"' EXIT
+          trap 'rm -f "$response_file" "$headers_file" "${SINGLE_PRODUCT_HELPER_FILE:-}"; unset consumers_json consumer_token' EXIT
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
             --dump-header "$headers_file" \
             --write-out '%{http_code}' \
@@ -654,6 +719,18 @@ jobs:
           ' "$response_file" >/dev/null
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
 
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ] || [ "$EXPECTED_SOURCE_SHA" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
+            test "$SINGLE_PRODUCT_HELPER_SHA" = "$WORKFLOW_SOURCE_SHA"
+            READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file" \
+              node "$SINGLE_PRODUCT_HELPER_FILE" >> "$GITHUB_ENV"
+          fi
+
+      - name: Clean trusted verification helper
+        if: always()
+        shell: bash
+        run: |
+          rm -f "${SINGLE_PRODUCT_HELPER_FILE:-}"
+
       - name: Record verification summary
         if: always()
         env:
@@ -666,6 +743,9 @@ jobs:
             test "${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}" = "200"
             test "${READ_RUNTIME_READBACK_OK:-false}" = "true"
             test "${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}" = "true"
+            if [ "${EXPECTED_SOURCE_SHA:-}" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "${EXPECTED_SOURCE_SHA:-}" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "${EXPECTED_SOURCE_SHA:-}" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ] || [ "${EXPECTED_SOURCE_SHA:-}" = '57abb8a978457b87068c3c9c9d76cc8116934bd5' ]; then
+              test "${SINGLE_PRODUCT_READBACK_OK:-false}" = "true"
+            fi
           fi
           {
             echo '## Existing read runtime verification'
@@ -674,5 +754,10 @@ jobs:
             echo "Compatibility response: ${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}"
             echo "Compatibility contract verified: ${READ_RUNTIME_READBACK_OK:-false}"
             echo "Migration headers verified: ${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}"
+            echo "Single-product contract verified: ${SINGLE_PRODUCT_READBACK_OK:-false}"
+            echo "Single-product diagnostic phase: ${SINGLE_PRODUCT_READBACK_PHASE:-NOT_RUN}"
+            echo "Single-product requests attempted: ${SINGLE_PRODUCT_READBACK_REQUEST_COUNT:-0}"
+            echo "Single-product last observed HTTP status: ${SINGLE_PRODUCT_READBACK_LAST_STATUS:-0}"
+            echo "Single-product safe diagnostic reason: ${SINGLE_PRODUCT_READBACK_REASON:-NONE}"
             echo 'This run performed no deployment or IAM mutation.'
           } >> "$GITHUB_STEP_SUMMARY"
