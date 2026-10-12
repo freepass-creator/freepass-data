@@ -134,6 +134,14 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       expect([v, r]).toEqual([v, { ok: false, reason: 'PII_DETECTED' }]);
     }
   });
+  it('accepts valid ISO dates and times but still rejects resident-number shaped digits', () => {
+    for (const v of ['2026-10-12T01:00:00Z', '2026-10-12', '출고 2026-10-12T01:00:00.000Z']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })).ok).toBe(true);
+    }
+    for (const v of ['9001-01-12T3:4567', '9001011234567']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
   it('rejects phone-like digit-heavy room codes', () => {
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });
   });
