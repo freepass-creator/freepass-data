@@ -9,6 +9,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeValue } from './supplier-freshness-lib.mjs';
+import { f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
 
 const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
@@ -59,20 +60,37 @@ const run = (script, args) => execFileSync(process.execPath, [join(ROOT, 'script
 // 공통 시트 F05
 if (process.env.FREEPASS_SHEET_F05_ID) {
   const sup = spec.supplierChannels.sharedInputSheet, dist = {};
-  for (const tab of [...new Set(sup.map(x => x.tab))]) {
+  // 숨긴 줄(행 숨기기·필터 숨김)은 상태와 무관하게 출고불가 — 값 읽기와 별개 호출(spreadsheets.get, 열 A 만·rowMetadata 만, 한 번에 전 탭)
+  let hiddenRows = new Map(), hiddenOk = false;
+  try {
+    // 보이는 탭만(숨김 탭·«종합» 제외 — 대표 확정). 규격에 있어도 시트에 없거나 숨긴 탭(연카·스위치플랜·에스에이 등)은 범위 밖.
+    const meta = execFileSync(gwsBin(), ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: process.env.FREEPASS_SHEET_F05_ID, fields: 'sheets(properties(title,hidden))' })], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const visible = new Set(JSON.parse(meta.slice(meta.indexOf('{'))).sheets.filter(x => !x.properties.hidden).map(x => x.properties.title));
+    visible.delete('종합');
+    const tabsAll = [...new Set(sup.map(x => x.tab))].filter(t => visible.has(t));
+    globalThis.__visibleTabs = visible;
+    const params = new URLSearchParams(); params.set('includeGridData', 'true'); params.set('fields', 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))');
+    const args = ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: process.env.FREEPASS_SHEET_F05_ID, includeGridData: true, ranges: tabsAll.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })];
+    const o = execFileSync(gwsBin(), args, { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] });
+    hiddenRows = hiddenRowsByTab(JSON.parse(o.slice(o.indexOf('{')))); hiddenOk = true;
+  } catch (e) { if (process.env.DEBUG_SELLABLE) console.error('hidden read error', e.message.slice(0, 300)); }
+  global.__hiddenOk = hiddenOk; global.__hiddenCount = [...hiddenRows.values()].reduce((n, set) => n + set.size, 0);
+  for (const tab of [...new Set(sup.map(x => x.tab))].filter(t => !globalThis.__visibleTabs || globalThis.__visibleTabs.has(t))) {
     let v; try { const o = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', process.env.FREEPASS_SHEET_F05_ID, '--range', `'${tab}'!A1:BX1500`], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); v = JSON.parse(o.slice(o.indexOf('{'))).values ?? []; } catch { continue; }
     const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null) continue;
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
-    for (const r of v.slice(1)) {
+    for (const [ri, r] of v.slice(1).entries()) {
+      const rowHidden = hiddenRows.get(tab)?.has(ri + 2) === true;
       const plate = key(g(r, '차량번호')); if (!plate) continue;
+      if (rowHidden) { globalThis.__hiddenPlateRows ??= {}; globalThis.__hiddenPlateRows[tab] = (globalThis.__hiddenPlateRows[tab] ?? 0) + 1; }
       if (!/\d{2,3}[가-힣]\d{4}/.test(plate)) { // «신차» 같은 번호 미배정 줄은 차량번호 대조에서 빼고 따로 센다(판매 후보면 지휘통제실 숫자에는 들어간다)
         const c0 = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
-        const o0 = (src[c0] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' }); if (g(r, '차량상태') !== '출고불가') { o0.미배정 = (o0.미배정 ?? 0) + 1; o0.lines = (o0.lines ?? 0) + 1; } continue;
+        const o0 = (src[c0] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' }); if (f05RowSellable({ status: g(r, '차량상태'), hidden: rowHidden })) { o0.미배정 = (o0.미배정 ?? 0) + 1; o0.lines = (o0.lines ?? 0) + 1; } continue;
       }
       const code = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
-      const o = (src[code] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' });
-      o.all.add(plate); const st = g(r, '차량상태'); if (F05_SELLABLE(st)) o.lines = (o.lines ?? 0) + 1; (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
-      if (F05_SELLABLE(st)) o.set.add(plate);
+      const o = (src[code] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가·숨긴 줄 제외 전부' });
+      o.all.add(plate); const st = g(r, '차량상태'); if (f05RowSellable({ status: st, hidden: rowHidden })) o.lines = (o.lines ?? 0) + 1; (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
+      if (f05RowSellable({ status: st, hidden: rowHidden })) o.set.add(plate);
     }
   }
   for (const x of sup) if (!src[x.code]) src[x.code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: `F05 에 «${x.tab}» 탭 없음` };
@@ -127,3 +145,5 @@ const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
 if (diffN || blocked.length) { console.log(alert); if (opt('alert-file')) appendFileSync(opt('alert-file'), alert + '\n'); }
 if (opt('json')) writeFileSync(opt('json'), JSON.stringify(rows.map(r => ({ ...r })), null, 1));
+if (global.__hiddenOk === false) console.log('주의: 숨긴 줄 메타데이터를 읽지 못함 — 숨긴 줄을 판매 가능으로 셌을 수 있음');
+else console.log(`숨긴 줄(차량번호 있는 줄) ${Object.values(globalThis.__hiddenPlateRows ?? {}).reduce((n, v) => n + v, 0)}개(행 숨기기·필터 숨김)는 출고불가로 제외: ${JSON.stringify(globalThis.__hiddenPlateRows ?? {})}`);
