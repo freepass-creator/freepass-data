@@ -129,7 +129,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
   it('does not let long digit runs through confidence or grouped-amount look-alikes', () => {
     const ok = createKakaoInfoCandidate(base({ confidence: 0.9001011234567 }));
     expect(ok.ok && ok.candidate.confidence).toBe(0.9);
-    for (const v of ['9,912,311,234,567', '9001011234567원', '900101만1234567원', '900101가1234567']) {
+    for (const v of ['9,912,311,234,567', '9001011234567원', '900101만1234567원', '900101가1234567', '010가1234나5678', '9001-01-12T3:4567']) {
       const r = createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }));
       expect([v, r]).toEqual([v, { ok: false, reason: 'PII_DETECTED' }]);
     }
