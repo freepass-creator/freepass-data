@@ -110,6 +110,12 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010123' }, fields: { 항목: 'TEST-FAKE-ITEM', 요약: '재고', 값: '45678' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
+  it('does not strip supplier-code-shaped text from free strings before residual digit checks', () => {
+    expect(createKakaoInfoCandidate(base({
+      fields: { 항목: 'TEST-FAKE-ITEM', 요약: 'RP01012', 값: 'TEST' },
+      vehicle: { model: '345678' },
+    }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

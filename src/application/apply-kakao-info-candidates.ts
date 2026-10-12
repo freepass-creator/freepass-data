@@ -1,12 +1,12 @@
 import { ingestRawSourceBatch } from './ingest-raw-source.js';
 import { kakaoInfoCandidatesToSourceBatch } from './kakao-info-to-source-batch.js';
 import { isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoCandidateInput } from '../domain/kakao-info-candidate.js';
-import { plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 export type KakaoInfoApplyOutcome = 'CREATED' | 'SKIPPED_SAME' | 'CONFLICT';
+export type KakaoInfoVehicleResolution = 'LINKED' | 'UNSPECIFIED_NO_PRODUCT';
 
 export type KakaoInfoApplyPort = SourceIngestionStore & {
   productExists?: (productRef: string) => Promise<boolean>;
@@ -25,6 +25,8 @@ export type KakaoInfoCandidateReceipt = {
   readbackDigest: string | null;
   vehicleUnspecified: boolean;
   productExistence: 'CONFIRMED' | 'MISSING_DOWNGRADED' | 'UNKNOWN' | 'NOT_APPLICABLE';
+  vehicleResolution: KakaoInfoVehicleResolution;
+  updatePending: boolean;
 };
 
 export type KakaoInfoApplyResult = {
@@ -70,6 +72,7 @@ function stableCandidateForDigest(candidate: unknown) {
     delete kakaoInfo.conflict;
     delete kakaoInfo.expiresAt;
     delete kakaoInfo.isFresh;
+    delete kakaoInfo.vehicleResolution;
     copy.kakaoInfo = kakaoInfo;
   }
   return copy;
@@ -127,11 +130,6 @@ function hasStoredLiteralSameSentencePlateEvidence(info: Record<string, unknown>
     && v.plateStatusSameSentence === true;
 }
 
-function productRefForPlate(value: string) {
-  const key = plateIdentityKey(value).replace(/-/g, '');
-  return key ? `products/${key}` : null;
-}
-
 export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
   const info = storedKakaoInfo(candidate);
   if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
@@ -142,46 +140,43 @@ export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
   return false;
 }
 
-async function downgradeMissingProducts(port: KakaoInfoApplyPort, inputs: readonly KakaoInfoCandidateInput[], writesEnabled: boolean) {
-  const prepared = structuredClone(inputs) as KakaoInfoCandidateInput[];
+async function resolveProductExistence(port: KakaoInfoApplyPort, plan: ReturnType<typeof kakaoInfoCandidatesToSourceBatch>, writesEnabled: boolean) {
   const productExistenceByInput = new Map<number, KakaoInfoCandidateReceipt['productExistence']>();
+  const vehicleResolutionByCandidateId = new Map<string, KakaoInfoVehicleResolution>();
   if (!port.productExists) {
     if (writesEnabled) throw new Error('KAKAO_INFO_PRODUCT_EXISTS_PORT_REQUIRED');
-    prepared.forEach((input, index) => {
-      productExistenceByInput.set(index, input.vehicle?.plate?.trim() ? 'UNKNOWN' : 'NOT_APPLICABLE');
+    plan.candidates.forEach((item, index) => {
+      productExistenceByInput.set(index, item.productRef ? 'UNKNOWN' : 'NOT_APPLICABLE');
+      vehicleResolutionByCandidateId.set(item.candidate.candidateId, item.productRef ? 'LINKED' : 'UNSPECIFIED_NO_PRODUCT');
     });
-    return { prepared, productExistenceByInput };
+    return { productExistenceByInput, vehicleResolutionByCandidateId };
   }
-  for (const [index, input] of prepared.entries()) {
-    const vehicle = input.vehicle;
-    if (!vehicle) {
+  for (const [index, item] of plan.candidates.entries()) {
+    if (!item.productRef) {
       productExistenceByInput.set(index, 'NOT_APPLICABLE');
+      vehicleResolutionByCandidateId.set(item.candidate.candidateId, 'UNSPECIFIED_NO_PRODUCT');
       continue;
     }
-    const plate = vehicle.plate?.trim();
-    if (!plate) {
-      productExistenceByInput.set(index, 'NOT_APPLICABLE');
-      continue;
-    }
-    const productRef = productRefForPlate(plate);
-    if (!productRef) {
-      productExistenceByInput.set(index, 'NOT_APPLICABLE');
-      continue;
-    }
-    if (await port.productExists(productRef)) {
+    if (await port.productExists(item.productRef)) {
       productExistenceByInput.set(index, 'CONFIRMED');
+      vehicleResolutionByCandidateId.set(item.candidate.candidateId, 'LINKED');
       continue;
     }
-    const { plate: _plate, plateEvidence: _plateEvidence, plateEvidenceMsgNo: _plateEvidenceMsgNo, ...vehicleRest } = vehicle;
-    input.vehicle = {
-      ...vehicleRest,
-      plateUnverified: vehicleRest.plateUnverified ?? plate,
-      plateStatusSameSentence: false,
-    };
-    input.needsSupplierConfirm = true;
     productExistenceByInput.set(index, 'MISSING_DOWNGRADED');
+    vehicleResolutionByCandidateId.set(item.candidate.candidateId, 'UNSPECIFIED_NO_PRODUCT');
   }
-  return { prepared, productExistenceByInput };
+  return { productExistenceByInput, vehicleResolutionByCandidateId };
+}
+
+function applyVehicleResolutionToPlan(plan: ReturnType<typeof kakaoInfoCandidatesToSourceBatch>, vehicleResolutionByCandidateId: ReadonlyMap<string, KakaoInfoVehicleResolution>) {
+  const batch = structuredClone(plan.batch) as SourceIntakeBatch;
+  for (const record of batch.records) {
+    const resolution = vehicleResolutionByCandidateId.get(record.sourceRecordId) ?? 'LINKED';
+    const normalized = record.payload.normalized;
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) continue;
+    (normalized as Record<string, unknown>).vehicleResolution = resolution;
+  }
+  return { ...plan, batch };
 }
 
 function batchForCandidateIds(batch: SourceIntakeBatch, candidateIds: ReadonlySet<string>): SourceIntakeBatch {
@@ -199,8 +194,9 @@ export async function applyKakaoInfoCandidates(
   assertDigest(inputs, options.expectedDigest);
   if (!Number.isFinite(Date.parse(options.now))) throw new Error('KAKAO_INFO_NOW_REQUIRED');
   const writesEnabled = assertWriteAllowed(options);
-  const { prepared: effectiveInputs, productExistenceByInput } = await downgradeMissingProducts(port, inputs, writesEnabled);
-  const plan = kakaoInfoCandidatesToSourceBatch(effectiveInputs, { now: options.now });
+  const basePlan = kakaoInfoCandidatesToSourceBatch([...inputs], { now: options.now });
+  const { productExistenceByInput, vehicleResolutionByCandidateId } = await resolveProductExistence(port, basePlan, writesEnabled);
+  const plan = applyVehicleResolutionToPlan(basePlan, vehicleResolutionByCandidateId);
   const productExistenceByCandidateId = new Map(plan.candidates.map((item, index) => [
     item.candidate.candidateId,
     productExistenceByInput.get(index) ?? (item.productRef ? 'UNKNOWN' : 'NOT_APPLICABLE'),
@@ -251,12 +247,18 @@ export async function applyKakaoInfoCandidates(
     }
     if (result === 'SKIPPED_SAME') skippedSame++;
     if (result === 'CONFLICT') conflict++;
+    const vehicleResolution = vehicleResolutionByCandidateId.get(item.candidate.candidateId) ?? 'LINKED';
+    const existingResolution = existing
+      ? (((existing.candidate as unknown as { kakaoInfo?: { vehicleResolution?: unknown } }).kakaoInfo)?.vehicleResolution ?? null)
+      : null;
     receipts.push({
       candidateId: item.candidate.candidateId,
       result,
       readbackDigest: existingDigest,
-      vehicleUnspecified: item.vehicleUnspecified,
+      vehicleUnspecified: item.vehicleUnspecified || vehicleResolution === 'UNSPECIFIED_NO_PRODUCT',
       productExistence: productExistenceByCandidateId.get(item.candidate.candidateId) ?? 'UNKNOWN',
+      vehicleResolution,
+      updatePending: result === 'SKIPPED_SAME' && existingResolution !== null && existingResolution !== vehicleResolution,
     });
   }
 

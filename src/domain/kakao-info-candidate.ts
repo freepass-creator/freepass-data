@@ -145,7 +145,6 @@ export function hasSensitiveKakaoExcerpt(value: string) {
 
 function candidateStringValues(input: KakaoInfoCandidateInput) {
   const strings: string[] = [
-    input.supplierCode,
     input.source?.side,
     input.type,
     input.vehicle?.plate,
@@ -164,7 +163,6 @@ function exceedsResidualDigitBudget(values: string[]) {
   let concat = '';
   for (const raw of values) {
     let text = raw;
-    text = text.replace(/\b(?:RP|PT-)\d{1,5}\b/g, ' ');
     text = text.replace(/\d{2,3}[\s-]*[가-힣][\s-]*\d{4}/g, ' ');
     text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')

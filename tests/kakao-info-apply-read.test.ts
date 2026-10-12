@@ -221,13 +221,43 @@ describe('applyKakaoInfoCandidates', () => {
     expect(result.warningCount).toBe(1);
   });
 
-  it('downgrades missing product plates to vehicle-unspecified before writing', async () => {
+  it('keeps candidate ids stable while recording missing products as derived vehicle resolution', async () => {
     const store = Object.assign(new MemorySourceStore(), { productExists: async () => false });
     const inputs = [candidate()];
     const result = await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
-    expect(result.receipts[0]).toMatchObject({ result: 'CREATED', vehicleUnspecified: true });
+    expect(result.receipts[0]).toMatchObject({
+      result: 'CREATED',
+      vehicleUnspecified: true,
+      vehicleResolution: 'UNSPECIFIED_NO_PRODUCT',
+      updatePending: false,
+    });
     const persisted = await store.listCandidatesBySource('kakao-info-candidate');
-    expect(persisted[0]?.candidate.issues).toContain('VEHICLE_UNSPECIFIED');
+    expect(persisted[0]?.candidateId).toBe(result.receipts[0]?.candidateId);
+    expect((persisted[0]?.candidate as unknown as { kakaoInfo: { vehicleResolution: string } }).kakaoInfo.vehicleResolution)
+      .toBe('UNSPECIFIED_NO_PRODUCT');
+    expect(persisted[0]?.candidate.issues ?? []).not.toContain('VEHICLE_UNSPECIFIED');
+  });
+
+  it('does not create a duplicate candidate when a product appears after a missing-product save', async () => {
+    let exists = false;
+    const store = Object.assign(new MemorySourceStore(), { productExists: async () => exists });
+    const inputs = [candidate()];
+    const first = await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    exists = true;
+
+    const retry = await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    expect(retry).toMatchObject({
+      status: 'APPLIED',
+      counts: { input: 1, created: 0, skippedSame: 1, conflict: 0, writes: 0 },
+    });
+    expect(retry.receipts[0]).toMatchObject({
+      candidateId: first.receipts[0]?.candidateId,
+      result: 'SKIPPED_SAME',
+      productExistence: 'CONFIRMED',
+      vehicleResolution: 'LINKED',
+      updatePending: true,
+    });
+    expect(await store.listCandidatesBySource('kakao-info-candidate')).toHaveLength(1);
   });
 
   it('checks product existence with the normalized product document key before downgrading', async () => {
