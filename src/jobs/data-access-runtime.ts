@@ -796,3 +796,24 @@ export function createPeriodFeeCoverageRuntime() {
     }, listActivePeriodFeeLedgerRows),
   };
 }
+
+export async function createContractLockRuntime() {
+  const { readProductsByIds, releaseContractLock } = await import('../infra/contract-lock-firestore.js');
+  const context = {
+    actor: { id: 'service:freepass-data-contract-lock', kind: 'SERVICE' as const },
+    clientId: 'job:release-contract-locks',
+    purpose: 'release approved stale contract locks on products (cancelled intake); status fields untouched',
+  };
+  const read = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const write = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  return {
+    readProducts: (ids: string[]) => read.read({
+      context, operation: 'READ_PRODUCTS_FOR_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' },
+      summarize: (value) => ({ count: Object.keys(value).length, digest: stableDigest(Object.keys(value).sort().map(key => stableDigest(key))) }),
+    }, () => readProductsByIds(ids)),
+    release: (requestDigest: string, input: Parameters<typeof releaseContractLock>[0]) => write.write({
+      context, operation: 'WRITE_CONTRACT_LOCK_RELEASE', resource: { kind: 'SOURCE' as const, name: 'products' }, requestDigest,
+      summarize: (value) => ({ count: value === 'RELEASED' ? 1 : 0, digest: stableDigest({ requestDigest, value }) }),
+    }, () => releaseContractLock(input)),
+  };
+}
