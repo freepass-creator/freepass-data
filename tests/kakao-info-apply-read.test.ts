@@ -387,6 +387,19 @@ describe('readKakaoKnownFacts', () => {
     })).toEqual([]);
   });
 
+  it('stores non-raw channels at T0 with no promotion and reads them back as T0 with the fixed-notice validity', async () => {
+    const store = writeStore();
+    const notice = candidate({
+      source: { ...candidate().source, msgNo: '300', channel: 'KAKAO_NOTICE', noticeFixed: true, excerpt: '공지 조건 안내' } as never,
+      type: '조건', vehicle: undefined, fields: { 항목: '조건', 요약: '조건 안내', 값: '출고 후 익일 정산' },
+    });
+    const inputs = [notice];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const facts = await readKakaoKnownFacts(store, { supplierCode: 'RP001', topic: '조건', asOf: '2026-12-01T00:00:00.000Z' });
+    expect(facts).toMatchObject([{ layer: 'T0', signalOnly: true }]);
+    expect(facts[0]!.expiresAt).toBe('2027-01-10T00:00:00.000Z');
+    expect(await readKakaoKnownFacts(store, { supplierCode: 'RP001', topic: '조건', asOf: '2027-02-01T00:00:00.000Z' })).toEqual([]);
+  });
   it('fails closed when a vehicleUid is requested but none is stored', async () => {
     const store = writeStore();
     const inputs = [candidate()];

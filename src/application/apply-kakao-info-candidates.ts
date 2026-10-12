@@ -154,6 +154,7 @@ export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
     if (isT1OrAbove(info.layer)) return true;
   }
   if (isPromotionForbiddenType(type) && info.autoPromotable === true) return true;
+  if (typeof info.channel === 'string' && info.channel !== 'KAKAO_RAW' && (info.layer !== 'T0' || info.autoPromotable === true)) return true;
   if (isT2OrAbove(info.layer)) return true;
   if (info.autoPromotable === true && !hasStoredLiteralSameSentencePlateEvidence(info)) return true;
   return false;
