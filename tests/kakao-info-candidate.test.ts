@@ -9,6 +9,7 @@ import {
 } from '../src/domain/kakao-info-candidate.js';
 
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
+  supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
   type: '재고',
@@ -16,10 +17,10 @@ const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateI
     plate: '99허0000',
     model: 'TEST-FAKE-MODEL',
     plateEvidenceMsgNo: 100,
+    plateEvidence: { source: 'LITERAL_IN_UTTERANCE', distance: 0 },
     plateStatusSameSentence: true,
-    plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
   },
-  fields: { 요약: '재고 확인', 값: '재고 있음' },
+  fields: { 항목: '재고 확인', 요약: '재고 확인', 값: '재고 있음' },
   confidence: 0.8,
   needsSupplierConfirm: false,
   aiInvolved: true,
@@ -42,29 +43,39 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       .toEqual({ ok: false, reason: 'INVALID_EXCERPT' });
   });
 
+  it('bounds supplierCode to short supplier ids', () => {
+    expect(createKakaoInfoCandidate(base({ supplierCode: 'RP01012345678' })))
+      .toEqual({ ok: false, reason: 'INVALID_FIELDS' });
+    expect(createKakaoInfoCandidate(base({ supplierCode: 'PT-01012345678' })))
+      .toEqual({ ok: false, reason: 'INVALID_FIELDS' });
+  });
+
   it('rejects PII from every candidate string field except roomCode', () => {
     for (const patch of [
-      { fields: { 요약: '가격', 값: '010.1234.5678' } },
-      { fields: { 요약: '가격', 값: '+82 10-1234-5678' } },
-      { fields: { 요약: '가격', 값: '010 1234 5678' } },
-      { fields: { 요약: '가격', 값: '010-1234-5678' } },
-      { fields: { 요약: '가격', 값: '(010) 1234 5678' } },
-      { fields: { 요약: '가격', 값: 'test@example.com' } },
-      { fields: { 요약: '가격', 값: '주민번호 900101-1234567' } },
-      { fields: { 요약: '가격', 값: '9001011234567' } },
-      { fields: { 요약: '가격', 값: '은행 계좌 1234567890' } },
-      { fields: { 요약: '가격', 값: '123-456-789012' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '010.1234.5678' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '+82 10-1234-5678' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '010 1234 5678' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '010-1234-5678' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '(010) 1234 5678' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: 'test@example.com' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '주민번호 900101-1234567' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '9001011234567' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '은행 계좌 1234567890' } },
+      { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '123-456-789012' } },
       {
-        fields: { 요약: '계좌', 값: '123456789012' },
+        fields: { 항목: 'TEST-FAKE-ITEM', 요약: '계좌', 값: '123456789012' },
       },
       { vehicle: { plate: '99허0000', model: '010 1234 5678', plateEvidenceMsgNo: 100, plateEvidence: { source: 'LITERAL_IN_UTTERANCE' } } },
     ] satisfies Partial<KakaoInfoCandidateInput>[]) {
       expect(createKakaoInfoCandidate(base(patch))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
-    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1,000,000' } })).ok).toBe(true);
-    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1000000' } })).ok).toBe(true);
-    expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '100만원' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '1,000,000' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '1000000' } })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '100만원' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-A010B123' })).ok).toBe(true);
+    const allowed = createKakaoInfoCandidate(base({ supplierCode: 'RP012' }));
+    expect(allowed.ok).toBe(true);
+    expect(JSON.stringify(allowed)).not.toContain('01012345678');
   });
 
   it('rejects candidates sent more than five minutes in the future', () => {
@@ -74,30 +85,65 @@ describe('KakaoInfoCandidate/v1 validation', () => {
   });
 
   it('re-checks personal data on the final trimmed output so whitespace cannot hide split identifiers', () => {
-    for (const fields of [{ 요약: 'alice@ ', 값: 'example.com' }, { 요약: '010-1234	', 값: '　5678' }, { 요약: ' alice@	', 값: '　example.com ' }]) {
+    for (const fields of [{ 항목: 'TEST-FAKE-ITEM', 요약: 'alice@ ', 값: 'example.com' }, { 항목: 'TEST-FAKE-ITEM', 요약: '010-1234	', 값: '　5678' }, { 항목: 'TEST-FAKE-ITEM', 요약: ' alice@	', 값: '　example.com ' }]) {
       expect(createKakaoInfoCandidate(base({ fields }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
   });
 
   it('re-checks personal data after vehicle fields are normalized too', () => {
-    const input = base({ fields: { 요약: '재고', 값: 'user@' }, vehicle: { ...base().vehicle, model: ' example.com' } });
+    const input = base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '재고', 값: 'user@' }, vehicle: { ...base().vehicle, model: ' example.com' } });
     expect(createKakaoInfoCandidate(input)).toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
   it('rejects identifiers split across non-adjacent fields or msgNo using a residual digit budget while allowing amounts', () => {
-    expect(createKakaoInfoCandidate(base({ fields: { 요약: '010-1234', 값: '재고 있음' }, vehicle: { ...base().vehicle, model: '5678' } })))
+    expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '010-1234', 값: '재고 있음' }, vehicle: { ...base().vehicle, model: '5678' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: '345678', excerpt: '99허0000 010-12' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
-    const ok = createKakaoInfoCandidate(base({ fields: { 요약: '월 대여료 1,000,000원', 값: '24개월 보증금 500,000원' } }));
+    const ok = createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '월 대여료 1,000,000원', 값: '24개월 보증금 500,000원' } }));
     expect(ok.ok).toBe(true);
   });
   it('rejects phone fragments spread over excerpt and vehicle model (non-adjacent fields)', () => {
-    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010-1234' }, fields: { 요약: '재고', 값: '확인' }, vehicle: { model: '5678' } })))
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010-1234' }, fields: { 항목: 'TEST-FAKE-ITEM', 요약: '재고', 값: '확인' }, vehicle: { model: '5678' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
   it('rejects a phone number split into 6- and 5-digit fragments across non-adjacent fields', () => {
-    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010123' }, fields: { 요약: '재고', 값: '45678' } })))
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010123' }, fields: { 항목: 'TEST-FAKE-ITEM', 요약: '재고', 값: '45678' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
+  it('does not strip supplier-code-shaped text from free strings before residual digit checks', () => {
+    expect(createKakaoInfoCandidate(base({
+      fields: { 항목: 'TEST-FAKE-ITEM', 요약: 'RP01012', 값: 'TEST' },
+      vehicle: { model: '345678' },
+    }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
+  it('rejects email fragments in any field regardless of field order', () => {
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: 'alice@' }, fields: { 항목: '서류', 요약: 'example.com', 값: '등본' } } as never)))
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
+  it('rejects out-of-range plateEvidenceMsgNo such as a resident-number shaped value', () => {
+    for (const bad of [9001011234567, -1, 1000000, 1.5]) {
+      expect(createKakaoInfoCandidate(base({ vehicle: { ...base().vehicle, plateEvidenceMsgNo: bad } })))
+        .toEqual({ ok: false, reason: 'INVALID_PLATE_EVIDENCE' });
+    }
+  });
+  it('does not let long digit runs through confidence or grouped-amount look-alikes', () => {
+    const ok = createKakaoInfoCandidate(base({ confidence: 0.9001011234567 }));
+    expect(ok.ok && ok.candidate.confidence).toBe(0.9);
+    for (const v of ['9,912,311,234,567', '9001011234567원', '900101만1234567원', '900101가1234567', '010가1234나5678', '010가1234 5678', '02/12345678', '9001-01-12T3:4567']) {
+      const r = createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }));
+      expect([v, r]).toEqual([v, { ok: false, reason: 'PII_DETECTED' }]);
+    }
+  });
+  it('accepts valid ISO dates and times but still rejects resident-number shaped digits', () => {
+    for (const v of ['2026-10-12T01:00:00Z', '2026-10-12', '출고 2026-10-12T01:00:00.000Z']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } })).ok).toBe(true);
+    }
+    for (const v of ['9001-01-12T3:4567', '9001011234567']) {
+      expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
+  it('rejects phone-like digit-heavy room codes', () => {
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });
   });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
@@ -152,17 +198,17 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({
       source: { ...base().source, excerpt: '99허0000 재고 있음' },
       vehicle: { ...base().vehicle!, plate: '99허0000' },
-      fields: { 요약: '010-1234', 값: '5678' },
+      fields: { 항목: 'TEST-FAKE-ITEM', 요약: '010-1234', 값: '5678' },
     }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     expect(createKakaoInfoCandidate(base({
       source: { ...base().source, sentAt: '2026-10-12T00:00:00.000Z', excerpt: '99허0000 재고 있음' },
       vehicle: { ...base().vehicle!, plate: '99허0000' },
-      fields: { 요약: '계좌 확인', 값: '정상 후보' },
+      fields: { 항목: 'TEST-FAKE-ITEM', 요약: '계좌 확인', 값: '정상 후보' },
     })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({
       source: { ...base().source, excerpt: '99허0000 재고 있음' },
       vehicle: { ...base().vehicle!, plate: '99허0000' },
-      fields: { 요약: '금액', 값: '1,000,000' },
+      fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '1,000,000' },
     })).ok).toBe(true);
   });
 
@@ -197,7 +243,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(classifyKakaoInfoSignal(stock, '2026-10-13T00:00:00.001Z').isFresh).toBe(false);
     expect(classifyKakaoInfoSignal(stock, '2026-10-12T00:00:00.000Z').expiresAt).toBe('2026-10-13T00:00:00.000Z');
 
-    const price = assertKakaoInfoCandidate(base({ type: '가격', fields: { 요약: '가격', 값: 'TEST-FAKE-AMOUNT' } }));
+    const price = assertKakaoInfoCandidate(base({ type: '가격', fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: 'TEST-FAKE-AMOUNT' } }));
     expect(classifyKakaoInfoSignal(price, '2026-10-18T23:59:59.999Z').isFresh).toBe(true);
     expect(classifyKakaoInfoSignal(price, '2026-10-19T00:00:00.001Z').isFresh).toBe(false);
     expect(classifyKakaoInfoSignal(price, '2026-10-12T00:00:00.000Z').expiresAt).toBe('2026-10-19T00:00:00.000Z');

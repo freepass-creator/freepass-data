@@ -8,6 +8,7 @@ import { createFirestoreProjectionReader } from '../infra/firestore-projection-r
 import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
 import { createIancarOneApiClient, createIancarPhotoByteCache, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
 import { logPhotoMetadataFailure } from './vehicle-photo-metadata-diagnostic.js';
+import { createVehiclePhotoReadFailureObserver } from './vehicle-photo-read-diagnostic.js';
 export { isPublicIancarPhotoProduct } from '../infra/erp5-compat-catalog-reader.js';
 
 /**
@@ -75,7 +76,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       const id = ids[index];
       if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
       return { count: ids.length, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
-    }, approvedPhotoReader),
+    }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver() }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()
   };

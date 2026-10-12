@@ -129,4 +129,10 @@ export class MemorySourceStore implements SourceIngestionStore {
   async listLineage(runId: string) {
     return copy([...this.lineage.values()].filter((x) => x.runId === runId));
   }
+  async getCandidate(candidateId: string) {
+    return copy(this.candidates.get(candidateId) ?? null);
+  }
+  async listCandidatesBySource(sourceId: string) {
+    return copy([...this.candidates.values()].filter((x) => x.sourceId === sourceId));
+  }
 }
