@@ -27,7 +27,7 @@ describe('ProductDossier/v1 schema', () => {
     const bare = { path: 'product.maker', group: 'BASIC', source: 'RAW', asOf: null };
     expect(validate({ ...sample, fields: [bare] })).toBe(false); // mismatch 와 사유 없음
     expect(validate({ ...sample, fields: [{ ...bare, mismatch: 'NOT_COMPARED' }] })).toBe(false); // asOf null 인데 reasonCode 없음
-    expect(validate({ ...sample, fields: [{ ...bare, mismatch: 'NOT_COMPARED', reasonCode: 'READ_FAILED' }] }), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ ...sample, status: 'PARTIAL', fields: [{ ...bare, mismatch: 'NOT_COMPARED', reasonCode: 'READ_FAILED' }] }), JSON.stringify(validate.errors)).toBe(true);
     expect(validate({ ...sample, fields: [{ ...bare, asOf: '2026-10-12T00:00:00.000Z' }] })).toBe(false); // mismatch 없음
     expect(validate({ ...sample, fields: [{ ...sample.fields[0], source: 'GUESS' }] })).toBe(false);
     expect(validate({ ...sample, candidates: Array.from({ length: 21 }, () => ({ productId: 'p', plateLast4: '0001' })) })).toBe(false);
