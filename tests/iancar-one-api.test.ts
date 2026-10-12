@@ -1036,3 +1036,17 @@ describe('ONE GET 일시 오류 재시도', () => {
     }
   });
 });
+
+describe('iancarOnePhotoIds — 신원 불일치·stale 거부', () => {
+  const vehicle = (over: Record<string, unknown> = {}) => ({ data: { vehicle_id: 'EANCAR-x', plate_number: '12가3456', stale: false,
+    photos: [{ photo_id: 'p1', url: '/v1/vehicles/EANCAR-x/photos/p1', representative: true }], ...over } });
+  it('정상 응답은 ID 를 돌려준다', () => expect(iancarOnePhotoIds(vehicle(), 'EANCAR-x', '12가3456')).toEqual(['p1']));
+  it('차량 ID·번호가 다르면 IDENTITY_MISMATCH', () => {
+    expect(() => iancarOnePhotoIds(vehicle(), 'EANCAR-y', '12가3456')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    expect(() => iancarOnePhotoIds(vehicle(), 'EANCAR-x', '99가9999')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+  });
+  it('stale 이 true(또는 없음)이면 DETAIL_STALE', () => {
+    expect(() => iancarOnePhotoIds(vehicle({ stale: true }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+    expect(() => iancarOnePhotoIds(vehicle({ stale: undefined }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+  });
+});

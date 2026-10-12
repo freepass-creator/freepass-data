@@ -64,3 +64,19 @@ describe('이안카 사진 ID 기반 서빙 게이트', () => {
     await expect(read('erp5-public-media', 'p1', 3)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
   });
 });
+
+describe('이안카 사진 ID 게이트 — 원천 신원 불일치·stale·차량 소멸', () => {
+  const gateOn = (error: Error) => createVehiclePhotoReader(async () => base(), {
+    eligible: () => true, connection: () => 'c', read: vi.fn(async () => { throw error; }),
+  }, undefined, Date.now, undefined, new Set(['RP031']));
+  it.each(['IANCAR_PHOTO_IDENTITY_MISMATCH', 'IANCAR_PHOTO_DETAIL_STALE'])('원천이 %s 로 거부하면 사진을 서빙하지 않고 503 계열 오류(응답에 원인 문구 없음)', async code => {
+    await expect(gateOn(new Error(code))('erp5-public-media', 'p1', 0)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    await expect(gateOn(new Error(code))('erp5-public-media', 'p1')).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+  });
+  it('원천에서 차량이 사라진 경우(ONE 상세 404)는 일시 오류가 아니라 «사진 없음» 404 로 답한다', async () => {
+    await expect(gateOn(new Error('IANCAR_ONE_API_HTTP_404'))('erp5-public-media', 'p1', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+  });
+  it('그 밖의 원천 오류(503·타임아웃)는 계속 일시 오류(UNAVAILABLE)', async () => {
+    for (const code of ['IANCAR_ONE_API_HTTP_503', 'IANCAR_ONE_API_HTTP_500', 'TimeoutError']) await expect(gateOn(new Error(code))('erp5-public-media', 'p1', 0)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+  });
+});
