@@ -12,6 +12,15 @@ export function checkIancarSyncExpect(raw: string | undefined, plan: Record<stri
   if (raw === undefined || !raw.trim()) return { ok: false, reasons: ['EXPECT_MISSING'] };
   let expect: unknown;
   try { expect = JSON.parse(raw); } catch { return { ok: false, reasons: ['EXPECT_NOT_JSON'] }; }
+  // JSON.parse 는 중복 키를 마지막 값으로 덮어 승인 범위가 넓어질 수 있다(예: deletes [0,0] 뒤에 deletes [0,1]).
+  // 이 설정 모양(값은 숫자 배열)에서는 문자열 바로 뒤에 ':' 가 오는 것이 전부 키이므로, 같은 키(이스케이프 해석 후)가 두 번 나오면 중단한다.
+  const seen = new Set<string>();
+  for (const match of raw.matchAll(/"((?:[^"\\]|\\.)*)"\s*:/g)) {
+    let key: string;
+    try { key = JSON.parse(`"${match[1]}"`) as string; } catch { return { ok: false, reasons: ['EXPECT_NOT_JSON'] }; }
+    if (seen.has(key)) return { ok: false, reasons: [`DUPLICATE_KEY:${key}`] };
+    seen.add(key);
+  }
   if (!expect || typeof expect !== 'object' || Array.isArray(expect)) return { ok: false, reasons: ['EXPECT_NOT_OBJECT'] };
   const record = expect as Record<string, unknown>;
   const reasons: string[] = [];
