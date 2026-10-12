@@ -69,6 +69,21 @@ const normalizePlateText = (value: string) => value.replace(/[^0-9A-Za-z가-힣]
 
 export const isValidKakaoInfoPlate = (value: string) => /^\d{2,3}[가-힣]\d{4}$/.test(normalizePlateText(value));
 
+const isDigit = (value: string | undefined) => value !== undefined && /^\d$/.test(value);
+
+function hasPlateLiteralWithNumericBoundary(excerpt: string, plate: string) {
+  const normalizedExcerpt = normalizePlateText(excerpt);
+  const normalizedPlate = normalizePlateText(plate);
+  let index = normalizedExcerpt.indexOf(normalizedPlate);
+  while (index >= 0) {
+    const previous = normalizedExcerpt[index - 1];
+    const next = normalizedExcerpt[index + normalizedPlate.length];
+    if (!isDigit(previous) && !isDigit(next)) return true;
+    index = normalizedExcerpt.indexOf(normalizedPlate, index + 1);
+  }
+  return false;
+}
+
 const parseMsgNo = (value: string) => {
   const trimmed = value.trim();
   if (/^\d+$/.test(trimmed)) return Number(trimmed);
@@ -118,9 +133,7 @@ export function hasSensitiveKakaoExcerpt(value: string) {
 
 function candidateStringValues(input: KakaoInfoCandidateInput) {
   const strings: string[] = [
-    input.source?.sentAt,
     input.source?.side,
-    input.source?.msgNo,
     input.source?.excerpt,
     input.type,
     input.fields?.요약,
@@ -132,10 +145,20 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
   return strings;
 }
 
+function candidateSensitiveProbeValues(values: string[]) {
+  const adjacent = values.slice(0, -1).map((value, index) => `${value}${values[index + 1]}`);
+  return [...values, values.join(''), ...adjacent];
+}
+
 function hasCrossFieldAccountEvidence(values: string[]) {
-  const hasAccountKeyword = values.some((value) => /(계좌|은행|입금)/.test(value));
-  if (!hasAccountKeyword) return false;
-  return values.some((value) => value.replace(/\D/g, '').length >= 10);
+  return values.some((value, index) => {
+    if (!/(계좌|은행|입금)/.test(value)) return false;
+    return [
+      value,
+      `${value}${values[index - 1] ?? ''}`,
+      `${value}${values[index + 1] ?? ''}`,
+    ].some((probe) => probe.replace(/\D/g, '').length >= 10);
+  });
 }
 
 const allowedInputFields = new Set([
@@ -190,7 +213,7 @@ function isValidRoomCode(value: string) {
 
 export function kakaoVehicleKey(candidate: Pick<KakaoInfoCandidateInput, 'vehicle'>) {
   const plate = candidate.vehicle?.plate?.trim();
-  if (plate) return plate;
+  if (plate && isValidKakaoInfoPlate(plate)) return normalizePlateText(plate);
   return 'UNSPECIFIED';
 }
 
@@ -221,7 +244,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     return { ok: false, reason: 'INVALID_EXCERPT' };
   }
   const stringValues = candidateStringValues(input);
-  if (stringValues.some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)) {
+  if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
@@ -252,7 +275,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   if (input.vehicle) {
     const sourceMsgNo = parseMsgNo(input.source.msgNo);
     const plate = input.vehicle.plate?.trim();
-    const validPlate = plate && isValidKakaoInfoPlate(plate) ? plate : undefined;
+    const validPlate = plate && isValidKakaoInfoPlate(plate) ? normalizePlateText(plate) : undefined;
     const plateEvidenceMsgNo = typeof input.vehicle.plateEvidenceMsgNo === 'number' && Number.isInteger(input.vehicle.plateEvidenceMsgNo)
       ? input.vehicle.plateEvidenceMsgNo
       : undefined;
@@ -266,7 +289,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       plateDistance === 0 &&
       plateEvidenceMsgNo === sourceMsgNo &&
       input.vehicle.plateStatusSameSentence === true &&
-      normalizePlateText(input.source.excerpt).includes(normalizePlateText(validPlate!));
+      hasPlateLiteralWithNumericBoundary(input.source.excerpt, validPlate!);
     const plateUnverified = plateHasEvidence ? input.vehicle.plateUnverified?.trim() : plate || input.vehicle.plateUnverified?.trim();
     normalized.vehicle = {
       ...(plateHasEvidence && validPlate ? { plate: validPlate } : {}),
@@ -320,7 +343,7 @@ export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, '
     candidate.vehicle?.plateStatusSameSentence === true &&
     Number.isInteger(sourceMsgNo) &&
     plateEvidenceMsgNo === sourceMsgNo &&
-    normalizePlateText(candidate.source.excerpt).includes(normalizePlateText(plate!));
+    hasPlateLiteralWithNumericBoundary(candidate.source.excerpt, plate!);
   return stateTypes.has(candidate.type)
     && isFresh
     && hasLiteralSameSentencePlate

@@ -109,6 +109,49 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(withModel.candidateId).toBe(noVehicle.candidateId);
   });
 
+  it('rejects PII split across candidate string values but allows amounts and structural dates', () => {
+    expect(createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '99허0000 재고 있음' },
+      vehicle: { ...base().vehicle!, plate: '99허0000' },
+      fields: { 요약: '010-1234', 값: '5678' },
+    }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    expect(createKakaoInfoCandidate(base({
+      source: { ...base().source, sentAt: '2026-10-12T00:00:00.000Z', excerpt: '99허0000 재고 있음' },
+      vehicle: { ...base().vehicle!, plate: '99허0000' },
+      fields: { 요약: '계좌 확인', 값: '정상 후보' },
+    })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '99허0000 재고 있음' },
+      vehicle: { ...base().vehicle!, plate: '99허0000' },
+      fields: { 요약: '금액', 값: '1,000,000' },
+    })).ok).toBe(true);
+  });
+
+  it('requires numeric boundaries for literal plate evidence in excerpts', () => {
+    for (const excerpt of ['199허0000 재고 있음', '99허00001 재고 있음']) {
+      const candidate = assertKakaoInfoCandidate(base({
+        source: { ...base().source, excerpt },
+        vehicle: { ...base().vehicle!, plate: '99허0000' },
+      }));
+      expect(candidate.vehicle?.plate).toBeUndefined();
+      expect(candidate.vehicle?.plateUnverified).toBe('99허0000');
+    }
+  });
+
+  it('stores normalized plate text and keeps equivalent plate spellings idempotent', () => {
+    const compact = assertKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '99허0000 재고 있음' },
+      vehicle: { ...base().vehicle!, plate: '99허0000' },
+    }));
+    const spaced = assertKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '99 허 0000 재고 있음' },
+      vehicle: { ...base().vehicle!, plate: '99 허 0000' },
+    }));
+    expect(compact.vehicle?.plate).toBe('99허0000');
+    expect(spaced.vehicle?.plate).toBe('99허0000');
+    expect(spaced.candidateId).toBe(compact.candidateId);
+  });
+
   it('calculates 24h TTL for state signals and 7d TTL for price or terms signals', () => {
     const stock = assertKakaoInfoCandidate(base({ type: '재고' }));
     expect(classifyKakaoInfoSignal(stock, '2026-10-12T23:59:59.999Z').isFresh).toBe(true);

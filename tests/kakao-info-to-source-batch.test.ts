@@ -200,6 +200,20 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
     }
   });
 
+  it('uses normalized plate text for productRef across equivalent plate spellings', () => {
+    const compact = kakaoInfoCandidatesToSourceBatch([candidate({
+      source: { ...candidate().source, excerpt: '99허0000 재고 있음' },
+      vehicle: { ...candidate().vehicle!, plate: '99허0000' },
+    })], { now: '2026-10-12T01:00:00.000Z' });
+    const spaced = kakaoInfoCandidatesToSourceBatch([candidate({
+      source: { ...candidate().source, excerpt: '99 허 0000 재고 있음' },
+      vehicle: { ...candidate().vehicle!, plate: '99 허 0000' },
+    })], { now: '2026-10-12T01:00:00.000Z' });
+    expect(compact.candidates[0]?.productRef).toBe('products/99허0000');
+    expect(spaced.candidates[0]?.productRef).toBe('products/99허0000');
+    expect(spaced.candidates[0]?.candidate.candidateId).toBe(compact.candidates[0]?.candidate.candidateId);
+  });
+
   it('preserves conflicting same-vehicle values as separate candidates instead of overwriting', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
       candidate({ source: { ...candidate().source, msgNo: '100' }, fields: { 요약: '재고', 값: '재고 있음' } }),
