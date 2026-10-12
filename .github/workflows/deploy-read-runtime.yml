@@ -285,11 +285,15 @@ jobs:
         if: ${{ env.USE_CONSUMER_SECRETS == 'true' && env.IANCAR_PHOTO_ID_GATE_SUPPLIERS != '' }}
         shell: bash
         run: |
+          set +x
           set -euo pipefail
-          consumers_json="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION"             --project="$PROJECT_ID"             --secret="$CONSUMERS_SECRET_NAME")"
+          # 비밀 값이 로그에 남지 않게: 실행 추적을 끄고, 조회·검증 명령의 stdout·stderr 를 모두 버리며 실패 시 고정 문구만 출력한다.
+          consumers_json="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" --project="$PROJECT_ID" --secret="$CONSUMERS_SECRET_NAME" 2>/dev/null)" || {
+            echo '::error::소비처 비밀을 읽지 못했습니다(권한 또는 버전 확인 필요)'; exit 1; }
           trap 'unset consumers_json' EXIT
           # 사진 소비처(erp5-public-media)가 정확히 하나, photos 권한, 32자 이상 토큰 — 존재·권한·형식만 보고 값은 출력하지 않는다.
-          jq -e '[.[] | select(.id == "erp5-public-media")] | length == 1 and (.[0].capabilities | type == "array" and index("photos") != null) and (.[0].token | type == "string" and length >= 32)' <<< "$consumers_json" >/dev/null
+          jq -e '[.[] | select(.id == "erp5-public-media")] | length == 1 and (.[0].capabilities | type == "array" and index("photos") != null) and (.[0].token | type == "string" and length >= 32)' <<< "$consumers_json" >/dev/null 2>&1 || {
+            echo '::error::소비처 비밀 형식 불일치(erp5-public-media 항목·photos 권한·토큰 형식 확인 필요)'; exit 1; }
           echo 'READ_RUNTIME_PHOTO_CONSUMER_SECRET_VERIFIED=true' >> "$GITHUB_ENV"
 
       - name: Build immutable container
