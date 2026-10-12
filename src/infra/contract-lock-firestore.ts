@@ -1,4 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
+import { buildContractLockReleaseUpdate } from '../domain/contract-lock-release-update.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 
@@ -35,12 +36,7 @@ export async function releaseContractLock(input: ContractLockReleaseWrite): Prom
     if (!data || data.provider_company_code !== input.supplierCode || data.locked_by_contract !== 'LEDGER' || typeof data._ledger_lock_at !== 'number' || data._ledger_lock_at !== input.expectedLockAt) {
       return 'PRECONDITION_FAILED' as const;
     }
-    tx.update(ref, {
-      locked_by_contract: null,
-      _ledger_unlocked_at: Date.now(),
-      _ledger_unlock_reason: input.reason,
-      _ledger_unlock_previous: { locked_by_contract: 'LEDGER', _ledger_lock_at: input.expectedLockAt },
-    });
+    tx.update(ref, buildContractLockReleaseUpdate(data, input, Date.now()));
     return 'RELEASED' as const;
   });
 }
