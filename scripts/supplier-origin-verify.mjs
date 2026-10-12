@@ -86,7 +86,7 @@ export function aicaRecords(values) {
     for (const [h, f] of Object.entries(AICA_HEADER_TO_FIELD)) rec[f] = get(r, h);
     rec['price.1.rent'] = get(r, '월렌트');
     for (const [h, p] of [['36개월', '36'], ['48개월', '48'], ['60개월', '60']]) rec[`price.${p}.rent`] = get(r, h);
-    for (const p of ['1', '36', '48', '60']) rec[`price.${p}.deposit`] = String(rec[`price.${p}.rent`]).trim() ? get(r, '장기보증') : '';
+    for (const p of ['1', '36', '48', '60']) rec[`price.${p}.deposit`] = (String(rec[`price.${p}.rent`]).trim() && String(rec[`price.${p}.rent`]).trim() !== '-') ? get(r, '장기보증') : '';
     out.push(rec);
   }
   return out;
