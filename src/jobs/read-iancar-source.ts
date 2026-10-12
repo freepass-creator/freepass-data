@@ -68,6 +68,11 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
     const [vehicle, rates] = await Promise.all([client.getVehicle(id), client.getRates(id)]) as [{ success?: boolean; data?: unknown }, { success?: boolean; data?: unknown }];
     // fail-closed: 상세·요금이 실패 응답이면 목록값·빈 요금으로 대체하지 않고 중단
     if (vehicle.success !== true || typeof vehicle.data !== 'object' || vehicle.data === null || rates.success !== true || !Array.isArray(rates.data)) { console.error('IANCAR_DETAIL_OR_RATES_RESPONSE_INVALID'); process.exit(3); }
+    // 상세에도 목록과 같은 상태·신선도·식별자 검증(상세가 목록과 다른 상태를 주면 중단)
+    const dv = vehicle.data as Record<string, unknown>;
+    if (!['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'].includes(String(dv.inventory_status)) || typeof dv.available !== 'boolean' || dv.available !== (dv.inventory_status === 'AVAILABLE')
+      || dv.stale === true || String(dv.vehicle_id) !== id || String(dv.plate_number ?? '').replace(/\s+/g, '') !== String(r.plate_number ?? '').replace(/\s+/g, '')
+      || String(dv.inventory_status) !== String(r.inventory_status)) { console.error('IANCAR_DETAIL_STATUS_INVALID_OR_MISMATCH'); process.exit(3); }
     detail.push({ list: r, vehicle, rates });
   }
   if (out) writeFileSync(out, JSON.stringify({ readAt, syncedAt, stale, detail }));

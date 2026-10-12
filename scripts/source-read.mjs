@@ -246,7 +246,8 @@ function crossCheck(c, res, products) {
   const src = new Set(res.records.map(r => plateKey(r.plate)).filter(Boolean));
   const dataSet = new Set(mine.map(p => plateKey(p.car_number)));
   return { sourceCount: src.size, dataTotal: mine.length, dataListable: listable.length, listableInSource: listable.filter(p => src.has(plateKey(p.car_number))).length,
-    listableNotInSource: listable.filter(p => !src.has(plateKey(p.car_number))).length, sourceNotInData: [...src].filter(p => !dataSet.has(p)).length };
+    listableNotInSource: res.partial ? null : listable.filter(p => !src.has(plateKey(p.car_number))).length, // 부분 읽기에서는 «원천에 없음»을 판정하지 않는다
+    sourceNotInData: [...src].filter(p => !dataSet.has(p)).length, partial: res.partial === true };
 }
 
 const NAMES = { RP004: '아이카', RP031: '이안카', RP012: '손오공', RP023: '오토플러스', RP006: '아이언' };
@@ -257,8 +258,8 @@ if (cmd === 'status') {
   for (const c of ['RP004', 'RP031', 'RP006', 'RP023', 'RP012']) {
     let res; try { res = await readSupplier(c, products); } catch (e) { res = { ok: false, reason: `예외: ${e.message}` }; }
     if (!res.ok) { console.log([`${NAMES[c]} ${c}`, '막힘', '-', '-', '-', '-', '-', '-', res.reason].join(' | ')); out[c] = { ok: false, reason: res.reason }; continue; }
-    const x = crossCheck(c, res, products); out[c] = { ok: true, ...x, readAt: res.readAt };
-    console.log([`${NAMES[c]} ${c}`, res.partial ? '일부 읽힘' : '읽힘', x.sourceCount, `${x.dataTotal}/${x.dataListable}`, x.listableInSource, x.listableNotInSource, x.sourceNotInData, res.readAt, res.note ?? ''].join(' | '));
+    const x = crossCheck(c, res, products); out[c] = { ok: true, partial: res.partial === true, ...x, readAt: res.readAt };
+    console.log([`${NAMES[c]} ${c}`, res.partial ? '일부 읽힘' : '읽힘', x.sourceCount, `${x.dataTotal}/${x.dataListable}`, x.listableInSource, x.listableNotInSource ?? '판정 불가(부분 읽기)', x.sourceNotInData, res.readAt, res.note ?? ''].join(' | '));
   }
   if (opt('json')) writeFileSync(opt('json'), JSON.stringify(out, null, 2));
 } else if (cmd === 'read' && code) {
