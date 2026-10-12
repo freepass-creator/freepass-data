@@ -190,18 +190,26 @@ export function createIancarOneApiClient(
   const RETRY_DELAYS_MS = [500, 1500];
   const requestJson = async (path: string): Promise<Json> => {
     let response: Response | undefined;
+    let timeouts = 0;
     for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-      response = await fetcher(apiUrl(normalized.origin, path), {
-        method: 'GET',
-        redirect: 'manual',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(normalized.timeoutMs),
-        headers: {
-          'User-Agent': 'FreePassData/1 iancar-one-api',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${normalized.apiKey}`
-        }
-      });
+      try {
+        response = await fetcher(apiUrl(normalized.origin, path), {
+          method: 'GET',
+          redirect: 'manual',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(normalized.timeoutMs),
+          headers: {
+            'User-Agent': 'FreePassData/1 iancar-one-api',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${normalized.apiKey}`
+          }
+        });
+      } catch (error) {
+        // ONE 가 느릴 때(상세·요금 5~13초) 한 요청의 시간 초과가 전량 읽기 회차 전체를 죽이지 않게 «한 번만» 더 시도한다.
+        // 두 번째도 시간 초과면 원래 오류 그대로 던진다(신선도 15분 창을 더 잡아먹지 않는다).
+        if ((error as { name?: string })?.name === 'TimeoutError' && ++timeouts <= 1) continue;
+        throw error;
+      }
       if (!TRANSIENT_STATUS.has(response.status) || attempt === RETRY_DELAYS_MS.length) break;
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
     }
