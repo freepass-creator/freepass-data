@@ -1,7 +1,8 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
-import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
+import { KAKAO_COMMISSION_POLICY, matchesReferenceRentBasisCandidate, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis, truncWon, validateSonokongQ12Basis } from './kakao-catalog-reference.js';
+import { parseErp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
   DepositResolution,
@@ -13,6 +14,51 @@ import type {
 
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+const isDeprecatedSonokongPickupVehiclePriceFee = (
+  supplierId: string,
+  commercialType: CommercialType | undefined,
+  fee: TermEconomicAmount,
+): boolean =>
+  supplierId === 'RP012' &&
+  fee.calculation?.kind === 'RATE' &&
+  fee.calculation.base === 'VEHICLE_PRICE' &&
+  (commercialType === 'PICKUP_SUBSCRIPTION' || !!fee.ruleId?.startsWith('SONOKONG_PICKUP_'));
+
+const matchesRentReferenceCandidate = (
+  target: Parameters<typeof matchesReferenceRentBasisCandidate>[0],
+  candidate: Parameters<typeof matchesReferenceRentBasisCandidate>[1],
+  termMonths: 12 | 36,
+  requireSettlement: boolean,
+): boolean => {
+  if (!matchesReferenceRentBasisCandidate(
+    requireSettlement ? target : { ...target, settlement: candidate.settlement },
+    candidate,
+    termMonths,
+  )) return false;
+  return !requireSettlement || candidate.settlement === target.settlement;
+};
+
+const referenceCandidateForPriceTerm = (
+  offerId: string,
+  term: PriceTerm,
+  evidenceByTerm: CommissionEvidenceByTerm,
+  rejectSubscriptionFormConflict: boolean,
+) => {
+  const parsed = parseErp5CompatibilityPriceKey(term.termKey);
+  const evidence = evidenceByTerm[term.termKey];
+  const resolved = resolveSubscriptionFormForTerm(evidence?.subscriptionForm, parsed?.settlement);
+  if (rejectSubscriptionFormConflict && resolved.conflict) return null;
+  return {
+    termMonths: term.termMonths,
+    settlement: resolved.subscriptionForm,
+    mileageKm: term.mileageLimitKmPerYear ?? undefined,
+    mileagePeriod: 'year' as const,
+    currency: term.monthlyRent.currency,
+    amount: term.monthlyRent.amount,
+    sourceRef: `catalog_offers/${offerId}/priceTerms/${term.termKey}`,
+  };
+};
 
 /** Reuses the pinned engine; changes only two fee fields on existing, price-aligned rows. */
 export function selectOfferFeeEconomics(offer: Offer, commercialType?: CommercialType, fuel?: string | null, termKeys?: readonly string[]) {
@@ -91,26 +137,84 @@ export function joinStoredProductEconomics(productId: string, offers: readonly O
 export function refreshOfferEconomicsForChangedInputs(
   previous: Offer, next: Offer, policyContextChanged: boolean, commercialType?: CommercialType, fuel?: string | null,
   vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+  evidenceByTerm: CommissionEvidenceByTerm = {},
 ) {
   if (typeof policyContextChanged !== 'boolean') throw new Error('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
-  const candidate = precomputeOfferEconomics(next, commercialType, fuel);
+  const candidate = precomputeOfferEconomics(next, commercialType, fuel, evidenceByTerm);
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
+  const newPrices = new Map(next.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
   for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
+  // 기준 행 메타데이터(referenceRentBasis)가 없는 옛 빌린 36개월 기준 수수료도 재계산한다(약화 금지).
   const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
     stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
+  const referenceNeededTerm = (fee: TermEconomicAmount): 12 | 36 | null => {
+    if (fee.reasonCode === 'OGONG_12M_BASE_MISSING' || fee.reasonCode === 'Q12_BASIS_REQUIRED') return 12;
+    if (fee.reasonCode === 'BILLIN_36_MONTH_RENT_REQUIRED') return 36;
+    return null;
+  };
+  const isSonokongOgongSubscription = previous.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
+  const referenceCandidate = (term: PriceTerm) =>
+    referenceCandidateForPriceTerm(next.id, term, evidenceByTerm, isSonokongOgongSubscription);
+  const referenceCandidateDigest = (terms: readonly PriceTerm[], current: PriceTerm, basisTermMonths: 12 | 36, requireSettlement: boolean) => {
+    const target = referenceCandidate(current);
+    if (target === null) return stableDigest(null);
+    return stableDigest(terms
+      .filter(term => {
+        const reference = referenceCandidate(term);
+        return reference !== null && matchesRentReferenceCandidate(target, reference, basisTermMonths, requireSettlement);
+      })
+      .map(term => ({
+        termKey: term.termKey,
+        termMonths: term.termMonths,
+        mileageLimitKmPerYear: term.mileageLimitKmPerYear ?? null,
+        monthlyRent: term.monthlyRent,
+      }))
+      .sort((a, b) => a.termKey.localeCompare(b.termKey)));
+  };
+  const referenceCandidateChange = (current: PriceTerm, fee: TermEconomicAmount): { changed: boolean; exact: boolean } => {
+    const basis = fee.referenceRentBasis;
+    const requireSettlement = basis?.termMonths === 12 || fee.reasonCode === 'OGONG_12M_BASE_MISSING' || fee.reasonCode === 'Q12_BASIS_REQUIRED';
+    if (!basis) {
+      const neededTerm = referenceNeededTerm(fee);
+      return neededTerm === null ? { changed: false, exact: false } : {
+        changed: referenceCandidateDigest(previous.priceTerms, current, neededTerm, requireSettlement) !== referenceCandidateDigest(next.priceTerms, current, neededTerm, requireSettlement),
+        exact: false,
+      };
+    }
+    const target = referenceCandidate(current);
+    const oldBasis = oldPrices.get(basis.termKey);
+    const newBasis = newPrices.get(basis.termKey);
+    if (!newBasis || stableDigest(oldBasis ?? null) !== stableDigest(newBasis)) return { changed: true, exact: true };
+    if (target === null) return { changed: false, exact: false };
+    const matches = (candidate: PriceTerm | undefined) => !!candidate &&
+      (() => {
+        const reference = referenceCandidate(candidate);
+        return reference !== null && matchesRentReferenceCandidate(target, reference, basis.termMonths, requireSettlement);
+      })();
+    const changed = [...changedPriceKeys].filter(key => matches(newPrices.get(key)) || matches(oldPrices.get(key)));
+    return { changed: changed.length > 0, exact: changed.some(key => key === basis.termKey) };
+  };
   return candidate.map(term => {
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = old.get(term.termKey)?.[side];
       if (!fee) continue;
       if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
-        const referenceChanged = (fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey)) ||
-          (fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed);
+        const newPrice = newPrices.get(term.termKey)!;
+        const referenceChange = referenceCandidateChange(newPrice, fee);
+        const legacyBillinChanged = !fee.referenceRentBasis && !!fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed;
+        const referenceChanged = referenceChange.changed || legacyBillinChanged;
         if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        else if (fee.referenceRentBasis && referenceChange.changed && !referenceChange.exact && term[side].state === 'KNOWN') term[side] = {
+          ...term[side], state: 'UNKNOWN', amount: null, calculation: null, sourceRefs: [],
+          vatAmount: null, totalAmount: null,
+          reasonCode: fee.referenceRentBasis?.termMonths === 12 ? 'OGONG_12M_BASE_MISSING' : 'BILLIN_36_MONTH_RENT_REQUIRED',
+        };
         continue;
       }
+      if (isDeprecatedSonokongPickupVehiclePriceFee(previous.supplierId, commercialType, fee)) continue;
       term[side] = structuredClone(fee);
       const oldPrice = oldPrices.get(term.termKey), newPrice = next.priceTerms.find(price => price.termKey === term.termKey)!;
       if (policyContextChanged || oldPrice?.termMonths !== newPrice.termMonths ||
@@ -159,17 +263,61 @@ export function precomputeOfferEconomics(
   const policy = KAKAO_COMMISSION_POLICY;
   return offer.priceTerms.filter(term=>termKeys===undefined || termKeys.includes(term.termKey)).map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
-    const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
-      candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
-      positiveSafeInteger(candidate.monthlyRent.amount));
-    const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
+    const explicitEvidence = evidenceByTerm[term.termKey];
+    const parsedTargetKey = parseErp5CompatibilityPriceKey(term.termKey);
+    const resolvedTargetSettlement = resolveSubscriptionFormForTerm(explicitEvidence?.subscriptionForm, parsedTargetKey?.settlement);
+    const targetSettlement = resolvedTargetSettlement.subscriptionForm;
+    const isSonokongOgongSubscription = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
+    const referenceCandidateFor = (candidate: PriceTerm) =>
+      referenceCandidateForPriceTerm(offer.id, candidate, evidenceByTerm, isSonokongOgongSubscription);
+    const targetReferenceCandidate = referenceCandidateForPriceTerm(offer.id, term, evidenceByTerm, false)!;
+    const basis36 = offer.priceTerms.filter(candidate => {
+      const reference = referenceCandidateFor(candidate);
+      return reference !== null && matchesRentReferenceCandidate(targetReferenceCandidate, reference, 36, isSonokongOgongSubscription);
+    });
+    const q12BasisCandidates = isSonokongOgongSubscription && !resolvedTargetSettlement.conflict
+      ? offer.priceTerms.flatMap(candidate => {
+        const reference = referenceCandidateFor(candidate);
+        return reference !== null &&
+          reference.termMonths === 12 &&
+          reference.settlement === targetReferenceCandidate.settlement &&
+          reference.mileageKm === targetReferenceCandidate.mileageKm &&
+          (reference.mileagePeriod ?? 'year') === (targetReferenceCandidate.mileagePeriod ?? 'year') &&
+          reference.currency === targetReferenceCandidate.currency &&
+          Number.isSafeInteger(reference.amount) && reference.amount > 0
+          ? [reference]
+          : [];
+      })
+      : [];
+    const explicitQ12 = explicitEvidence?.q12Basis;
+    const explicitQ12Result = isSonokongOgongSubscription && explicitQ12 && !resolvedTargetSettlement.conflict
+      ? validateSonokongQ12Basis(explicitQ12, targetReferenceCandidate, q12BasisCandidates)
+      : {};
+    const q12Basis = isSonokongOgongSubscription && !explicitEvidence?.q12Basis && !resolvedTargetSettlement.conflict
+      ? selectSonokongQ12Basis(targetReferenceCandidate, offer.priceTerms.flatMap(candidate => {
+        const reference = referenceCandidateFor(candidate);
+        return reference === null ? [] : [reference];
+      }))
+      : undefined;
+    const automaticSonokongEvidence = q12Basis
+      ? { q12Basis }
+      : {};
+    const { q12Basis: _ignoredInvalidQ12Basis, ...explicitEvidenceWithoutQ12 } = explicitEvidence ?? {};
+    const effectiveExplicitEvidence = 'reasonCode' in explicitQ12Result ? explicitEvidenceWithoutQ12 : explicitEvidence;
+    const args = { ...effectiveExplicitEvidence,
+      ...(targetSettlement ? { subscriptionForm: targetSettlement } : {}),
+      ...(resolvedTargetSettlement.conflict ? { subscriptionFormConflict: true as const } : {}),
+      supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
-      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
+      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
+      ...automaticSonokongEvidence,
+      ...(explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
         side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
       // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
-      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE') return structuredClone(saved);
+      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE' &&
+          !isDeprecatedSonokongPickupVehiclePriceFee(offer.supplierId, commercialType, saved)) return structuredClone(saved);
       const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
@@ -178,8 +326,19 @@ export function precomputeOfferEconomics(
         base.referenceRentBasis = { termKey: basis36[0]!.termKey, termMonths: 36,
           monthlyRent: structuredClone(basis36[0]!.monthlyRent), multiplier: side === 'BILLING' ? 1 : 0.8 };
       }
+      const q12BasisTerm = args.q12Basis?.sourceRef
+        ? offer.priceTerms.find(candidate => args.q12Basis?.sourceRef === `catalog_offers/${offer.id}/priceTerms/${candidate.termKey}`)
+        : undefined;
+      if (result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && q12BasisTerm?.termMonths === 12) {
+        base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${q12BasisTerm.termKey}`])];
+        base.referenceRentBasis = { termKey: q12BasisTerm.termKey, termMonths: 12,
+          monthlyRent: structuredClone(q12BasisTerm.monthlyRent), multiplier: 1 };
+      }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
+      if ('reasonCode' in explicitQ12Result && isSonokongOgongSubscription) {
+        return unknown(explicitQ12Result.reasonCode);
+      }
       if (!productType) return unknown('PRODUCT_TYPE_REQUIRED');
       if (policy.exceptionSupplierIds.iancar.includes(offer.supplierId as 'RP004') && !fuel?.trim()) {
         return unknown('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
@@ -190,7 +349,7 @@ export function precomputeOfferEconomics(
       }
       if (result.state === 'NOT_APPLICABLE') return { ...base, state: 'NOT_APPLICABLE', amount: null, calculation: null, reasonCode: result.reasonCode };
       if (result.state === 'COORDINATION_REQUIRED') return unknown('COORDINATION_REQUIRED');
-      if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
+      if ((result.state !== 'CALCULATED' && result.state !== 'CALCULATED_APPROX') || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
 
       let calculation: TermEconomicAmount['calculation'];
       const monthlyRule = policy.rules.find(rule => rule.id === result.ruleId && 'basis' in rule && rule.basis === 'MONTHLY_RENT');
@@ -210,22 +369,35 @@ export function precomputeOfferEconomics(
           if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
         }
         calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
-      } else if (result.ruleId?.endsWith('_RENT_X_TERM')) {
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM') ||
+          (result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' && term.termMonths !== 12)) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
           rule.id.startsWith('STANDARD_RERENT_') && 'rateBasisPoints' in rule);
+        const sonokongPickup60Rate = result.ruleId === `SONOKONG_PICKUP_60_${side}_RENT_X_TERM`
+          ? side === 'BILLING' ? 275 : 200
+          : null;
         const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === term.termMonths) : payout;
-        const rate = row && 'rateBasisPoints' in row ? row.rateBasisPoints : null;
+        const rate = sonokongPickup60Rate ?? (row && 'rateBasisPoints' in row ? row.rateBasisPoints : null);
         if (rate == null) return unknown('CALCULATION_RULE_REQUIRED');
-        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: rate / 10000 };
+        const expectedAmount = result.ruleId?.startsWith('SONOKONG_') || result.note?.startsWith('SONOKONG_')
+          ? truncWon(args.monthlyRent * term.termMonths * rate / 10000)
+          : Math.round(args.monthlyRent * term.termMonths * rate / 10000);
+        const adjustmentAmount = side === 'BILLING' && result.amount === expectedAmount - 100000
+          ? { amount: -100000, currency: 'KRW' as const }
+          : undefined;
+        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: rate / 10000,
+          ...(adjustmentAmount ? { adjustmentAmount } : {}) };
       } else {
         calculation = { kind: 'FIXED', amount: { amount: result.amount, currency: 'KRW' } };
       }
       return { ...base, state: result.amount === 0 ? 'ZERO' : 'KNOWN',
         sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority,
           ...(result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
-        amount: { amount: result.amount, currency: 'KRW' }, calculation, reasonCode: null };
+        amount: { amount: result.amount, currency: 'KRW' }, calculation,
+        reasonCode: result.state === 'CALCULATED_APPROX' ? (result.note ?? 'APPROXIMATE_COMMISSION_RULE') : null,
+        ...(result.state === 'CALCULATED_APPROX' ? { approximate: true, note: result.note ?? null } : {}) };
     };
     const deposit = structuredClone(term.deposit ?? null);
     return {
@@ -433,6 +605,7 @@ export function summarizeCommercialTerms(
 function auditEconomicAmount(
   value: TermEconomicAmount,
   label: string,
+  supplierId: string,
   monthlyRent: number,
   termMonths: number,
   decisions: string[],
@@ -481,11 +654,15 @@ function auditEconomicAmount(
     }
     expected = Math.round(monthlyRent * calculation.multiplier);
   } else if (calculation.base === 'MONTHLY_RENT_X_TERM') {
-    if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
+    if (!Number.isFinite(calculation.rate) || calculation.rate < 0 ||
+        (calculation.adjustmentAmount !== undefined && (calculation.adjustmentAmount.currency !== 'KRW' ||
+          !Number.isSafeInteger(calculation.adjustmentAmount.amount)))) {
       invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
       return;
     }
-    expected = Math.round(monthlyRent * termMonths * calculation.rate);
+    expected = supplierId === 'RP012'
+      ? truncWon(monthlyRent * termMonths * calculation.rate) + (calculation.adjustmentAmount?.amount ?? 0)
+      : Math.round(monthlyRent * termMonths * calculation.rate) + (calculation.adjustmentAmount?.amount ?? 0);
   } else if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
     invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
     return;
@@ -499,6 +676,11 @@ function auditEconomicAmount(
   if (expected !== undefined && expected !== amount) {
     invalidFacts.push(`ECONOMICS_CALCULATION_MISMATCH:${label}`);
   }
+}
+
+function expectedOgongBillingFromQ12(rent12: number, termMonths: number): number | null {
+  const addon = ({ 12: 0, 24: 200000, 36: 400000, 48: 600000, 60: 600000 } as Record<number, number | undefined>)[termMonths];
+  return addon === undefined ? null : rent12 - 100000 + addon;
 }
 
 /**
@@ -524,17 +706,23 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
         (term.termMonths !== undefined && term.termMonths !== price.termMonths)) {
       invalidFacts.push(`STALE_ECONOMICS_INPUT:${term.termKey}`);
     }
-    auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
-    auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
-    auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = term[side], basis = fee.referenceRentBasis;
       if (!basis) continue;
       const reference = prices.get(basis.termKey);
-      if (!reference || reference.termMonths !== 36 || basis.termMonths !== 36 ||
+      const ogongBillingExpected = side === 'supplierBillingFee' && fee.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && basis.termMonths === 12
+        ? expectedOgongBillingFromQ12(basis.monthlyRent.amount, price.termMonths)
+        : null;
+      if (!reference || reference.termMonths !== basis.termMonths ||
           reference.monthlyRent.amount !== basis.monthlyRent.amount || reference.monthlyRent.currency !== basis.monthlyRent.currency ||
-          basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
-          Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount) {
+          (basis.termMonths === 36 && (basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
+            Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount)) ||
+          (basis.termMonths === 12 && (basis.multiplier !== 1 || (side === 'channelPayoutFee' &&
+            basis.monthlyRent.amount !== fee.amount?.amount) || (side === 'supplierBillingFee' &&
+            (ogongBillingExpected === null || fee.amount?.amount !== ogongBillingExpected))))) {
         invalidFacts.push(`ECONOMICS_REFERENCE_RENT_MISMATCH:${term.termKey}:${side}`);
       }
     }
@@ -577,7 +765,7 @@ export function readStoredTermFees(offer: Offer, price: PriceTerm): Pick<AdminPr
     if ((row?.monthlyRent && (row.monthlyRent.amount !== price.monthlyRent.amount || row.monthlyRent.currency !== price.monthlyRent.currency)) ||
         (row?.termMonths !== undefined && row.termMonths !== price.termMonths)) return unknown('STALE_ECONOMICS_INPUT');
     const errors: string[] = [];
-    auditEconomicAmount(value, field, price.monthlyRent.amount, price.termMonths, [], errors);
+    auditEconomicAmount(value, field, offer.supplierId, price.monthlyRent.amount, price.termMonths, [], errors);
     if (!['KNOWN', 'ZERO', 'UNKNOWN', 'NOT_APPLICABLE'].includes(value.state) || errors.length) return unknown('INVALID_STORED_ECONOMICS');
     return { ...structuredClone(value), amount: structuredClone(value.amount ?? null) };
   };

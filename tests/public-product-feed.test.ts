@@ -123,6 +123,11 @@ describe('public product feed v1', () => {
     expect(buildPublicProductQuote(duplicate, 'a', {})).toBeNull();
   });
 
+  it('photo_cache 맵({src,urls})의 드라이브 사진도 이미지 목록에 포함한다', () => {
+    const quote = buildPublicProductQuote(snapshot({ P1: product({ image_urls: [], photo_cache: { src: 'https://drive.example/folder', urls: ['https://example.test/cache-0.jpg', 'https://example.test/cache-1.jpg'] } }) }), 'P1', {});
+    expect(quote?.product.image_urls).toEqual(['https://example.test/cache-0.jpg', 'https://example.test/cache-1.jpg']);
+  });
+
   it('preserves complete galleries and rejects oversized galleries', () => {
     const images = Array.from({ length: 50 }, (_, i) => `https://example.test/${i}.jpg`);
     const quote = buildPublicProductQuote(snapshot({ P1: product({ image_urls: images }) }), 'P1', {});

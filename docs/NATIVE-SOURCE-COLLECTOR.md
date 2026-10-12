@@ -12,7 +12,7 @@ P1 수정 검증(2026-10-09, HEAD `8508e9f` 기반 미커밋): RP023 실제 문�
 
 **CODED / OFFLINE TESTED, 운영 실측 HOLD.** 기준 `503aee8aff28c52a0d55f39d23cc753d15e328ed`, `work/freepass-data/kakao-live-ports-20261009`. 사용자 제공 main/Issue #24/겹치는 PR 확인을 사용했다. Academy READY `2026-10-09T13:26:04.539Z`, reuse COMPOSE_OR_EXTEND. **CREATE_NEW_JUSTIFIED**: 기존 SourceStore·사건 선점·카카오 CLI·사진 계획과 이안카 typed backup codec을 재사용한다. 기존 포트에는 Drive REST transport/사용자 ADC 조합/일반 카톡 사진 CAS 구현이 없어 `kakao-drive-archive.ts`, `kakao-live-ports.ts`, 가짜 transport 시험만 추가했다. 새 DB·예약 작업·서비스·공유 권한은 만들지 않았다.
 
-아래 결정이 이 절의 과거 domain reader 허용, Actions 실행 초안, live ports 미구현 안내를 대체한다. 실행자는 **카톡 비공개 대기열이 있는 Windows PC의 예약 작업**, 인증자는 **pyh@teamjpk.com 사용자 ADC**다. 기존 gws 사용자 인증과 gcloud ADC는 별개 토큰 저장소이므로 gws 성공만으로 ADC 접근을 판단하지 않는다. 서비스 계정 키·폴더 공유·공개 링크 없음. 예약 작업은 해당 Windows 사용자로 실행하고 중복 인스턴스를 시작하지 않도록 설정해야 한다. 이번 작업은 예약을 등록/활성화하지 않았다.
+아래 결정이 이 절의 과거 domain reader 허용, Actions 실행 초안, live ports 미구현 안내를 대체한다. 실행자는 **카톡 비공개 대기열이 있는 Windows PC의 예약 작업**, 인증자는 **owner@example.com 사용자 ADC**다. 기존 gws 사용자 인증과 gcloud ADC는 별개 토큰 저장소이므로 gws 성공만으로 ADC 접근을 판단하지 않는다. 서비스 계정 키·폴더 공유·공개 링크 없음. 예약 작업은 해당 Windows 사용자로 실행하고 중복 인스턴스를 시작하지 않도록 설정해야 한다. 이번 작업은 예약을 등록/활성화하지 않았다.
 
 환경 변수(실제 값은 비공개 운영 설정에만 둔다):
 
@@ -61,7 +61,7 @@ Source는 기존 `FirestoreSourceStore` 그대로다. `KakaoProductReader`는 `p
 **운영 실측 명령 순서 — 네트워크 있는 승인된 PC에서만, 이번에는 실행하지 않음:**
 
 ```powershell
-# 대상 작업 트리에서, 기존 pyh@teamjpk.com 사용자 ADC 사용. 토큰 출력/저장 금지.
+# 대상 작업 트리에서, 기존 owner@example.com 사용자 ADC 사용. 토큰 출력/저장 금지.
 $env:NODE_ENV = 'production'
 $env:FIREBASE_PROJECT_ID = 'freepasserp5'
 $env:FREEPASS_KAKAO_DRIVE_ROOT_ID = Read-Host '비공개 Drive 루트 ID'
