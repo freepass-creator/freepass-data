@@ -129,11 +129,19 @@ export function dossierToProduct(d) {
 async function readProducts(token) {
   if (opt('dossier-json')) {
     const j = JSON.parse(readFileSync(opt('dossier-json'), 'utf8'));
-    return (Array.isArray(j) ? j : (j.dossiers ?? [])).map(dossierToProduct).filter(Boolean);
+    if (j && j.success === false) throw new Error('DOSSIER_JSON_FAILURE_RESPONSE'); // fail-closed: 실패 응답·미지원 구조를 빈 목록으로 바꾸지 않는다
+    const list = Array.isArray(j) ? j : j?.dossiers;
+    if (!Array.isArray(list) || !list.length) throw new Error('DOSSIER_JSON_UNSUPPORTED_OR_EMPTY');
+    const prods = list.map(dossierToProduct);
+    if (prods.some(x => !x)) throw new Error('DOSSIER_JSON_ITEM_INVALID');
+    return prods;
   }
   if (opt('data-json')) { // 상품 전수 조회(읽기) 출력 JSON: 배열 또는 {products:[...]} — 각 항목은 products 문서 필드(디코딩된 값)
     const j = JSON.parse(readFileSync(opt('data-json'), 'utf8'));
-    return Array.isArray(j) ? j : (j.products ?? j.items ?? []);
+    if (j && j.success === false) throw new Error('DATA_JSON_FAILURE_RESPONSE'); // fail-closed
+    const list = Array.isArray(j) ? j : (j?.products ?? j?.items);
+    if (!Array.isArray(list) || !list.length || list.some(x => !x || !String(x.car_number ?? '').trim())) throw new Error('DATA_JSON_UNSUPPORTED_EMPTY_OR_WITHOUT_CAR_NUMBER');
+    return list;
   }
   const out = []; let pageToken = '';
   const top = ['car_number', 'provider_company_code', 'partner_code', 'listable', 'maker', 'model', 'sub_model', 'trim_name', 'ext_color', 'year', 'mileage',

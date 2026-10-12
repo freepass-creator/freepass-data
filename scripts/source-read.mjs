@@ -112,13 +112,16 @@ async function readIron() {
       while (url && seen.size < 10 && !seen.has(url)) {
         seen.add(url); const html = await get(url);
         if (!/<article\b/.test(html)) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록 페이지에서 차량을 한 건도 읽지 못함(점검 페이지·구조 변경 의심)` }; // fail-closed
-        for (const a of html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)) { const id = a[0].match(/href="\/vehicles\/([^"?/#]+)/)?.[1]; if (id) items.push({ id, cond, sold: /rental-product-card--sold/.test(a[0]) }); }
+        const cards = [...html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)];
+        if (cards.some(a => !/href="\/vehicles\/([^"?/#]+)/.test(a[0]))) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록에 차량 링크를 읽지 못한 카드가 있음(구조 변경 의심)` }; // fail-closed
+        for (const a of cards) { const id = a[0].match(/href="\/vehicles\/([^"?/#]+)/)?.[1]; if (id) items.push({ id, cond, sold: /rental-product-card--sold/.test(a[0]) }); }
         const more = html.match(/<a[^>]*href="([^"]+)"[^>]*>\s*더보기\s*<\/a>/)?.[1];
         url = more ? new URL(more.replace(/&amp;/g, '&'), 'https://ironrentcar.com').href : null;
       }
       if (url) return { ok: false, reason: `아이언 «${cond}» 목록이 페이지 상한(10)에 닿았거나 순환 — 불완전` }; // fail-closed
     }
   } catch (e) { return { ok: false, reason: `아이언 목록 읽기 실패(${e.message})` }; }
+  { const seenIds = new Set(); for (let i = items.length - 1; i >= 0; i--) { if (seenIds.has(items[i].id)) items.splice(i, 1); else seenIds.add(items[i].id); } } // 같은 차량이 목록에 중복돼 나오면 상세는 한 번만
   const only = opt('plate4');
   const records = []; let cursor = 0;
   const worker = async () => { while (cursor < items.length) { const it = items[cursor++]; // 차량당 1회, 동시 2

@@ -25,8 +25,12 @@ const PROJECT = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 
 const pick = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 const rawRows = JSON.parse(readFileSync(rawPath, 'utf8'));
+// fail-closed: 실패 응답·배열 아님·0대·차량번호 매핑 누락/빈 번호는 «원천 0대»로 대조하지 않는다(0대가 맞으면 --allow-empty)
+if (rawRows && rawRows.success === false) { console.error('RAW_FAILURE_RESPONSE'); process.exit(3); }
 if (!Array.isArray(rawRows)) { console.error('원본은 JSON 배열이어야 한다'); process.exit(2); }
+if (!rawRows.length && !argv.includes('--allow-empty')) { console.error('RAW_EMPTY'); process.exit(3); }
 const rawRecords = rawRows.map(r => Object.fromEntries(['car_number', ...fields].map(f => [f, pick(r, map[f] ?? f)])));
+if (rawRecords.some(r => !String(r.car_number ?? '').trim())) { console.error('RAW_ROW_WITHOUT_CAR_NUMBER — --map 에 car_number 매핑이 필요하다'); process.exit(3); }
 
 const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
 async function readSupplier() {
