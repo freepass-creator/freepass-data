@@ -65,24 +65,29 @@ jobs:
             export IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031 REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" EXPECTED_SOURCE_SHA="$source_sha"
             export EXPECTED_BASELINE_REVISION=freepass-data-read-00038-phh EXPECTED_BASELINE_SOURCE_SHA=c9b9a4b31d001c2cbffd43022c9213e01e3d2544
             export EXPECTED_BASELINE_IMAGE_DIGEST=sha256:6322eb95ab90882f42febd480844c45e400411ccc1a81c99f8601de3e2e6c5b2
+            report_unit_log() {
+              sed -E 's/\x1B\[[0-9;]*m//g' "$1" | grep -E 'FAIL |AssertionError|Expected|Received|^[[:space:]]*[+-] |Test Files|Tests.*(failed|passed)|Error:' | tail -n 60 || true
+            }
             regression='stops before deploy on any changed baseline|deployment preserves bindings'
             if IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031 REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-inherited-env.log" 2>&1; then
               echo 'EXPECTED_FROZEN_UNIT_ENV_FAILURE_NOT_OBSERVED' >&2
+              report_unit_log "$RUNNER_TEMP/photo-unit-inherited-env.log"
               exit 1
             fi
-            grep -q '2 failed' "$RUNNER_TEMP/photo-unit-inherited-env.log"
+            grep -q '2 failed' "$RUNNER_TEMP/photo-unit-inherited-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-inherited-env.log"; exit 1; }
             echo 'FROZEN_SOURCE_TWO_ENV_EXPECTED_FAILURE_COUNT=2'
             if REQUESTED_RUNTIME_SOURCE_SHA="$source_sha" env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log" 2>&1; then
               echo 'EXPECTED_FROZEN_SELECTOR_ENV_FAILURE_NOT_OBSERVED' >&2
+              report_unit_log "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log"
               exit 1
             fi
-            grep -q '1 failed' "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log"
+            grep -q '1 failed' "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-gate-only-clean-env.log"; exit 1; }
             echo 'FROZEN_SOURCE_GATE_ONLY_EXPECTED_FAILURE_COUNT=1'
-            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-clean-env.log" 2>&1
-            grep -q '2 passed' "$RUNNER_TEMP/photo-unit-clean-env.log"
+            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-clean-env.log" 2>&1 || { report_unit_log "$RUNNER_TEMP/photo-unit-clean-env.log"; exit 1; }
+            grep -q '2 passed' "$RUNNER_TEMP/photo-unit-clean-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-clean-env.log"; exit 1; }
             echo 'FROZEN_SOURCE_TWO_ENV_ISOLATED_PASS_COUNT=2'
-            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm test 2>&1 | tee "$RUNNER_TEMP/photo-unit-representative-env.log"
-            grep 'Tests .*passed' "$RUNNER_TEMP/photo-unit-representative-env.log"
+            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS -u REQUESTED_RUNTIME_SOURCE_SHA npm test > "$RUNNER_TEMP/photo-unit-representative-env.log" 2>&1 || { report_unit_log "$RUNNER_TEMP/photo-unit-representative-env.log"; exit 1; }
+            grep 'Tests .*passed' "$RUNNER_TEMP/photo-unit-representative-env.log" || { report_unit_log "$RUNNER_TEMP/photo-unit-representative-env.log"; exit 1; }
             echo 'FROZEN_SOURCE_REPRESENTATIVE_ENV_FULL_UNIT_OK=true'
             echo 'FROZEN_SOURCE_UNIT_ENV_ISOLATION_REPRODUCED=true'
           )
