@@ -15,8 +15,8 @@ const sample = {
   supplierCode: 'RP001',
   listable: true,
   fields: [
-    { path: 'product.maker', group: 'BASIC', normalizedValue: '기아', rawValue: 'KIA', rawRef: { supplierCode: 'RP001', sourceKind: 'SHEET', sheetTab: 'T', sheetRow: 3, rawPath: '원문.전체.차명' }, source: 'REFINED', asOf: '2026-10-12T00:00:00.000Z', mismatch: false },
-    { path: 'billing[source:12].amount', group: 'BILLING_PAYOUT', normalizedValue: null, source: 'LEDGER', asOf: '2026-10-12T00:00:00.000Z', ledgerRunId: 'run-1', reasonCode: 'UNCONFIRMED' },
+    { path: 'product.maker', group: 'BASIC', normalizedValue: '기아', rawValue: 'KIA', rawRef: { supplierCode: 'RP001', sourceKind: 'SHEET', sheetTab: 'T', sheetRow: 3, rawPath: '원문.전체.차명' }, source: 'REFINED', asOf: '2026-10-12T00:00:00.000Z', mismatch: 'MATCH' },
+    { path: 'billing[source:12].amount', group: 'BILLING_PAYOUT', normalizedValue: null, source: 'LEDGER', asOf: '2026-10-12T00:00:00.000Z', ledgerRunId: 'run-1', mismatch: 'NOT_COMPARED', reasonCode: 'UNCONFIRMED' },
   ],
 };
 
@@ -24,6 +24,11 @@ describe('ProductDossier/v1 schema', () => {
   it('accepts a flat fields[] dossier and rejects unknown keys or bad enums', () => {
     expect(validate(sample), JSON.stringify(validate.errors)).toBe(true);
     expect(validate({ ...sample, customerPhone: 'x' })).toBe(false);
+    const bare = { path: 'product.maker', group: 'BASIC', source: 'RAW', asOf: null };
+    expect(validate({ ...sample, fields: [bare] })).toBe(false); // mismatch 와 사유 없음
+    expect(validate({ ...sample, fields: [{ ...bare, mismatch: 'NOT_COMPARED' }] })).toBe(false); // asOf null 인데 reasonCode 없음
+    expect(validate({ ...sample, fields: [{ ...bare, mismatch: 'NOT_COMPARED', reasonCode: 'READ_FAILED' }] }), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ ...sample, fields: [{ ...bare, asOf: '2026-10-12T00:00:00.000Z' }] })).toBe(false); // mismatch 없음
     expect(validate({ ...sample, fields: [{ ...sample.fields[0], source: 'GUESS' }] })).toBe(false);
     expect(validate({ ...sample, candidates: Array.from({ length: 21 }, () => ({ productId: 'p', plateLast4: '0001' })) })).toBe(false);
   });

@@ -160,7 +160,8 @@
         "path",
         "group",
         "source",
-        "asOf"
+        "asOf",
+        "mismatch"
       ],
       "properties": {
         "path": {
@@ -233,17 +234,21 @@
           "description": "source=LEDGER 일 때 박제 run ID"
         },
         "mismatch": {
-          "type": "boolean",
-          "description": "정리값이 원문과 다르면 true (정리값을 손으로 덮지 않는다)"
+          "enum": [
+            "MATCH",
+            "MISMATCH",
+            "NOT_COMPARED"
+          ],
+          "description": "원문 대조 결과: MATCH 일치 / MISMATCH 불일치(정리값을 덮지 않고 둘 다 표시) / NOT_COMPARED 미대조(원문 칸이 없거나 대조 전). 필수 — 대조 결과가 없는 응답은 허용하지 않는다"
         },
         "reasonCode": {
           "enum": [
             "NOT_COLLECTED",
             "NOT_APPLICABLE",
             "READ_FAILED",
-            "UNCONFIRMED",
-            null
-          ]
+            "UNCONFIRMED"
+          ],
+          "description": "값이 없거나 기준 시각을 모를 때 이유. asOf 가 null 이면 필수"
         },
         "depositKind": {
           "enum": [
@@ -254,6 +259,21 @@
           ],
           "description": "원문 보증금이 단기/장기로 갈릴 때 구분"
         }
+      },
+      "if": {
+        "properties": {
+          "asOf": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "asOf"
+        ]
+      },
+      "then": {
+        "required": [
+          "reasonCode"
+        ]
       }
     }
   }
