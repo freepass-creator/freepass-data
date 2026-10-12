@@ -274,7 +274,7 @@ jobs:
           npm run check:data-access-boundary
           npm run check:sheets
           npm run build
-          npm test
+          env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS npm test
           npm run test:read-runtime-smoke
           npm run test:shadow
           npm run test:delivery-owner

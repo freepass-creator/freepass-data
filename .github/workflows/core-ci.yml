@@ -53,6 +53,19 @@ jobs:
           git show 'HEAD:scripts/verify-photo-rendition-runtime.mjs' > "$probe_file"
           chmod 0444 "$probe_file"
           git -c core.autocrlf=false archive "$source_sha" | tar -x -C "$source_dir"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$source_dir/node_modules"
+          (
+            cd "$source_dir"
+            regression='stops before deploy on any changed baseline|deployment preserves bindings'
+            if IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031 npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-inherited-env.log" 2>&1; then
+              echo 'EXPECTED_FROZEN_UNIT_ENV_FAILURE_NOT_OBSERVED' >&2
+              exit 1
+            fi
+            grep -q '2 failed' "$RUNNER_TEMP/photo-unit-inherited-env.log"
+            env -u IANCAR_PHOTO_ID_GATE_SUPPLIERS npm exec -- vitest run tests/runtime-baseline-deployment.test.ts tests/runtime-policy.test.ts --maxWorkers=1 -t "$regression" > "$RUNNER_TEMP/photo-unit-clean-env.log" 2>&1
+            grep -q '2 passed' "$RUNNER_TEMP/photo-unit-clean-env.log"
+            echo 'FROZEN_SOURCE_UNIT_ENV_ISOLATION_REPRODUCED=true'
+          )
           local_image="freepass-data-photo-image-check:$source_sha"
           docker build --pull --build-arg FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js --build-arg "FREEPASS_DATA_SOURCE_SHA=$source_sha" --label "org.opencontainers.image.revision=$source_sha" --tag "$local_image" "$source_dir"
           test "$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$source_sha"
