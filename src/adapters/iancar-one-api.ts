@@ -185,18 +185,27 @@ export function createIancarOneApiClient(
 ) {
   const normalized = normalizedConfig(config);
 
+  // GET 은 멱등이라 공급사 일시 오류(502/503/504)만 짧게 두 번 더 시도한다. 인증·404·429 는 재시도하지 않는다(신선도 15분 창 안에서만).
+  const TRANSIENT_STATUS = new Set([502, 503, 504]);
+  const RETRY_DELAYS_MS = [500, 1500];
   const requestJson = async (path: string): Promise<Json> => {
-    const response = await fetcher(apiUrl(normalized.origin, path), {
-      method: 'GET',
-      redirect: 'manual',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(normalized.timeoutMs),
-      headers: {
-        'User-Agent': 'FreePassData/1 iancar-one-api',
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${normalized.apiKey}`
-      }
-    });
+    let response: Response | undefined;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      response = await fetcher(apiUrl(normalized.origin, path), {
+        method: 'GET',
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(normalized.timeoutMs),
+        headers: {
+          'User-Agent': 'FreePassData/1 iancar-one-api',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${normalized.apiKey}`
+        }
+      });
+      if (!TRANSIENT_STATUS.has(response.status) || attempt === RETRY_DELAYS_MS.length) break;
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+    if (!response) throw new IancarOneApiError('IANCAR_ONE_API_NO_RESPONSE');
 
     const requestId = response.headers.get('x-request-id');
     if (response.status >= 300 && response.status < 400)
