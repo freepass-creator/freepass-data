@@ -13,35 +13,46 @@ describe('trusted read runtime source selection', () => {
   it('stops selected-source publication on failed Linux checks or a mismatched local image', () => {
     const validation = workflow.split('      - name: Validate selected photo source before publication')[1]!.split('      - name: Authenticate deploy identity')[0]!;
     const validationScript = validation.split('        run: |\n')[1]!.split('\n').map(line => line.slice(10)).join('\n');
-    const selected = '57abb8a978457b87068c3c9c9d76cc8116934bd5';
-    const tree = '712c286a842dea616e7360b421fdd5e068540a40';
-    const parent = '2ebdb18822416847b2019f6506b7b0d65daf0ee2';
-    const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo '${tree}'; else echo '${selected}'; fi;; show) echo '${parent}';; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
+    for (const [selected, tree, parent] of [
+      ['57abb8a978457b87068c3c9c9d76cc8116934bd5', '712c286a842dea616e7360b421fdd5e068540a40', '2ebdb18822416847b2019f6506b7b0d65daf0ee2'],
+      ['d42c4f58d939d7899457730cd1a82f419b3eade8', '4ea34735d2c5ebd4b0b369435e8f3dda81ace01b', '1fa62d59151e25f78d900e27d496eb92f9f210bf'],
+    ] as const) {
+    const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo "$MOCK_TREE"; else echo '${selected}'; fi;; show) if [ "$2" = -s ]; then echo "$MOCK_PARENT"; else echo PROBE_FROM_TRUSTED_MAIN; fi;; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
       `tar() { :; }\n` +
       `npm() { echo "NPM $*"; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
-      `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; fi; }\n` +
+      `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; if [ "$1" = run ] && [ "$MOCK_NATIVE_FAIL" = true ]; then return 1; fi; fi; }\n` +
       `jq() { cat >/dev/null; }\n`;
     const dir = mkdtempSync(join(tmpdir(), 'selected-photo-check-'));
     try {
-      for (const [failed, label, mismatch, pass] of [['false', selected, 'false', true], ['true', selected, 'false', false], ['false', 'c'.repeat(40), 'false', false], ['false', selected, 'true', false]] as const) {
+      for (const [failed, label, mismatch, actualTree, actualParent, nativeFail, pass] of [
+        ['false', selected, 'false', tree, parent, 'false', true],
+        ['true', selected, 'false', tree, parent, 'false', false],
+        ['false', 'c'.repeat(40), 'false', tree, parent, 'false', false],
+        ['false', selected, 'true', tree, parent, 'false', false],
+        ['false', selected, 'false', 'f'.repeat(40), parent, 'false', false],
+        ['false', selected, 'false', tree, 'f'.repeat(40), 'false', false],
+        ...(selected.startsWith('d42') ? [['false', selected, 'false', tree, parent, 'true', false] as const] : []),
+      ] as const) {
         const result = spawnSync(bash, ['-s'], { input: mocks + validationScript + '\necho PUBLICATION_ALLOWED\n', encoding: 'utf8', env: {
           ...process.env, EXPECTED_SOURCE_SHA: selected, WORKFLOW_SOURCE_SHA: 'a'.repeat(40), RUNNER_TEMP: dir,
           MOCK_FAILED_CHECK: failed, MOCK_LABEL: label, MOCK_FILE_MISMATCH: mismatch, RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js',
+          MOCK_TREE: actualTree as string, MOCK_PARENT: actualParent as string, MOCK_NATIVE_FAIL: nativeFail as string,
           GITHUB_ENV: '/dev/null', GITHUB_STEP_SUMMARY: '/dev/null',
         } });
         expect(result.status === 0, result.stderr).toBe(pass);
         expect(result.stdout.includes('PUBLICATION_ALLOWED')).toBe(pass);
-        if (mismatch === 'true') expect(result.stdout).not.toContain('NPM');
+        if (mismatch === 'true' || actualTree !== tree || actualParent !== parent) expect(result.stdout).not.toContain('NPM');
         else {
           expect(result.stdout).toContain('NPM run test:delivery-owner');
-          expect(result.stdout).toContain('NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');
+          expect(result.stdout).toContain(selected.startsWith('d42') ? 'NPM exec -- vitest run tests/vehicle-photo-rendition.test.ts' : 'NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');
         }
         expect(result.stdout).not.toContain('docker push');
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
     expect(workflow.indexOf('Validate selected photo source before publication')).toBeLessThan(workflow.indexOf('Authenticate deploy identity'));
     expect(workflow.indexOf('SELECTED_PHOTO_SOURCE_CHECKED:-false')).toBeLessThan(workflow.indexOf('docker push "$image"'));
-  });
+  }, 15_000);
 
   it('restores archive public-file scanning with an exact temporary Git index and no remote', () => {
     const dir = mkdtempSync(join(tmpdir(), 'photo-archive-index-'));
@@ -61,7 +72,7 @@ describe('trusted read runtime source selection', () => {
       expect(unpack.status, unpack.stderr).toBe(0);
       expect(run(archived, 'ls-files', '--cached', '--others', '--exclude-standard', '-z').status).not.toBe(0);
       const preparation = workflow.split('          cd "$source_dir"\n')[1]!.split('          npm ci')[0]!;
-      const initialized = spawnSync(bash, ['-s'], { cwd: archived, input: preparation.replace('712c286a842dea616e7360b421fdd5e068540a40', tree), encoding: 'utf8', env: { ...process.env, source_files: sourceFiles.replaceAll('\\', '/') } });
+      const initialized = spawnSync(bash, ['-s'], { cwd: archived, input: preparation.replace('712c286a842dea616e7360b421fdd5e068540a40', tree), encoding: 'utf8', env: { ...process.env, source_files: sourceFiles.replaceAll('\\', '/'), expected_tree: tree } });
       expect(initialized.status, initialized.stderr).toBe(0);
       expect(run(archived, 'write-tree').stdout.trim()).toBe(tree);
       mkdirSync(join(archived, 'node_modules'));
