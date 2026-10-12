@@ -1,0 +1,309 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { planSourceCycle, applySourceCycle, deepEqual, emptyCycleState,
+  type CycleProduct, type CycleCommands, type CycleControl, type CycleEvidence, type CycleConfig } from '../src/application/source-cycle.js';
+import { sourceCyclePlugin, sharedSheetCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CycleCapture, type CycleSourceKind } from '../src/adapters/source-cycle-plugins.js';
+import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
+import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
+import { fileCycleControl, sourceRunCycleHeartbeat } from '../src/adapters/source-cycle-control.js';
+import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
+import type { SourceProductRecord } from '../src/domain/source-engine.js';
+import type { SourceIngestionStore } from '../src/ports/source-store.js';
+
+const time = '2026-10-12T00:00:00.000Z', now = Date.parse(time);
+const config: CycleConfig = { sourceId: 'SYNTHETIC', family: 'OTHER', maxDowngradeRatio: 0.5 };
+const record = (uid: string, status = '게시'): SourceProductRecord => ({ sourceId: config.sourceId, uid, plate: null,
+  vehicleText: '합성 차종', status: { raw: status, saleAvailable: true }, observedAt: time, raw: { price: { a: 1, b: 2 } }, vehicleHold: [],
+  terms: [{ months: 12, monthlyRent: { state: 'KNOWN', value: 100 }, deposit: { state: 'ZERO', value: 0 }, mileage: '20000km', raw: {} }] });
+const product = (uid: string, listable = true): CycleProduct => ({ record: record(uid), listable, locked_by_contract: false,
+  publication_withdrawal: null, publication_withdrawal_prior: null });
+const evidence = (records: SourceProductRecord[], complete = true): CycleEvidence => ({ records, complete, observedAt: time, heldCount: 0 });
+function memory(initial: CycleProduct[] = []) {
+  const data = new Map(initial.map(p => [p.record.uid, structuredClone(p)]));
+  const backups = new Map<string, CycleProduct | null>();
+  const order: string[] = [];
+  const commands: CycleCommands = {
+    async list() { return { complete: true, products: structuredClone([...data.values()]) }; },
+    async read(_source, uid) { return structuredClone(data.get(uid) ?? null); },
+    async backup(key, value) { order.push('backup'); backups.set(key, structuredClone(value)); },
+    async readBackup(key) { if (!backups.has(key)) throw Error('BACKUP_MISSING'); return structuredClone(backups.get(key)!); },
+    async compareAndApply(digest, after) {
+      if (stableDigest(data.get(after.record.uid) ?? null) !== digest) throw Error('CAS_CONFLICT');
+      order.push('write'); data.set(after.record.uid, structuredClone(after));
+    },
+  };
+  return { commands, data, backups, order };
+}
+function control() {
+  let state = emptyCycleState(), busy = false;
+  const alerts: string[] = [];
+  const ctrl: CycleControl = {
+    async acquire() { if (busy) return null; busy = true; return async () => { busy = false; }; },
+    async load() { return structuredClone(state); }, async save(_id, s) { state = structuredClone(s); },
+    heartbeat: vi.fn(async () => {}), async alert(_id, reason) { alerts.push(reason); },
+  };
+  return { ctrl, alerts };
+}
+function capture(rows: SourceProductRecord[], scopes = ['inventory']): CycleCapture {
+  return { observedAt: time, complete: true, completedScopes: scopes, visibilityComplete: true, heldCount: 0,
+    rows: rows.map(r => ({ scope: scopes[0]!, record: r })) };
+}
+const plugin = (read: () => Promise<CycleCapture>, kind: CycleSourceKind = 'IRON') => sourceCyclePlugin(
+  { sourceId: config.sourceId, kind, scopes: kind === 'AICA' ? [...AICA_SCOPES] : ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time);
+async function apply(commands: CycleCommands, plan: ReturnType<typeof planSourceCycle>) {
+  return applySourceCycle(commands, plan.plan, { apply: true, digest: plan.digest, approval: plan.digest, now });
+}
+
+describe('source cycle planning/application', () => {
+  it('source 3/catalog 5: two withdrawals, one source-built enrollment, conditions update and idempotent replay', async () => {
+    const m = memory(['a', 'b', 'absent1', 'absent2'].map(id => product(id)).concat(product('historical', false)));
+    const rows = [record('a'), record('b'), record('new')]; rows[0]!.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    rows[2]!.vehicleHold = ['VEHICLE_MASTER_REVIEW_REQUIRED'];
+    const build = () => planSourceCycle(config, evidence(rows), { products: [...m.data.values()], complete: true }, now);
+    const built = build();
+    expect(built.plan.entries.map(e => e.kind).sort()).toEqual(['DOWNGRADE', 'DOWNGRADE', 'ENROLL', 'UPDATE']);
+    expect((await applySourceCycle(m.commands, built.plan, { now })).writes).toBe(0);
+    expect(m.order).toEqual([]);
+    expect(await apply(m.commands, built)).toMatchObject({ status: 'APPLIED', writes: 4, verified: 4 });
+    expect(m.order.slice(0, 4)).toEqual(['backup', 'backup', 'backup', 'backup']);
+    expect(m.data.size).toBe(6);
+    expect(m.data.get('new')!.record.vehicleHold).toHaveLength(1);
+    expect(m.data.get('absent1')).toMatchObject({ listable: false, publication_withdrawal: { reason: 'SOURCE_ABSENT', deleteAuthorized: false }, publication_withdrawal_prior: { listable: true } });
+    expect(m.data.get('absent1')!.record.raw).toEqual(product('absent1').record.raw);
+    expect(build().plan.entries).toEqual([]);
+    rows.forEach(r => { r.observedAt = new Date(now + 1000).toISOString(); });
+    expect(planSourceCycle(config, { ...evidence(rows), observedAt: rows[0]!.observedAt }, { complete: true, products: [...m.data.values()] }, now + 1000).plan.entries).toEqual([]);
+  });
+  it('partial read and row identity HOLD never infer absence', () => {
+    const snapshot = { products: [product('missing')], complete: true };
+    expect(planSourceCycle(config, evidence([], false), snapshot, now).plan.entries).toHaveLength(0);
+    expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
+    expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
+  });
+  it('blocks over-ratio before even backups; exact cap is allowed', async () => {
+    const m = memory([product('a'), product('b')]);
+    const built = planSourceCycle(config, evidence([]), await m.commands.list(config.sourceId), now);
+    expect(built.plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    await expect(apply(m.commands, built)).rejects.toThrow('CYCLE_BLOCKED'); expect(m.order).toEqual([]);
+    expect(planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now).plan.blockers).toEqual([]);
+  });
+  it.each(['locked_by_contract', 'status'] as const)('contract lock %s preserves every field including price', async kind => {
+    const p = product('a'); if (kind === 'status') p.record.status.raw = '계약중'; else p.locked_by_contract = true;
+    const r = record('a'); r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    expect(planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now).plan.entries).toEqual([]);
+    expect(planSourceCycle(config, evidence([]), { complete: true, products: [p] }, now).plan.entries).toEqual([]);
+  });
+  it('reactivates solely from current source, retaining prior withdrawal audit', async () => {
+    const p = product('a', false); p.record.status.saleAvailable = false;
+    p.publication_withdrawal = { reason: 'SOURCE_ABSENT', source: config.sourceId, observedAt: time, deleteAuthorized: false };
+    p.publication_withdrawal_prior = { listable: true, status: record('a').status };
+    const m = memory([p]), built = planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now);
+    expect(built.plan.entries[0]!.kind).toBe('REEXPOSE'); await apply(m.commands, built);
+    expect(m.data.get('a')!.publication_withdrawal).toBeNull();
+    expect(m.data.get('a')!.publication_withdrawal_prior).toEqual(p.publication_withdrawal_prior);
+  });
+  it('readback compares deep maps without key-order sensitivity', async () => {
+    const m = memory(), built = planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now);
+    m.commands.read = async (_id, uid) => { const p = structuredClone(m.data.get(uid)!); p.record.raw.price = { b: 2, a: 1 }; return p; };
+    expect(deepEqual({ x: [{ b: 2, a: 1 }] }, { x: [{ a: 1, b: 2 }] })).toBe(true);
+    expect(deepEqual([1, 2], [2, 1])).toBe(false);
+    expect((await apply(m.commands, built)).verified).toBe(1);
+  });
+  it('readback outage after commit is uncertain and stops further writes', async () => {
+    const m = memory(), built = planSourceCycle(config, evidence([record('a'), record('b')]), await m.commands.list(config.sourceId), now);
+    m.commands.read = async () => { throw Error('READ_TIMEOUT'); };
+    expect(await apply(m.commands, built)).toMatchObject({ status: 'APPLY_UNCERTAIN', writes: 1, verified: 0 });
+    expect(m.data.size).toBe(1);
+  });
+  it('requires approval, rejects tampered plan and verifies backups before write', async () => {
+    const m = memory(), built = planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now);
+    await expect(applySourceCycle(m.commands, built.plan, { apply: true, now })).rejects.toThrow('APPROVED_DIGEST');
+    const forged = structuredClone(built); forged.plan.entries[0]!.after.record.uid = 'forged'; forged.digest = stableDigest(forged.plan);
+    await expect(apply(m.commands, forged)).rejects.toThrow('REPLAN');
+    m.commands.readBackup = async () => product('wrong');
+    await expect(apply(m.commands, built)).rejects.toThrow('BACKUP_MISMATCH'); expect(m.data.size).toBe(0);
+  });
+  it('catalog/lock changes after plan reject replay; CAS fences changes after backup', async () => {
+    const m = memory([product('a')]), r = record('a'); r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    const built = planSourceCycle(config, evidence([r]), await m.commands.list(config.sourceId), now);
+    m.data.get('a')!.locked_by_contract = true;
+    await expect(apply(m.commands, built)).rejects.toThrow('REPLAN');
+    m.data.get('a')!.locked_by_contract = false;
+    const backup = m.commands.backup;
+    m.commands.backup = async (key, p) => { await backup(key, p); m.data.get('a')!.locked_by_contract = true; };
+    expect((await apply(m.commands, built)).status).toBe('APPLY_UNCERTAIN');
+    expect(m.data.get('a')!.record.terms[0]!.monthlyRent.value).toBe(100);
+  });
+  it('rejects stale evidence, incomplete catalog, invalid ratio and expired apply', async () => {
+    expect(() => planSourceCycle({ ...config, maxDowngradeRatio: NaN }, evidence([]), { complete: true, products: [] }, now)).toThrow();
+    expect(planSourceCycle(config, evidence([]), { complete: false, products: [] }, now).plan.blockers).toContain('CATALOG_INCOMPLETE');
+    const m = memory(), built = planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now);
+    await expect(applySourceCycle(m.commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now: now + 3600000 })).rejects.toThrow('REPLAN');
+  });
+  it('observation clocks in RAW do not churn unchanged prices or conditions', () => {
+    const p = product('a'), r = record('a');
+    p.record.raw.synced_at = time; r.raw.synced_at = new Date(now + 1000).toISOString();
+    expect(planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now).plan.entries).toHaveLength(0);
+    r.terms[0]!.raw.contract_conditions = { version: 'changed' };
+    expect(planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now).plan.entries).toHaveLength(1);
+  });
+  it('condition updates preserve unrelated existing envelope fields', () => {
+    const p = { ...product('a'), humanNote: 'synthetic-preserve' }, r = record('a');
+    r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    const built = planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now);
+    expect(built.plan.entries[0]!.after).toHaveProperty('humanNote', 'synthetic-preserve');
+  });
+});
+
+describe('source plugins', () => {
+  it.each([['IANCAR', 'PREPARING', true], ['IANCAR', 'UNAVAILABLE', false], ['IANCAR', 'RESERVED', false],
+    ['AICA', '배차문의', true], ['AICA', '수리중', true], ['IRON', '판매완료', false], ['F05', '출고불가', false], ['F05', '출고협의', true],
+    ['SONOGONG', '출고가능', true], ['AUTOPLUS', '출고가능', true]] as const)('%s %s = %s', async (kind, status, expected) => {
+    const p = plugin(async () => capture([record('a', status)], kind === 'AICA' ? [...AICA_SCOPES] : ['inventory']), kind);
+    const read = await p.read(); expect(read.complete).toBe(true); expect(p.toRecords(read).records[0]!.status.saleAvailable).toBe(expected);
+  });
+  it('F05 excludes hidden tabs, hidden rows and filters; missing visibility is incomplete/unknown', async () => {
+    const raw = capture([record('a'), record('b'), record('c')]);
+    raw.rows[0]!.hiddenTab = true; raw.rows[1]!.hiddenByUser = true; raw.rows[2]!.hiddenByFilter = true;
+    const p = plugin(async () => raw, 'F05');
+    expect(p.toRecords(await p.read()).records.every(r => !r.status.saleAvailable)).toBe(true);
+    raw.visibilityComplete = false;
+    expect((await p.read()).complete).toBe(false);
+    expect(p.toRecords(await p.read()).records.every(r => r.status.saleAvailable === null)).toBe(true);
+  });
+  it('requires all four AICA segments', async () => {
+    const p = plugin(async () => capture([record('a')], [AICA_SCOPES[0]]), 'AICA');
+    expect((await p.read()).complete).toBe(false);
+  });
+  it('F05 reuses actual phase-one UID/term conversion and visibility metadata', async () => {
+    const channel = sharedSheetChannels[0]!, headers = [...sharedSheetHeaders, 'UID'];
+    const values: Record<string, SheetCell> = { 회사명: channel.companyName, 차량번호: '신차', 차량상태: '출고가능',
+      상품구분: '중고렌트', '12개월': 100, 단기보증: '무보증', 장기보증: '무보증', 연주행: '20000km', '차명 원문': '합성', UID: 'synthetic-new' };
+    const captured: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only',
+      layoutVersion: '2026-10-04-no-account', readTime: time, revision: 'synthetic',
+      tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {
+        const rows = [headers, ...(title === channel.tab ? [headers.map(h => values[h] ?? '')] : [])];
+        return { title, readTime: time, complete: true, rowCount: rows.length, values: rows };
+      }) };
+    const p = sharedSheetCyclePlugin(channel.code, 0.5, async () => ({ capture: captured,
+      visibility: { complete: true, tabs: captured.tabs.map(t => ({ title: t.title, hidden: false, coveredRows: t.rowCount, hiddenRows: [] })) } }), () => time);
+    const read = await p.read(); expect(read.complete).toBe(true);
+    const rows = p.toRecords(read).records; expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ uid: 'synthetic-new', plate: null, terms: [{ deposit: { state: 'ZERO', value: 0 } }] });
+  });
+  it('ONE full-facts maps supplier UID, PREPARING, period rates and ZERO deposit', async () => {
+    const c: IancarOneListCapture = { version: 'iancar-one-api/1', capturedAt: time, origin: 'synthetic', syncedAt: time,
+      stale: false, total: 1, pages: 1, sourceDigest: 'synthetic', issues: [], readyForRawIngest: true, factScope: 'FULL_FACTS',
+      records: [{ vehicleId: 'synthetic-one', fingerprint: 'synthetic', payload: { inventory_status: 'PREPARING', plate_number: 'synthetic',
+        detail: { data: { name: '합성' } }, rates: { data: [{ rental_period: 12, monthly_rate: 100, deposit: 0,
+          currency: 'KRW', vat_included: true, contracted_mileage: 20000, mileage_period: 'year' }] } } }] };
+    const p = iancarCyclePlugin(0.5, async () => c, () => time);
+    const read = await p.read(); expect(read.complete).toBe(true);
+    expect(p.toRecords(read).records[0]).toMatchObject({ uid: 'synthetic-one', status: { saleAvailable: true },
+      terms: [{ months: 12, deposit: { state: 'ZERO', value: 0 }, mileage: '20000km/year' }] });
+    c.factScope = 'PHASE_ONE_FACTS'; expect((await p.read()).complete).toBe(false);
+  });
+  it.each(['429', '403', 'partial'])('read error %s is never complete', async reason => {
+    const p = plugin(async () => { throw Error(reason); }); expect((await p.read()).complete).toBe(false);
+  });
+  it('rejects malformed capture HOLD counts before conversion loops', async () => {
+    const raw = capture([]); raw.heldCount = Infinity;
+    expect((await plugin(async () => raw).read()).error).toBe('SCHEMA_INVALID');
+  });
+});
+
+describe('runner safety and heartbeat', () => {
+  it('persists three failures, alerts and stops before a fourth source read', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
+    for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    expect((await runSourceCycle(p, m.commands, ctrl)).status).toBe('STOPPED');
+    expect(read).toHaveBeenCalledTimes(3); expect(alerts).toHaveLength(3); expect(alerts[2]).toContain('STOPPED');
+    expect((await ctrl.load(config.sourceId)).lastCompleteAt).toBeNull(); expect(m.order).toEqual([]);
+  });
+  it('ratio guard alerts before writes and success resets the failure streak', async () => {
+    const { ctrl, alerts } = control(), m = memory([product('a')]);
+    await runSourceCycle(plugin(async () => capture([])), m.commands, ctrl, { now: () => now });
+    expect(alerts).toContain('DOWNGRADE_RATIO_EXCEEDED'); expect(m.order).toEqual([]);
+    const result = await runSourceCycle(plugin(async () => capture([record('a')])), m.commands, ctrl, { now: () => now });
+    expect(result.status).toBe('DRY_RUN'); expect((await ctrl.load(config.sourceId)).failures).toBe(0);
+    expect(ctrl.heartbeat).toHaveBeenCalledTimes(2);
+  });
+  it('overlap is skipped and a failure releases the lock', async () => {
+    const { ctrl } = control(), m = memory(), release = await ctrl.acquire(config.sourceId), p = plugin(async () => capture([]));
+    expect((await runSourceCycle(p, m.commands, ctrl)).status).toBe('LOCKED'); await release!();
+    expect((await runSourceCycle(p, m.commands, ctrl, { now: () => now })).status).toBe('DRY_RUN');
+  });
+  it('heartbeat outage cannot suppress the durable three-failure stop alert', async () => {
+    const { ctrl, alerts } = control(), m = memory(), p = plugin(async () => capture([]));
+    ctrl.heartbeat = async () => { throw Error('HEARTBEAT_DOWN'); };
+    for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    expect((await ctrl.load(config.sourceId)).stopped).toBe(true);
+    expect(alerts).toContain('STOPPED:HEARTBEAT_DOWN');
+  });
+  it('synced_at skip uses only successful applied state; dry-run never consumes the token', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => time);
+    expect((await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => now })).status).toBe('DRY_RUN');
+    expect((await ctrl.load(config.sourceId)).lastSyncedAt).toBeNull();
+    const state = await ctrl.load(config.sourceId); state.lastSyncedAt = time; await ctrl.save(config.sourceId, state);
+    expect((await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => now })).status).toBe('UNCHANGED_SYNC');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+  it('CLI cannot enable scheduled writes', async () => {
+    await expect(sourceCycleCli(['--runtime', 'unused', '--apply'])).rejects.toThrow('SCHEDULED_APPLY_NOT_AUTHORIZED');
+  });
+  it('runner applies a pinned reviewed plan, then returns zero changes on second cycle', async () => {
+    const { ctrl } = control(), m = memory(), p = plugin(async () => capture([record('a')]));
+    const dry = await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    if (!('plan' in dry) || !dry.plan || !('planDigest' in dry)) throw Error('NO_PLAN');
+    const applied = await runSourceCycle(p, m.commands, ctrl, { apply: true, approvedPlan: dry.plan,
+      digest: dry.planDigest, approval: dry.planDigest, now: () => now + 1 });
+    expect(applied.status).toBe('APPLIED'); expect(applied.writes).toBe(1);
+    const again = await runSourceCycle(p, m.commands, ctrl, { now: () => now + 2 });
+    expect('plan' in again && again.plan?.entries).toEqual([]);
+  });
+  it('heartbeat reuses ingestion lifecycle under partial, ineligible scope', async () => {
+    const calls: Record<string, unknown[]> = {};
+    const store = Object.fromEntries(['upsertSource', 'beginRun', 'appendRaw', 'completeRun', 'failRun'].map(key => [key,
+      async (arg: unknown) => { (calls[key] ??= []).push(arg); }])) as unknown as SourceIngestionStore;
+    const heartbeat = sourceRunCycleHeartbeat(store), state = { ...emptyCycleState(), lastAttemptAt: time, lastCompleteAt: time };
+    await heartbeat(config.sourceId, state, null);
+    expect(calls.completeRun![0]).toMatchObject({ coverage: { mode: 'PARTIAL', completeness: 'INCOMPLETE' }, rawCount: 1 });
+    await heartbeat(config.sourceId, { ...state, error: 'READ_FAILED' }, null);
+    expect(calls.failRun).toHaveLength(1);
+  });
+});
+
+const temp: string[] = [];
+afterEach(async () => { for (const p of temp.splice(0)) await rm(p, { recursive: true, force: true }); });
+describe('local control persistence', () => {
+  it('exclusive lock, durable restart stop, JSON alert and owner release', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'source-cycle-test-')); temp.push(dir);
+    const c = fileCycleControl(dir, async () => {}), release = await c.acquire(config.sourceId);
+    const other = fileCycleControl(dir, async () => {});
+    expect(await other.acquire(config.sourceId)).toBeNull();
+    await c.save(config.sourceId, { ...emptyCycleState(), failures: 3, stopped: true });
+    expect((await other.load(config.sourceId)).stopped).toBe(true);
+    await c.alert(config.sourceId, 'STOPPED');
+    expect(JSON.parse((await readFile(join(dir, 'alerts.jsonl'), 'utf8')).trim()).reason).toBe('STOPPED');
+    await release!(); const release2 = await other.acquire(config.sourceId); expect(release2).not.toBeNull(); await release2!();
+    expect((await readdir(dir)).filter(f => f.endsWith('.lock'))).toEqual([]);
+  });
+  it('offline snapshot CLI performs zero product writes and persists redacted heartbeat', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'source-cycle-cli-')); temp.push(dir);
+    const input = join(dir, 'capture.json'), raw = capture([record('a')]);
+    raw.observedAt = new Date().toISOString(); raw.rows[0]!.record.observedAt = raw.observedAt;
+    await writeFile(input, JSON.stringify({ sources: [{ definition: { sourceId: config.sourceId, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, capture: raw }],
+      products: [], catalogComplete: true }), 'utf8');
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await sourceCycleCli(['--snapshot', input, '--state-dir', dir])).toBe(0);
+      expect(output.mock.calls[0]![0]).toContain('DRY_RUN');
+      expect(await readFile(join(dir, 'offline-heartbeats.jsonl'), 'utf8')).not.toContain('price');
+      expect(JSON.parse(await readFile(input, 'utf8')).products).toEqual([]);
+    } finally { output.mockRestore(); }
+  });
+});

@@ -231,6 +231,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 원천 엔진 2단계 — 반복 사이클 코드·시험 / 운영 연결 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC2-20261012.md`. 대상 HEAD `91eff5ee57799e6d88d0638245bd00d5c259884d`, `work/freepass-data/source-engine-core-20261012`; 이번 커밋 없음. SPEC 영수증으로 오프라인 사전점검 대체.
+- 변경: UID 기반 하향/편입/재노출/조건갱신 계획, digest 승인·전체 백업/CAS·키순서 무관 되읽기, 계약잠금/불완전 누락 방어/하향 비율 상한, 파일 잠금·3회 실패 정지·heartbeat, 설정형 원천 플러그인·F05/ONE 변환 연결, 15분 Windows 등록/제거 스크립트(실행 안 함).
+- 검증: 신규41/41 및 관련7파일211/211 PASS, build/architecture/data-access/PowerShell 구문 PASS. 확장 ONE97/99: tsx 초기화 `uv_os_get_passwd ENOMEM` CLI 실패2. 전체 PASS 아님. Claude UNAVAILABLE.
+- 남음: 실제 source mapping·UID live binding·CatalogStore command runtime·소비처 되읽기 미연결/미검증. 운영 쓰기·네트워크·배포·push·예약 등록0. [결과·실행 경로·정확한 HOLD](SOURCE-ENGINE-RESULT2-20261012.md).
+- next_start_here: 결과 문서와 `tests/source-cycle.test.ts` → native 캡처 mapping/CatalogStore adapter → private dry-run UID 집합·digest 검증. 지휘통제실이 코드 검토/커밋하며 운영 연결은 별도다.
+
 ### 2026-10-12 원천 엔진 골격 — 오프라인 작업
 
 - 정본/목적: `SOURCE-ENGINE-SPEC-20261012.md` 및 설계 사본, source-engine-core 작업선. 시작 revision `62906b2f2cc997aaba7dde2f1c6cdce2d08b1d93`.
