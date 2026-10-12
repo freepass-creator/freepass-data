@@ -35,7 +35,7 @@
       "oneOf": [
         {"type": "object", "additionalProperties": false, "required": ["kind", "amount"], "properties": {"kind": {"const": "FIXED"}, "amount": {"$ref": "#/$defs/money"}}},
         {"type": "object", "additionalProperties": false, "required": ["kind", "base", "multiplier"], "properties": {"kind": {"const": "MULTIPLY"}, "base": {"const": "MONTHLY_RENT"}, "multiplier": {"type": "number", "minimum": 0}}},
-        {"type": "object", "additionalProperties": false, "required": ["kind", "base", "rate"], "properties": {"kind": {"const": "RATE"}, "base": {"enum": ["MONTHLY_RENT_X_TERM", "VEHICLE_PRICE"]}, "rate": {"type": "number", "minimum": 0}}}
+        {"type": "object", "additionalProperties": false, "required": ["kind", "base", "rate"], "properties": {"kind": {"const": "RATE"}, "base": {"enum": ["MONTHLY_RENT_X_TERM", "VEHICLE_PRICE"]}, "rate": {"type": "number", "minimum": 0}, "adjustmentAmount": {"type": "object", "additionalProperties": false, "required": ["amount", "currency"], "properties": {"amount": {"type": "integer"}, "currency": {"const": "KRW"}}}}}
       ]
     },
     "termEconomicAmount": {
@@ -44,7 +44,7 @@
       "required": ["state", "sourceRefs"],
       "properties": {
         "priceSourceRefs": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "referenceRentBasis": {"type": "object", "additionalProperties": false, "required": ["termKey", "termMonths", "monthlyRent", "multiplier"], "properties": {"termKey": {"type": "string", "minLength": 1}, "termMonths": {"const": 36}, "monthlyRent": {"$ref": "#/$defs/money"}, "multiplier": {"enum": [1, 0.8]}}},
+        "referenceRentBasis": {"type": "object", "additionalProperties": false, "required": ["termKey", "termMonths", "monthlyRent", "multiplier"], "properties": {"termKey": {"type": "string", "minLength": 1}, "termMonths": {"enum": [12, 36]}, "monthlyRent": {"$ref": "#/$defs/money"}, "multiplier": {"enum": [1, 0.8]}}},
         "vatTreatment": {"enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"]},
         "vatAmount": {"type": ["integer", "null"], "minimum": 0},
         "totalAmount": {"type": ["integer", "null"], "minimum": 0},
@@ -54,6 +54,8 @@
         "ruleId": {"type": ["string", "null"]},
         "policyId": {"type": "string", "minLength": 1},
         "reasonCode": {"type": ["string", "null"]},
+        "approximate": {"type": "boolean"},
+        "note": {"type": ["string", "null"]},
         "sourceRefs": {"type": "array", "minItems": 0, "items": {"type": "string", "minLength": 1}}
       },
       "allOf": [
