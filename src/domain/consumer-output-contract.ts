@@ -385,7 +385,7 @@ export function createVehiclePhotoReader(
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   const recheckIds = async (check: () => Promise<boolean>) => { if (!await check()) throw new Error('VEHICLE_PHOTO_NOT_FOUND'); };
-  return async (consumerId: string, productId: string, index?: number, options: VehiclePhotoReadOptions = {}) => {
+  const readPhoto = async (consumerId: string, productId: string, index?: number, options: VehiclePhotoReadOptions = {}) => {
     // Diagnostic time is independent of the injected cache clock.
     const tick = () => { try { return performance.now(); } catch { return NaN; } };
     const started = observer ? tick() : 0;
@@ -697,4 +697,6 @@ export function createVehiclePhotoReader(
       return { count: result.count, bytes: Buffer.from(output), contentType: result.contentType, revalidate };
     } finally { active--; }
   };
+  // 게이트웨이가 «줄인 결과물 캐시 옵션»을 넘겨도 되는 읽기 함수임을 표시한다(옵션을 모르는 대체 읽기 함수에는 호출 인자를 늘리지 않는다).
+  return Object.assign(readPhoto, { supportsRenditionCache: true as const });
 }

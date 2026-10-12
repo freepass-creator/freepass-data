@@ -571,10 +571,11 @@ export function createConsumerGateway(
       reply.raw.once('finish', release).once('close', release).once('error', release);
       if (reply.raw.destroyed) release();
       const read = compatReader.readVehiclePhoto.bind(compatReader);
-      const photoOptions: VehiclePhotoReadOptions = index !== undefined && size !== undefined
-        ? { renditionCacheLookup: tag => renditionCache.get(request.params.productId, index, size, tag) } : {};
+      const supportsRenditionCache = (compatReader.readVehiclePhoto as { supportsRenditionCache?: boolean }).supportsRenditionCache === true;
+      const photoOptions: VehiclePhotoReadOptions | undefined = supportsRenditionCache && index !== undefined && size !== undefined
+        ? { renditionCacheLookup: tag => renditionCache.get(request.params.productId, index, size, tag) } : undefined;
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
-        summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index, photoOptions));
+        summarize: value => ({ count: value.count }) }, () => photoOptions ? read(binding.id, request.params.productId, index, photoOptions) : read(binding.id, request.params.productId, index));
       if (result.fromRenditionCache) {
         // 캐시 적중: 이미 검사·줄인 결과물. 비공개·철회·연결·개수 변경만 DB 로 다시 확인하고 내보낸다.
         if (!await result.revalidate()) {
