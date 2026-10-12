@@ -81,6 +81,7 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
     const args = ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: process.env.FREEPASS_SHEET_F05_ID, includeGridData: true, ranges: tabsAll.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })];
     const o = execFileSync(gwsBin(), args, { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] });
     hiddenRows = hiddenRowsByTab(JSON.parse(o.slice(o.indexOf('{')))); hiddenOk = true;
+    if (tabsAll.some(t => !hiddenRows.has(t))) { hiddenOk = false; blockers.push('HIDDEN_ROW_METADATA_INCOMPLETE'); } // 요청한 탭이 응답에 빠지면 숨긴 줄을 판별할 수 없다
   } catch (e) { blockers.push('HIDDEN_ROW_METADATA_READ_FAILED'); if (process.env.DEBUG_SELLABLE) console.error('hidden read error', e.message.slice(0, 300)); }
   global.__hiddenOk = hiddenOk; global.__hiddenCount = [...hiddenRows.values()].reduce((n, set) => n + set.size, 0);
   for (const tab of [...new Set(sup.map(x => x.tab))].filter(t => !globalThis.__visibleTabs || globalThis.__visibleTabs.has(t))) {

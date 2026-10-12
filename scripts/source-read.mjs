@@ -68,6 +68,7 @@ async function readAica(products) {
   // fail-closed: 기대 탭이 하나라도 없거나 숨겨졌으면(이름 변경·구조 변경 의심) 빈 재고로 보지 않고 중단
   if (visibleTabs.length !== expectedTabs.length) return { ok: false, reason: `아이카 보이는 탭 구성이 기대와 다름(${visibleTabs.join('·') || '없음'}) — 시트 구조 변경 의심` };
   const hiddenRows = visibleTabs.length ? hiddenRowsByTab(gwsGet({ includeGridData: true, ranges: visibleTabs.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })) : new Map();
+  if (visibleTabs.length && visibleTabs.some(t => !hiddenRows.has(t))) return { ok: false, reason: '아이카 숨긴 줄 메타데이터 응답에 요청한 탭이 빠져 있음 — 숨긴 줄을 판별할 수 없어 중단' }; // fail-closed
   let hiddenSkipped = 0;
   for (const tab of visibleTabs) {
     const v = sheetRead(id, `'${tab}'!A1:Y1500`);
@@ -113,6 +114,7 @@ async function readIron() {
         seen.add(url); const html = await get(url);
         if (!/<article\b/.test(html)) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록 페이지에서 차량을 한 건도 읽지 못함(점검 페이지·구조 변경 의심)` }; // fail-closed
         const cards = [...html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)];
+        if ((html.match(/<article\b/g) ?? []).length !== cards.length) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록에 닫히지 않은(잘린) 카드가 있음` }; // fail-closed
         if (cards.some(a => !/href="\/vehicles\/([^"?/#]+)/.test(a[0]))) return { ok: false, reason: `아이언 «${cond}» ${seen.size}번째 목록에 차량 링크를 읽지 못한 카드가 있음(구조 변경 의심)` }; // fail-closed
         for (const a of cards) { const id = a[0].match(/href="\/vehicles\/([^"?/#]+)/)?.[1]; if (id) items.push({ id, cond, sold: /rental-product-card--sold/.test(a[0]) }); }
         const more = html.match(/<a[^>]*href="([^"]+)"[^>]*>\s*더보기\s*<\/a>/)?.[1];

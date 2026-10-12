@@ -33,6 +33,8 @@ for (let page = 1; page <= 100; page++) {
   // 원천 갱신 시각이 유효하고 신선도 한도(이안카 60분) 안이어야 한다 — 오래된 AVAILABLE 목록으로 편입·재노출을 계획하지 않는다
   const syncedMs = Date.parse(String(body.synced_at ?? ''));
   if (!Number.isFinite(syncedMs) || syncedMs > Date.now() + 60_000 || Date.now() - syncedMs > 60 * 60_000) { console.error('IANCAR_LIST_SYNCED_AT_INVALID_OR_OLD'); process.exit(3); }
+  // 페이지마다 같은 회차(synced_at)·같은 총수여야 한다 — 회차가 섞인 목록은 완전 수집이 아니다
+  if (page > 1 && (body.synced_at !== syncedAt || body.pagination?.total !== total)) { console.error('IANCAR_LIST_PAGES_INCONSISTENT'); process.exit(3); }
   records.push(...(body.data ?? [])); syncedAt = body.synced_at; stale = body.stale; total = body.pagination?.total ?? records.length;
   if (!body.data?.length || records.length >= total) break;
 }
