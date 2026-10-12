@@ -79,6 +79,10 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     }
   });
 
+  it('re-checks personal data after vehicle fields are normalized too', () => {
+    const input = base({ fields: { 요약: '재고', 값: 'user@' }, vehicle: { ...base().vehicle, model: ' example.com' } });
+    expect(createKakaoInfoCandidate(input)).toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

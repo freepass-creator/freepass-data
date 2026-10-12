@@ -145,11 +145,11 @@ export function hasSensitiveKakaoExcerpt(value: string) {
 function candidateStringValues(input: KakaoInfoCandidateInput) {
   const strings: string[] = [
     input.source?.side,
-    input.source?.excerpt,
     input.type,
+    input.vehicle?.plate,
+    input.source?.excerpt,
     input.fields?.요약,
     input.fields?.값,
-    input.vehicle?.plate,
     input.vehicle?.model,
     input.vehicle?.plateUnverified,
   ].filter((value): value is string => typeof value === 'string');
@@ -157,8 +157,9 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
 }
 
 function candidateSensitiveProbeValues(values: string[]) {
-  const adjacent = values.slice(0, -1).map((value, index) => `${value}${values[index + 1]}`);
-  return [...values, values.join(''), ...adjacent];
+  // 자유 문자열 칸끼리 인접하도록 정렬된 목록에서 인접 결합(양방향)과 전체 이어붙임을 검사한다.
+  const adjacent = values.slice(0, -1).flatMap((value, index) => [`${value}${values[index + 1]}`, `${values[index + 1]}${value}`]);
+  return [...values, values.join(''), values.join(' '), ...adjacent];
 }
 
 function hasCrossFieldAccountEvidence(values: string[]) {
@@ -284,11 +285,6 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
     type: input.type,
     status: 'CANDIDATE',
   };
-  // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
-  const finalValues = candidateStringValues(normalized);
-  if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)) {
-    return { ok: false, reason: 'PII_DETECTED' };
-  }
   if (input.vehicle) {
     const sourceMsgNo = parseMsgNo(input.source.msgNo);
     const plate = input.vehicle.plate?.trim();
@@ -317,6 +313,11 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       ...(plateHasEvidence && plateEvidenceSource ? { plateEvidence: { source: plateEvidenceSource } } : {}),
     };
     normalized.needsSupplierConfirm = Boolean(normalized.needsSupplierConfirm || plateUnverified);
+  }
+  // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
+  const finalValues = candidateStringValues(normalized);
+  if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)) {
+    return { ok: false, reason: 'PII_DETECTED' };
   }
   return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized), ...(warnings ? { warnings } : {}) } };
 }
