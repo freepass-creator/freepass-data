@@ -116,6 +116,10 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       vehicle: { model: '345678' },
     }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
+  it('rejects email fragments in any field regardless of field order', () => {
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: 'alice@' }, fields: { 항목: '서류', 요약: 'example.com', 값: '등본' } } as never)))
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

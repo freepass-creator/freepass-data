@@ -281,6 +281,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   const stringValues = candidateStringValues(input);
   if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)
+    || stringValues.some((value) => value.includes('@')) // 이메일 조각은 어떤 칸에도 허용하지 않는다(칸 분할 우회 차단)
     || exceedsResidualDigitBudget([...stringValues, (input.source.msgNo ?? '').length >= 5 ? input.source.msgNo : ''])) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
@@ -345,6 +346,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   const finalValues = candidateStringValues(normalized);
   if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)
+    || finalValues.some((value) => value.includes('@'))
     || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo.length >= 5 ? normalized.source.msgNo : ''])) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
