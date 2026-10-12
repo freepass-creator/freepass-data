@@ -288,6 +288,22 @@ describe('API runtime boundary', () => {
     expect(gateRun('RP031', env).status).not.toBe(0);                       // 요청했는데 배포 뒤 환경에 없음
     expect(gateRun('RP031', withGate('RP012')).status).not.toBe(0);         // 다른 값으로 반영됨
   });
+  it('이안카 사진 ID 게이트: 소비처 비밀 검증이 배포보다 먼저이고, 게이트 변수가 비면 건너뛴다', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const verify = workflow.indexOf('- name: Verify photo consumer secret before enabling the photo ID gate');
+    const deploy = workflow.indexOf('- name: Deploy private read-only service');
+    expect(verify).toBeGreaterThan(0);
+    expect(verify).toBeLessThan(deploy);                       // 검증 실패 시 배포 단계에 도달하지 않는다
+    const step = workflow.slice(verify, deploy);
+    expect(step).toContain("env.IANCAR_PHOTO_ID_GATE_SUPPLIERS != ''"); // 비어 있으면 건너뜀(꺼짐)
+    expect(step).toContain("env.USE_CONSUMER_SECRETS == 'true'");
+    expect(step).toContain('erp5-public-media');
+    expect(step).toContain('index("photos")');
+    expect(step).not.toMatch(/echo[^\n]*(consumer_token|consumers_json)/); // 값 비노출
+    expect(step).not.toMatch(/GITHUB_ENV[^\n]*(token|consumers_json)/i);   // 비밀 내용을 다음 단계로 넘기지 않는다
+    // 배포 뒤 단계에는 비밀 내용 검증이 없다(배포 후 실패로 늦게 알리지 않는다).
+    expect(workflow.slice(deploy)).not.toContain('erp5-public-media');
+  });
   it('deploys privately and grants anonymous invoker only after approved preflight', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const gate = workflow.indexOf('- name: Validate public approval before deployment effects');

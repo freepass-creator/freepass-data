@@ -138,7 +138,11 @@ describe('trusted bounded single-product runtime readback', () => {
     const deploy = workflow.split('\n  verify:')[0]!;
     expect(deploy).toContain('git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs"');
     expect(deploy.indexOf('git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs"')).toBeLessThan(deploy.indexOf('ref: ${{ steps.runtime-source.outputs.sha }}'));
-    expect(deploy.match(/gcloud secrets versions access/g)).toHaveLength(1);
+    // 읽기는 두 곳뿐: 읽기 확인 단계(항상)와, 사진 ID 게이트를 켤 때만 도는 배포 전 소비처 검증 단계(값은 버리고 존재·권한·형식만 본다).
+    expect(deploy.match(/gcloud secrets versions access/g)).toHaveLength(2);
+    const photoVerify = deploy.split('- name: Verify photo consumer secret before enabling the photo ID gate')[1]!.split('- name: Deploy private read-only service')[0]!;
+    expect(photoVerify.match(/gcloud secrets versions access/g)).toHaveLength(1);
+    expect(deploy.split('- name: Verify IAM denial and authenticated compatibility readback')[1]!.match(/gcloud secrets versions access/g)).toHaveLength(1);
     expect(deploy).toContain('READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file"');
     expect(deploy).toContain('Clean trusted readback helper');
   });
