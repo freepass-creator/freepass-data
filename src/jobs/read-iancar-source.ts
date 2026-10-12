@@ -72,7 +72,8 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
     const dv = vehicle.data as Record<string, unknown>;
     if (!['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'].includes(String(dv.inventory_status)) || typeof dv.available !== 'boolean' || dv.available !== (dv.inventory_status === 'AVAILABLE')
       || dv.stale === true || String(dv.vehicle_id) !== id || String(dv.plate_number ?? '').replace(/\s+/g, '') !== String(r.plate_number ?? '').replace(/\s+/g, '')
-      || String(dv.inventory_status) !== String(r.inventory_status)) { console.error('IANCAR_DETAIL_STATUS_INVALID_OR_MISMATCH'); process.exit(3); }
+      || String(dv.inventory_status) !== String(r.inventory_status)
+      || !Number.isFinite(Date.parse(String(dv.synced_at ?? ''))) || Date.now() - Date.parse(String(dv.synced_at)) > 60 * 60_000 || Date.parse(String(dv.synced_at)) > Date.now() + 60_000) { console.error('IANCAR_DETAIL_STATUS_INVALID_OR_MISMATCH'); process.exit(3); }
     detail.push({ list: r, vehicle, rates });
   }
   if (out) writeFileSync(out, JSON.stringify({ readAt, syncedAt, stale, detail }));
