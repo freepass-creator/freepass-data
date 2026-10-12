@@ -188,7 +188,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(dateInferred.ok && dateInferred.candidate.source.sentAtApprox).toBe('dateInferred');
   });
   it('gives fixed notices a 90-day validity, but only for KAKAO_NOTICE', () => {
-    const notice = createKakaoInfoCandidate(base({ source: { ...base().source, channel: 'KAKAO_NOTICE', noticeFixed: true } as never, type: '조건', vehicle: undefined }));
+    const notice = createKakaoInfoCandidate(base({ source: { ...base().source, channel: 'KAKAO_NOTICE', noticeFixed: true } as never, type: '조건', vehicle: undefined as never }));
     expect(notice.ok, JSON.stringify(notice)).toBe(true);
     if (!notice.ok) return;
     const signal = classifyKakaoInfoSignal(notice.candidate, '2026-10-20T00:00:00.000Z');

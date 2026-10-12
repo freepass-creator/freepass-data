@@ -155,6 +155,8 @@ export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
   }
   if (isPromotionForbiddenType(type) && info.autoPromotable === true) return true;
   if (typeof info.channel === 'string' && info.channel !== 'KAKAO_RAW' && (info.layer !== 'T0' || info.autoPromotable === true)) return true;
+  // 근사 시각(sentAtApprox)이 있는 후보는 자동 승격 금지 — 저장 뒤 변조된 autoPromotable 도 불변식 위반으로 본다.
+  if (info.sentAtApprox != null && info.autoPromotable === true) return true;
   if (isT2OrAbove(info.layer)) return true;
   if (info.autoPromotable === true && !hasStoredLiteralSameSentencePlateEvidence(info)) return true;
   return false;
