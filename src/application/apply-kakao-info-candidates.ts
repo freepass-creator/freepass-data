@@ -1,6 +1,6 @@
 import { ingestRawSourceBatch } from './ingest-raw-source.js';
 import { kakaoInfoCandidatesToSourceBatch } from './kakao-info-to-source-batch.js';
-import type { KakaoInfoCandidateInput } from '../domain/kakao-info-candidate.js';
+import { isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoCandidateInput } from '../domain/kakao-info-candidate.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -98,6 +98,44 @@ function hasExpectedDerivedSafetyFields(existing: unknown, expected: unknown) {
   return stableDigest(derivedSafetyFields(existing)) === stableDigest(derivedSafetyFields(expected));
 }
 
+function text(value: unknown) {
+  return typeof value === 'string' ? value : '';
+}
+
+function storedKakaoInfo(candidate: unknown) {
+  return candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    ? (candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo
+    : undefined;
+}
+
+function isT2OrAbove(layer: unknown) {
+  return typeof layer === 'string' && /^T[2-9][0-9]*$/.test(layer);
+}
+
+function isPromotionForbiddenType(type: unknown) {
+  const typed = type as Parameters<typeof isKakaoMoneyInfo>[0];
+  return isKakaoMoneyInfo(typed) || isKakaoT0OnlyInfo(typed) || text(type) === 'SALES_REQUEST';
+}
+
+function hasStoredLiteralSameSentencePlateEvidence(info: Record<string, unknown>) {
+  const vehicle = info.vehicle;
+  if (!vehicle || typeof vehicle !== 'object' || Array.isArray(vehicle)) return false;
+  const v = vehicle as Record<string, unknown>;
+  return v.plateEvidenceSource === 'LITERAL_IN_UTTERANCE'
+    && v.plateEvidenceDistance === 0
+    && v.plateStatusSameSentence === true;
+}
+
+export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
+  const info = storedKakaoInfo(candidate);
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
+  const type = info.type;
+  if (isPromotionForbiddenType(type) && info.autoPromotable === true) return true;
+  if (isT2OrAbove(info.layer)) return true;
+  if (info.autoPromotable === true && !hasStoredLiteralSameSentencePlateEvidence(info)) return true;
+  return false;
+}
+
 async function downgradeMissingProducts(port: KakaoInfoApplyPort, inputs: readonly KakaoInfoCandidateInput[], writesEnabled: boolean) {
   const prepared = structuredClone(inputs) as KakaoInfoCandidateInput[];
   const productExistenceByInput = new Map<number, KakaoInfoCandidateReceipt['productExistence']>();
@@ -192,6 +230,7 @@ export async function applyKakaoInfoCandidates(
     if (!expectedCandidate) throw new Error('KAKAO_INFO_PLAN_BINDING_FAILED');
     const existingDigest = existing ? candidateDigest(existing) : null;
     const result: KakaoInfoApplyOutcome = !existing ? 'CREATED'
+      : hasKakaoInfoStoredInvariantViolation(existing.candidate) ? 'CONFLICT'
       : existing.sourceFingerprint === expectedFingerprint
         && existingDigest === expectedDigest
         && hasExpectedDerivedSafetyFields(existing.candidate, expectedCandidate) ? 'SKIPPED_SAME'

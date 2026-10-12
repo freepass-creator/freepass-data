@@ -1,5 +1,6 @@
 import { classifyKakaoInfoSignal, isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoPlateEvidenceSource } from '../domain/kakao-info-candidate.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
+import { hasKakaoInfoStoredInvariantViolation } from './apply-kakao-info-candidates.js';
 
 export type KakaoKnownFactTopic = '재고' | '가격' | '조건' | '정책변경' | '계약진행' | '서류요구' | '접수가능';
 
@@ -88,6 +89,10 @@ export async function readKakaoKnownFacts(
   const records = await store.listCandidatesBySource(SOURCE_ID);
   let warningCount = 0;
   const facts = records.flatMap(record => {
+    if (hasKakaoInfoStoredInvariantViolation(record.candidate)) {
+      warningCount++;
+      return [];
+    }
     const root = record.candidate as Record<string, unknown>;
     const info = (record.candidate as { kakaoInfo?: Record<string, unknown> }).kakaoInfo;
     if (!info || info.type !== query.topic) return [];
