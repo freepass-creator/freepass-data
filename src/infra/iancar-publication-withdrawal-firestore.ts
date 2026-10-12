@@ -164,6 +164,26 @@ export function iancarPhotoPendingPatch(old: Record<string, any>): Record<string
   };
 }
 
+/** 기존 문서에 ONE 의 «현재 값» 중 안전한 것만 반영한다(대표 10-12 규칙):
+ * - 주행거리: 매 동기화 ONE 값. 기존 형식(문자열 «7,405» 또는 숫자)을 유지하고, 처음 바꿀 때 옛 값을 mileage_source_original 에 보존.
+ * - 연식: year 는 최초등록 연도 정의라 덮어쓰지 않는다. ONE 연식(모델연식)은 model_year_source 로 따로 보존.
+ * 색상·연료는 정제 매핑표 확정 전이라 건드리지 않는다. */
+export function iancarFactsRefreshPatch(old: Record<string, any>, facts: Record<string, unknown>, observedAt: string): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const mileage = facts.mileage;
+  if (typeof mileage === 'number' && Number.isSafeInteger(mileage) && mileage >= 0) {
+    const asText = typeof old.mileage === 'string';
+    const next = asText ? mileage.toLocaleString('en-US') : mileage;
+    if (old.mileage !== next) {
+      patch.mileage = next;
+      if (old.mileage != null && !Object.hasOwn(old, 'mileage_source_original')) patch.mileage_source_original = old.mileage;
+    }
+    patch.iancar_mileage_observed_at = observedAt;
+  }
+  if (typeof facts.year === 'string' && facts.year) patch.model_year_source = facts.year;
+  return patch;
+}
+
 type PhaseOneProduct = {
   sourceVehicleId: string; car_number: string; price: Record<string, { rent: number; deposit: number }>;
   vehicle_status: string; status: string; status_kind: string; listable: boolean;
@@ -217,6 +237,8 @@ export async function publishIancarPhaseOne(input: {
   apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string; sourceEvidence?: string;
   /** 사진 보류 모드: ONE 사진 주소(옛 별칭)를 쓰지 않고, 죽은 별칭만 비워 PHOTO_PENDING 으로 표시한다(드라이브 사진이 있는 차는 건드리지 않는다). */
   photoPending?: boolean;
+  /** 기존 문서에 ONE 현재 값(주행거리)·모델연식 출처를 반영한다(iancarFactsRefreshPatch). */
+  refreshFacts?: boolean;
   /** 임시 노출 중단(publication_withdrawal) 문서는 해제하지 않고 그대로 둔다. */
   keepWithdrawn?: boolean;
 }) {
@@ -302,6 +324,7 @@ export async function publishIancarPhaseOne(input: {
     if (!prior) for (const [key, value] of Object.entries(product.facts)) {
       if (['maker', 'model', 'year', 'fuel_type', 'ext_color', 'mileage'].includes(key)) fields[key] = value;
     }
+    if (input.refreshFacts && prior) Object.assign(fields, iancarFactsRefreshPatch(old, product.facts, input.sourceSyncedAt));
     if (input.photoPending) Object.assign(fields, iancarPhotoPendingPatch(old));
     else if (product.photo) Object.assign(fields, iancarPhotoPatch(old, { ...product.photo,
       productId: id, vehicleId: product.sourceVehicleId, plate }), { iancar_one_photo_ids: product.photo.photoIds });

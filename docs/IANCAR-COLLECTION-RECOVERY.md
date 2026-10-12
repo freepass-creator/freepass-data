@@ -64,6 +64,10 @@
 | manufacturer·model·name·trim | maker·model·sub_model·trim_name | 차종 마스터(F03)를 거쳐서만 — ONE 원문은 보존, 우리 4단 값은 기존 보존(차종-기준-한장). ONE 값과 마스터가 충돌하면 확인 필요 표시 |
 | photos | image_urls·photo_cache·iancar_one_photo_ids | §3-2: ONE 사진은 열쇠 필요 → Data 사진 길로만. 별칭 주소 금지 |
 
+**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 ONE 연식은 `model_year_source` 로만 보존한다. `year` 는 덮어쓰지 않는다. 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
+- 백업 버킷 재사용 판정: 새로 만들지 않는다. `freepasserp5-data-audit-evidence`(asia-northeast3)가 이미 있고 코드가 이 버킷만 허용(`IANCAR_BACKUP_WRONG_BUCKET`). 단발 적용 때 `EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET` 으로 지정.
+- 복원: `--restore-sync=<백업> --expected-digest=<원천 digest>`(계획) / `--apply` + `IANCAR_SYNC_RESTORE_APPROVED=true`.
+
 ## 4-2. 자동 수집 재개 계획 (대표 승인 항목 — 승인 전 계획)
 **무엇이·왜 멈췄나**: 이안카 15분 Cloud Scheduler 가 10-03 13:01Z 에 PAUSED(호출 주소 `/verify`, 적용 주소 `/schedule` 아님)로 두어졌고 Data 쪽 이안카 전용 예약은 없다. 이후 동기화는 10-08 수동 단발 1회뿐이다. 코드 결함이 아니라 «재개 승인 대기» 상태다.
 **주기 설계(실측 반영)**: ONE 갱신이 불규칙(15~60분)이고 신선도 창이 갱신 후 15분, 전량 읽기가 약 10분이므로 시계 예약이 아니라 «감지 후 읽기»로 한다: 목록 1건(분당 1회 이하)으로 `synced_at` 변화를 보고, 바뀌면 즉시 전량 읽기→계획→검사 통과 시 적용. 같은 `synced_at` 에서는 최대 2회 시도, 이후 다음 갱신을 기다린다.

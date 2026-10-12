@@ -122,7 +122,7 @@ if ([...requested].some(arg => arg.startsWith('--restore-sync='))) {
   console.log(JSON.stringify(await runIancarPhaseOneRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
   process.exit(0);
 }
-const allowed = new Set(['--photos-pending', '--keep-withdrawn', '--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos', '--sync', '--apply-sync']);
+const allowed = new Set(['--refresh-facts', '--photos-pending', '--keep-withdrawn', '--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos', '--sync', '--apply-sync']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
@@ -131,7 +131,7 @@ const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
 if (requested.has('--apply-sync') && !requested.has('--sync')) throw new Error('IANCAR_SYNC_MODE_REQUIRED');
 if (requested.has('--sync')) {
-  if ([...requested].some(arg => !['--sync', '--apply-sync', '--save-private', '--photos-pending', '--keep-withdrawn'].includes(arg))) throw new Error('IANCAR_SYNC_OPTIONS_MIXED');
+  if ([...requested].some(arg => !['--sync', '--apply-sync', '--save-private', '--photos-pending', '--keep-withdrawn', '--refresh-facts'].includes(arg))) throw new Error('IANCAR_SYNC_OPTIONS_MIXED');
   if (requested.has('--apply-sync') && process.env.EANCAR_ONE_SYNC_APPROVED !== 'true') throw new Error('IANCAR_SYNC_APPROVAL_REQUIRED');
 }
 
@@ -279,7 +279,7 @@ if (requested.has('--sync')) {
   }
   const { runIancarPhaseOnePublication } = await import('./data-access-runtime.js');
   const input = { capture, apply: false, mirrorInventory: true,
-    ...(requested.has('--photos-pending') ? { photoPending: true } : {}), ...(requested.has('--keep-withdrawn') ? { keepWithdrawn: true } : {}),
+    ...(requested.has('--photos-pending') ? { photoPending: true } : {}), ...(requested.has('--keep-withdrawn') ? { keepWithdrawn: true } : {}), ...(requested.has('--refresh-facts') ? { refreshFacts: true } : {}),
     ...(process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET ? { privateEvidenceBucket: process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET } : {}) };
   const plan = await runIancarPhaseOnePublication(input);
   report.publicationPlan = plan;

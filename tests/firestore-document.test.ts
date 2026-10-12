@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentSnapshot } from 'firebase-admin/firestore';
 import { GeoPoint, Timestamp } from 'firebase-admin/firestore';
-import { encodeIancarBackupValue, decodeIancarBackupValue, iancarAbsencePatch, iancarPhotoPatch, iancarPhotoPendingPatch } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { encodeIancarBackupValue, decodeIancarBackupValue, iancarAbsencePatch, iancarPhotoPatch, iancarPhotoPendingPatch, iancarFactsRefreshPatch } from '../src/infra/iancar-publication-withdrawal-firestore.js';
 import {
   decodeFirestoreDocument,
   decodeFirestoreIdentityDocument
@@ -98,5 +98,21 @@ describe('iancarPhotoPendingPatch — 죽은 ERP4 별칭만 «사진 확인 중�
   });
   it('사진이 전혀 없는 새 문서는 «사진 확인 중»', () => {
     expect(iancarPhotoPendingPatch({})).toMatchObject({ image_kind: 'PHOTO_PENDING', image_urls: [] });
+  });
+});
+
+describe('iancarFactsRefreshPatch — 주행거리는 ONE 값, 연식은 모델연식 출처로 따로', () => {
+  it('문자열 주행거리 형식을 유지하고 옛 값을 보존한다', () => {
+    const patch = iancarFactsRefreshPatch({ mileage: '10', year: '2026' }, { mileage: 1380, year: '2027' }, 'T') as any;
+    expect(patch).toMatchObject({ mileage: '1,380', mileage_source_original: '10', model_year_source: '2027', iancar_mileage_observed_at: 'T' });
+    expect('year' in patch).toBe(false);
+  });
+  it('숫자 형식·같은 값·옛 보존 칸은 건드리지 않는다', () => {
+    expect((iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toMatchObject({ mileage: 7 });
+    expect('mileage_source_original' in (iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toBe(false);
+    expect('mileage' in (iancarFactsRefreshPatch({ mileage: '1,380' }, { mileage: 1380 }, 'T') as any)).toBe(false);
+  });
+  it('ONE 값이 없으면 주행거리를 지우지 않는다', () => {
+    expect(iancarFactsRefreshPatch({ mileage: '10' }, { mileage: null, year: null }, 'T')).toEqual({});
   });
 });

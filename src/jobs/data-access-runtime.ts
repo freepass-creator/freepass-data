@@ -245,13 +245,13 @@ export async function runIancarPublicationWithdrawal(input: {
 
 export async function runIancarPhaseOnePublication(input: {
   capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
-  photoPending?: boolean; keepWithdrawn?: boolean;
+  photoPending?: boolean; keepWithdrawn?: boolean; refreshFacts?: boolean;
 }) {
   const prepared = { products: buildIancarOnePublicationProducts(input.capture),
     sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
     apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
     ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
-    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}),
+    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}), ...(input.refreshFacts ? { refreshFacts: true } : {}),
     ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
     ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
   const runtime = createJobDataAccessRuntime();
