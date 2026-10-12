@@ -302,7 +302,7 @@ if (requested.has('--sync')) {
     ...(process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET ? { privateEvidenceBucket: process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET } : {}) };
   const plan = await runIancarPhaseOnePublication(input);
   report.publicationPlan = plan;
-  if (requested.has('--photos-pending') && !requested.has('--apply-sync')) {
+  if (requested.has('--photos-pending') && !requested.has('--keep-withdrawn') && !requested.has('--apply-sync')) {
     // 같은 수집으로 «해제 제외» 판을 함께 계획한다(승인 전 두 digest).
     report.publicationPlanKeepWithdrawn = await runIancarPhaseOnePublication({ ...input, keepWithdrawn: true });
   }

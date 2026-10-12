@@ -1,4 +1,5 @@
 import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
+import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT } from '../domain/consumer-output-contract.js';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
@@ -968,7 +969,8 @@ export function createConsumerGateway(
           && (v.updateTimeExact.seconds < meta.readTimeExact.seconds || v.updateTimeExact.seconds === meta.readTimeExact.seconds && v.updateTimeExact.nanoseconds <= meta.readTimeExact.nanoseconds);
         if (!versionOK(meta.documentVersions.product)) invalid();
         const product = data.products[productId]!;
-        if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one')), SINGLE_PRODUCT_FACT_FIELDS)) invalid();
+        if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one' && k !== 'iancar_policy_terms')), SINGLE_PRODUCT_FACT_FIELDS)) invalid();
+        if (Object.hasOwn(product, 'iancar_policy_terms') && projectIancarPolicyTerms(product.iancar_policy_terms) === undefined) invalid();
         if (Object.hasOwn(product, 'price') && product.price !== null && (!object(product.price) || Object.keys(product.price).length > 200
           || Object.entries(product.price).some(([k, row]) => !isSingleProductPriceKey(k) || !priceFields(row)))) invalid();
         if (Object.hasOwn(product, 'iancar_phase_one') && product.iancar_phase_one !== null) {

@@ -1,3 +1,4 @@
+import { priceWithoutIancarAliases } from '../domain/iancar-price-alias.js';
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -226,7 +227,7 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     if (link.kind !== 'MATCH') issue(`POLICY_LINK_${link.kind}`);
   }
   if (!object(d.price) || Object.keys(d.price).length === 0) issue('MISSING_PRICE_TERMS');
-  else for (const [sourceKey, terms] of Object.entries(d.price)) {
+  else for (const [sourceKey, terms] of Object.entries(priceWithoutIancarAliases(d))) {
     const parsedKey = parseErp5PriceKey(sourceKey);
     if (!parsedKey) { issue('UNSUPPORTED_PRICE_KEY'); continue; }
     const months = parsedKey.months;
