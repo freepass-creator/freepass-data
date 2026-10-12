@@ -327,6 +327,21 @@ export type VehiclePhotoRead = {
   photoIds?: string[]; upstreamPhotoIds?: string[];
   upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[];
 };
+/** 사진 읽기 선택 옵션. renditionCacheLookup: 같은 내용 표지(cacheTag)로 이미 줄여 둔 결과물이 있으면 돌려주는 함수(없으면 undefined). */
+/** 원천 앨범 지문 — 사진 수·대표 표시 패턴·제공 순서. ONE 은 사진 ID 를 호출마다 재발급하므로 ID 는 넣지 않는다.
+ * 캐시를 만들 때의 지문과 재확인 때의 지문이 다르면(앨범 구성·대표 사진·순서 변경) 캐시를 쓰지 않는다. */
+export function iancarAlbumFingerprint(read: { count: number; upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[] }): string {
+  return createHash('sha256').update(JSON.stringify([read.count, read.upstreamRepresentatives ?? null, read.servingSourceOrdinals ?? null])).digest('hex');
+}
+
+export const RENDITION_SOURCE_RECHECK_MS = 10 * 60 * 1000;
+export type VehiclePhotoReadOptions = {
+  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number; albumFingerprint?: string; sourceSha256?: string } | undefined;
+  /** 캐시 적중 때 원천 사진 «내용»(원본 바이트 sha256)과 앨범 구성을 다시 대조하는 간격(ms). 기본 RENDITION_SOURCE_RECHECK_MS.
+   * 이 간격이 «원천이 개수·대표·순서를 유지한 채 사진 내용만 바꿨을 때» 옛 사진을 서빙할 수 있는 최대 시간이다. */
+  renditionSourceRecheckMs?: number;
+};
+
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
   connection(product: Rec): string;
@@ -377,7 +392,7 @@ export function createVehiclePhotoReader(
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   const recheckIds = async (check: () => Promise<boolean>) => { if (!await check()) throw new Error('VEHICLE_PHOTO_NOT_FOUND'); };
-  return async (consumerId: string, productId: string, index?: number) => {
+  const readPhoto = async (consumerId: string, productId: string, index?: number, options: VehiclePhotoReadOptions = {}) => {
     // Diagnostic time is independent of the injected cache clock.
     const tick = () => { try { return performance.now(); } catch { return NaN; } };
     const started = observer ? tick() : 0;
@@ -406,6 +421,21 @@ export function createVehiclePhotoReader(
       const sourceConnection = (value: Rec) => JSON.stringify([iancarSource.connection(value), value.provider_company_code,
         value.iancar_one_vehicle_id, value.car_number]);
       const initialConnection = sourceConnection(product);
+      // 내용 버전 표지: 상품 연결(공급사·차량 ID·번호)과 등록 개수. 같은 표지의 사진 결과물은 같은 상품·같은 앨범 구성에서 나온 것이다.
+      const cacheTag = createHash('sha256').update(JSON.stringify([initialConnection, registeredPhotoCount])).digest('hex');
+      // DB 쪽 게이트만 다시 확인한다(비공개·철회·삭제·연결·개수 변경 검사) — 원천(ONE) 호출 없음.
+      const dbStillValid = async (): Promise<Rec | undefined> => {
+        enter('FINAL_DB');
+        let current: Rec | undefined;
+        try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); return undefined; }
+        enter('FINAL_GATE');
+        const currentIds = idGatePhotoIds(current);
+        const unchanged = !!current && isPublicIancarPhotoProduct(current) && iancarSource.eligible(current)
+          && !Object.hasOwn(current, 'photo_original_refs') && sourceConnection(current) === initialConnection
+          && !!currentIds && currentIds.length === registeredPhotoCount;
+        if (!unchanged) { emit('PROOF_CHANGED'); return undefined; }
+        return current;
+      };
       const currentLayoutValid = (value: VehiclePhotoRead): boolean => {
         const served = value.photoIds, upstream = value.upstreamPhotoIds;
         const representatives = value.upstreamRepresentatives, ordinals = value.servingSourceOrdinals;
@@ -422,10 +452,47 @@ export function createVehiclePhotoReader(
       };
       if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
       active++;
+      let prefetched: VehiclePhotoRead | undefined;
       try {
         enter('SOURCE_AWAIT');
+        if (index !== undefined && options.renditionCacheLookup) {
+          // 줄여 둔 결과물이 있으면 사진 바이트는 원천에서 다시 받지 않는다. 다만 마지막 원천 확인이 renditionSourceRecheckMs 보다 오래됐으면
+          // 그 순번의 원본을 한 번 다시 받아 앨범 구성(수·대표·순서)과 «원본 바이트 sha256» 을 캐시를 만들 때의 값과 대조한다(철회·교체·내용 변경 감지).
+          // ONE 은 사진 ID 를 호출마다 재발급해 ID 로는 내용 교체를 알 수 없으므로 내용 지문(sha256)을 쓴다. 지문이 없는 옛 항목은 확인 시점에 무조건 다시 받는다.
+          // 다시 확인하기 전 구간(기본 10분)에 일어난 내용 교체는 그 구간 동안 옛 사진이 나갈 수 있다 — 허용 한도 = renditionSourceRecheckMs.
+          const hit = options.renditionCacheLookup(cacheTag);
+          if (hit) {
+            const recheckMs = options.renditionSourceRecheckMs ?? RENDITION_SOURCE_RECHECK_MS;
+            let checkedAt = hit.sourceCheckedAt;
+            if (now() - checkedAt > recheckMs) {
+              enter('FINAL_SOURCE');
+              let album: VehiclePhotoRead;
+              try { album = await iancarSource.read(product, index, true, registeredPhotoCount); }
+              catch (error) {
+                const code = error instanceof Error ? error.message : '';
+                const gone = code === 'IANCAR_PHOTO_NOT_FOUND' || code === 'IANCAR_ONE_API_HTTP_404';
+                emit(gone ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
+                if (gone) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+              }
+              enter('FINAL_MEMBERSHIP');
+              if (!currentLayoutValid(album)) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              // 캐시를 만들 때의 앨범 지문과 달라졌으면(사진 수·대표 표시·순서 변경) 캐시를 쓰지 않는다.
+              if (hit.albumFingerprint !== undefined && iancarAlbumFingerprint(album) !== hit.albumFingerprint) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              if (!Buffer.isBuffer(album.bytes) || validateVehiclePhotoMedia(album.contentType, album.bytes.length, album.bytes)) { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
+              if (index >= album.count) { emit('SELECTED_MISSING', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              if (hit.sourceSha256 === undefined || createHash('sha256').update(album.bytes).digest('hex') !== hit.sourceSha256) {
+                // 내용이 바뀌었다(또는 지문 없는 옛 항목): 캐시를 버리고 방금 받은 원본으로 새로 처리한다(원천을 한 번 더 읽지 않는다).
+                emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP');
+                prefetched = album;
+              } else checkedAt = now();
+            }
+            if (!prefetched) return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const,
+              sourceCheckedAt: checkedAt, ...(hit.albumFingerprint !== undefined ? { albumFingerprint: hit.albumFingerprint } : {}), ...(hit.sourceSha256 !== undefined ? { sourceSha256: hit.sourceSha256 } : {}), revalidate: async () => !!(await dbStillValid()) };
+          }
+        }
         let result: VehiclePhotoRead;
-        try { result = await iancarSource.read(product, index, true, registeredPhotoCount); }
+        try { result = prefetched ?? await iancarSource.read(product, index, true, registeredPhotoCount); }
         catch (error) {
           const code = error instanceof Error ? error.message : '';
           // 원천에서 차량이 사라진 경우(ONE 상세 404)는 일시 오류(503)가 아니라 «사진 없음»(404)으로 정직하게 답한다.
@@ -442,15 +509,8 @@ export function createVehiclePhotoReader(
         }
         if (!Number.isSafeInteger(result.count) || result.count < 1 || result.count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const revalidateIds = async (checkSource = true): Promise<boolean> => {
-          enter('FINAL_DB');
-          let current: Rec | undefined;
-          try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); return false; }
-          enter('FINAL_GATE');
-          const currentIds = idGatePhotoIds(current);
-          const unchanged = !!current && isPublicIancarPhotoProduct(current) && iancarSource.eligible(current)
-            && !Object.hasOwn(current, 'photo_original_refs') && sourceConnection(current) === initialConnection
-            && !!currentIds && currentIds.length === registeredPhotoCount;
-          if (!unchanged) { emit('PROOF_CHANGED'); return false; }
+          const current = await dbStillValid();
+          if (!current) return false;
           if (!checkSource) return true;
           enter('FINAL_SOURCE');
           let finalMetadata: VehiclePhotoRead;
@@ -464,7 +524,7 @@ export function createVehiclePhotoReader(
         };
         if (index === undefined) {
           await recheckIds(() => revalidateIds(false));
-          return { count: result.count, bytes: null, contentType: 'application/json', revalidate: revalidateIds };
+          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result), revalidate: revalidateIds };
         }
         const bytes = result.bytes;
         enter('RESULT_MEDIA');
@@ -473,7 +533,8 @@ export function createVehiclePhotoReader(
           { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const frozenBytes = Buffer.from(bytes);
         await recheckIds(() => revalidateIds(false));
-        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, revalidate: revalidateIds };
+        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result),
+          sourceSha256: createHash('sha256').update(frozenBytes).digest('hex'), revalidate: revalidateIds };
       } finally { active--; }
     }
     const mediaOnly = consumerId === 'erp5-public-media';
@@ -654,4 +715,6 @@ export function createVehiclePhotoReader(
       return { count: result.count, bytes: Buffer.from(output), contentType: result.contentType, revalidate };
     } finally { active--; }
   };
+  // 게이트웨이가 «줄인 결과물 캐시 옵션»을 넘겨도 되는 읽기 함수임을 표시한다(옵션을 모르는 대체 읽기 함수에는 호출 인자를 늘리지 않는다).
+  return Object.assign(readPhoto, { supportsRenditionCache: true as const });
 }

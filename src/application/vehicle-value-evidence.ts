@@ -27,9 +27,14 @@ function positiveIntegerAmount(value: unknown): number | null {
 }
 
 function rawVehicleValue(product: Rec): number | null {
+  const supplier = text(product.provider_company_code);
   const raw = product['원문'];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  return positiveIntegerAmount((raw as Rec)['차량가격']);
+  const direct = positiveIntegerAmount((raw as Rec)['차량가격']);
+  if (direct !== null) return direct;
+  if (supplier !== 'RP006' && supplier !== 'RP020') return null; // 손오공 판정은 기존 그대로
+  const all = (raw as Rec)['전체']; // 아이언·우리캐피탈 시트 원문은 «전체» 아래에 열이 있다
+  return all && typeof all === 'object' && !Array.isArray(all) ? positiveIntegerAmount((all as Rec)['차량가격']) : null;
 }
 
 function consumerVehicleValue(product: Rec): number | null {
@@ -51,7 +56,11 @@ function newCarTrimVehicleValue(product: Rec, newCarTrim: NewCarTrimEvidenceInpu
 }
 
 export function resolveVehicleValueEvidence(product: Rec, newCarTrim: NewCarTrimEvidenceInput): VehicleValueEvidence | null {
-  if (text(product.provider_company_code) !== 'RP012') return null;
+  // 손오공 + (대표 2026-10-12) 아이언·우리캐피탈렌터카 신차: 공급사 원문 차량가격이 있으면 그것이 차량가액.
+  // 아이언·우리캐피탈은 차량가액을 쓰는 신차렌트에만 붙인다(중고렌트 행이 근사로 바뀌지 않게).
+  const supplier = text(product.provider_company_code) ?? '';
+  if (!['RP012', 'RP006', 'RP020'].includes(supplier)) return null;
+  if (supplier !== 'RP012' && text(product.product_type) !== '신차렌트') return null;
   const productType = text(product.product_type)?.replace(/\s+/g, '') ?? '';
   if (productType.includes('픽업구독') || productType.includes('오공구독')) return null;
   const raw = rawVehicleValue(product);
