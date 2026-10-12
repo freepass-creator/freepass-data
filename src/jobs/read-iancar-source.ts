@@ -1,18 +1,35 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
+import { createIancarOneApiClient, IANCAR_ONE_PAGE_SIZE } from '../adapters/iancar-one-api.js';
 
-// 읽기 전용: 이안카 ONE API 목록을 있는 그대로 읽는다(GET 만, 쓰기 0). 열쇠는 비밀 저장소에서 이 프로세스 안으로만 읽고 출력·저장하지 않는다.
-// 사용: tsx src/jobs/read-iancar-source.ts --out <저장소 밖 임시 경로.json>   (차량번호가 들어가므로 저장소 안에 두지 않는다)
-const outIndex = process.argv.indexOf('--out');
-const out = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
-const secretName = process.env.IANCAR_ONE_API_SECRET || 'freepass-data-iancar-one-api';
-const project = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
-const apiKey = execFileSync('gcloud', ['secrets', 'versions', 'access', 'latest', `--secret=${secretName}`, `--project=${project}`],
-  { encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-const capture = await collectIancarOneVehicleList({ apiKey });
-if (out) writeFileSync(out, JSON.stringify({ capturedAt: capture.capturedAt, syncedAt: capture.syncedAt, stale: capture.stale, total: capture.total,
-  records: capture.records.map(r => r.payload) }));
-console.log(JSON.stringify({ capturedAt: capture.capturedAt, syncedAt: capture.syncedAt, stale: capture.stale, total: capture.total, pages: capture.pages,
-  records: capture.records.length, issues: capture.issues, readyForRawIngest: capture.readyForRawIngest,
-  fields: Object.keys(capture.records[0]?.payload ?? {}) }, null, 1));
+// 직접 확인(읽기 전용, 저장 없음): 이안카 ONE API 를 그 순간 읽는다. 기존 어댑터의 «요청 층»(createIancarOneApiClient)만 쓰고
+// 수집 함수(collectIancarOne*: 페이지 지문·적재 준비)는 거치지 않는다. 열쇠는 비밀 저장소에서 이 프로세스 안으로만 읽고 출력하지 않는다.
+//   tsx src/jobs/read-iancar-source.ts                       목록 전체(요약)
+//   tsx src/jobs/read-iancar-source.ts --plate4 6235         그 차 하나: 상세 + 기간별 요금
+//   --out <저장소 밖 경로.json>                               원천 응답 그대로(차량번호 포함) — 증거용
+const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
+const plate4 = arg('--plate4'), out = arg('--out');
+const apiKey = execFileSync('gcloud', ['secrets', 'versions', 'access', 'latest', `--secret=${process.env.IANCAR_ONE_API_SECRET || 'freepass-data-iancar-one-api'}`,
+  `--project=${process.env.FIREBASE_PROJECT_ID || 'freepasserp5'}`], { encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+const client = createIancarOneApiClient({ apiKey });
+const readAt = new Date().toISOString();
+const records: Record<string, unknown>[] = []; let syncedAt: string | undefined; let stale: boolean | undefined; let total = 0;
+for (let page = 1; page <= 100; page++) {
+  const body = await client.listVehicles(page, IANCAR_ONE_PAGE_SIZE) as { data?: Record<string, unknown>[]; synced_at?: string; stale?: boolean; pagination?: { total?: number; page_size?: number } };
+  records.push(...(body.data ?? [])); syncedAt = body.synced_at; stale = body.stale; total = body.pagination?.total ?? records.length;
+  if (!body.data?.length || records.length >= total) break;
+}
+if (plate4) {
+  const hit = records.filter(r => String(r.plate_number ?? '').replace(/\s/g, '').endsWith(plate4));
+  const detail = [];
+  for (const r of hit) {
+    const id = String(r.vehicle_id);
+    const [vehicle, rates] = await Promise.all([client.getVehicle(id), client.getRates(id)]);
+    detail.push({ list: r, vehicle, rates });
+  }
+  if (out) writeFileSync(out, JSON.stringify({ readAt, syncedAt, stale, detail }));
+  console.log(JSON.stringify({ readAt, syncedAt, stale, 찾음: hit.length, detail: detail.map(d => ({ ...d, list: { ...d.list, plate_number: `…${plate4}` } })) }, null, 1));
+} else {
+  if (out) writeFileSync(out, JSON.stringify({ capturedAt: readAt, syncedAt, stale, total, records }));
+  console.log(JSON.stringify({ capturedAt: readAt, syncedAt, stale, total, records: records.length, fields: Object.keys(records[0] ?? {}) }, null, 1));
+}

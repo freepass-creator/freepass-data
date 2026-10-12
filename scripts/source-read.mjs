@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeValue } from './supplier-freshness-lib.mjs';
+import { classifyField } from './supplier-field-reconcile-lib.mjs';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0], code = argv[1];
@@ -133,6 +134,61 @@ function readAutoplus(products) {
 
 const BLOCKED = { RP012: { ok: false, reason: '손오공 ERP 계정이 이 PC·freepass-data 에 없음 — 대표 손 한 가지: 손오공 로그인 계정을 비밀 저장소(freepass-data 프로젝트)에 등록' } };
 
+// ── 직접 확인: 차량 하나를 원천에서 «그 순간» 읽어 정규 칸으로(저장 없음) ───────────────────────────
+function ianSingle(plate4) {
+  const tmp = join(process.env.TEMP || '/tmp', `iancar-one-${Date.now()}.json`);
+  const tsx = join(ROOT, 'node_modules', '.bin', 'tsx');
+  const bin = existsSync(tsx) ? tsx : join(ROOT, '..', '..', '..', 'node_modules', '.bin', 'tsx');
+  try { execFileSync(bin, ['src/jobs/read-iancar-source.ts', '--plate4', plate4, '--out', tmp], { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch { return { ok: false, reason: '이안카 ONE API 읽기 실패(비밀 저장소 접근 또는 API 응답)' }; }
+  const j = JSON.parse(readFileSync(tmp, 'utf8')); try { require_unlink(tmp); } catch { /* 임시 파일은 남겨도 저장소 밖 */ }
+  const d = j.detail?.[0]; if (!d) return { ok: true, readAt: j.readAt, found: false, sourceSyncedAt: j.syncedAt };
+  const v = d.vehicle?.data ?? d.list, terms = (d.rates?.data ?? []).map(t => ({ 개월: t.rental_period, km: t.contracted_mileage, 주기: t.mileage_period, 월대여료: t.monthly_rate, 보증금: t.deposit }));
+  return { ok: true, found: true, readAt: j.readAt, sourceSyncedAt: j.syncedAt, 원천갱신: v.synced_at, 상태: v.inventory_status, 판매가능: v.available, 연식: v.year, 연료: v.fuel, 주행거리: v.mileage, 외장: v.color,
+    사진수: Array.isArray(v.photos) ? v.photos.length : null, 차명: v.name, 요금: terms };
+}
+function require_unlink(f) { execFileSync(process.platform === 'win32' ? 'cmd' : 'rm', process.platform === 'win32' ? ['/c', 'del', f] : [f]); }
+
+const periodKey = t => `${t.개월}_${t.주기 === 'month' ? '월' : '연'}${t.km}km`;
+const fmt = v => v == null || v === '' ? '-' : String(v);
+const FIELD_OF = { 연료: 'fuel_type', 외장: 'ext_color', 주행거리: 'mileage', 연식: 'year' };
+const judge = (항목, a, b) => { const c = classifyField(a, b, FIELD_OF[항목]); return { MATCH: '일치', FORMAT_ONLY: '일치(표기 차이)', NEAR_NUMERIC: '일치(반올림)', EMPTY_IN_DATA: '데이터 빈칸', EMPTY_IN_RAW: '원천 칸 없음', BOTH_EMPTY: '둘 다 빈칸', VALUE_DIFF: '차이' }[c]; };
+const same = (a, b) => a != null && b != null && String(a).replace(/[,\s]/g, '') === String(b).replace(/[,\s]/g, '');
+
+async function compareOne(c, plate4, idx = 0) {
+  const mine = products.filter(p => (p.provider_company_code || p.partner_code) === c && last4(p.car_number) === plate4);
+  const prod = mine[idx];
+  const rows = [];
+  const row = (항목, 원천, 데이터, 판정) => rows.push({ 항목, 원천: fmt(원천), 데이터: fmt(데이터), 판정: 판정 ?? judge(항목, 원천, 데이터) });
+  let readAt, note;
+  if (c === 'RP031') {
+    const r = ianSingle(plate4); if (!r.ok) return { ok: false, reason: r.reason };
+    readAt = r.readAt; if (!r.found) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
+    row('원천 갱신 시각', r.원천갱신, prod?._direct_ingest_at ? new Date(prod._direct_ingest_at).toISOString() : null, '참고');
+    row('상태', r.상태, prod?.status_label_raw, r.판매가능 ? (prod?.listable ? '원천 가능/데이터 판매중' : '원천 가능인데 데이터 판매 아님') : '원천 불가');
+    row('연식', r.연식, prod?.year); row('연료', r.연료, prod?.fuel_type); row('주행거리', r.주행거리, prod?.mileage); row('외장', r.외장, prod?.ext_color);
+    row('사진 수', r.사진수, (Array.isArray(prod?.image_urls) ? prod.image_urls.length : 0) + (prod?.photo_link ? 1 : 0));
+    for (const t of r.요금.filter(t => t.개월 >= 36 || [12, 24].includes(t.개월))) { const dk = prod?.price?.[periodKey(t)]; row(`${periodKey(t)} 월대여료`, t.월대여료, dk?.rent); row(`${periodKey(t)} 보증금`, t.보증금, dk?.deposit); }
+  } else if (c === 'RP004' || c === 'RP006') {
+    const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
+    readAt = res.readAt; const hit = res.records.find(r => last4(r.plate) === plate4);
+    if (!hit) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
+    row('상태', hit.상태, prod?.status_label_raw, hit.상태 ? (prod?.listable ? '데이터 판매중' : '데이터 판매 아님') : undefined);
+    row('연료', hit.연료, prod?.fuel_type); row('주행거리', hit.주행거리, prod?.mileage); row('외장', hit.외장, prod?.ext_color);
+    for (const [m, rent] of Object.entries(hit.월대여료 ?? {})) { const dk = prod?.price?.[m]; row(`${m}개월 월대여료`, rent, dk?.rent); }
+    row('보증금(원천 한 칸)', hit.보증금, Object.values(prod?.price ?? {})[0]?.deposit, '참고');
+    row('사진 수', hit.사진수, (Array.isArray(prod?.image_urls) ? prod.image_urls.length : 0) + (prod?.photo_link ? 1 : 0), hit.사진수 == null ? '원천 칸 없음' : undefined);
+  } else if (c === 'RP023') {
+    const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
+    readAt = res.readAt; const hit = res.records.find(r => last4(r.plate) === plate4);
+    return { ok: true, readAt, 원천에있음: !!hit, 원천: hit?.원천 ?? null, 데이터: prod ? { 상태: prod.status, 사유: prod.status_reason, 판매중: prod.listable === true } : null,
+      판정: hit ? (prod?.listable ? '원천에 있고 데이터 판매중' : '원천에 있으나 데이터 판매 아님') : (prod?.listable ? '원천(시트+홈페이지)에 없는데 데이터 판매중 → 공개 보류 후보' : '원천에 없고 데이터도 판매 아님'), note: res.note };
+  } else return { ok: false, reason: c === 'RP012' ? BLOCKED.RP012.reason : '지원하지 않는 공급사' };
+  if (!prod) note = '프리패스 데이터에 이 차량이 없음(원천에만 있음 → 수집 누락 후보)';
+  const diff = rows.filter(r => r.판정 === '차이' || /차이|보류|아닌/.test(r.판정)).length;
+  return { ok: true, readAt, 데이터읽은시각: new Date().toISOString(), 데이터마지막반영: prod?._direct_ingest_at ? new Date(prod._direct_ingest_at).toISOString() : null, 데이터마지막폴링: prod?._var_polled_at ? new Date(prod._var_polled_at).toISOString() : null, 차이건수: diff, 항목: rows, note };
+}
+
 async function readSupplier(c, products) {
   if (c === 'RP004') return readAica(products);
   if (c === 'RP031') return readIancar();
@@ -170,4 +226,16 @@ if (cmd === 'status') {
   const p4 = opt('plate4');
   if (p4) { const r = res.records.filter(x => last4(x.plate) === p4); console.log(JSON.stringify({ readAt: res.readAt, 찾음: r.length, 레코드: r.map(x => ({ ...x, plate: `…${last4(x.plate)}` })) }, null, 1)); }
   else console.log(JSON.stringify({ 공급사: code, readAt: res.readAt, 원천대수: res.records.length, ...crossCheck(code, res, products), note: res.note, 필드: Object.keys(res.records[0] ?? {}) }, null, 1));
-} else { console.error('사용: status | read <공급사코드> [--plate4 XXXX|--summary] [--out 파일]'); process.exit(2); }
+} else if (cmd === 'compare' && code && opt('plate4')) {
+  const n = Math.max(1, products.filter(p => (p.provider_company_code || p.partner_code) === code && last4(p.car_number) === opt('plate4')).length);
+  for (let i = 0; i < n; i++) {
+  const r = await compareOne(code, opt('plate4'), i);
+  if (!r.ok) { console.error(`막힘: ${r.reason}`); process.exit(3); }
+  const tag = n > 1 ? ` (끝4자리 같은 상품 ${i + 1}/${n}: ${(products.filter(p => (p.provider_company_code || p.partner_code) === code && last4(p.car_number) === opt('plate4'))[i]?.model ?? '?')})` : '';
+  if (argv.includes('--json')) console.log(JSON.stringify(r, null, 1));
+  else if (r.항목) {
+    console.log(`[${NAMES[code]} …${opt('plate4')}]${tag} 원천 읽은 시각 ${r.readAt} · 데이터 마지막 반영 ${r.데이터마지막반영 ?? '-'} · 마지막 폴링 ${r.데이터마지막폴링 ?? '-'} · 차이 ${r.차이건수}건${r.note ? ' · ' + r.note : ''}`);
+    console.log('항목 | 원천(정답) | 프리패스 데이터 | 판정'); for (const x of r.항목) console.log([x.항목, x.원천, x.데이터, x.판정].join(' | '));
+  } else console.log(tag, JSON.stringify(r, null, 1));
+  }
+} else { console.error('사용: compare <공급사코드> --plate4 XXXX | status | status | read <공급사코드> [--plate4 XXXX|--summary] [--out 파일]'); process.exit(2); }
