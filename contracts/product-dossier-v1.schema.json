@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/product-dossier-v1.schema.json",
+  "title": "ProductDossier/v1 (internal read only)",
+  "description": "상품 하나에 대해 프리패스 데이터에 있는 모든 것. 내부 조회 전용 — 공개(ERP5) 응답에 싣지 않는다. 대조 도구는 fields[] 의 rawRef 로 원천에서 값을 읽어 rawValue 와 필드별로 비교한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "readAt", "lookup", "status", "fields"],
+  "properties": {
+    "schema": { "const": "ProductDossier/v1" },
+    "readAt": { "type": "string", "format": "date-time" },
+    "lookup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "enum": ["PLATE", "PLATE_LAST4", "PRODUCT_ID", "VEHICLE_UID"] },
+        "value": { "type": "string" }
+      }
+    },
+    "status": { "enum": ["OK", "PRODUCT_NOT_FOUND", "TOO_MANY_CANDIDATES", "NOT_LISTABLE", "NO_PRICE_ROWS"] },
+    "reason": { "type": ["string", "null"] },
+    "productId": { "type": ["string", "null"] },
+    "vehicleUid": { "type": ["string", "null"] },
+    "candidates": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["productId", "plateLast4"],
+        "properties": {
+          "productId": { "type": "string" },
+          "plateLast4": { "type": "string", "pattern": "^[0-9]{4}$" },
+          "supplierId": { "type": ["string", "null"] },
+          "carName": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/field" }
+    }
+  },
+  "$defs": {
+    "group": {
+      "enum": ["BASIC", "IDENTITY", "STATUS", "SUPPLIER_SOURCE", "PRICE_ROW", "BILLING_PAYOUT", "PHOTO", "POLICY_LINK", "RAW_MAPPING", "COLLECTION_HISTORY", "KAKAO_CANDIDATE"]
+    },
+    "source": { "enum": ["RAW", "REFINED", "CANDIDATE", "LEDGER", "ENGINE"] },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "group", "source", "asOf"],
+      "properties": {
+        "path": { "type": "string", "description": "정리값 칸 경로. 예) product.maker, priceRow[source:24].monthlyRent, billing[source:24].amount" },
+        "group": { "$ref": "#/$defs/group" },
+        "normalizedValue": {},
+        "rawValue": { "description": "원문 쪽 값(원문에 해당 칸이 있을 때). 없으면 생략" },
+        "rawRef": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "supplierCode": { "type": "string" },
+            "sourceKind": { "type": "string" },
+            "sourceExternalId": { "type": ["string", "null"] },
+            "sheetTab": { "type": ["string", "null"] },
+            "sheetRow": { "type": ["integer", "string", "null"] },
+            "rawPath": { "type": ["string", "null"], "description": "원문 객체 안 칸 이름(예: 원문.차명)" }
+          }
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "asOf": { "type": ["string", "null"], "description": "기준 시각(수집·박제·계산 시각). 모르면 null + reasonCode" },
+        "ledgerRunId": { "type": ["string", "null"], "description": "source=LEDGER 일 때 박제 run ID" },
+        "mismatch": { "type": "boolean", "description": "정리값이 원문과 다르면 true (정리값을 손으로 덮지 않는다)" },
+        "reasonCode": { "enum": ["NOT_COLLECTED", "NOT_APPLICABLE", "READ_FAILED", "UNCONFIRMED", null] }
+      }
+    }
+  }
+}
