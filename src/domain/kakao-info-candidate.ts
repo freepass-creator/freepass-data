@@ -165,8 +165,8 @@ function exceedsResidualDigitBudget(values: string[]) {
   const stripped = (match: string) => { concat += match.replace(/\D/g, ''); return ' '; };
   for (const raw of values) {
     let text = raw;
-    text = text.replace(/\d{2,3}[\s-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][\s-]*\d{4}/g, ' ');
-    text = text.replace(/\d{2,3}\s*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\s*\d{4}/g, ' ');
+    text = text.replace(/(?<!\d)\d{2,3}[\s-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][\s-]*\d{4}(?!\d)/g, ' ');
+    text = text.replace(/(?<!\d)\d{2,3}\s*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\s*\d{4}(?!\d)/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
       .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, stripped)
       .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, stripped);
