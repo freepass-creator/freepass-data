@@ -27,7 +27,7 @@ const fields = (v, allowed) => object(v) && Object.keys(v).every(k => allowed.in
 const priceKey = k => typeof k === 'string' && k.length > 0 && k.length <= 80
   && !['__proto__', 'constructor', 'prototype'].includes(k) && !/[\u0000-\u001f\u007f]|https?:\/\/|<[^>]*>|AIza|ya29\./i.test(k);
 // Verification allowlists mirror the bounded response contract; they do not assign policy meaning.
-export const PRODUCT_FIELDS = '_key product_code provider_company_code partner_code provider_name partner_name deposit_note policy_id policy_code _deleted deletedAt status vehicle_status status_kind listable publication_withdrawal car_number vehicle_uid maker model sub_model trim_name trim_extra variant fuel_type engine_type engine_cc drive_type transmission vehicle_class product_type year seats mileage annual_mileage ext_color int_color first_registration_date price iancar_phase_one'.split(' ');
+export const PRODUCT_FIELDS = '_key product_code provider_company_code partner_code provider_name partner_name deposit_note policy_id policy_code _deleted deletedAt status vehicle_status status_kind listable publication_withdrawal car_number vehicle_uid maker model sub_model trim_name trim_extra variant fuel_type engine_type engine_cc drive_type transmission vehicle_class product_type year seats mileage annual_mileage ext_color int_color first_registration_date price iancar_phase_one iancar_policy_terms'.split(' ');
 export const POLICY_FIELDS = '_key policy_code companyId provider_company_code policy_name policy_type payment_method payment_timing basic_driver_age driver_age_lowering driver_age_upper_limit license_period personal_driver_scope business_driver_scope insurance_included deposit_installment deposit_card_payment rental_card_payment maintenance_service credit_grade'.split(' ');
 export const PARTNER_FIELDS = '_key partner_code company_code provider_company_code partner_name company_name name brand_name alias'.split(' ');
 export const PRICE_FIELDS = 'rent deposit depositState deposit_state depositStatusLabel depositEvidenceReason depositEvidenceBasis depositRuleDifference'.split(' ');
@@ -83,7 +83,7 @@ export function validateProduct(value, headers, note = () => {}) {
   if (!version(meta.documentVersions.product) || meta.documentVersions.product.id !== PRODUCT_ID) fail();
   const product = data.products[PRODUCT_ID];
   note('VALIDATE_PRODUCT');
-  if (!object(product) || product._key !== PRODUCT_ID || !fields(Object.fromEntries(Object.entries(product).filter(([k]) => !['price', 'iancar_phase_one'].includes(k))), PRODUCT_FIELDS)) fail();
+  if (!object(product) || product._key !== PRODUCT_ID || !fields(Object.fromEntries(Object.entries(product).filter(([k]) => !['price', 'iancar_phase_one', 'iancar_policy_terms'].includes(k))), PRODUCT_FIELDS)) fail();
   note('VALIDATE_PRICE');
   if (product.price != null) {
     if (!object(product.price) || Object.keys(product.price).length > 200) fail();
@@ -103,6 +103,20 @@ export function validateProduct(value, headers, note = () => {}) {
     if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
       || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
         || Object.entries(phase.priceAliases).some(([k, v]) => !priceKey(k) || !priceKey(v)))) fail();
+  }
+  if (product.iancar_policy_terms != null) {
+    // 이안카 차량별 보험·추가요금 조건: 고정 키·자료형만(src/domain/iancar-policy-terms-projection.ts 와 같은 규칙).
+    note('VALIDATE_PRODUCT');
+    const t = product.iancar_policy_terms;
+    const ints = ['minimumDriverAge', 'maximumDriverAge', 'minimumLicenseMonths', 'ownDamageDeductible', 'ownDamageMinimumFaultPercent', 'personalInjuryDeductible', 'propertyDamageDeductible', 'repairLimit', 'perPanelRepair', 'excessMileageFeePerKm'];
+    const all = ['source', 'observedAt', ...ints, 'ownDamageIncluded', 'vatIncluded', 'age24Surcharge', 'dailyLossOrLateReturnFeeByTerm'];
+    const int = v => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000_000;
+    if (!object(t) || Object.keys(t).length !== all.length || Object.keys(t).some(k => !all.includes(k)) || t.source !== 'ONE_RATES'
+      || typeof t.observedAt !== 'string' || t.observedAt.length > 40 || !Number.isFinite(Date.parse(t.observedAt)) || !ints.every(k => int(t[k]))
+      || typeof t.ownDamageIncluded !== 'boolean' || typeof t.vatIncluded !== 'boolean'
+      || !(t.age24Surcharge === null || int(t.age24Surcharge) || (typeof t.age24Surcharge === 'string' && t.age24Surcharge.length > 0 && t.age24Surcharge.length <= 20))
+      || !object(t.dailyLossOrLateReturnFeeByTerm) || Object.keys(t.dailyLossOrLateReturnFeeByTerm).length > 200
+      || Object.entries(t.dailyLossOrLateReturnFeeByTerm).some(([k, v]) => !/^[0-9]{1,3}_(월|연)[0-9]{1,6}km$/.test(k) || k.length > 40 || !int(v))) fail();
   }
   note('VALIDATE_LINKED');
   for (const [name, singular, allowed] of [['policies', 'policy', POLICY_FIELDS], ['partners', 'partner', PARTNER_FIELDS]]) {
