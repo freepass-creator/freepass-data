@@ -7,6 +7,7 @@ import {
   isValidKakaoInfoPlate,
   isKakaoMoneyInfo,
   isKakaoStateAutoPromotable,
+  isKakaoT0OnlyInfo,
   kakaoInfoFieldsDigest,
   type KakaoInfoCandidate,
   type KakaoInfoCandidateInput,
@@ -33,9 +34,6 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
   const signal = classifyKakaoInfoSignal(candidate, now);
   const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
   const productRef = plate ? `products/${plate}` : null;
-  // Trust boundary: plate literal evidence is extractor-owned. This transformer preserves
-  // the evidence metadata but does not inspect neighbor utterances or check products/<plate>.
-  // TODO(D2 write): if products/<plate> is absent, downgrade to vehicle-unspecified there.
   return {
     ruleVersion: 'kakao-info-candidate/1',
     sourceKind: 'KAKAO',
@@ -43,15 +41,21 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
     aiInvolved: true,
     candidate,
     raw: {
+      supplierCode: candidate.supplierCode,
       roomCode: candidate.roomCode,
       sentAt: candidate.source.sentAt,
       msgNo: candidate.source.msgNo,
       excerpt: candidate.source.excerpt,
     },
     normalized: {
+      layer: isKakaoT0OnlyInfo(candidate.type) ? 'T0' : signal.layer,
       type: candidate.type,
+      supplierCode: candidate.supplierCode,
+      item: candidate.fields.항목,
       summary: candidate.fields.요약,
       value: candidate.fields.값,
+      sentAt: candidate.source.sentAt,
+      roomCode: candidate.roomCode,
       vehicle: {
         productRef,
         plate,
@@ -59,15 +63,58 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
         plateUnverified: candidate.vehicle?.plateUnverified ?? null,
         plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
         plateEvidenceSource: candidate.vehicle?.plateEvidence?.source ?? null,
-        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? null,
+        plateEvidenceDistance: candidate.vehicle?.plateEvidence?.distance ?? null,
+        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? false,
         unspecified: productRef == null,
       },
       needsSupplierConfirm: candidate.needsSupplierConfirm || Boolean(candidate.vehicle?.plateUnverified),
       confidence: candidate.confidence,
-      autoPromotable: isKakaoMoneyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
+      autoPromotable: isKakaoMoneyInfo(candidate.type) || isKakaoT0OnlyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
       conflict,
       expiresAt: signal.expiresAt,
       isFresh: signal.isFresh,
+    },
+  };
+}
+
+function fingerprintPayloadFor(candidate: KakaoInfoCandidate) {
+  const plate = candidate.vehicle?.plate && isValidKakaoInfoPlate(candidate.vehicle.plate) ? candidate.vehicle.plate : null;
+  const productRef = plate ? `products/${plate}` : null;
+  return {
+    ruleVersion: 'kakao-info-candidate/1',
+    sourceKind: 'KAKAO',
+    authority: 'CANDIDATE',
+    aiInvolved: true,
+    candidate,
+    raw: {
+      supplierCode: candidate.supplierCode,
+      roomCode: candidate.roomCode,
+      sentAt: candidate.source.sentAt,
+      msgNo: candidate.source.msgNo,
+      excerpt: candidate.source.excerpt,
+    },
+    normalized: {
+      layer: isKakaoT0OnlyInfo(candidate.type) ? 'T0' : 'T1',
+      type: candidate.type,
+      supplierCode: candidate.supplierCode,
+      item: candidate.fields.항목,
+      summary: candidate.fields.요약,
+      value: candidate.fields.값,
+      sentAt: candidate.source.sentAt,
+      roomCode: candidate.roomCode,
+      vehicle: {
+        productRef,
+        plate,
+        model: candidate.vehicle?.model ?? null,
+        plateUnverified: candidate.vehicle?.plateUnverified ?? null,
+        plateEvidenceMsgNo: candidate.vehicle?.plateEvidenceMsgNo ?? null,
+        plateEvidenceSource: candidate.vehicle?.plateEvidence?.source ?? null,
+        plateEvidenceDistance: candidate.vehicle?.plateEvidence?.distance ?? null,
+        plateStatusSameSentence: candidate.vehicle?.plateStatusSameSentence ?? false,
+        unspecified: productRef == null,
+      },
+      needsSupplierConfirm: candidate.needsSupplierConfirm || Boolean(candidate.vehicle?.plateUnverified),
+      confidence: candidate.confidence,
     },
   };
 }
@@ -100,7 +147,7 @@ export function kakaoInfoCandidatesToSourceBatch(
     const payload = payloadFor(candidate, now, conflicts.has(key));
     return {
       sourceRecordId: candidate.candidateId,
-      sourceFingerprint: stableDigest(payload),
+      sourceFingerprint: stableDigest(fingerprintPayloadFor(candidate)),
       payload,
     };
   });
@@ -134,7 +181,7 @@ export function kakaoInfoCandidatesToSourceBatch(
       candidate,
       productRef: plate ? `products/${plate}` : null,
       vehicleUnspecified: !plate,
-      autoPromotable: isKakaoMoneyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
+      autoPromotable: isKakaoMoneyInfo(candidate.type) || isKakaoT0OnlyInfo(candidate.type) ? false : isKakaoStateAutoPromotable(candidate, signal.isFresh),
       conflict: conflicts.has(key),
       expiresAt: signal.expiresAt,
       isFresh: signal.isFresh,
@@ -147,7 +194,7 @@ export function kakaoInfoCandidatesToSourceBatch(
     const normalizedCandidate = payload.normalized;
     const issues = [
       'KAKAO_CANDIDATE_ONLY',
-      ...(normalizedCandidate.vehicle.unspecified ? ['VEHICLE_UNSPECIFIED'] : []),
+      ...(normalizedCandidate.vehicle.unspecified && normalizedCandidate.vehicle.plate == null ? ['VEHICLE_UNSPECIFIED'] : []),
       ...(normalizedCandidate.needsSupplierConfirm ? ['SUPPLIER_CONFIRM_REQUIRED'] : []),
       ...(normalizedCandidate.conflict ? ['KAKAO_INFO_CONFLICT'] : []),
       ...(!normalizedCandidate.isFresh ? ['KAKAO_INFO_EXPIRED'] : []),
@@ -173,11 +220,14 @@ export function kakaoInfoCandidatesToSourceBatch(
     };
     const lineage: FieldLineageRecord[] = [
       'type',
+      'layer',
+      'item',
       'summary',
       'value',
       'vehicle.productRef',
       'vehicle.plateEvidenceMsgNo',
       'vehicle.plateEvidenceSource',
+      'vehicle.plateEvidenceDistance',
       'vehicle.plateStatusSameSentence',
       'needsSupplierConfirm',
       'autoPromotable',

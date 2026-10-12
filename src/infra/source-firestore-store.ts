@@ -154,6 +154,20 @@ export class FirestoreSourceStore implements SourceIngestionStore {
     const snap = await this.db.collection(C.lineage).where('runId', '==', runId).get();
     return snap.docs.map((x) => x.data() as FieldLineageRecord);
   }
+  async getCandidate(candidateId: string) {
+    const snap = await this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)).get();
+    return snap.exists ? snap.data() as NormalizedCandidateRecord : null;
+  }
+  async listCandidatesBySource(sourceId: string) {
+    const snap = await this.db.collection(C.candidates).where('sourceId', '==', sourceId).get();
+    return snap.docs.map((x) => x.data() as NormalizedCandidateRecord);
+  }
+  async productExists(productRef: string) {
+    const id = productRef.startsWith('products/') ? productRef.slice('products/'.length) : productRef;
+    if (!id || id.includes('/')) throw new Error('KAKAO_INFO_PRODUCT_REF_INVALID');
+    const snap = await this.db.collection(FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products).doc(id).get();
+    return snap.exists;
+  }
 }
 
 export function createFirestoreSourceStore() {
