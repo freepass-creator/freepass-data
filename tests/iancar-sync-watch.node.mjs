@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyOutcome, classifyRun, decide, exitCodeFor, initialState, noteObservation, parseReport, MAX_OBSERVE_FAILURES } from '../scripts/iancar-sync-watch-lib.mjs';
@@ -81,6 +81,10 @@ test('날짜로 해석되지 않는 응답(잘못된 값)도 조회 실패로 �
   for (let i = 0; i < MAX_OBSERVE_FAILURES; i++) s = noteObservation(s, 'not-a-date');
   assert.equal(s.halted, true); assert.equal(s.haltReason, 'OBSERVE_FAILED');
 });
+test('미래 날짜(1분 넘게)는 잘못된 값으로 기다리고 실패로 센다', () => {
+  const future = new Date(T + 10 * 60000).toISOString();
+  assert.equal(decide(initialState(), future, T).reason, 'OBSERVED_INVALID');
+});
 test('종료 코드: 정상 0, 건수 관문 중단 3, 그 밖의 실패 1', () => {
   assert.equal(exitCodeFor({ kind: 'APPLIED' }), 0);
   assert.equal(exitCodeFor({ kind: 'DRY_OK' }), 0);
@@ -89,7 +93,7 @@ test('종료 코드: 정상 0, 건수 관문 중단 3, 그 밖의 실패 1', () 
 });
 
 const script = new URL('../scripts/iancar-sync-watch.mjs', import.meta.url).pathname.replace(/^[/]([A-Za-z]:)/, '$1');
-const run = (args, env) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 20000, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...env } });
+const run = (args, env) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 20000, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: tmpdir(), TMP: tmpdir(), ...env } });
 
 test('적용 모드는 승인·건수 범위·백업 버킷을 외부에서 받지 못하면 시작을 거부(64) — 실행기가 승인을 대신하지 않는다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
@@ -99,7 +103,7 @@ test('적용 모드는 승인·건수 범위·백업 버킷을 외부에서 받�
   const wrong = run(['--apply', '--once', '--lock-root', root], { EANCAR_ONE_SYNC_APPROVED: 'yes', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'b' });
   assert.equal(wrong.status, 64);
 });
-test('이미 살아 있는 프로세스가 잠금을 쥐고 있으면 종료 75(동시 실행 금지), --break-stale-lock 로도 못 지운다', () => {
+test('이미 살아 있는 프로세스가 잠금을 쥐고 있으면 종료 75(동시 실행 금지)', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
   const lock = join(root, 'iancar-sync.lock');
   mkdirSync(lock, { recursive: true });
@@ -107,28 +111,30 @@ test('이미 살아 있는 프로세스가 잠금을 쥐고 있으면 종료 75(
   const result = run(['--once', '--lock-root', root], {});
   assert.equal(result.status, 75);
   assert.match(result.stderr, /잠금/);
-  assert.equal(run(['--once', '--break-stale-lock', '--lock-root', root], {}).status, 75);
 });
-test('죽은 프로세스의 잠금은 자동으로 넘겨받지 않고(경쟁 방지) 종료 75, --break-stale-lock 로만 사람이 넘겨받는다', () => {
+test('죽은 프로세스의 잠금도 자동으로 넘겨받지 않는다(인계 경쟁 자체가 없음) — 종료 75, 사람이 확인 뒤 직접 지운다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
   const lock = join(root, 'iancar-sync.lock');
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, 'pid'), '2147483646');
   const auto = run(['--once', '--lock-root', root], {});
   assert.equal(auto.status, 75);
-  assert.match(auto.stderr, /비정상 종료/);
-  // 사람이 넘겨받으면 잠금은 통과한다(열쇠 조회에서 멈추도록 gcloud 가 없는 PATH 로 실행 — 실제 비밀을 읽지 않는다)
+  assert.match(auto.stderr, /직접 지우고/);
+  assert.equal(run(['--once', '--break-stale-lock', '--lock-root', root], {}).status, 75);     // 인계 옵션은 없다
+  rmSync(lock, { recursive: true, force: true });                                              // 사람이 지운 뒤에는 잠금을 잡는다(열쇠 조회에서 멈추도록 gcloud 없는 PATH — 비밀을 읽지 않는다)
   const empty = mkdtempSync(join(tmpdir(), 'iancar-nopath-'));
-  const taken = spawnSync(process.execPath, [script, '--once', '--break-stale-lock', '--lock-root', root], { encoding: 'utf8', timeout: 20000, env: { PATH: empty } });
+  const taken = spawnSync(process.execPath, [script, '--once', '--lock-root', root], { encoding: 'utf8', timeout: 20000, env: { PATH: empty, TEMP: tmpdir(), TMP: tmpdir() } });
   assert.notEqual(taken.status, 75);
 });
-
+test('--lock-root 는 시스템 임시 폴더 아래만 허용(운영에서 잠금 위치를 바꿔 배타를 우회하지 못함)', () => {
+  assert.equal(run(['--once', '--lock-root', join(process.cwd(), 'elsewhere')], {}).status, 64);
+});
 test('잠금 위치는 LOCALAPPDATA/TMPDIR 같은 환경변수에 의존하지 않는다(환경이 달라도 같은 잠금을 본다)', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
   const lock = join(root, 'iancar-sync.lock');
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, 'pid'), String(process.pid));
-  for (const env of [{ LOCALAPPDATA: join(root, 'a'), TMPDIR: join(root, 'b') }, { TMPDIR: join(root, 'c') }, {}]) {
+  for (const env of [{ LOCALAPPDATA: join(root, 'a'), HOME: join(root, 'b') }, { HOME: join(root, 'c'), USERPROFILE: join(root, 'd') }, {}]) {
     assert.equal(run(['--once', '--lock-root', root], env).status, 75);
   }
 });

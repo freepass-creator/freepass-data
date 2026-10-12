@@ -33,7 +33,7 @@ export function classifyRun({ exitCode, stdout = '', stderr = '', dry = false })
 /** 감지 조회 결과를 상태에 반영한다. 연속 실패가 한도에 닿으면 정지한다(조용한 무한 재시도 금지). */
 export function noteObservation(state, observed) {
   // 값이 없거나 날짜로 해석되지 않으면(잘못된 응답) 조회 실패로 센다.
-  if (observed && Number.isFinite(Date.parse(observed))) return state.observeFailures ? { ...state, observeFailures: 0 } : state;
+  if (observed && Number.isFinite(Date.parse(observed)) && Date.parse(observed) - Date.now() < 60_000) return state.observeFailures ? { ...state, observeFailures: 0 } : state;
   const failures = state.observeFailures + 1;
   const next = { ...state, observeFailures: failures };
   if (failures >= MAX_OBSERVE_FAILURES && !next.halted) { next.halted = true; next.haltReason = 'OBSERVE_FAILED'; }
@@ -45,7 +45,7 @@ export function decide(state, observed, now) {
   if (state.halted) return { action: 'HALTED', reason: state.haltReason };
   if (!observed) return { action: 'WAIT', reason: 'OBSERVE_FAILED' };
   const age = now - Date.parse(observed);
-  if (!Number.isFinite(age)) return { action: 'WAIT', reason: 'OBSERVED_INVALID' };
+  if (!Number.isFinite(age) || age < -60_000) return { action: 'WAIT', reason: 'OBSERVED_INVALID' };   // 날짜가 아니거나 1분 넘게 미래면 잘못된 값
   if (observed === state.lastHandledSyncedAt) return { action: 'WAIT', reason: 'ALREADY_HANDLED' };
   if (age > FRESH_WINDOW_MS) return { action: 'WAIT', reason: 'SOURCE_ALREADY_STALE' };           // 이미 15분 지난 갱신은 읽어도 신선도 중단
   return { action: 'RUN', syncedAt: observed };
