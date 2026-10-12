@@ -4,6 +4,10 @@ import { sonogongSourceAdapter, type SonogongBucketObservation } from '../adapte
 import { collectSupplierSource, type SourceIntakeBatch } from '../domain/source-intake.js';
 import { compareSonogongDeposits } from '../domain/sonogong-deposit-comparison.js';
 import { prepareRawSourceBatch } from '../application/ingest-raw-source.js';
+import { sonogongNormalizer } from '../adapters/normalize-sonogong.js';
+import { verifiedMasterRecords } from '../adapters/vehicle-identity-inputs.js';
+import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 
 /** Conservative JSON Firestore storage bound, not JSON byte size alone.
  * Map/array overhead and scalar allowance deliberately overestimate storage.
@@ -29,7 +33,7 @@ export async function runSonogongCollection(input: {
   args: string[]; env: NodeJS.ProcessEnv;
   reader?: ReturnType<typeof createSonogongErpReader>;
   now?: () => number;
-  ingest?: (batch: SourceIntakeBatch) => Promise<unknown>;
+  ingest?: (batch: SourceIntakeBatch, normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] } | null) => Promise<unknown>;
 }) {
   const args = new Set(input.args);
   if ([...args].some(v => !['--apply-raw', '--compare-deposits'].includes(v))) throw new Error('SONOGONG_UNKNOWN_OPTION');
@@ -56,7 +60,10 @@ export async function runSonogongCollection(input: {
   const batch = await adapter.read();
   assertSonogongRawFits(batch);
   const collected = await collectSupplierSource({ ...adapter, read: async () => batch }, new Date(now()).toISOString());
-  const report = { collector: 'freepass-data/sonogong', status: collected.evidence.status,
+  const report: { collector: string; status: string; coverage: string; buckets: typeof buckets; observedAt: string;
+    freshness: string; issues: string[]; writeExecuted: boolean; canonicalPublication: string;
+    retirementAuthorized: boolean; depositComparison?: unknown; candidateCount?: number;
+    rejectedCount?: number; holdReasons?: Record<string, number> } = { collector: 'freepass-data/sonogong', status: collected.evidence.status,
     coverage: batch.coverage.mode, buckets, observedAt: batch.observedAt,
     freshness: collected.evidence.issues.includes('SOURCE_STALE') ? 'STALE' : 'WITHIN_CAPTURE_WINDOW',
     issues: collected.evidence.issues, writeExecuted: false,
@@ -64,12 +71,31 @@ export async function runSonogongCollection(input: {
     ...(args.has('--compare-deposits') ? { depositComparison: compareSonogongDeposits(batch) } : {}) };
   if (apply) {
     if (collected.evidence.status !== 'RAW_READY') throw new Error('SONOGONG_SOURCE_NOT_READY');
-    if (input.ingest) await input.ingest(batch);
-    else {
-      const { createSourceIngestDataAccessRuntime } = await import('./data-access-runtime.js');
-      const runtime = await createSourceIngestDataAccessRuntime();
-      await runtime.ingestRawBatch(batch);
+    const normalize = input.ingest ? sonogongNormalizer() : await import('./data-access-runtime.js')
+      .then(async runtimeModule => {
+        const { captureVehicleMasterSnapshotReadOnly } = runtimeModule;
+        const masterSnapshot = await captureVehicleMasterSnapshotReadOnly();
+        return sonogongNormalizer({ records: verifiedMasterRecords(masterSnapshot, now()),
+          readAt: masterSnapshot.readAt, snapshotDigest: masterSnapshot.digest });
+      });
+    const run = input.ingest ? await input.ingest(batch, normalize) : await import('./data-access-runtime.js')
+      .then(async runtimeModule => {
+        const { createSourceIngestDataAccessRuntime } = runtimeModule;
+        const runtime = await createSourceIngestDataAccessRuntime();
+        return runtime.ingestRawBatch(batch, normalize);
+      });
+    const candidateCount = typeof (run as { candidateCount?: unknown })?.candidateCount === 'number'
+      ? (run as { candidateCount: number }).candidateCount : prepareRawSourceBatch(batch).rawRecords.map(raw => normalize(raw)).filter(Boolean).length;
+    const normalized = prepareRawSourceBatch(batch).rawRecords.map(raw => normalize(raw)).filter((value): value is NonNullable<ReturnType<typeof normalize>> => !!value);
+    const holdReasons: Record<string, number> = {};
+    let rejectedCount = 0;
+    for (const item of normalized) {
+      if (item.record.status !== 'VALID') rejectedCount++;
+      for (const reason of item.record.candidate.issues) holdReasons[reason] = (holdReasons[reason] ?? 0) + 1;
     }
+    report.candidateCount = candidateCount;
+    report.rejectedCount = rejectedCount;
+    report.holdReasons = holdReasons;
     report.writeExecuted = true;
   }
   return report;

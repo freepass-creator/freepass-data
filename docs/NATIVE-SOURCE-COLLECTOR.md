@@ -329,7 +329,27 @@ securityDepositAmount·monthly12/24/36/48/60·estimateType·creditType와 나머
 별도 estimates endpoint는 만들지 않는다. 목록/상세 JSON envelope도 RAW에 보존한다
 (목록 envelope는 기존 RAW 저장소에 `evidence:list:<bucket>:<pageIndex>` 단위로 원문 그대로 보존한다. 차량 record와 페이지 증거는 별개이며 RAW 건수는 차량 대수가 아니다. 전 버킷 차량 0건은 페이지 증거가 있어도 HOLD/적재 거부).
 
-손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 현재 RAW runtime은 정규화 함수를 전달하지 않으므로 페이지 증거를 차량 후보로 만들지 않는다. 향후 정규화 연결 시 반드시 페이지 증거를 제외하는 계약이 필요하다.
+손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 2026-10-12부터 `--apply-raw` 승인 경로는 `sonogongNormalizer`를 전달해 차량 RAW를 후보로 연결한다. `evidence:list:` / `LIST_PAGE` 페이지 증거는 RAW와 lineage 보존 대상일 뿐 후보를 만들지 않는다.
+
+### 손오공 RAW→후보 정규화 연결(2026-10-12)
+
+`src/adapters/normalize-sonogong.ts`의 `sonogongNormalizer(master?)`는 손오공 API payload 전용 adapter다. 공통 시트 normalizer와 같은 `RawRecord -> { record: NormalizedCandidateRecord, lineage }` 계약, `candidate_${stableDigest([raw.rawRecordId, ruleVersion]).slice(0,40)}` ID 규칙, 이슈가 있으면 `REJECTED` 보류 규칙을 따른다. `ruleVersion`은 `sonogong-normalizer/1`이다. 입력 원문은 바꾸지 않는다.
+
+| 원문 경로 | 후보/근거 |
+| --- | --- |
+| `list.carNumber` | `carNumber`, `plateIdentityKey`, `isAssignedPlate` |
+| `list.carName`, `groupName4/2/1`, 연료/배기량/연식/최초등록 | 차종 원문 증거. 확정명은 `chooseVehicleIdentity`와 읽기 전용 Vehicle Master snapshot으로만 결정 |
+| `list.carFuel`, `engineDisplacement`, `mileage`, `detail.firstRegistrationDate`, `detail.saleAmt` | `vehicleFacts.fields` 근거. 숫자 문자열은 기존 정수 parser 규칙으로만 해석 |
+| `list.webVisibility`, `contractAvailable`, `hasActiveContract` | supplierStatus 원문 근거. 원문 그대로 KNOWN 으로 보존하며 노출 판정은 별도 정책(보류 사유 아님) |
+| `detail.estimates[]` LOW / 12~60개월 | `priceTerms.m12...`; 보증금은 `assessDepositEvidence`로 `KNOWN/ZERO/UNKNOWN` 구분 |
+| `bucket` + plate | `classifySonokongRecord` 재사용. `LOW_TCAR`는 픽업, 나머지는 손오공 상품 축으로 분리 |
+| `detail.images[]`, `carDescription`, `options` | 후보에는 URL 다운로드 없이 사진 URL 존재/개수와 RAW 참조 근거만 보존 |
+
+주요 이슈 코드는 `VEHICLE_IDENTITY_DATA_CONFLICT`, `VEHICLE_MASTER_SNAPSHOT_REQUIRED`, `PLATE_MISSING`, `PLATE_NOT_ASSIGNED`, `NO_PRICE_TERMS`, `DEPOSIT_REVIEW_REQUIRED:*`, `UNKNOWN_BUCKET`, `MONTHLY_RENT_INVALID:m*`이다. `CommercialType`에 오공·픽업 구독이 이미 있어 `CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED`는 이 경로에서 쓰지 않는다(전 구독 차량 보류 방지). 발행 단계의 상품 유형 수용 여부는 소비처에서 별도 확인한다. 보증금 `0`은 명시 면제 근거 없이는 `UNKNOWN`이다. 수수료·12개월 기준은 이 정규화에서 다루지 않는다(손오공 수수료는 기간별, 계산은 급한 작업 세션 소관).
+
+차량가액(`vehiclePrice`)은 선택 사실 칸이며 수수료 계산에 연결하지 않는다(손오공 수수료는 기간별, 대표 2026-10-12 — 계산은 급한 작업 세션 소관). 수수료·12개월 기준은 보류 사유가 아니다.
+
+남은 HOLD: 운영 실호출과 RAW 되읽기, 계정/Secret Manager 운영 주입, 15분 예약 연결, 수수료 기준 확정은 별도 승인·검증 전까지 완료로 보지 않는다. 공급사 원문은 고치지 않는다.
 
 **이식 제외:** 계정 파일 읽기, 토큰 파일 캐시, 덤프/상세 파일 캐시, 응답 본문을 포함한 오류,
 동시 8개 pool, 원천 count의 버킷 무시 동작, viewAgent/외부 롯데 HTML 접근,
@@ -714,3 +734,20 @@ Fastify `request.ip`는 `FREEPASS_DATA_TRUST_PROXY_HOPS` 정수0~3으로만 프�
 기존 infra의 `createApprovedDrivePhotoReader`는 승인된 정확 fileId에 대해 metadata와 `alt=media` GET만 수행한다. 원본 download 방식은 [Drive 공식 문서](https://developers.google.com/workspace/drive/api/guides/manage-downloads)를 따른다. `google-auth-library` Compute metadata 인증은 runtime service account와 drive.readonly scope만 사용하며 사용자 ADC/gws를 읽지 않는다. token/fetch fixture 주입을 지원한다. ID 불일치·휴지통·용량·미디어 오류는 download 전 거부하고 스트림을 공통 8MiB 한도 안에서 읽는다. 전체 bytes의 서명과 기존 공통 reader의 SHA256·차량키·승인 철회 검사 후에만 응답한다. SDK/HTTP 오류 원문이나 토큰은 기록·반환하지 않는다.
 
 factory를 운영 runtime에 자동 연결하지 않았다. 기존 선택적 ApprovedPhotoReader 인자로만 연결할 수 있다. 승인 refs/정확 폴더 ID/서비스 계정 Drive 읽기 권한의 운영 검증과 별도 승인이 남았다. 앞 절의 reader 미구현은 이 코드 작업으로 해소하되, 비공개 사진 읽기 권한·승인 연결 게시·배포 HOLD는 유지한다.
+
+### 손오공 «최신 원문» 보존 설계 — 계획만, 쓰기 미승인 (2026-10-12)
+
+**현황(실측, 읽기만).** 프리패스 데이터 `products`의 손오공(RP012) 문서 736건 중 판매 140건의 `원문` 칸은 처음 원문 백필 시점(09-04~09-11)의 스냅샷이다. ERP4 직접수집 엔진(`ingest-supplier-to-firestore`, 고정 커밋)은 매 회차 `원문`에 사진 증거와 옵션 증거만 덧붙이고(`mergeRawPhotoEvidence`) 손오공 API 목록·상세 전체를 다시 저장하지 않는다. 최신 API 덤프는 실행기 임시 파일이며 회차 끝에 삭제된다. 따라서 «원문은 처음 것과 최신 것 둘 다 보존» 원칙이 최신 쪽에서 충족되지 않는다. 정제 필드(가격·주행 등)는 변동분만 반영되고, 판매 140건 중 132건의 마지막 값 반영이 09-21이다(`_var_polled_at` 만 일부 갱신).
+
+**목표 구조.**
+1. 처음 원문: 기존 `원문` 칸을 그대로 둔다(수정 금지).
+2. 최신 원문: 새 칸 `원문_최신` = `{ observedAt, runId, sourceRevision, payloadDigest, 요약(버킷·노출·계약가능·월납 기간 수·사진 장수) }` 만 products 에 두고, 전체 JSON(목록·상세·estimates)은 기존 `source_runs`/`raw_records`(run 단위, 이전 run 보존)에 둔다. 1 MiB 문서 한도 때문에 전체를 products 문서에 넣지 않는다.
+3. 최신 원문의 출처는 이 저장소의 `source:sonogong` 읽기(이미 구현, 상세 estimates 포함 전량). 별도 reader 를 새로 만들지 않는다.
+
+**두 가지 이행 경로.**
+- 경로 1(정석): freepass-data 에서 자체 계정으로 `--apply-raw`. 필요: freepass-data 비밀 `SONOGONG_ACCOUNT_JSON`(옛 ERP4 와 같은 값, 대표 손 1회). 지휘통제실 결정으로 ERP4 폐기·이식 일정과 함께 요청한다.
+- 경로 2(임시, ERP4 동결): ERP4 실행기가 이미 받는 덤프를 가져오는 방법은 없다(회차 끝에 삭제, 저장소 변경 금지). 따라서 경로 2 는 채택하지 않는다.
+
+**쓰기 전 승인 항목.** `원문_최신` 새 칸 추가(스키마), 첫 `--apply-raw`, products 에 대한 연결 쓰기. 각각 계획·되읽기·롤백 방법(새 칸 삭제만으로 원복)을 PR 에 붙인 뒤 지휘통제실 승인.
+
+**대조 도구·수집 감사에 전달할 정정.** 일치율에서 본 가격·사진·주행 불일치는 `원문` 칸이 낡아서 생긴 차이일 수 있다. 다만 판매 140건 중 132건의 마지막 값 반영이 09-21이므로 «저장 정제값이 최신 공급사 값과 같다»는 별개로 증명되지 않았다 — 최신 원문을 얻은 뒤 같은 대조를 다시 해야 한다.

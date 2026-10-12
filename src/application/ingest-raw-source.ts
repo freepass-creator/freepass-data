@@ -55,7 +55,7 @@ export async function ingestRawSourceBatch(
   store: SourceIngestionStore,
   input: SourceIntakeBatch,
   now = new Date().toISOString(),
-  normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] },
+  normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] } | null,
   evidenceLineage?: (raw: RawRecord) => FieldLineageRecord[]
 ): Promise<SourceRun> {
   if (!Number.isFinite(Date.parse(now))) {
@@ -147,6 +147,7 @@ export async function ingestRawSourceBatch(
       }
       if (normalize) {
         const normalized = normalize(structuredClone(raw));
+        if (!normalized) continue;
         await store.appendCandidate(normalized.record);
         for (const item of normalized.lineage) await store.appendLineage(item);
         candidateCount++;

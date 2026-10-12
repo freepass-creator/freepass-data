@@ -24,6 +24,8 @@ import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
 import { ingestRawSourceBatch } from '../application/ingest-raw-source.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import {
   assessLatestSheetConsumerCutover,
@@ -662,7 +664,7 @@ export async function createSourceIngestDataAccessRuntime() {
       }, () => ingestLegacyProductSnapshot(sourceStore, snapshot))
 ,
 
-    ingestRawBatch: (batch: SourceIntakeBatch) =>
+    ingestRawBatch: (batch: SourceIntakeBatch, normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] } | null) =>
       access.write({
         context: {
           actor: { id: 'service:freepass-data-source-intake', kind: 'SERVICE' },
@@ -697,7 +699,7 @@ export async function createSourceIngestDataAccessRuntime() {
             checkpoint: value.checkpoint
           })
         })
-      }, () => ingestRawSourceBatch(sourceStore, batch))
+      }, () => ingestRawSourceBatch(sourceStore, batch, new Date().toISOString(), normalize))
   };
 }
 
