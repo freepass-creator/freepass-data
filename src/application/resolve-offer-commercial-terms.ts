@@ -39,6 +39,27 @@ const matchesRentReferenceCandidate = (
   return !requireSettlement || candidate.settlement === target.settlement;
 };
 
+const referenceCandidateForPriceTerm = (
+  offerId: string,
+  term: PriceTerm,
+  evidenceByTerm: CommissionEvidenceByTerm,
+  rejectSubscriptionFormConflict: boolean,
+) => {
+  const parsed = parseErp5CompatibilityPriceKey(term.termKey);
+  const evidence = evidenceByTerm[term.termKey];
+  const resolved = resolveSubscriptionFormForTerm(evidence?.subscriptionForm, parsed?.settlement);
+  if (rejectSubscriptionFormConflict && resolved.conflict) return null;
+  return {
+    termMonths: term.termMonths,
+    settlement: resolved.subscriptionForm,
+    mileageKm: term.mileageLimitKmPerYear ?? undefined,
+    mileagePeriod: 'year' as const,
+    currency: term.monthlyRent.currency,
+    amount: term.monthlyRent.amount,
+    sourceRef: `catalog_offers/${offerId}/priceTerms/${term.termKey}`,
+  };
+};
+
 /** Reuses the pinned engine; changes only two fee fields on existing, price-aligned rows. */
 export function selectOfferFeeEconomics(offer: Offer, commercialType?: CommercialType, fuel?: string | null, termKeys?: readonly string[]) {
   if (termKeys === undefined) return precomputeOfferEconomics(offer, commercialType, fuel);
@@ -116,9 +137,10 @@ export function joinStoredProductEconomics(productId: string, offers: readonly O
 export function refreshOfferEconomicsForChangedInputs(
   previous: Offer, next: Offer, policyContextChanged: boolean, commercialType?: CommercialType, fuel?: string | null,
   vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+  evidenceByTerm: CommissionEvidenceByTerm = {},
 ) {
   if (typeof policyContextChanged !== 'boolean') throw new Error('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
-  const candidate = precomputeOfferEconomics(next, commercialType, fuel);
+  const candidate = precomputeOfferEconomics(next, commercialType, fuel, evidenceByTerm);
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
   const newPrices = new Map(next.priceTerms.map(term => [term.termKey, term]));
@@ -133,22 +155,17 @@ export function refreshOfferEconomicsForChangedInputs(
     if (fee.reasonCode === 'BILLIN_36_MONTH_RENT_REQUIRED') return 36;
     return null;
   };
-  const referenceCandidate = (term: PriceTerm) => {
-    const parsed = parseErp5CompatibilityPriceKey(term.termKey);
-    return {
-      termMonths: term.termMonths,
-      settlement: parsed?.settlement,
-      mileageKm: term.mileageLimitKmPerYear ?? undefined,
-      mileagePeriod: 'year' as const,
-      currency: term.monthlyRent.currency,
-      amount: term.monthlyRent.amount,
-      sourceRef: `priceTerms/${term.termKey}`,
-    };
-  };
+  const isSonokongOgongSubscription = previous.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
+  const referenceCandidate = (term: PriceTerm) =>
+    referenceCandidateForPriceTerm(next.id, term, evidenceByTerm, isSonokongOgongSubscription);
   const referenceCandidateDigest = (terms: readonly PriceTerm[], current: PriceTerm, basisTermMonths: 12 | 36, requireSettlement: boolean) => {
     const target = referenceCandidate(current);
+    if (target === null) return stableDigest(null);
     return stableDigest(terms
-      .filter(term => matchesRentReferenceCandidate(target, referenceCandidate(term), basisTermMonths, requireSettlement))
+      .filter(term => {
+        const reference = referenceCandidate(term);
+        return reference !== null && matchesRentReferenceCandidate(target, reference, basisTermMonths, requireSettlement);
+      })
       .map(term => ({
         termKey: term.termKey,
         termMonths: term.termMonths,
@@ -168,8 +185,15 @@ export function refreshOfferEconomicsForChangedInputs(
       };
     }
     const target = referenceCandidate(current);
+    if (target === null) return { changed: false, exact: false };
+    const oldBasis = oldPrices.get(basis.termKey);
+    const newBasis = newPrices.get(basis.termKey);
+    if (!newBasis || stableDigest(oldBasis ?? null) !== stableDigest(newBasis)) return { changed: true, exact: true };
     const matches = (candidate: PriceTerm | undefined) => !!candidate &&
-      matchesRentReferenceCandidate(target, referenceCandidate(candidate), basis.termMonths, requireSettlement);
+      (() => {
+        const reference = referenceCandidate(candidate);
+        return reference !== null && matchesRentReferenceCandidate(target, reference, basis.termMonths, requireSettlement);
+      })();
     const changed = [...changedPriceKeys].filter(key => matches(newPrices.get(key)) || matches(oldPrices.get(key)));
     return { changed: changed.length > 0, exact: changed.some(key => key === basis.termKey) };
   };
@@ -244,30 +268,9 @@ export function precomputeOfferEconomics(
     const resolvedTargetSettlement = resolveSubscriptionFormForTerm(explicitEvidence?.subscriptionForm, parsedTargetKey?.settlement);
     const targetSettlement = resolvedTargetSettlement.subscriptionForm;
     const isSonokongOgongSubscription = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
-    const referenceCandidateFor = (candidate: PriceTerm) => {
-      const parsedCandidateKey = parseErp5CompatibilityPriceKey(candidate.termKey);
-      const candidateEvidence = evidenceByTerm[candidate.termKey];
-      const resolvedCandidateSettlement = resolveSubscriptionFormForTerm(candidateEvidence?.subscriptionForm, parsedCandidateKey?.settlement);
-      if (isSonokongOgongSubscription && resolvedCandidateSettlement.conflict) return null;
-      return {
-        termMonths: candidate.termMonths,
-        settlement: resolvedCandidateSettlement.subscriptionForm,
-        mileageKm: candidate.mileageLimitKmPerYear ?? undefined,
-        mileagePeriod: 'year' as const,
-        currency: candidate.monthlyRent.currency,
-        amount: candidate.monthlyRent.amount,
-        sourceRef: `catalog_offers/${offer.id}/priceTerms/${candidate.termKey}`,
-      };
-    };
-    const targetReferenceCandidate = {
-      termMonths: term.termMonths,
-      settlement: targetSettlement,
-      mileageKm: term.mileageLimitKmPerYear ?? undefined,
-      mileagePeriod: 'year' as const,
-      currency: term.monthlyRent.currency,
-      amount: term.monthlyRent.amount,
-      sourceRef: priceRef,
-    };
+    const referenceCandidateFor = (candidate: PriceTerm) =>
+      referenceCandidateForPriceTerm(offer.id, candidate, evidenceByTerm, isSonokongOgongSubscription);
+    const targetReferenceCandidate = referenceCandidateForPriceTerm(offer.id, term, evidenceByTerm, false)!;
     const basis36 = offer.priceTerms.filter(candidate => {
       const reference = referenceCandidateFor(candidate);
       return reference !== null && matchesRentReferenceCandidate(targetReferenceCandidate, reference, 36, isSonokongOgongSubscription);

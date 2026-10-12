@@ -200,6 +200,33 @@ describe('offer economics recompute', () => {
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
   });
+  it('refreshes Sonokong fees when an explicit BUYOUT reference row with an opaque key changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'q24',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    const evidence={q12:{subscriptionForm:'BUYOUT' as const},q24:{subscriptionForm:'BUYOUT' as const}};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION',null,evidence);
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    expect(offer.internalEconomicsTerms[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:800000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION',null,undefined,evidence);
+    expect(refreshed[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:1000000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    expect(refreshed[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'q12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    const removed={...structuredClone(offer),priceTerms:offer.priceTerms.filter(term=>term.termKey!=='q12')};
+    expect(refreshOfferEconomicsForChangedInputs(offer,removed,false,'OGONG_SUBSCRIPTION',null,undefined,evidence)[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+  });
   it('preserves Sonokong buyout fees when an unrelated return Q12 row changes', async () => {
     const store=await fixture(), original=(await store.listOffers())[0]!;
     const offer={...original,supplierId:'RP012',priceTerms:[
