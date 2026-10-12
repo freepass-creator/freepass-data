@@ -984,9 +984,14 @@ describe('F04 2026-10-04 alignment regression', () => {
     const sonokongWithoutQ12 = { ...sonokong, price: { [sonokongQ24Key]: { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-missing', sonokongWithoutQ12, { [sonokongQ24Key]: { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!
       .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
-    const sonokongDuplicateQ12 = { ...sonokong, price: { [sonokongQ12Key]: { rent: 800000 }, [`${sonokongQ12Key} `]: { rent: 800000 }, [sonokongQ24Key]: { rent: 700000 } } };
-    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-duplicate', sonokongDuplicateQ12, { [sonokongQ24Key]: { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } } })!
-      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'CALCULATED' });
+    const sonokongReturnQ12DifferentMileageOnly = { ...sonokong, price: { '12_3만': { rent: 800000 }, '24_2만': { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-wrong-scope', sonokongReturnQ12DifferentMileageOnly, {
+      '24_2만': { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } },
+    })!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
+    const sonokongDuplicateQ12 = { ...sonokong, price: { '12_2만': { rent: 800000 }, '12_연20000km': { rent: 800000 }, '24_2만': { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-duplicate', sonokongDuplicateQ12, { '24_2만': { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
     const sonokongWithConflictingSettlement = { ...sonokong, price: { '12': { rent: 800000 }, '12_인수형': { rent: 900000 }, '24_인수형': { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-conflict', sonokongWithConflictingSettlement, { '24_인수형': { subscriptionForm: 'RETURN' } })!
       .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee)

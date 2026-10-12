@@ -487,6 +487,13 @@ describe('F04 explicit canonical evidence', () => {
       '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
     })[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
 
+    input.priceTerms.unshift({ termKey: '12', termMonths: 12, mileageLimitKmPerYear: 30000, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      '12': { subscriptionForm: 'RETURN' },
+      '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
+    })[1]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
+
+    input.priceTerms.shift();
     input.priceTerms.unshift({ termKey: '12_인수형', termMonths: 12, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
       '12_인수형': { subscriptionForm: 'BUYOUT' },

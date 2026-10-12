@@ -757,12 +757,7 @@ export function validateSonokongQ12Basis(
   candidates: readonly SonokongQ12BasisCandidate[],
 ): { q12Basis?: CommissionInput['q12Basis']; reasonCode?: 'OGONG_12M_BASE_MISSING' | 'Q12_BASIS_CONFLICT' } {
   if (!explicitQ12) return {};
-  const strictMatching = candidates.filter(candidate => matchesReferenceRentBasisCandidate(target, candidate, 12));
-  const matching = strictMatching.length > 0 ? strictMatching : candidates.filter(candidate =>
-    candidate.termMonths === 12 &&
-    candidate.currency === target.currency &&
-    Number.isSafeInteger(candidate.amount) &&
-    candidate.amount > 0);
+  const matching = candidates.filter(candidate => matchesReferenceRentBasisCandidate(target, candidate, 12));
   if (matching.length !== 1) return { reasonCode: 'OGONG_12M_BASE_MISSING' };
   if (matching[0]!.amount !== explicitQ12.amount) return { reasonCode: 'Q12_BASIS_CONFLICT' };
   return { q12Basis: { amount: explicitQ12.amount, sourceRef: matching[0]!.sourceRef } };
