@@ -56,7 +56,7 @@ export function classifyField(rawV, dataV, field) {
 }
 
 // rawRecords: [{ car_number, ...필드 }] (필드 이름은 map 으로 Firestore 이름에 맞춘 뒤). dataRecords: products 문서 필드 객체 배열.
-export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sampleLimit = 5, cause = null, fixLimit = 300 } = {}) {
+export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sampleLimit = 5, cause = null, fixLimit = 300, storedRaw = null } = {}) {
   const byPlate = (rows, label) => {
     const m = new Map(), dup = [];
     for (const r of rows) { const k = plateKey(r.car_number); if (!k) continue; if (m.has(k)) dup.push({ side: label, plate4: last4(k) }); else m.set(k, r); }
@@ -66,6 +66,7 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
   const types = Object.fromEntries(MISMATCH_TYPES.map(t => [t, 0]));
   const samples = Object.fromEntries(MISMATCH_TYPES.map(t => [t, []]));
   const causes = Object.fromEntries(CAUSES.map(c => [c, 0])), reasons = new Map(), fixCandidates = [];
+  const rawColumn = { compared: 0, stale: 0, staleWhileRefinedMatches: 0, perField: {} }; // 원문 칸 ↔ 원천, 정리값 ↔ 원천과 분리해 본다
   const add = (type, s, ctx = {}) => {
     types[type]++; if (samples[type].length < sampleLimit) samples[type].push(s);
     if (!cause || type === 'FORMAT_ONLY' || type === 'NEAR_NUMERIC' || type === 'DUPLICATE_PLATE') return;
@@ -84,6 +85,18 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
     both++;
     for (const f of fields) {
       const c = classifyField(r[f], d[f], f), pf = perField[f];
+      if (storedRaw) {
+        const sv = storedRaw(d, f);
+        if (sv !== undefined && !(isEmpty(sv) && isEmpty(r[f]))) {
+          const sc = classifyField(r[f], sv, f), stale = !(sc === 'MATCH' || sc === 'FORMAT_ONLY' || sc === 'NEAR_NUMERIC');
+          const rf = (rawColumn.perField[f] ??= { compared: 0, stale: 0 });
+          rawColumn.compared++; rf.compared++;
+          if (stale) {
+            rawColumn.stale++; rf.stale++;
+            if (c === 'MATCH' || c === 'FORMAT_ONLY' || c === 'NEAR_NUMERIC') { rawColumn.staleWhileRefinedMatches++; causes.RAW_COLUMN_STALE++; const key = 'RAW_COLUMN|' + f + '|RAW_COLUMN_STALE'; reasons.set(key, (reasons.get(key) ?? 0) + 1); }
+          }
+        }
+      }
       if (c === 'BOTH_EMPTY') continue;
       pf.compared++;
       if (c === 'MATCH') pf.match++;
@@ -104,6 +117,7 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
     fieldMatchRate: compared ? matched / compared : null, // 정규화 후 일치 / 비교한 항목
     fieldExactRate: compared ? (matched - Object.values(perField).reduce((a, p) => a + p.formatOnly, 0)) / compared : null,
     comparedFields: compared, perField, types, samples, causes,
+    rawColumn: { ...rawColumn, staleRate: rawColumn.compared ? rawColumn.stale / rawColumn.compared : null },
     topReasons: [...reasons].map(([key, n]) => { const [type, field, c] = key.split('|'); return { type, field, cause: c, count: n }; }).sort((a, b) => b.count - a.count).slice(0, 12),
     fixCandidates,
     digest: sha(JSON.stringify([raw.m.size, data.m.size, both, compared, matched, types])),
@@ -117,7 +131,8 @@ const clip = v => { const s = Array.isArray(v) ? JSON.stringify(v) : String(v); 
 // SOURCE_CHANGE    원천 변경: 원천에서 차가 사라졌거나 상태가 바뀜(데이터가 판매 중으로 남아 있으면 반영 지연도 겸함)
 // SOURCE_ANOMALY   원천 값 이상: 원천 값 자체가 규칙에 맞지 않음(숫자가 아닌 주행거리, 0 이하 요금 등)
 // UNDETERMINED     저장된 원문이 없어 원인을 가를 수 없음
-export const CAUSES = ['COLLECTION_LAG', 'REFINEMENT_ERROR', 'SOURCE_CHANGE', 'SOURCE_ANOMALY', 'UNDETERMINED'];
+export const CAUSES = ['COLLECTION_LAG', 'REFINEMENT_ERROR', 'SOURCE_CHANGE', 'SOURCE_ANOMALY', 'RAW_COLUMN_STALE', 'UNDETERMINED'];
+// RAW_COLUMN_STALE 원문 칸 낡음: 정리값은 현재 원천과 맞는데 데이터에 보존된 원문(원문.전체)만 옛 값 — 정제 오류가 아니다(손오공: 원문은 09월 백필 스냅샷)
 export const REFINED_FIELDS = new Set(['maker', 'model', 'sub_model', 'trim_name']);
 
 export function rawAnomaly(field, v) {
@@ -138,7 +153,7 @@ export function makeCauseClassifier({ storedRaw = () => undefined, dataAgeH = ()
     if (field && rawAnomaly(field, raw)) return 'SOURCE_ANOMALY';
     const stored = storedRaw(dataRec, field);
     if (stored !== undefined) {
-      if (normalize(stored) !== normalize(raw)) return 'COLLECTION_LAG'; // 저장된 원문이 현재 원천과 다름 = 원천이 바뀐 뒤 아직 못 가져옴
+      if (normalize(stored) !== normalize(raw)) return 'COLLECTION_LAG'; // 정리값도 원천과 다르고 원문 칸도 낡음 → 수집 지연(정리값 자체가 못 따라감) // 저장된 원문이 현재 원천과 다름 = 원천이 바뀐 뒤 아직 못 가져옴
       if (/^price\./.test(field ?? '')) return 'UNDETERMINED'; // 원문=원천인데 정리 가격이 다름: 판매가 가공 규칙인지 확인 필요(오류로 단정하지 않음)
       return REFINED_FIELDS.has(field) || type === 'VALUE_DIFF' || type === 'EMPTY_IN_DATA' ? 'REFINEMENT_ERROR' : 'UNDETERMINED';
     }

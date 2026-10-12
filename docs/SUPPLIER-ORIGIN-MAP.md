@@ -118,3 +118,9 @@ F05 에 데이터가 있는 공급사 12곳(엘씨·스카이는 공유 탭에 �
 - 주기 제안: 전수는 하루 1회(shared-sheet-daily 직후), 의심 시 공급사 단독 실행. 토큰 0, 약 10초.
 - 예약 등록은 하지 않았다(지휘통제실 승인 필요).
 - 시험: `tests/supplier-field-reconcile.node.mjs`·`tests/supplier-freshness.node.mjs` 11건.
+
+## 6. 원문 칸 낡음 분리 (손오공 등, 지휘통제실 정정 반영)
+손오공 수집은 정체가 아니다 — ERP4 매시 회차가 정리값(가격·상태·주행·사진)을 계속 갱신하고, products 에서 오래된 것은 `원문` 칸(09-04~09-11 백필 스냅샷)이다. 그래서 대조는 두 갈래로 따로 낸다.
+- **정리값 ↔ 원천**: 기존 필드별 일치율·불일치 유형·원인.
+- **원문 칸 ↔ 원천** (`rawColumn`): 필드별 `compared`·`stale`·`staleRate`, 그리고 `staleWhileRefinedMatches`(정리값은 원천과 맞는데 원문 칸만 낡은 수). 이 경우는 원인 `RAW_COLUMN_STALE`(원문 칸 낡음)로 센다 — 정제 오류도 수집 정체도 아니다. 정리값까지 원천과 다르면 기존대로 `COLLECTION_LAG`.
+- 온라인 원천 일반 모드(손오공 ERP·이안카 ONE·아이언·오토플러스): `node scripts/supplier-origin-verify.mjs --supplier RP012 --raw-json <원천 읽기 결과 배열> --map <{데이터 칸: 원천 키}> [--stored-map <{데이터 칸: 데이터 원문 안 경로}>]`. `--map` 에 `car_number` 가 있어야 하고, `--stored-map` 의 경로는 `원문` 안의 점 경로(예 `전체.월렌트`, `사진`). 원천 읽기 결과는 각 전담 세션이 만든다(차량번호가 들어가므로 저장소 밖에 둔다).

@@ -79,3 +79,10 @@ test('Dossier 최상위 plate·supplierCode·listable 과 photo.count', () => {
     { path: 'photo.count', group: 'PHOTO', normalizedValue: 3, source: 'REFINED', asOf: null }] });
   assert.equal(doc.car_number, '22나2222'); assert.equal(doc.provider_company_code, 'RP021'); assert.equal(doc.listable, false); assert.equal(doc.image_urls.length, 3);
 });
+
+test('원문 칸 낡음: 정리값은 원천과 맞고 보존된 원문만 옛 값', () => {
+  const raw = [{ car_number: '1', mileage: '200' }];
+  const data = [{ car_number: '1', mileage: '200', stored: { mileage: '100' } }];
+  const r = reconcile(raw, data, { fields: ['mileage'], storedRaw: (d, f) => d.stored[f] });
+  assert.equal(r.fieldMatchRate, 1); assert.equal(r.rawColumn.stale, 1); assert.equal(r.rawColumn.staleWhileRefinedMatches, 1); assert.equal(r.causes.RAW_COLUMN_STALE, 1);
+});
