@@ -390,7 +390,7 @@ export function createConsumerGateway(
     readProductCompat?(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot>;
     readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
-    readVehiclePhoto?(consumerId: string, productId: string, index?: number, options?: VehiclePhotoReadOptions): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean>; cacheTag?: string; fromRenditionCache?: true }>;
+    readVehiclePhoto?(consumerId: string, productId: string, index?: number, options?: VehiclePhotoReadOptions): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean>; cacheTag?: string; sourceCheckedAt?: number; fromRenditionCache?: true }>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
@@ -583,6 +583,8 @@ export function createConsumerGateway(
           catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
           return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
         }
+        if (typeof result.sourceCheckedAt === 'number' && result.cacheTag && index !== undefined && size !== undefined)
+          renditionCache.touchSource(request.params.productId, index, size, result.cacheTag, result.sourceCheckedAt);
         reply.header('X-Photo-Cache', 'HIT');
         return reply.type(result.contentType).send(result.bytes);
       }
@@ -616,7 +618,7 @@ export function createConsumerGateway(
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
       }
       if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
-      if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes)) renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType });
+      if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes)) renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType, sourceCheckedAt: result.sourceCheckedAt ?? Date.now() });
       return reply.type(outputType).send(outputBytes);
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });

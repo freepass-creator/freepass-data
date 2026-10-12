@@ -328,8 +328,11 @@ export type VehiclePhotoRead = {
   upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[];
 };
 /** 사진 읽기 선택 옵션. renditionCacheLookup: 같은 내용 표지(cacheTag)로 이미 줄여 둔 결과물이 있으면 돌려주는 함수(없으면 undefined). */
+export const RENDITION_SOURCE_RECHECK_MS = 10 * 60 * 1000;
 export type VehiclePhotoReadOptions = {
-  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string } | undefined;
+  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number } | undefined;
+  /** 캐시 적중 때 원천 앨범을 다시 확인하는 간격(ms). 기본 RENDITION_SOURCE_RECHECK_MS. */
+  renditionSourceRecheckMs?: number;
 };
 
 export type VehiclePhotoSource = {
@@ -426,11 +429,6 @@ export function createVehiclePhotoReader(
         if (!unchanged) { emit('PROOF_CHANGED'); return undefined; }
         return current;
       };
-      if (index !== undefined && options.renditionCacheLookup) {
-        // 이미 만들어 둔 줄인 결과물이 있으면 원천을 읽지 않고 돌려준다(응답 직전 DB 재확인은 그대로 한다).
-        const hit = options.renditionCacheLookup(cacheTag);
-        if (hit) return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const, revalidate: async () => !!(await dbStillValid()) };
-      }
       const currentLayoutValid = (value: VehiclePhotoRead): boolean => {
         const served = value.photoIds, upstream = value.upstreamPhotoIds;
         const representatives = value.upstreamRepresentatives, ordinals = value.servingSourceOrdinals;
@@ -449,6 +447,33 @@ export function createVehiclePhotoReader(
       active++;
       try {
         enter('SOURCE_AWAIT');
+        if (index !== undefined && options.renditionCacheLookup) {
+          // 줄여 둔 결과물이 있으면 사진 바이트는 원천에서 다시 받지 않는다. 다만 원천 앨범 확인(철회·교체·개수 변경 감지)은
+          // 마지막 확인이 renditionSourceRecheckMs 보다 오래됐을 때 한 번 다시 한다(그동안은 DB 재확인만).
+          // ONE 은 사진 ID 를 호출마다 재발급해 같은 개수 안의 «내용 교체»는 메타데이터로 알 수 없다 — 그 경우는 캐시 시간(TTL)이 상한이다.
+          const hit = options.renditionCacheLookup(cacheTag);
+          if (hit) {
+            const recheckMs = options.renditionSourceRecheckMs ?? RENDITION_SOURCE_RECHECK_MS;
+            let checkedAt = hit.sourceCheckedAt;
+            if (now() - checkedAt > recheckMs) {
+              enter('FINAL_SOURCE');
+              let album: VehiclePhotoRead;
+              try { album = await iancarSource.read(product, undefined, true, registeredPhotoCount); }
+              catch (error) {
+                const code = error instanceof Error ? error.message : '';
+                const gone = code === 'IANCAR_PHOTO_NOT_FOUND' || code === 'IANCAR_ONE_API_HTTP_404';
+                emit(gone ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
+                if (gone) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+              }
+              enter('FINAL_MEMBERSHIP');
+              if (!currentLayoutValid(album)) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              checkedAt = now();
+            }
+            return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const,
+              sourceCheckedAt: checkedAt, revalidate: async () => !!(await dbStillValid()) };
+          }
+        }
         let result: VehiclePhotoRead;
         try { result = await iancarSource.read(product, index, true, registeredPhotoCount); }
         catch (error) {
@@ -482,7 +507,7 @@ export function createVehiclePhotoReader(
         };
         if (index === undefined) {
           await recheckIds(() => revalidateIds(false));
-          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, revalidate: revalidateIds };
+          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, sourceCheckedAt: now(), revalidate: revalidateIds };
         }
         const bytes = result.bytes;
         enter('RESULT_MEDIA');
@@ -491,7 +516,7 @@ export function createVehiclePhotoReader(
           { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const frozenBytes = Buffer.from(bytes);
         await recheckIds(() => revalidateIds(false));
-        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, revalidate: revalidateIds };
+        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), revalidate: revalidateIds };
       } finally { active--; }
     }
     const mediaOnly = consumerId === 'erp5-public-media';
