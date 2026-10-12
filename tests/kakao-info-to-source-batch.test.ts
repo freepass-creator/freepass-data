@@ -4,13 +4,14 @@ import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import type { KakaoInfoCandidateInput } from '../src/domain/kakao-info-candidate.js';
 
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
-  roomCode: 'K-TEST-FAKE-ROOM',
+  roomCode: 'K-TESTFAKE',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
   vehicle: {
     plate: 'TEST-FAKE-PLATE-1',
     model: 'TEST-FAKE-MODEL',
     plateEvidenceMsgNo: 100,
+    plateStatusSameSentence: true,
     plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
   },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
@@ -48,6 +49,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
         vehicle: {
           productRef: 'products/TEST-FAKE-PLATE-1',
           plateEvidenceMsgNo: 100,
+          plateStatusSameSentence: true,
           plateEvidenceSource: 'LITERAL_IN_UTTERANCE',
         },
       },
@@ -80,7 +82,12 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
       candidate({ type: '가격', fields: { 요약: '가격', 값: 'TEST-FAKE-AMOUNT' }, source: { ...candidate().source, msgNo: '100' } }),
       candidate({ type: '조건', fields: { 요약: '조건', 값: 'TEST-FAKE-CONDITION' }, source: { ...candidate().source, msgNo: '101', excerpt: '조건 발언' } }),
       candidate({ type: '정책변경', fields: { 요약: '정책', 값: 'TEST-FAKE-POLICY' }, source: { ...candidate().source, msgNo: '102', excerpt: '정책 발언' } }),
-      candidate({ type: '계약진행', fields: { 요약: '진행', 값: '접수 가능' }, source: { ...candidate().source, msgNo: '103', excerpt: '계약 발언' } }),
+      candidate({
+        type: '계약진행',
+        fields: { 요약: '진행', 값: '접수 가능' },
+        source: { ...candidate().source, msgNo: '103', excerpt: 'TEST-FAKE-PLATE-1 계약 접수 가능' },
+        vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 103 },
+      }),
     ], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.candidates.map((item) => item.autoPromotable)).toEqual([false, false, false, true]);
     expect(plan.batch.records.map((record) => (record.payload.normalized as { autoPromotable: boolean }).autoPromotable))
@@ -95,10 +102,74 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
     expect(plan.candidates.map((item) => item.autoPromotable)).toEqual([false, false]);
   });
 
+  it('requires literal same-utterance plate evidence before auto-promotion', () => {
+    const previous = candidate({
+      source: { ...candidate().source, msgNo: '101', excerpt: 'B모델 재고 있음' },
+      vehicle: {
+        plate: 'TEST-FAKE-PLATE-A',
+        model: 'TEST-FAKE-MODEL-B',
+        plateEvidenceMsgNo: 100,
+        plateStatusSameSentence: true,
+        plateEvidence: { source: 'LITERAL_IN_PREVIOUS' },
+      },
+    });
+    const ambiguous = candidate({
+      source: { ...candidate().source, msgNo: '102', excerpt: 'TEST-FAKE-PLATE-1 TEST-FAKE-PLATE-2 재고 있음' },
+      vehicle: {
+        model: 'TEST-FAKE-MODEL',
+        plateUnverified: 'TEST-FAKE-PLATE-1',
+        plateEvidenceMsgNo: 102,
+        plateStatusSameSentence: true,
+        plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+      },
+    });
+    const otherSentence = candidate({
+      source: { ...candidate().source, msgNo: '103', excerpt: 'TEST-FAKE-PLATE-1 확인. 재고 있음' },
+      vehicle: {
+        plate: 'TEST-FAKE-PLATE-1',
+        model: 'TEST-FAKE-MODEL',
+        plateEvidenceMsgNo: 103,
+        plateStatusSameSentence: false,
+        plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
+      },
+    });
+    const sameSentence = candidate({
+      source: { ...candidate().source, msgNo: '104', excerpt: 'TEST-FAKE-PLATE-1 재고 있음' },
+      vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 104 },
+    });
+    const plan = kakaoInfoCandidatesToSourceBatch([previous, ambiguous, otherSentence, sameSentence], { now: '2026-10-12T01:00:00.000Z' });
+
+    expect(plan.candidates.map((item) => item.autoPromotable)).toEqual([false, false, false, true]);
+    expect(plan.candidates.map((item) => item.vehicleUnspecified)).toEqual([true, true, true, false]);
+    expect(plan.batch.records.map((record) => (record.payload.normalized as { autoPromotable: boolean }).autoPromotable))
+      .toEqual([false, false, false, true]);
+  });
+
+  it('rejects phone-shaped roomCode and strips unknown input fields from payload.candidate', () => {
+    expect(() => kakaoInfoCandidatesToSourceBatch([candidate({ roomCode: 'K-01012345678' })], { now: '2026-10-12T01:00:00.000Z' }))
+      .toThrow('INVALID_ROOM_CODE');
+
+    const plan = kakaoInfoCandidatesToSourceBatch([
+      {
+        ...candidate(),
+        senderName: 'TEST-FAKE-SENDER',
+        roomName: 'TEST-FAKE-ROOM',
+      } as unknown as KakaoInfoCandidateInput,
+    ], { now: '2026-10-12T01:00:00.000Z' });
+    const payloadCandidate = plan.batch.records[0]?.payload.candidate as Record<string, unknown>;
+    expect(payloadCandidate.senderName).toBeUndefined();
+    expect(payloadCandidate.roomName).toBeUndefined();
+    expect(payloadCandidate.warnings).toEqual([{ code: 'UNKNOWN_FIELD', fields: ['senderName', 'roomName'] }]);
+  });
+
   it('preserves conflicting same-vehicle values as separate candidates instead of overwriting', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([
       candidate({ source: { ...candidate().source, msgNo: '100' }, fields: { 요약: '재고', 값: '재고 있음' } }),
-      candidate({ source: { ...candidate().source, msgNo: '101', excerpt: '다음 발언' }, fields: { 요약: '재고', 값: '재고 없음' } }),
+      candidate({
+        source: { ...candidate().source, msgNo: '101', excerpt: 'TEST-FAKE-PLATE-1 재고 없음' },
+        vehicle: { ...candidate().vehicle!, plateEvidenceMsgNo: 101 },
+        fields: { 요약: '재고', 값: '재고 없음' },
+      }),
     ], { now: '2026-10-12T01:00:00.000Z' });
     expect(plan.batch.records).toHaveLength(2);
     expect(new Set(plan.batch.records.map((record) => record.sourceRecordId)).size).toBe(2);
@@ -124,11 +195,14 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
         plate: 'TEST-FAKE-PLATE-1',
         model: 'TEST-FAKE-MODEL',
         plateEvidenceMsgNo: 100,
+        plateStatusSameSentence: true,
         plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
       },
     })], { now: '2026-10-12T00:00:00.000Z' });
     expect(plan.candidates[0]?.isFresh).toBe(false);
+    expect(plan.candidates[0]?.autoPromotable).toBe(false);
     expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);
+    expect((plan.batch.records[0]?.payload as { normalized: { autoPromotable: boolean } }).normalized.autoPromotable).toBe(false);
   });
 
   it('marks future sentAt as not fresh when classifying already trusted candidates', () => {

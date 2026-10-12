@@ -17,6 +17,8 @@ export type KakaoInfoRejectReason =
   | 'PII_DETECTED'
   | 'FUTURE_SENT_AT';
 
+export type KakaoInfoCandidateWarning = { code: 'UNKNOWN_FIELD'; fields: string[] };
+
 export type KakaoInfoCandidateInput = {
   roomCode: string;
   source: { sentAt: string; side: string; msgNo: string; excerpt: string };
@@ -32,6 +34,7 @@ export type KakaoInfoCandidateInput = {
     model?: string;
     plateUnverified?: string;
     plateEvidenceMsgNo?: number;
+    plateStatusSameSentence?: boolean;
     plateEvidence?: { source: KakaoInfoPlateEvidenceSource };
   };
   fields: { 요약: string; 값: string };
@@ -44,6 +47,7 @@ export type KakaoInfoCandidateInput = {
 export type KakaoInfoCandidate = KakaoInfoCandidateInput & {
   schemaVersion: 'KakaoInfoCandidate/v1';
   candidateId: string;
+  warnings?: KakaoInfoCandidateWarning[];
 };
 
 export type KakaoInfoCandidateResult =
@@ -132,6 +136,51 @@ function hasCrossFieldAccountEvidence(values: string[]) {
   return values.some((value) => value.replace(/\D/g, '').length >= 10);
 }
 
+const allowedInputFields = new Set([
+  'roomCode',
+  'source',
+  'type',
+  'vehicle',
+  'fields',
+  'confidence',
+  'needsSupplierConfirm',
+  'aiInvolved',
+  'status',
+]);
+
+const allowedSourceFields = new Set(['sentAt', 'side', 'msgNo', 'excerpt']);
+const allowedVehicleFields = new Set(['plate', 'model', 'plateUnverified', 'plateEvidenceMsgNo', 'plateStatusSameSentence', 'plateEvidence']);
+const allowedPlateEvidenceFields = new Set(['source']);
+const allowedFieldsFields = new Set(['요약', '값']);
+
+function collectUnknownFields(input: KakaoInfoCandidateInput) {
+  const fields: string[] = [];
+  for (const key of Object.keys(input as unknown as Record<string, unknown>)) {
+    if (!allowedInputFields.has(key)) fields.push(key);
+  }
+  for (const key of Object.keys(input.source as unknown as Record<string, unknown> ?? {})) {
+    if (!allowedSourceFields.has(key)) fields.push(`source.${key}`);
+  }
+  for (const key of Object.keys(input.vehicle as unknown as Record<string, unknown> ?? {})) {
+    if (!allowedVehicleFields.has(key)) fields.push(`vehicle.${key}`);
+  }
+  for (const key of Object.keys(input.vehicle?.plateEvidence as unknown as Record<string, unknown> ?? {})) {
+    if (!allowedPlateEvidenceFields.has(key)) fields.push(`vehicle.plateEvidence.${key}`);
+  }
+  for (const key of Object.keys(input.fields as unknown as Record<string, unknown> ?? {})) {
+    if (!allowedFieldsFields.has(key)) fields.push(`fields.${key}`);
+  }
+  return fields;
+}
+
+function isValidRoomCode(value: string) {
+  const trimmed = value.trim();
+  if (!/^K-[A-Z0-9]{3,12}$/.test(trimmed)) return false;
+  const suffix = trimmed.slice(2);
+  if (/^\d{10,}$/.test(suffix)) return false;
+  return !hasSensitiveKakaoExcerpt(trimmed);
+}
+
 export function kakaoVehicleKey(candidate: Pick<KakaoInfoCandidateInput, 'vehicle'>) {
   const plate = candidate.vehicle?.plate?.trim();
   if (plate) return plate;
@@ -155,7 +204,7 @@ export function kakaoInfoCandidateId(input: KakaoInfoCandidateInput) {
 }
 
 export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoInfoCandidateResult {
-  if (!/^K-[A-Za-z0-9_-]{1,64}$/.test(input.roomCode)) return { ok: false, reason: 'INVALID_ROOM_CODE' };
+  if (!isValidRoomCode(input.roomCode)) return { ok: false, reason: 'INVALID_ROOM_CODE' };
   if (!Number.isFinite(Date.parse(input.source?.sentAt)) || !nonBlank(input.source?.msgNo)) {
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
@@ -175,8 +224,9 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   if (input.aiInvolved !== true || input.status !== 'CANDIDATE') return { ok: false, reason: 'INVALID_STATUS' };
 
+  const unknownFields = collectUnknownFields(input);
+  const warnings = unknownFields.length ? [{ code: 'UNKNOWN_FIELD' as const, fields: unknownFields }] : undefined;
   const normalized: KakaoInfoCandidateInput = {
-    ...input,
     roomCode: input.roomCode.trim(),
     source: {
       sentAt: new Date(input.source.sentAt).toISOString(),
@@ -185,7 +235,11 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       excerpt: input.source.excerpt,
     },
     fields: { 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
+    confidence: input.confidence,
     needsSupplierConfirm: Boolean(input.needsSupplierConfirm || input.vehicle?.plateUnverified),
+    aiInvolved: true,
+    type: input.type,
+    status: 'CANDIDATE',
   };
   if (input.vehicle) {
     const sourceMsgNo = parseMsgNo(input.source.msgNo);
@@ -194,28 +248,28 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       ? input.vehicle.plateEvidenceMsgNo
       : undefined;
     const plateEvidenceSource = input.vehicle.plateEvidence?.source;
-    const plateEvidenceSourceAccepted =
-      plateEvidenceSource === 'LITERAL_IN_UTTERANCE' || plateEvidenceSource === 'LITERAL_IN_PREVIOUS';
     const plateDistance = plateEvidenceMsgNo !== undefined ? sourceMsgNo - plateEvidenceMsgNo : Number.NaN;
     const plateHasEvidence =
       Boolean(plate) &&
       Number.isInteger(plateEvidenceMsgNo) &&
-      plateEvidenceSourceAccepted &&
+      plateEvidenceSource === 'LITERAL_IN_UTTERANCE' &&
       Number.isInteger(sourceMsgNo) &&
-      plateDistance >= 0 &&
-      plateDistance <= 2 &&
-      (plateDistance !== 0 || normalizePlateText(input.source.excerpt).includes(normalizePlateText(plate!)));
+      plateDistance === 0 &&
+      plateEvidenceMsgNo === sourceMsgNo &&
+      input.vehicle.plateStatusSameSentence === true &&
+      normalizePlateText(input.source.excerpt).includes(normalizePlateText(plate!));
     const plateUnverified = plateHasEvidence ? input.vehicle.plateUnverified?.trim() : plate || input.vehicle.plateUnverified?.trim();
     normalized.vehicle = {
       ...(plateHasEvidence && plate ? { plate } : {}),
       ...(input.vehicle.model ? { model: input.vehicle.model.trim() } : {}),
       ...(plateUnverified ? { plateUnverified } : {}),
       ...(plateEvidenceMsgNo !== undefined ? { plateEvidenceMsgNo: plateEvidenceMsgNo } : {}),
+      ...(input.vehicle.plateStatusSameSentence === true ? { plateStatusSameSentence: true } : {}),
       ...(plateHasEvidence && plateEvidenceSource ? { plateEvidence: { source: plateEvidenceSource } } : {}),
     };
     normalized.needsSupplierConfirm = Boolean(normalized.needsSupplierConfirm || plateUnverified);
   }
-  return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized) } };
+  return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized), ...(warnings ? { warnings } : {}) } };
 }
 
 export function assertKakaoInfoCandidate(input: KakaoInfoCandidateInput) {
@@ -242,12 +296,24 @@ export function isKakaoMoneyInfo(type: KakaoInfoType) {
   return moneyTypes.has(type);
 }
 
-export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields'>) {
+export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh = true) {
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
   const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));
   const hasNegative = stateNegativeSignals.some((signal) => text.includes(signal));
   const hasNegation = stateNegationSignals.some((signal) => text.includes(signal));
+  const sourceMsgNo = parseMsgNo(candidate.source.msgNo);
+  const plateEvidenceMsgNo = candidate.vehicle?.plateEvidenceMsgNo;
+  const plate = candidate.vehicle?.plate;
+  const hasLiteralSameSentencePlate =
+    Boolean(plate) &&
+    candidate.vehicle?.plateEvidence?.source === 'LITERAL_IN_UTTERANCE' &&
+    candidate.vehicle?.plateStatusSameSentence === true &&
+    Number.isInteger(sourceMsgNo) &&
+    plateEvidenceMsgNo === sourceMsgNo &&
+    normalizePlateText(candidate.source.excerpt).includes(normalizePlateText(plate!));
   return stateTypes.has(candidate.type)
+    && isFresh
+    && hasLiteralSameSentencePlate
     && !hasNegation
     && !(hasPositive && hasNegative)
     && stateSignals.some((signal) => text.includes(signal));
