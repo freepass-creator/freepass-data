@@ -20,7 +20,7 @@ describe('trusted read runtime source selection', () => {
     const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo "$MOCK_TREE"; else echo '${selected}'; fi;; show) if [ "$2" = -s ]; then echo "$MOCK_PARENT"; else echo PROBE_FROM_TRUSTED_MAIN; fi;; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
       `tar() { :; }\n` +
       `npm() { echo "NPM $*"; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
-      `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; if [ "$1" = run ] && [ "$MOCK_NATIVE_FAIL" = true ]; then return 1; fi; fi; }\n` +
+      `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; if [ "$1" = run ]; then test -r "$probe_file" || return 1; if [ "$MOCK_NATIVE_FAIL" = true ]; then return 1; fi; fi; fi; }\n` +
       `jq() { cat >/dev/null; }\n`;
     const dir = mkdtempSync(join(tmpdir(), 'selected-photo-check-'));
     try {
@@ -51,6 +51,10 @@ describe('trusted read runtime source selection', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
     }
     expect(workflow.indexOf('Validate selected photo source before publication')).toBeLessThan(workflow.indexOf('Authenticate deploy identity'));
+    expect(validationScript.indexOf('chmod 0444 "$probe_file"')).toBeGreaterThan(validationScript.indexOf('git show "$WORKFLOW_SOURCE_SHA:scripts/verify-photo-rendition-runtime.mjs"'));
+    expect(validationScript.indexOf('chmod 0444 "$probe_file"')).toBeLessThan(validationScript.indexOf('docker run --rm'));
+    expect(validationScript).not.toContain('--user');
+    expect(readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')).toMatch(/^USER node\s*$/m);
     expect(workflow.indexOf('SELECTED_PHOTO_SOURCE_CHECKED:-false')).toBeLessThan(workflow.indexOf('docker push "$image"'));
   }, 15_000);
 

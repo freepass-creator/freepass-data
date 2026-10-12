@@ -238,7 +238,8 @@ jobs:
               expected_tree='4ea34735d2c5ebd4b0b369435e8f3dda81ace01b'
               expected_parent='1fa62d59151e25f78d900e27d496eb92f9f210bf'
               probe_file="$(mktemp "$RUNNER_TEMP/sharp-list-runtime.XXXXXX.mjs")"
-              git show "$WORKFLOW_SOURCE_SHA:scripts/verify-photo-rendition-runtime.mjs" > "$probe_file" ;;
+              git show "$WORKFLOW_SOURCE_SHA:scripts/verify-photo-rendition-runtime.mjs" > "$probe_file"
+              chmod 0444 "$probe_file" ;;
             *) exit 1 ;;
           esac
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
