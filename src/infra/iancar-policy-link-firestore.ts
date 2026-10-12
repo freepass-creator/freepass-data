@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, type VehicleTerms } from '../domain/iancar-policy-link.js';
 import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-publication-withdrawal-firestore.js';
@@ -89,7 +89,7 @@ export async function applyIancarPolicyLink(options: { expectedPlanDigest: strin
   return { status: 'POLICY_LINK_READBACK_VERIFIED', runId, backupPath, privateBackupObject: objectName, planDigest: plan.planDigest, counts: plan.counts, writeExecuted: true };
 }
 
-/** 적용 뒤 문서가 아직 계획 값 그대로일 때만 되돌린다(그 사이 바뀌었으면 중단). 삭제는 «이전에 없던 칸» 제거뿐이다. */
+/** 적용 뒤 문서가 아직 계획 값 그대로일 때만 되돌린다(그 사이 바뀌었으면 중단). 이전에 없던 칸은 삭제하지 않고 null 로 되돌린다. */
 export async function restoreIancarPolicyLink(options: { backupPath: string; expectedPlanDigest: string; apply: boolean }) {
   const backup = JSON.parse(await readFile(options.backupPath, 'utf8'));
   if (backup.schema !== 'iancar-policy-link-typed-backup/1' || backup.projectId !== 'freepasserp5' || backup.planDigest !== options.expectedPlanDigest) throw new Error('IANCAR_POLICY_LINK_RESTORE_BACKUP_INVALID');
@@ -107,7 +107,8 @@ export async function restoreIancarPolicyLink(options: { backupPath: string; exp
       for (const [k, v] of Object.entries(decoded[i]!.patch)) if (stableDigest(data[k]) !== stableDigest(v)) throw new Error('IANCAR_POLICY_LINK_RESTORE_REVISION_CHANGED');
     });
     if (!options.apply) return;
-    decoded.forEach(r => tx.update(db.doc(r.path), Object.fromEntries(Object.entries(r.before).map(([k, v]) => [k, v === undefined ? FieldValue.delete() : v]))));
+    // 이전에 없던 칸은 지우지 않고 null 로 되돌린다(들어온 데이터는 삭제가 아니라 상태로 정리한다는 규칙).
+    decoded.forEach(r => tx.update(db.doc(r.path), Object.fromEntries(Object.entries(r.before).map(([k, v]) => [k, v === undefined ? null : v]))));
   });
   return { status: options.apply ? 'RESTORED_REQUIRES_READBACK' : 'RESTORE_PLAN_VERIFIED', count: decoded.length, deletes: 0 };
 }

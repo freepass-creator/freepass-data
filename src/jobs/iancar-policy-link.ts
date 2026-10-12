@@ -7,6 +7,8 @@
 import { applyIancarPolicyLink, planIancarPolicyLinkFromFirestore, restoreIancarPolicyLink, type FetchVehicleTerms } from '../infra/iancar-policy-link-firestore.js';
 import { createIancarOneApiClient, iancarOneApiConfigFromEnv } from '../adapters/iancar-one-api.js';
 import { extractVehicleTerms } from '../domain/iancar-policy-link.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { createJobDataAccessRuntime } from './data-access-runtime.js';
 
 const args = process.argv.slice(2);
 const arg = (name: string) => args.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -14,11 +16,22 @@ for (const a of args) if (a !== '--apply' && !/^--(expected-digest|restore)=/.te
 const expected = arg('expected-digest');
 if (expected !== undefined && !/^[a-f0-9]{64}$/.test(expected)) throw new Error('EXPECTED_DIGEST_INVALID');
 
+// 모든 읽기·쓰기는 Data Access Gateway 를 거친다(접근 기록·승인 문맥).
+const runtime = createJobDataAccessRuntime();
+const context = { actor: { id: 'service:freepass-data-iancar-policy-link', kind: 'SERVICE' as const }, clientId: 'job:iancar-policy-link',
+  purpose: 'link RP031 listable products to the common policy and pull supplier-original insurance terms with private backup and readback' };
+const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/iancar-policy-link' };
+
 const restore = arg('restore');
 if (restore) {
   if (!expected) throw new Error('EXPECTED_DIGEST_REQUIRED');
   if (args.includes('--apply') && process.env.IANCAR_POLICY_LINK_RESTORE_APPROVED !== 'true') throw new Error('IANCAR_POLICY_LINK_RESTORE_APPROVAL_REQUIRED');
-  console.log(JSON.stringify(await restoreIancarPolicyLink({ backupPath: restore, expectedPlanDigest: expected, apply: args.includes('--apply') })));
+  const apply = args.includes('--apply');
+  const run = () => restoreIancarPolicyLink({ backupPath: restore, expectedPlanDigest: expected, apply });
+  const result = apply
+    ? await runtime.access.write({ context, operation: 'RESTORE_IANCAR_POLICY_LINK', resource, requestDigest: stableDigest({ restore: expected }), summarize: value => ({ count: value.count }) }, run)
+    : await runtime.access.read({ context, operation: 'READ_IANCAR_POLICY_LINK_RESTORE_PLAN', resource, summarize: value => ({ count: value.count }) }, run);
+  console.log(JSON.stringify(result));
   process.exit(0);
 }
 
@@ -42,9 +55,12 @@ const fetchTerms: FetchVehicleTerms = async vehicleId => {
 if (args.includes('--apply')) {
   if (process.env.IANCAR_POLICY_LINK_APPROVED !== 'true') throw new Error('IANCAR_POLICY_LINK_APPROVAL_REQUIRED');
   if (!expected) throw new Error('EXPECTED_DIGEST_REQUIRED');
-  console.log(JSON.stringify(await applyIancarPolicyLink({ expectedPlanDigest: expected, fetchTerms }), null, 2));
+  const result = await runtime.access.write({ context, operation: 'WRITE_IANCAR_POLICY_LINK', resource, requestDigest: stableDigest({ expected }),
+    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => applyIancarPolicyLink({ expectedPlanDigest: expected, fetchTerms }));
+  console.log(JSON.stringify(result, null, 2));
 } else {
-  const plan = await planIancarPolicyLinkFromFirestore({ fetchTerms });
+  const plan = await runtime.access.read({ context, operation: 'READ_IANCAR_POLICY_LINK_PLAN', resource,
+    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => planIancarPolicyLinkFromFirestore({ fetchTerms }));
   // 상품 문서 ID 에 차량번호가 들어 있을 수 있어 요약에는 ID 를 싣지 않는다(개수·패치 예시·사유 분포만).
   const reasons: Record<string, number> = {};
   for (const row of plan.withoutSourceTerms) reasons[row.reason] = (reasons[row.reason] ?? 0) + 1;
