@@ -29,4 +29,14 @@ describe('이안카 단발 적용 건수 관문 (fail-closed)', () => {
     expect(run(good, { ...plan, deletes: 1 }).ok).toBe(false);
     expect(run(good, { ...plan, contractChanges: 1 }).ok).toBe(false);
   });
+  it('중복 키는 마지막 값으로 덮이지 않고 중단한다', () => {
+    const dup = '{"created":[5,6],"absenceHeld":[12,12],"withdrawalHoldsReleased":[8,8],"open":[95,97],"deletes":[0,0],"contractChanges":[0,0],"skippedCount":[0,1],"deletes":[0,1]}';
+    expect(run(dup, { ...plan, deletes: 1 })).toEqual({ ok: false, reasons: ['DUPLICATE_KEY:deletes'] });
+    expect(run(dup)).toEqual({ ok: false, reasons: ['DUPLICATE_KEY:deletes'] });
+    // 이스케이프로 철자만 다른 같은 키도 같은 키로 본다(e = e).
+    const escaped = JSON.stringify(good).slice(0, -1) + ',"delet\\u0065s":[0,1]}';
+    expect(run(escaped, { ...plan, deletes: 1 })).toEqual({ ok: false, reasons: ['DUPLICATE_KEY:deletes'] });
+    // 키가 한 번씩이면 영향 없음
+    expect(run(JSON.stringify(good))).toEqual({ ok: true });
+  });
 });
