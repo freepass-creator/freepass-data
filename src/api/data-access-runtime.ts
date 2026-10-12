@@ -24,7 +24,17 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
     access,
     projection: createFirestoreProjectionReader(),
     health: createFirestoreDataHealthReader(),
-    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index, fresh) => {
+    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index, fresh, expectedPhotoIds) => {
+      // Snapshot the opt-in lane's registered serving order before any await.
+      let expected: readonly string[] | undefined;
+      if (expectedPhotoIds !== undefined) {
+        if (fresh !== true || !Array.isArray(expectedPhotoIds) || expectedPhotoIds.length < 1 || expectedPhotoIds.length > 200
+          || Array.from(expectedPhotoIds).some(id => typeof id !== 'string' || !id || id.length > 2048 || id.trim() !== id)
+          || new Set(expectedPhotoIds).size !== expectedPhotoIds.length
+          || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= expectedPhotoIds.length)))
+          throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+        expected = Object.freeze([...expectedPhotoIds]);
+      }
       // Also covers a byte request's final fresh-membership recheck; no caller binding is inferred.
       const observeMetadata = fresh === true && index === undefined;
       let client: ReturnType<typeof createIancarOneApiClient>;
@@ -46,6 +56,9 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         let photoIds: string[], metadata: { count: number; photoIds: string[]; upstreamPhotoIds: string[]; upstreamRepresentatives: boolean[]; servingSourceOrdinals: number[] };
         try {
           photoIds = iancarOnePhotoIds(detail, vehicleId, plate);
+          // Use this same fresh detail for both membership and selected bytes.
+          if (expected && (photoIds.length !== expected.length || photoIds.some((id, i) => id !== expected![i])))
+            throw new Error('VEHICLE_PHOTO_NOT_FOUND');
           const raw = (detail as any)?.data ?? detail;
           const upstreamPhotoIds = raw.photos.map((photo: any) => String(photo.photo_id).trim()) as string[];
           const upstreamRepresentatives = raw.photos.map((photo: any) => photo.representative) as boolean[];

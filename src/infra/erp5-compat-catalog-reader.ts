@@ -408,24 +408,29 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
  * It must never become a write API or a fallback around the canonical release gate.
  */
 
+/** Explicit RP031 opt-in only; missing or malformed configuration stays off. */
+export function parseIancarPhotoIdGateSuppliers(raw: unknown): ReadonlySet<string> {
+  return new Set(typeof raw === 'string' && raw.trim() === 'RP031' ? ['RP031'] : []);
+}
+
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
   readonly sourceStore = createFirestoreSourceStore();
   private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
-  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
+  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean, expectedPhotoIds?: readonly string[]) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
     approvedPhotoReader?: ApprovedPhotoReader, options: CatalogCompatibilityReaderOptions = {}) {
     this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
     this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
       eligible: isPublicIancarPhotoProduct,
       connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
-      read: async (product, index, fresh) => {
+      read: async (product, index, fresh, expectedPhotoIds) => {
         if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
-        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
+        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh, expectedPhotoIds);
       },
     }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
     // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
-    new Set((process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS ?? '').split(',').map(value => value.trim()).filter(Boolean)));
+    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS));
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
