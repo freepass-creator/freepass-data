@@ -167,7 +167,7 @@ jobs:
           echo "sha=$resolved" >> "$GITHUB_OUTPUT"
           echo "EXPECTED_SOURCE_SHA=$resolved" >> "$GITHUB_ENV"
           echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
-          if [ "$resolved" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$resolved" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$resolved" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$resolved" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ]; then
             helper_file="$(mktemp "$RUNNER_TEMP/single-product-readback.XXXXXX.mjs")"
             git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs" > "$helper_file"
             echo "SINGLE_PRODUCT_HELPER_FILE=$helper_file" >> "$GITHUB_ENV"
@@ -470,7 +470,7 @@ jobs:
             (.data.partners | type == "object")
           ' "$response_file" >/dev/null
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
-          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ]; then
             test "$SINGLE_PRODUCT_HELPER_SHA" = "$WORKFLOW_SOURCE_SHA"
             READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file" \
               node "$SINGLE_PRODUCT_HELPER_FILE" >> "$GITHUB_ENV"
@@ -586,7 +586,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ]; then
             test "$GITHUB_REF" = 'refs/heads/main'
             [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
             test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -672,7 +672,7 @@ jobs:
           ' "$response_file" >/dev/null
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
 
-          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+          if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "$EXPECTED_SOURCE_SHA" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "$EXPECTED_SOURCE_SHA" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ]; then
             test "$SINGLE_PRODUCT_HELPER_SHA" = "$WORKFLOW_SOURCE_SHA"
             READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file" \
               node "$SINGLE_PRODUCT_HELPER_FILE" >> "$GITHUB_ENV"
@@ -696,7 +696,7 @@ jobs:
             test "${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}" = "200"
             test "${READ_RUNTIME_READBACK_OK:-false}" = "true"
             test "${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}" = "true"
-            if [ "${EXPECTED_SOURCE_SHA:-}" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+            if [ "${EXPECTED_SOURCE_SHA:-}" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ] || [ "${EXPECTED_SOURCE_SHA:-}" = '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8' ] || [ "${EXPECTED_SOURCE_SHA:-}" = '2ebdb18822416847b2019f6506b7b0d65daf0ee2' ]; then
               test "${SINGLE_PRODUCT_READBACK_OK:-false}" = "true"
             fi
           fi

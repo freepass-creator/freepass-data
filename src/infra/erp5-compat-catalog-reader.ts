@@ -262,8 +262,8 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const product = await tx.get(db.collection(layout.products).doc(productId));
     if (!product.exists) throw new CatalogCompatibilityProductReadError('PRODUCT_NOT_FOUND', 404);
     const raw = product.data()!;
-    const readAt = product.readTime?.toDate().toISOString();
-    const version = product.updateTime?.toDate().toISOString();
+    const readAt = product.readTime && new Date(product.readTime.toMillis()).toISOString();
+    const version = product.updateTime && new Date(product.updateTime.toMillis()).toISOString();
     if (product.id !== productId || !readAt || !version) return selectionUnavailable();
     if (raw._key != null && raw._key !== '' && raw._key !== productId) return selectionUnavailable();
     const policyCode = selectedDocId(raw.policy_code);
@@ -280,7 +280,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       const doc = await tx.get(db.collection(collection).doc(id));
       if (!doc.readTime || !doc.readTime.isEqual(product.readTime)) return selectionUnavailable();
       if (!doc.exists) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
-      const updateTime = doc.updateTime?.toDate().toISOString();
+      const updateTime = doc.updateTime && new Date(doc.updateTime.toMillis()).toISOString();
       if (!updateTime || doc.id !== id) return selectionUnavailable();
       const facts = doc.data()!;
       const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];

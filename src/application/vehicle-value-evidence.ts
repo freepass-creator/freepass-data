@@ -56,11 +56,13 @@ function newCarTrimVehicleValue(product: Rec, newCarTrim: NewCarTrimEvidenceInpu
 }
 
 export function resolveVehicleValueEvidence(product: Rec, newCarTrim: NewCarTrimEvidenceInput): VehicleValueEvidence | null {
-  // 손오공 + (대표 2026-10-12) 아이언·우리캐피탈렌더카 신차: 공급사 원문 차량가격이 있으면 그것이 차량가액.
+  // 손오공 + (대표 2026-10-12) 아이언·우리캐피탈렌터카 신차: 공급사 원문 차량가격이 있으면 그것이 차량가액.
   // 아이언·우리캐피탈은 차량가액을 쓰는 신차렌트에만 붙인다(중고렌트 행이 근사로 바뀌지 않게).
   const supplier = text(product.provider_company_code) ?? '';
   if (!['RP012', 'RP006', 'RP020'].includes(supplier)) return null;
   if (supplier !== 'RP012' && text(product.product_type) !== '신차렌트') return null;
+  const productType = text(product.product_type)?.replace(/\s+/g, '') ?? '';
+  if (productType.includes('픽업구독') || productType.includes('오공구독')) return null;
   const raw = rawVehicleValue(product);
   const consumer = consumerVehicleValue(product);
   if (raw !== null) {

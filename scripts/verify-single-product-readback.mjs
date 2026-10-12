@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 export const SOURCE_SHA = '8af86d3b84020a402e21ec3c34a8498bd3066148';
+export const SOURCE_SHAS = Object.freeze([SOURCE_SHA, '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8', '2ebdb18822416847b2019f6506b7b0d65daf0ee2']);
 export const PRODUCT_ID = '10하8099';
 export const BODY_LIMIT = 1024 * 1024;
 const REASONS = new Set(['VALIDATION_FAILED', 'FULL_COMPAT_INVALID', 'PRODUCT_NOT_OBSERVED', 'KEY_CONFLICT', 'REFERENCE_CONFLICT', 'RELATED_CODE_CONFLICT', 'TRUST_BINDING_INVALID', 'AUTH_BINDING_INVALID', 'BODY_LIMIT_EXCEEDED', 'BODY_INVALID', 'HTTP_STATUS_UNEXPECTED', 'DEADLINE_EXCEEDED', 'UNEXPECTED_FAILURE', 'NONE']);
@@ -135,7 +136,7 @@ export async function verifyReadback({ sourceSha, workflowSha, helperSha, full, 
   const state = { phase: 'TRUST_PREFLIGHT', requestCount: 0, lastStatus: 0, reason: 'NONE' };
   let controller, timer;
   try {
-  if (sourceSha !== SOURCE_SHA || !/^[a-f0-9]{40}$/.test(workflowSha ?? '') || helperSha !== workflowSha) fail('TRUST_BINDING_INVALID');
+  if (!SOURCE_SHAS.includes(sourceSha) || !/^[a-f0-9]{40}$/.test(workflowSha ?? '') || helperSha !== workflowSha) fail('TRUST_BINDING_INVALID');
   state.phase = 'SELECT_PRODUCT';
   const selected = selectProduct(full); // Selection must finish before the first request.
   state.phase = 'AUTH_PREFLIGHT';
