@@ -19,11 +19,16 @@ async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: Fetch
   const productsSnap = await db.collection('products').where('provider_company_code', '==', 'RP031').get();
   const products = productsSnap.docs.map(doc => ({ id: doc.id, updateTimeMs: doc.updateTime.toMillis(), data: doc.data() }));
   const vehicleTerms: Record<string, VehicleTerms | undefined> = {}, vehicleTermsErrors: Record<string, string> = {};
-  for (const product of products) {
-    if (product.data.listable !== true || typeof product.data.iancar_one_vehicle_id !== 'string') continue;
-    const result = await fetchTerms(product.data.iancar_one_vehicle_id);
-    if (result.terms) vehicleTerms[product.id] = result.terms; else vehicleTermsErrors[product.id] = result.error ?? 'UNKNOWN';
-  }
+  // 원천 요금 조회는 동시 3개까지(ONE 429 방지) — 결과는 상품 순서와 무관하게 상품 ID 로 모은다.
+  const queue = products.filter(product => product.data.listable === true && typeof product.data.iancar_one_vehicle_id === 'string');
+  let cursor = 0;
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (cursor < queue.length) {
+      const product = queue[cursor++]!;
+      const result = await fetchTerms(product.data.iancar_one_vehicle_id as string);
+      if (result.terms) vehicleTerms[product.id] = result.terms; else vehicleTermsErrors[product.id] = result.error ?? 'UNKNOWN';
+    }
+  }));
   return { policy: { exists: policySnap.exists, updateTimeMs: policySnap.updateTime?.toMillis() ?? null, data: policySnap.data() ?? {} }, products, vehicleTerms, vehicleTermsErrors };
 }
 
