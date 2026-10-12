@@ -210,7 +210,7 @@ async function main() {
     if (t.rawJson) {
       const map = JSON.parse(readFileSync(opt('map'), 'utf8')), stored = opt('stored-map') ? JSON.parse(readFileSync(opt('stored-map'), 'utf8')) : {};
       const rows = JSON.parse(readFileSync(opt('raw-json'), 'utf8'));
-      raw = (Array.isArray(rows) ? rows : rows.items ?? rows.vehicles ?? []).map(r => Object.fromEntries(Object.entries(map).map(([f, k]) => [f, pick(r, k)])));
+      raw = (Array.isArray(rows) ? rows : rows.items ?? rows.vehicles ?? rows.records ?? []).map(r => Object.fromEntries(Object.entries(map).map(([f, k]) => [f, pick(r, k)])));
       fields = Object.keys(map).filter(f => f !== 'car_number');
       headerOf = f => stored[f];
     } else if (t.aica) { raw = AICA_TABS.flatMap(tab => aicaRecords(readTab(tab, AICA))); fields = AICA_FIELDS; }
