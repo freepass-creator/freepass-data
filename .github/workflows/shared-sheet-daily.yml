@@ -337,6 +337,8 @@ jobs:
           code=$?
           set -e
           cat "$T/apply.json"
+          # 보고서가 비면(적용 단계가 보고 전에 예외로 종료) JSON 파싱 오류로 가리지 말고 종료 코드를 그대로 드러낸다.
+          if [ ! -s "$T/apply.json" ]; then echo "APPLY_NO_REPORT exit=$code (원인 코드는 위 SHARED_SHEET_JOB_HOLD 줄)"; exit 1; fi
           # PARTIAL_HOLD(=2) is expected while some cars are held; anything else, or a read-back mismatch, fails the run.
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const ok=['APPLIED','PARTIAL_HOLD'].includes(r.status)&&(r.reconciliation?.readbackMismatches??1)===0;process.exit(ok?0:1)" "$T/apply.json"
           test "$code" = 0 -o "$code" = 2

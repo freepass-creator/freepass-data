@@ -456,5 +456,6 @@ export async function main(args = process.argv.slice(2)) {
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1; });
+  main().catch(e => { // 고정 코드(대문자·숫자·밑줄)만 공개 로그에 낸다 — 원인 메시지를 삼켜서 «왜 멈췄는지» 모르던 문제(2026-10-12)
+    console.error(`SHARED_SHEET_JOB_HOLD ${e instanceof Error && /^[A-Z0-9_]+$/.test(e.message) ? e.message : 'UNCLASSIFIED'}`); process.exitCode = 1; });
 }
