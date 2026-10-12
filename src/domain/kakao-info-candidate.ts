@@ -164,11 +164,12 @@ function exceedsResidualDigitBudget(values: string[], plateText?: string) {
   let digits = 0;
   for (const raw of values) {
     let text = raw;
-    if (plateText) text = text.split(plateText).join(' ');
-    text = text.replace(/d{4}-d{2}-d{2}(?:T[d:.]+Z?)?/g, ' ')
-      .replace(/d{1,3}(?:,d{3})+s*원?/g, ' ')
-      .replace(/d+s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
-    digits += (text.match(/d/g) ?? []).length;
+    text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' '); // 차량번호 형식은 숫자 예산에서 제외
+    text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
+      .replace(/\d{1,3}(?:,\d{3})+\s*원?/g, ' ')
+      .replace(/\d+\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
+    // 6~9자리 연속 숫자는 금액(예: 1000000)일 수 있어 예산에서 제외한다(10자리 이상 연속은 다른 규칙이 거부). 짧은 조각만 합산한다.
+    for (const run of text.match(/\d+/g) ?? []) if (run.length <= 5 || run.length >= 10) digits += run.length;
   }
   return digits >= 8;
 }
@@ -275,7 +276,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   const stringValues = candidateStringValues(input);
   if (candidateSensitiveProbeValues(stringValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(stringValues)
-    || exceedsResidualDigitBudget([...stringValues, input.source.msgNo ?? ''], input.vehicle?.plate ? normalizePlateText(String(input.vehicle.plate)) : undefined)) {
+    || exceedsResidualDigitBudget([...stringValues, (input.source.msgNo ?? '').length >= 5 ? input.source.msgNo : ''], input.vehicle?.plate ? normalizePlateText(String(input.vehicle.plate)) : undefined)) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   if (!validTypes.has(input.type)) return { ok: false, reason: 'INVALID_TYPE' };
@@ -335,7 +336,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   // 출력에 실제로 담길 최종 객체(trim·정규화 완료)에 개인정보 검사를 다시 수행한다 — 입력 원문 검사 뒤의 가공으로 우회되지 않게.
   const finalValues = candidateStringValues(normalized);
   if (candidateSensitiveProbeValues(finalValues).some(hasSensitiveKakaoExcerpt) || hasCrossFieldAccountEvidence(finalValues)
-    || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo], normalized.vehicle?.plate ? normalizePlateText(normalized.vehicle.plate) : undefined)) {
+    || exceedsResidualDigitBudget([...finalValues, normalized.source.msgNo.length >= 5 ? normalized.source.msgNo : ''], normalized.vehicle?.plate ? normalizePlateText(normalized.vehicle.plate) : undefined)) {
     return { ok: false, reason: 'PII_DETECTED' };
   }
   return { ok: true, candidate: { schemaVersion: 'KakaoInfoCandidate/v1', ...normalized, candidateId: kakaoInfoCandidateId(normalized), ...(warnings ? { warnings } : {}) } };
