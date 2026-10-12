@@ -16,6 +16,7 @@ describe('trusted read runtime source selection', () => {
     for (const [selected, tree, parent] of [
       ['57abb8a978457b87068c3c9c9d76cc8116934bd5', '712c286a842dea616e7360b421fdd5e068540a40', '2ebdb18822416847b2019f6506b7b0d65daf0ee2'],
       ['d42c4f58d939d7899457730cd1a82f419b3eade8', '4ea34735d2c5ebd4b0b369435e8f3dda81ace01b', '1fa62d59151e25f78d900e27d496eb92f9f210bf'],
+      ['bd03f33b9bdedfb8f49ad8717062b32784e9a08a', 'f8b0d22400bff1987ae9cf1824302c99afefce05', 'c9b9a4b31d001c2cbffd43022c9213e01e3d2544'],
     ] as const) {
     const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo "$MOCK_TREE"; else echo '${selected}'; fi;; show) if [ "$2" = -s ]; then echo "$MOCK_PARENT"; else echo PROBE_FROM_TRUSTED_MAIN; fi;; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
       `tar() { :; }\n` +
@@ -31,7 +32,7 @@ describe('trusted read runtime source selection', () => {
         ['false', selected, 'true', tree, parent, 'false', false],
         ['false', selected, 'false', 'f'.repeat(40), parent, 'false', false],
         ['false', selected, 'false', tree, 'f'.repeat(40), 'false', false],
-        ...(selected.startsWith('d42') ? [['false', selected, 'false', tree, parent, 'true', false] as const] : []),
+        ...(selected !== '57abb8a978457b87068c3c9c9d76cc8116934bd5' ? [['false', selected, 'false', tree, parent, 'true', false] as const] : []),
       ] as const) {
         const result = spawnSync(bash, ['-s'], { input: mocks + validationScript + '\necho PUBLICATION_ALLOWED\n', encoding: 'utf8', env: {
           ...process.env, EXPECTED_SOURCE_SHA: selected, WORKFLOW_SOURCE_SHA: 'a'.repeat(40), RUNNER_TEMP: dir,
@@ -44,7 +45,8 @@ describe('trusted read runtime source selection', () => {
         if (mismatch === 'true' || actualTree !== tree || actualParent !== parent) expect(result.stdout).not.toContain('NPM');
         else {
           expect(result.stdout).toContain('NPM run test:delivery-owner');
-          expect(result.stdout).toContain(selected.startsWith('d42') ? 'NPM exec -- vitest run tests/vehicle-photo-rendition.test.ts' : 'NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');
+          expect(result.stdout).toContain(selected !== '57abb8a978457b87068c3c9c9d76cc8116934bd5' ? 'NPM exec -- vitest run tests/vehicle-photo-rendition.test.ts' : 'NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');
+          if (selected.startsWith('bd03')) expect(result.stdout).toContain('tests/iancar-one-api.test.ts');
         }
         expect(result.stdout).not.toContain('docker push');
       }
