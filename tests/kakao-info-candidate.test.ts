@@ -126,6 +126,14 @@ describe('KakaoInfoCandidate/v1 validation', () => {
         .toEqual({ ok: false, reason: 'INVALID_PLATE_EVIDENCE' });
     }
   });
+  it('does not let long digit runs through confidence or grouped-amount look-alikes', () => {
+    const ok = createKakaoInfoCandidate(base({ confidence: 0.9001011234567 }));
+    expect(ok.ok && ok.candidate.confidence).toBe(0.9);
+    for (const v of ['9,912,311,234,567', '9001011234567원']) {
+      const r = createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }));
+      expect(r).toEqual({ ok: false, reason: 'PII_DETECTED' });
+    }
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

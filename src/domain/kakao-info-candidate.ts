@@ -167,8 +167,8 @@ function exceedsResidualDigitBudget(values: string[]) {
     text = text.replace(/\d{2,3}[\s-]*[가-힣][\s-]*\d{4}/g, ' ');
     text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
-      .replace(/\d{1,3}(?:,\d{3})+\s*원?/g, ' ')
-      .replace(/\d+\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
+      .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, ' ')
+      .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
     for (const run of text.match(/\d+/g) ?? []) {
       concat += run;
       if (run.length <= 5 || run.length >= 10) digits += run.length;
@@ -313,7 +313,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       excerpt: input.source.excerpt,
     },
     fields: { 항목: input.fields.항목.trim(), 요약: input.fields.요약.trim(), 값: input.fields.값.trim() },
-    confidence: input.confidence,
+    confidence: Math.round(input.confidence * 100) / 100,
     needsSupplierConfirm: Boolean(input.needsSupplierConfirm || input.vehicle?.plateUnverified),
     aiInvolved: true,
     type: input.type,
