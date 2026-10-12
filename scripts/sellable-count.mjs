@@ -56,7 +56,7 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
     for (const r of v.slice(1)) {
       const plate = key(g(r, '차량번호')); if (!plate) continue;
-      if (!/d{2,3}[가-힣]d{4}/.test(plate)) continue; // «신차» 같은 번호 미배정 줄은 세지 않는다
+      if (!/\d{2,3}[가-힣]\d{4}/.test(plate)) continue; // «신차» 같은 번호 미배정 줄은 세지 않는다
       const code = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
       const o = (src[code] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트 상태 출고가능·즉시출고·출고협의' });
       o.all.add(plate); const st = g(r, '차량상태'); (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
