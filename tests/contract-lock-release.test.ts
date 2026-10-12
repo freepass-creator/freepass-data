@@ -6,6 +6,7 @@ import {
   parseContractLockSheetEvidence,
   summarizeContractLockDecisions,
 } from '../src/application/contract-lock-release.js';
+import { buildContractLockReleaseUpdate } from '../src/domain/contract-lock-release-update.js';
 import { runReleaseContractLocks, type ContractLockRuntime } from '../src/jobs/release-contract-locks.js';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -165,5 +166,14 @@ describe('release-contract-locks job', () => {
     expect(parseContractLockReleasePlan({ planId: 'p', items: [{ ...item, sheetRow: 0 }] })).toBeNull();
     expect(parseContractLockReleasePlan({ planId: 'p', items: [item, item] })).toBeNull();
     expect(parseContractLockReleasePlan({ planId: 'p', items: [item] })).not.toBeNull();
+  });
+  it('keeps earlier unlock history instead of overwriting it', () => {
+    const fresh = buildContractLockReleaseUpdate(product, { expectedLockAt: 5, reason: 'r2' }, 200);
+    expect(fresh).toMatchObject({ locked_by_contract: null, _ledger_unlocked_at: 200, _ledger_unlock_reason: 'r2' });
+    expect(fresh).not.toHaveProperty('_ledger_unlock_history');
+    const again = buildContractLockReleaseUpdate({ ...product, _ledger_unlocked_at: 100, _ledger_unlock_reason: 'r1', _ledger_unlock_previous: { locked_by_contract: 'LEDGER', _ledger_lock_at: 4 } }, { expectedLockAt: 5, reason: 'r2' }, 200);
+    expect(again._ledger_unlock_history).toEqual([{ at: 100, reason: 'r1', previous: { locked_by_contract: 'LEDGER', _ledger_lock_at: 4 } }]);
+    const third = buildContractLockReleaseUpdate({ ...product, ...again, _ledger_unlocked_at: 200 }, { expectedLockAt: 6, reason: 'r3' }, 300);
+    expect((third._ledger_unlock_history as unknown[]).length).toBe(2);
   });
 });
