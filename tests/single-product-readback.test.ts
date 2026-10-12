@@ -34,17 +34,18 @@ function options(full: unknown = snapshot()) {
     baseUrl: 'https://existing-service.run.app', idToken: 'same-cloud-run-token', fetchImpl };
 }
 describe('trusted bounded single-product runtime readback', () => {
-  it.each(['8af86d3b84020a402e21ec3c34a8498bd3066148', '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8', '2ebdb18822416847b2019f6506b7b0d65daf0ee2'])('verifies only reviewed exact source %s with three requests', async sourceSha => {
+  it.each(['8af86d3b84020a402e21ec3c34a8498bd3066148', '7a02e85475ffb4a3f1d417987403a3fa3e6b3be8', '2ebdb18822416847b2019f6506b7b0d65daf0ee2', '57abb8a978457b87068c3c9c9d76cc8116934bd5'])('verifies only reviewed exact source %s with three requests', async sourceSha => {
     const input = options(); expect(await helper.verifyReadback({ ...input, sourceSha })).toBe(true);
     expect(input.fetchImpl).toHaveBeenCalledTimes(3);
-    expect(helper.SOURCE_SHAS).toHaveLength(3);
+    expect(helper.SOURCE_SHAS).toHaveLength(4);
   });
-  it('binds all three reviewed source SHAs at every workflow helper gate', () => {
+  it('binds all four reviewed source SHAs at every workflow helper gate', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8');
     const gates = workflow.split('\n').filter(line => line.includes("'8af86d3b84020a402e21ec3c34a8498bd3066148'"));
     expect(gates).toHaveLength(5);
     expect(gates.every(line => line.includes("'7a02e85475ffb4a3f1d417987403a3fa3e6b3be8'"))).toBe(true);
     expect(gates.every(line => line.includes("'2ebdb18822416847b2019f6506b7b0d65daf0ee2'"))).toBe(true);
+    expect(gates.every(line => line.includes("'57abb8a978457b87068c3c9c9d76cc8116934bd5'"))).toBe(true);
   });
   it('makes exactly three GETs for one ID, reuses Cloud Run identity and omits consumer authorization for 401', async () => {
     const input = options(); expect(await helper.verifyReadback(input)).toBe(true);
