@@ -1,6 +1,7 @@
 import { ingestRawSourceBatch } from './ingest-raw-source.js';
 import { kakaoInfoCandidatesToSourceBatch } from './kakao-info-to-source-batch.js';
 import { isKakaoMoneyInfo, isKakaoT0OnlyInfo, type KakaoInfoCandidateInput } from '../domain/kakao-info-candidate.js';
+import { plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -126,6 +127,11 @@ function hasStoredLiteralSameSentencePlateEvidence(info: Record<string, unknown>
     && v.plateStatusSameSentence === true;
 }
 
+function productRefForPlate(value: string) {
+  const key = plateIdentityKey(value).replace(/-/g, '');
+  return key ? `products/${key}` : null;
+}
+
 export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
   const info = storedKakaoInfo(candidate);
   if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
@@ -157,7 +163,11 @@ async function downgradeMissingProducts(port: KakaoInfoApplyPort, inputs: readon
       productExistenceByInput.set(index, 'NOT_APPLICABLE');
       continue;
     }
-    const productRef = `products/${plate}`;
+    const productRef = productRefForPlate(plate);
+    if (!productRef) {
+      productExistenceByInput.set(index, 'NOT_APPLICABLE');
+      continue;
+    }
     if (await port.productExists(productRef)) {
       productExistenceByInput.set(index, 'CONFIRMED');
       continue;

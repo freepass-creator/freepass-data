@@ -230,6 +230,25 @@ describe('applyKakaoInfoCandidates', () => {
     expect(persisted[0]?.candidate.issues).toContain('VEHICLE_UNSPECIFIED');
   });
 
+  it('checks product existence with the normalized product document key before downgrading', async () => {
+    const checked: string[] = [];
+    const store = Object.assign(new MemorySourceStore(), {
+      productExists: async (productRef: string) => {
+        checked.push(productRef);
+        return productRef === 'products/123가4567';
+      },
+    });
+    const inputs = [candidate({
+      source: { ...candidate().source, excerpt: '123가-4567 재고 확인' },
+      vehicle: { ...candidate().vehicle!, plate: ' 123가-4567 ' },
+    })];
+    const result = await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    expect(checked).toEqual(['products/123가4567']);
+    expect(result.receipts[0]).toMatchObject({ productExistence: 'CONFIRMED', vehicleUnspecified: false });
+    const persisted = await store.listCandidatesBySource('kakao-info-candidate');
+    expect(persisted[0]?.candidate.issues ?? []).not.toContain('VEHICLE_UNSPECIFIED');
+  });
+
   it('requires product existence checks for writes and reports unknown product checks in dry-run', async () => {
     const store = new MemorySourceStore();
     const inputs = [candidate()];

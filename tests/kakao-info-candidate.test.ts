@@ -43,6 +43,13 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       .toEqual({ ok: false, reason: 'INVALID_EXCERPT' });
   });
 
+  it('bounds supplierCode to short supplier ids', () => {
+    expect(createKakaoInfoCandidate(base({ supplierCode: 'RP01012345678' })))
+      .toEqual({ ok: false, reason: 'INVALID_FIELDS' });
+    expect(createKakaoInfoCandidate(base({ supplierCode: 'PT-01012345678' })))
+      .toEqual({ ok: false, reason: 'INVALID_FIELDS' });
+  });
+
   it('rejects PII from every candidate string field except roomCode', () => {
     for (const patch of [
       { fields: { 항목: 'TEST-FAKE-ITEM', 요약: '가격', 값: '010.1234.5678' } },
@@ -66,6 +73,9 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '1000000' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ fields: { 항목: 'TEST-FAKE-ITEM', 요약: '금액', 값: '100만원' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-A010B123' })).ok).toBe(true);
+    const allowed = createKakaoInfoCandidate(base({ supplierCode: 'RP012' }));
+    expect(allowed.ok).toBe(true);
+    expect(JSON.stringify(allowed)).not.toContain('01012345678');
   });
 
   it('rejects candidates sent more than five minutes in the future', () => {
