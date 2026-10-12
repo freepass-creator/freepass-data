@@ -67,11 +67,11 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
       const plate = key(g(r, '차량번호')); if (!plate) continue;
       if (!/\d{2,3}[가-힣]\d{4}/.test(plate)) { // «신차» 같은 번호 미배정 줄은 차량번호 대조에서 빼고 따로 센다(판매 후보면 지휘통제실 숫자에는 들어간다)
         const c0 = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
-        const o0 = (src[c0] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' }); if (g(r, '차량상태') !== '출고불가') o0.미배정 = (o0.미배정 ?? 0) + 1; continue;
+        const o0 = (src[c0] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' }); if (g(r, '차량상태') !== '출고불가') { o0.미배정 = (o0.미배정 ?? 0) + 1; o0.lines = (o0.lines ?? 0) + 1; } continue;
       }
       const code = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
       const o = (src[code] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' });
-      o.all.add(plate); const st = g(r, '차량상태'); (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
+      o.all.add(plate); const st = g(r, '차량상태'); if (F05_SELLABLE(st)) o.lines = (o.lines ?? 0) + 1; (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
       if (F05_SELLABLE(st)) o.set.add(plate);
     }
   }
@@ -99,7 +99,7 @@ for (const c of codes) {
   const dataSell = new Set(mine.filter(d => d.listable).map(d => d.plate));
   const erp5Sell = new Set([...erp5].filter(p => plateCode.get(p) === c));
   const nowMs = Date.now();
-  const r = { 신선도통과: mine.filter(d => d.listable && freshOk(d, nowMs)).length, code: c, 이름: NAMES[c] ?? c, 읽힘: !!s?.읽힘, 비고: s?.비고 ?? '원천 지도에 없음', 원천판매가능: s?.읽힘 ? s.set.size : null, 번호미배정: s?.미배정 ?? 0, 데이터판매: dataSell.size, ERP5노출: erp5Sell.size };
+  const r = { 신선도통과: mine.filter(d => d.listable && freshOk(d, nowMs)).length, code: c, 이름: NAMES[c] ?? c, 읽힘: !!s?.읽힘, 비고: s?.비고 ?? '원천 지도에 없음', 원천판매가능: s?.읽힘 ? s.set.size : null, 번호미배정: s?.미배정 ?? 0, 줄수: s?.lines ?? null, 데이터판매: dataSell.size, ERP5노출: erp5Sell.size };
   if (s?.읽힘) {
     r.원천O데이터X = [...s.set].filter(p => !dataSell.has(p)).map(l4);
     r.데이터O원천X = [...dataSell].filter(p => !s.set.has(p)).map(p => `${l4(p)}${s.all.has(p) ? '(원천 판매불가)' : '(원천에 없음)'}`);
@@ -117,7 +117,7 @@ console.log(`신선도 자동 보류 그림자: 데이터 판매 ${tot('데이�
 console.log(`합계(읽힘 ${read.length}곳): 원천 판매가능 ${read.reduce((n, r) => n + r.원천판매가능, 0)} · 데이터 판매 ${read.reduce((n, r) => n + r.데이터판매, 0)} · ERP5 노출 ${read.reduce((n, r) => n + r.ERP5노출, 0)} | 전체 데이터 판매 ${tot('데이터판매')} · ERP5 노출 ${erp5.size}`);
 { const sum = codes => read.filter(r => codes.includes(r.code)).reduce((n, r) => n + r.원천판매가능, 0);
   const f05Codes = new Set(spec.supplierChannels.sharedInputSheet.map(x => x.code));
-  const f05 = read.filter(r => f05Codes.has(r.code)).reduce((n, r) => n + r.원천판매가능, 0), data = c => rows.find(r => r.code === c)?.데이터판매 ?? 0;
+  const f05 = read.filter(r => f05Codes.has(r.code)).reduce((n, r) => n + (r.줄수 ?? r.원천판매가능), 0), data = c => rows.find(r => r.code === c)?.데이터판매 ?? 0;
   const parts = [['공통 시트', f05], ['아이카', sum(['RP004'])], ['이안카', sum(['RP031'])], ['손오공', null], ['오토플러스', sum(['RP023'])], ['아이언', sum(['RP006'])]];
   const total = parts.reduce((n, [, v]) => n + (v ?? 0), 0);
   console.log('원천 기준: ' + parts.map(([k, v]) => v == null ? `${k} 미확인(데이터 ${data('RP012')}대)` : `${k} ${v}대`).join(' · ') + ` · 총 ${total}대(손오공 제외)`);
