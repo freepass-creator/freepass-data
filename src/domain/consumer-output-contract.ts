@@ -324,11 +324,17 @@ export type VehiclePhotoSource = {
   read(product: Rec, index?: number, fresh?: boolean): Promise<VehiclePhotoRead>;
 };
 
+export const PHOTO_READ_FAILURE_PHASES = ['INITIAL_DB', 'INITIAL_GATE', 'SOURCE_AWAIT', 'RESULT_LAYOUT', 'RESULT_MEDIA', 'RESULT_HASH', 'FINAL_DB', 'FINAL_GATE', 'FINAL_SOURCE', 'FINAL_MEMBERSHIP', 'REUSE_TTL'] as const;
+export const PHOTO_READ_FAILURE_REASONS = ['DB_FAILURE', 'CONSUMER_DENIED', 'REQUEST_INVALID', 'PUBLIC_INELIGIBLE', 'APPROVAL_INVALID', 'BASIS_INVALID', 'SOURCE_UNAVAILABLE', 'SOURCE_NOT_FOUND', 'SOURCE_BUSY', 'LAYOUT_MISMATCH', 'SELECTED_MISSING', 'MEDIA_INVALID', 'HASH_MISMATCH', 'PROOF_CHANGED', 'MEMBERSHIP_MISMATCH', 'REUSE_EXPIRED', 'UNKNOWN'] as const;
+export type VehiclePhotoReadFailure = Readonly<{ operation: 'INDEXED' | 'MANIFEST'; phase: typeof PHOTO_READ_FAILURE_PHASES[number]; reason: typeof PHOTO_READ_FAILURE_REASONS[number]; elapsedMs: number; phaseElapsedMs: number }>;
+export type VehiclePhotoReadFailureObserver = (failure: VehiclePhotoReadFailure) => void | Promise<void>;
+
 export function createVehiclePhotoReader(
   readProduct: (productId: string) => Promise<Rec | undefined>,
   iancarSource?: VehiclePhotoSource,
   approvedPhotoReader?: ApprovedPhotoReader,
   now: () => number = Date.now,
+  observer?: VehiclePhotoReadFailureObserver,
 ) {
   const cache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
   type ReviewedImage = { result: VehiclePhotoRead; expiresAt: number; productId: string; connection: string };
@@ -360,25 +366,43 @@ export function createVehiclePhotoReader(
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   return async (consumerId: string, productId: string, index?: number) => {
-    if (!(consumerId === 'erp-com' || consumerId === 'erp5-public-media' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN');
+    // Diagnostic time is independent of the injected cache clock.
+    const tick = () => { try { return performance.now(); } catch { return NaN; } };
+    const started = observer ? tick() : 0;
+    let phaseStarted = started, emitted = false;
+    let phase: VehiclePhotoReadFailure['phase'] = 'INITIAL_GATE';
+    const enter = (value: VehiclePhotoReadFailure['phase']) => { phase = value; if (observer) phaseStarted = tick(); };
+    const emit = (reason: VehiclePhotoReadFailure['reason'], at = phase) => {
+      if (!observer || emitted) return;
+      emitted = true;
+      const end = tick();
+      const duration = (start: number) => Number.isFinite(end - start) && end >= start ? Math.min(300_000, Math.floor(end - start)) : 0;
+      try { void Promise.resolve(observer(Object.freeze({ operation: index === undefined ? 'MANIFEST' : 'INDEXED', phase: at, reason, elapsedMs: duration(started), phaseElapsedMs: duration(phaseStarted) }))).catch(() => {}); } catch { /* Observation cannot change a read. */ }
+    };
+    if (!(consumerId === 'erp-com' || consumerId === 'erp5-public-media' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) { emit('CONSUMER_DENIED'); throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN'); }
     if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
-      || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+      || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) { emit('REQUEST_INVALID'); throw new Error('VEHICLE_PHOTO_REQUEST_INVALID'); }
+    enter('INITIAL_DB');
     let product: Rec | undefined;
-    try { product = await readProduct(productId); } catch (error) { invalidateReviewed(productId); throw error; }
+    try { product = await readProduct(productId); } catch (error) { emit('DB_FAILURE'); invalidateReviewed(productId); throw error; }
+    enter('INITIAL_GATE');
     const mediaOnly = consumerId === 'erp5-public-media';
     // The machine media consumer never falls through to approved Drive or other suppliers.
-    if (mediaOnly && !isPublicIancarPhotoProduct(product)) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+    if (mediaOnly && !isPublicIancarPhotoProduct(product)) { emit('PUBLIC_INELIGIBLE'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const consumerSources = mediaOnly ? sources.filter(candidate => candidate === iancarSource) : sources;
     const source = consumerSources.find(candidate => candidate.eligible(product));
-    if (!source || !product || !hasVehiclePhotoVerification(product)) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+    if (!source || !product || !hasVehiclePhotoVerification(product)) { emit('APPROVAL_INVALID'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const refs = product.photo_original_refs as Rec[];
     if (source === iancarSource && refs.some(ref => ref.reviewBasis !== undefined && ref.reviewBasis !== 'CONTENT_ORDINAL/1'))
-      { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+      { emit('BASIS_INVALID'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     if (source === iancarSource && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1')
-      && refs.some(ref => ref.sourceKind !== 'IANCAR_ONE')) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+      && refs.some(ref => ref.sourceKind !== 'IANCAR_ONE')) { emit('BASIS_INVALID'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const boundOneReview = source === iancarSource && refs.some(ref => ref.sourceKind === 'IANCAR_ONE');
     const contentBasis = boundOneReview && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1');
+    let mismatch: VehiclePhotoReadFailure['reason'] = 'LAYOUT_MISMATCH';
     const reviewedSetMatches = (result: VehiclePhotoRead, checkBytes = index !== undefined): boolean => {
+      mismatch = 'LAYOUT_MISMATCH';
+      enter('RESULT_LAYOUT');
       if (!boundOneReview) return true;
       const ids = result.photoIds, upstream = result.upstreamPhotoIds;
       if (!ids || !upstream || ids.length !== refs.length || result.count !== refs.length
@@ -399,8 +423,12 @@ export function createVehiclePhotoReader(
         && typeof ref.photoSha256 === 'string' && /^[a-f0-9]{64}$/.test(ref.photoSha256));
       if (!unchanged || !checkBytes || index === undefined) return unchanged;
       const ref = refs[index];
-      return !!ref && Buffer.isBuffer(result.bytes) && result.contentType === ref.mediaType
-        && createHash('sha256').update(result.bytes).digest('hex') === ref.photoSha256;
+      if (!ref) { mismatch = 'SELECTED_MISSING'; return false; }
+      enter('RESULT_MEDIA');
+      if (!Buffer.isBuffer(result.bytes) || result.contentType !== ref.mediaType) { mismatch = 'MEDIA_INVALID'; return false; }
+      mismatch = 'HASH_MISMATCH';
+      enter('RESULT_HASH');
+      return createHash('sha256').update(result.bytes).digest('hex') === ref.photoSha256;
     };
     const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
     for (const [key, entry] of reviewedCache) if (entry.productId === productId && entry.connection !== connection) removeReviewed(key);
@@ -408,21 +436,28 @@ export function createVehiclePhotoReader(
     let verifiedImage: ReviewedImage | undefined;
     let reusedVerifiedImage = false;
     const revalidate = async (checkSource = true): Promise<boolean> => {
+      enter('FINAL_DB');
       let current: Rec | undefined;
-      try { current = await readProduct(productId); } catch { invalidateReviewed(productId); return false; }
+      try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); invalidateReviewed(productId); return false; }
+      enter('FINAL_GATE');
       const unchanged = !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
         && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
-      if (!unchanged) { invalidateReviewed(productId); return false; }
-      if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { invalidateReviewed(productId); return false; }
+      if (!unchanged) { emit('PROOF_CHANGED'); invalidateReviewed(productId); return false; }
+      if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { emit('REUSE_EXPIRED', 'REUSE_TTL'); invalidateReviewed(productId); return false; }
       if (!boundOneReview || !checkSource) return true;
       // The response is a frozen copy whose bytes already matched the reviewed hash.
       // Recheck current membership, not a second image that will never be transmitted.
+      let finalSourceCompleted = false;
       try {
-        if (!reviewedSetMatches(await source.read(current!, undefined, true), false)) {
+        enter('FINAL_SOURCE');
+        const currentMetadata = await source.read(current!, undefined, true);
+        finalSourceCompleted = true;
+        if (!reviewedSetMatches(currentMetadata, false)) {
+          emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP');
           invalidateReviewed(productId);
           return false;
         }
-        if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { invalidateReviewed(productId); return false; }
+        if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { emit('REUSE_EXPIRED', 'REUSE_TTL'); invalidateReviewed(productId); return false; }
         // Publish only after this caller's success audit and final fresh membership
         // check. Expiry stays tied to the original byte validation, never the hit.
         if (reviewedKey && verifiedImage && verifiedImage.expiresAt > now()) {
@@ -436,6 +471,7 @@ export function createVehiclePhotoReader(
         }
         return true;
       } catch {
+        emit(finalSourceCompleted ? 'UNKNOWN' : 'SOURCE_UNAVAILABLE', finalSourceCompleted ? 'FINAL_MEMBERSHIP' : 'FINAL_SOURCE');
         invalidateReviewed(productId);
         return false;
       }
@@ -446,14 +482,18 @@ export function createVehiclePhotoReader(
       if (!await revalidate(false)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     };
     const read = async () => {
+      let sourceCompleted = false;
       try {
+        enter('SOURCE_AWAIT');
         const result = await source.read(product, index, boundOneReview);
-        if (!reviewedSetMatches(result)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+        sourceCompleted = true;
+        if (!reviewedSetMatches(result)) { emit(mismatch, mismatch === 'HASH_MISMATCH' ? 'RESULT_HASH' : mismatch === 'MEDIA_INVALID' ? 'RESULT_MEDIA' : 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
         return result;
       }
       catch (error) {
         // Adapter diagnostics stay private; the public response vocabulary is source independent.
         const code = error instanceof Error ? error.message : '';
+        emit(sourceCompleted ? 'UNKNOWN' : code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || code === 'IANCAR_PHOTO_NOT_FOUND' ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE', sourceCompleted ? phase : 'SOURCE_AWAIT');
         if (code.startsWith('VEHICLE_PHOTO_')) throw error;
         if (code === 'IANCAR_PHOTO_NOT_FOUND') throw new Error('VEHICLE_PHOTO_NOT_FOUND');
         if (code === 'IANCAR_PHOTO_BUSY') throw new Error('VEHICLE_PHOTO_BUSY');
@@ -471,23 +511,27 @@ export function createVehiclePhotoReader(
         let request = pendingReviewed.get(reviewedKey);
         reusedVerifiedImage = !!request;
         if (!request) {
-          if (pendingReviewed.size >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
+          if (pendingReviewed.size >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
           request = Promise.resolve().then(read).then(result => ({ result: { ...result,
             bytes: Buffer.isBuffer(result.bytes) ? Buffer.from(result.bytes) : result.bytes,
           }, productId, connection, expiresAt: now() + VEHICLE_PHOTO_CACHE_TTL_MS }))
             .finally(() => { pendingReviewed.delete(reviewedKey); });
           pendingReviewed.set(reviewedKey, request);
         }
-        entry = await request;
+        enter('SOURCE_AWAIT');
+        try { entry = await request; }
+        // A shared rejection may originate in the initiating caller's result
+        // validation, not the source transport. Do not infer its origin here.
+        catch (error) { emit('UNKNOWN'); throw error; }
       }
-      if (!reviewedSetMatches(entry.result)) { removeReviewed(reviewedKey); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+      if (!reviewedSetMatches(entry.result)) { emit(mismatch, mismatch === 'HASH_MISMATCH' ? 'RESULT_HASH' : mismatch === 'MEDIA_INVALID' ? 'RESULT_MEDIA' : 'RESULT_LAYOUT'); removeReviewed(reviewedKey); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
       verifiedImage = entry;
       return { ...entry.result, bytes: Buffer.isBuffer(entry.result.bytes) ? Buffer.from(entry.result.bytes) : entry.result.bytes };
     };
     const validCount = (count: number) => {
-      if (!Number.isSafeInteger(count) || count < 0 || count > 200) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      if (!Number.isSafeInteger(count) || count < 0 || count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
     };
-    if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
+    if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
     active++;
     try {
       if (index === undefined) {
@@ -497,16 +541,18 @@ export function createVehiclePhotoReader(
       }
       const selectedRef = source === approvedSource ? (product.photo_original_refs as ApprovedVehiclePhotoRef[])[index] : undefined;
       const ref = selectedRef ? { ...selectedRef } : undefined;
-      if (source === approvedSource && !ref) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      if (source === approvedSource && !ref) { emit('SELECTED_MISSING', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
       const cacheKey = ref ? JSON.stringify([productId, ref.driveFileId, ref.sha256, ref.approvedAt, ref.vehicleKey]) : undefined;
       for (const [key, entry] of cache) if (entry.expiresAt <= now()) remove(key);
       const cached = cacheKey ? cache.get(cacheKey) : undefined;
       const result = cached ? { ...cached, count: (product.photo_original_refs as ApprovedVehiclePhotoRef[]).length } : await readReviewed();
       validCount(result.count);
       const bytes = result.bytes;
-      if (validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(bytes) ? bytes.length : 0, bytes) || !Buffer.isBuffer(bytes) || index >= result.count
+      enter('RESULT_MEDIA');
+      let selectedMissing = false;
+      if (validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(bytes) ? bytes.length : 0, bytes) || !Buffer.isBuffer(bytes) || (selectedMissing = index >= result.count)
         || (ref && (result.contentType !== ref.mediaType || createHash('sha256').update(bytes).digest('hex') !== ref.sha256)))
-        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+        { emit(selectedMissing ? 'SELECTED_MISSING' : 'MEDIA_INVALID', selectedMissing ? 'RESULT_LAYOUT' : 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
       const output = Buffer.from(bytes);
       await recheck();
       if (cacheKey) {

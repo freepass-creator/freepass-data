@@ -9,7 +9,7 @@ import { logRouteError } from '../shared/route-error-log.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
 
-import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader, type VehiclePhotoReadFailureObserver } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
@@ -343,6 +343,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
 
 export type CatalogCompatibilityReaderOptions = {
   readCollections?: readonly CatalogCompatibilityReadCollection[];
+  photoReadFailureObserver?: VehiclePhotoReadFailureObserver;
 };
 
 const jsonSafe = (value: unknown): unknown => {
@@ -422,7 +423,7 @@ export class FirestoreCatalogCompatibilityReader {
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
         return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
       },
-    }, approvedPhotoReader);
+    }, approvedPhotoReader, undefined, options.photoReadFailureObserver);
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
