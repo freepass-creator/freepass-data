@@ -25,6 +25,7 @@ export type CyclePlan = {
   entries: CycleEntry[]; held: number; blockers: string[]; sourceCount: number; exposedBefore: number;
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
+  observedSellableCount?: number; unassignedPlateCount?: number;
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,
   lastAttemptAt: null, lastCompleteAt: null, readCount: 0, heldCount: 0, error: null });

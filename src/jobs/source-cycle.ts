@@ -38,6 +38,29 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
+      const unassigned = converted.held.filter(h => h.reasons.some(r => r.includes('UID_REQUIRED'))).length;
+      state.unassignedPlateCount = unassigned;
+      state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
+      if (plugin.observationOnly) {
+        if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
+        state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
+        await control.save(plugin.sourceId, state);
+        await control.heartbeat(plugin.sourceId, state, null);
+        return { status: 'OBSERVED', writes: 0, summary: `관측 전용 원천 ${converted.records.filter(r => r.status.saleAvailable === true).length} · 번호미배정 ${unassigned} · 상품 쓰기 0` };
+      }
+      if (options.approvedPlan) {
+        // A fresh transport read naturally has a new observation clock. Pin approved facts,
+        // not a stale transport snapshot: only clocks may differ, source synced_at is retained.
+        const prior = options.approvedPlan.evidence;
+        const withoutReadClock = (v: unknown): unknown => Array.isArray(v) ? v.map(withoutReadClock) :
+          v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'observedAt' && k !== 'captured_at')
+            .map(([k, child]) => [k, withoutReadClock(child)])) : v;
+        if (!read.observedAt || Date.parse(read.observedAt) < Date.parse(prior.observedAt ?? '') || Date.parse(read.observedAt) > clock() ||
+          !deepEqual(withoutReadClock(converted.records), withoutReadClock(prior.records)) || converted.held.length !== prior.heldCount ||
+          (read.complete && !read.error) !== prior.complete) throw new Error('CYCLE_REPLAN_REQUIRED');
+        converted.records = structuredClone(prior.records);
+        read.observedAt = prior.observedAt;
+      }
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
         observedAt: read.observedAt, heldCount: converted.held.length }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
@@ -49,6 +72,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const counts = (kind: string) => plan!.entries.filter(e => e.kind === kind).length;
       summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL') + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${options.apply ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
+      summary += ` · 번호미배정 ${unassigned}`;
       if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
       state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
       // A dry-run must never consume the change token for a later authorized apply.

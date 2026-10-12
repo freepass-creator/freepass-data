@@ -18,8 +18,10 @@ export type CycleCapture = {
   complete: boolean; completedScopes: string[]; visibilityComplete: boolean;
   rows: Array<{ scope: string; record: SourceProductRecord; hiddenTab?: boolean; hiddenByUser?: boolean; hiddenByFilter?: boolean }>;
   heldCount: number;
+  heldReasons?: string[];
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
+  observationOnly?: boolean;
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
@@ -53,7 +55,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
     toRecords(read) {
       const records: SourceProductRecord[] = [], held: Array<{ row: number; reasons: string[] }> = [];
       if (!read.raw) return { records, held };
-      for (let i = 0; i < read.raw.heldCount; i++) held.push({ row: 0, reasons: ['UPSTREAM_ROW_HOLD'] });
+      for (let i = 0; i < read.raw.heldCount; i++) held.push({ row: 0, reasons: [read.raw.heldReasons?.[i] ?? 'UPSTREAM_ROW_HOLD'] });
       for (const [i, row] of read.raw.rows.entries()) {
         if (!def.scopes.includes(row.scope) || row.scope === '종합') continue;
         if (row.record.sourceId !== def.sourceId) { held.push({ row: i + 1, reasons: ['SOURCE_MISMATCH'] }); continue; }

@@ -231,6 +231,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 원천 엔진 3단계 — REST runtime 코드·시험 / 라이브 적합성 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3-20261012.md`; 시작 HEAD `3ac8cb283209eb9ae8c12bb55c49956b8359e9ee`, `work/freepass-data/source-engine-core-20261012`. SPEC 영수증으로 사전점검 대체, 커밋 없음.
+- 변경: 기존 2단계 계획/제어를 재사용한 REST commands·전체 원본 백업/CAS/깊은 되읽기·receipt/복구, 차량번호 UID 및 미배정 HOLD, 여섯 원천 runtime 조합과 관측 전용 무쓰기. [결과·실행 한 장](SOURCE-ENGINE-RESULT3-20261012.md).
+- 검증: 신규37/37, 관련265/265 PASS. 확장 ONE97/99: 기존 tsx `uv_os_get_passwd ENOMEM` CLI 실패2 재현. build/architecture/data-access PASS. Claude UNAVAILABLE. 라이브/운영 쓰기·외부 스크립트 실행·예약 등록·push0.
+- 남음: 아이카 금액 헤더/아이언 listing 형식의 실제 적합성, F05/ONE private capture, 기존 UID 이행 및 전체 소비처 대조 미검증. 코드 시험을 운영 완료로 확대하지 않는다.
+- next_start_here: RESULT3 → runtime 합성 시험 → 연결 담당의 비공개 live dry-run. 승인 digest는 외부 입력이며 예약 자동 적용은 아직 연결하지 않았다.
+
 ### 2026-10-13 원천 엔진 2단계 — 반복 사이클 코드·시험 / 운영 연결 HOLD
 
 - 목적/정본: `SOURCE-ENGINE-SPEC2-20261012.md`. 대상 HEAD `91eff5ee57799e6d88d0638245bd00d5c259884d`, `work/freepass-data/source-engine-core-20261012`; 이번 커밋 없음. SPEC 영수증으로 오프라인 사전점검 대체.
