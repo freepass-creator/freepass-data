@@ -95,6 +95,10 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010-1234' }, fields: { 요약: '재고', 값: '확인' }, vehicle: { model: '5678' } })))
       .toEqual({ ok: false, reason: 'PII_DETECTED' });
   });
+  it('rejects a phone number split into 6- and 5-digit fragments across non-adjacent fields', () => {
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, excerpt: '010123' }, fields: { 요약: '재고', 값: '45678' } })))
+      .toEqual({ ok: false, reason: 'PII_DETECTED' });
+  });
   it('rejects non-numeric msgNo without echoing the value', () => {
     expect(createKakaoInfoCandidate(base({ source: { ...base().source, msgNo: 'test@example.com' } })))
       .toEqual({ ok: false, reason: 'INVALID_MSG_NO' });

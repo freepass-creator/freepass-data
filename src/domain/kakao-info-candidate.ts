@@ -162,6 +162,7 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
  */
 function exceedsResidualDigitBudget(values: string[], plateText?: string) {
   let digits = 0;
+  let concat = '';
   for (const raw of values) {
     let text = raw;
     text = text.replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g, ' '); // 차량번호 형식은 숫자 예산에서 제외
@@ -169,8 +170,12 @@ function exceedsResidualDigitBudget(values: string[], plateText?: string) {
       .replace(/\d{1,3}(?:,\d{3})+\s*원?/g, ' ')
       .replace(/\d+\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, ' ');
     // 6~9자리 연속 숫자는 금액(예: 1000000)일 수 있어 예산에서 제외한다(10자리 이상 연속은 다른 규칙이 거부). 짧은 조각만 합산한다.
-    for (const run of text.match(/\d+/g) ?? []) if (run.length <= 5 || run.length >= 10) digits += run.length;
+    for (const run of text.match(/\d+/g) ?? []) {
+      concat += run; // 칸을 가로질러 쪼갠 식별번호를 이어 붙여 검사한다(6자리 조각 포함)
+      if (run.length <= 5 || run.length >= 10) digits += run.length;
+    }
   }
+  if (/01[016789]\d{7,8}/.test(concat) || /\d{6}[1-4]\d{6}/.test(concat)) return true;
   return digits >= 8;
 }
 
