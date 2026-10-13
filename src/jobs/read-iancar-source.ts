@@ -53,7 +53,8 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
     if (rates.success !== true || !Array.isArray(rates.data)) { console.error('IANCAR_RATES_RESPONSE_INVALID'); process.exit(3); }
     const price: Record<string, { rent: unknown; deposit: unknown }> = {}; const lowest = new Map<number, number>();
     for (const t of rates.data ?? []) { const m = Number(t.rental_period), km = Number(t.contracted_mileage);
-      const key = `${m}_${t.mileage_period === 'month' ? '월' : '연'}${km}km`; price[key] = { rent: t.monthly_rate, deposit: t.deposit }; keys.add(key);
+      const key = `${m}_${t.mileage_period === 'month' ? '월' : '연'}${km}km`; if (price[key] !== undefined || !Number.isFinite(m) || !Number.isFinite(km) || typeof t.monthly_rate !== 'number' || typeof t.deposit !== 'number') { console.error('IANCAR_RATES_DUPLICATE_OR_INVALID_TERM'); process.exit(3); } // 같은 조건의 중복·비정상 값은 거부(덮어쓰기 금지)
+      price[key] = { rent: t.monthly_rate, deposit: t.deposit }; keys.add(key);
       if ((lowest.get(m) ?? Infinity) > km) { lowest.set(m, km); price[String(m)] = { rent: t.monthly_rate, deposit: t.deposit }; keys.add(String(m)); } }
     rows.push({ plate_number: r.plate_number, status: r.inventory_status, price }); } };
   await Promise.all([worker(), worker(), worker()]);
