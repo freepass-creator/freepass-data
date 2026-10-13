@@ -101,7 +101,7 @@ describe('public product feed v1', () => {
   });
 
   it('preserves Korean vehicle-number identity and rejects ambiguous share tokens', () => {
-    const code = '183어2364';
+    const code = '100가2364';
     const snap = snapshot({ a: product({ product_code: code, _key: 'veh_183어2364', publicProductKey: code }), b: product({ product_code: code, _key: 'other', publicProductKey: 'other' }) });
     expect(buildPublicProductQuote(snap, code, {})?.product.publicProductKey).toBe(code);
     expect(buildPublicProductQuote(snap, publicProductShareToken(code), {})).toBeNull();
@@ -109,7 +109,7 @@ describe('public product feed v1', () => {
     ajv.addSchema(publicSchema);
     expect(ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote')!(buildPublicProductQuote(snap, code, {}))).toBe(true);
     expect(() => buildPublicProductQuote(snap, 'https://example.test', {})).toThrow();
-    expect(() => buildPublicProductQuote(snap, '183어2364\u0000', {})).toThrow();
+    expect(() => buildPublicProductQuote(snap, '100가2364\u0000', {})).toThrow();
   });
 
   it('rejects ambiguous exact aliases independently of product order', () => {
