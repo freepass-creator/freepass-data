@@ -1,4 +1,4 @@
-import type { SourceEngine, SourceFamily, SourceProductRecord, SourceRead } from '../domain/source-engine.js';
+import { classifyReadError, type SourceEngine, type SourceFamily, type SourceProductRecord, type SourceRead } from '../domain/source-engine.js';
 import { sharedSheetEngine } from './shared-sheet-engine.js';
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
@@ -50,9 +50,8 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           (!['F05', 'AICA'].includes(def.kind) || raw.visibilityComplete === true);
         return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL' };
       } catch (e) {
-        const text = e instanceof Error ? e.message : '';
-        return { raw: null, complete: false, attemptedAt, observedAt: null,
-          error: /429/.test(text) ? 'RATE_LIMITED' : /403|401/.test(text) ? 'AUTH_FAILED' : 'READ_FAILED' };
+        const { error, detail } = classifyReadError(e);
+        return { raw: null, complete: false, attemptedAt, observedAt: null, error, detail };
       }
     },
     toRecords(read) {

@@ -35,7 +35,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         if (state.lastSyncedAt && Date.parse(synced) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
       }
       const read = await plugin.read();
-      if (read.raw === null && read.error) throw new Error(read.error);
+      if (read.raw === null && read.error) throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
@@ -92,7 +92,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     } catch (e) {
       // Only internal safe codes reach logs; no provider response bodies or customer raw data.
       const candidate = e instanceof Error ? e.message : '';
-      const reason = /^[A-Z_,]+$/.test(candidate) ? candidate : 'CYCLE_ERROR';
+      const reason = /^[A-Z0-9_,]+$/.test(candidate) ? candidate : 'CYCLE_ERROR';
       state.failures = previousFailures + 1; state.stopped = state.failures >= 3; state.error = reason;
       await control.save(plugin.sourceId, state);
       try { await control.heartbeat(plugin.sourceId, state, plan); }

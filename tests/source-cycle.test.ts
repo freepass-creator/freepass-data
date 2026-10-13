@@ -383,3 +383,25 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     expect(fewAbsent.plan.blockers).toEqual([]);
   });
 });
+
+describe('읽기 실패는 안전한 세부 코드를 남긴다 (이안카 READ_FAILED 원인 불명 사고)', () => {
+  const failWith = async (error: Error) => {
+    const { ctrl, alerts } = control(), m = memory([]);
+    const result = await runSourceCycle(plugin(async () => { throw error; }), m.commands, ctrl, { now: () => now });
+    return { result, alerts };
+  };
+  it.each([
+    ['HTTP 상태', Object.assign(new Error('응답 본문 비밀 토큰'), { status: 503 }), 'READ_FAILED_HTTP_503'],
+    ['시간 제한', Object.assign(new Error('aborted'), { name: 'TimeoutError' }), 'READ_FAILED_TIMEOUT'],
+    ['내부 오류 코드', new Error('IANCAR_ONE_PLATE_MISMATCH'), 'READ_FAILED_IANCAR_ONE_PLATE_MISMATCH'],
+    ['분류 불가 문장', new Error('something odd happened'), 'READ_FAILED'],
+  ])('%s', async (_name, error, expected) => {
+    const { result, alerts } = await failWith(error);
+    expect(result.status).toBe('HOLD'); expect(alerts).toEqual([expected]);
+    expect(JSON.stringify([result, alerts])).not.toMatch(/비밀|odd happened|aborted/);       // 원문 메시지는 어디에도 남지 않는다
+  });
+  it('429 and 401/403 keep their existing classification', async () => {
+    expect((await failWith(Object.assign(new Error('x'), { status: 429 }))).alerts).toEqual(['RATE_LIMITED']);
+    expect((await failWith(new Error('HTTP_403'))).alerts).toEqual(['AUTH_FAILED']);
+  });
+});

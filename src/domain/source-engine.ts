@@ -16,7 +16,21 @@ export type SourceRowHold = { row: number; reasons: string[] };
 export type SourceRead<T> = {
   raw: T | null; complete: boolean; attemptedAt: string; observedAt: string | null;
   error: 'PARTIAL' | 'RATE_LIMITED' | 'AUTH_FAILED' | 'READ_FAILED' | 'SCHEMA_INVALID' | null;
+  /** READ_FAILED 의 안전한 세부 코드(대문자·숫자·밑줄, 예: HTTP_503·TIMEOUT·내부 오류 코드). 응답 본문·원문 메시지는 담지 않는다. */
+  detail?: string | null;
 };
+const READ_DETAIL = /^[A-Z][A-Z0-9_]{2,63}$/;
+/** 읽기 예외를 분류 코드와 안전한 세부 코드로 나눈다. 429·401·403 은 기존 분류를 유지하고, 그 밖의 실패만 세부를 남긴다. */
+export function classifyReadError(e: unknown): { error: 'RATE_LIMITED' | 'AUTH_FAILED' | 'READ_FAILED'; detail: string | null } {
+  const text = e instanceof Error ? e.message : '';
+  const status = typeof (e as { status?: unknown } | null)?.status === 'number' ? (e as { status: number }).status : null;
+  if (status === 429 || /429/.test(text)) return { error: 'RATE_LIMITED', detail: null };
+  if (status === 401 || status === 403 || /403|401/.test(text)) return { error: 'AUTH_FAILED', detail: null };
+  const name = e instanceof Error ? e.name : '';
+  if (name === 'TimeoutError' || name === 'AbortError') return { error: 'READ_FAILED', detail: 'TIMEOUT' };
+  if (status !== null && status >= 100 && status <= 599) return { error: 'READ_FAILED', detail: `HTTP_${status}` };
+  return { error: 'READ_FAILED', detail: READ_DETAIL.test(text) ? text : null };
+}
 export interface SourceEngine<T> {
   read(): Promise<SourceRead<T>>;
   toRecords(read: SourceRead<T>): { records: SourceProductRecord[]; held: SourceRowHold[] };
