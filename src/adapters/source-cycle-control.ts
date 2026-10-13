@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, unlink, appendFile, stat, link } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, appendFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -14,20 +14,28 @@ const processAlive = (pid: number) => {
  * (pid 재사용·읽기 실패·최근 잠금) 인계하지 않는다. 남의 잠금을 지우지 않고 증거를 남기며 한 이름으로 옮긴다. */
 export const STALE_LOCK_MS = 10 * 60_000;
 async function takeOverDeadLock(path: string): Promise<boolean> {
+  // 인계 자체를 한 번에 한 회차만 하도록 배타 생성되는 인계 표식 파일을 둔다. 표식을 쥔 동안에만 잠금을 읽고 옮기므로, 여러 회차가
+  // 같은 죽은 잠금을 두고 경쟁해도 «다른 회차의 살아 있는 새 잠금»을 옮기거나 지우는 일이 없다(검사와 이동 사이의 경쟁 제거).
+  // 표식을 못 얻으면 이번 회차는 인계하지 않는다(HOLD). 크래시로 남은 낡은 표식은 한 번 치우고 다음 회차에 다시 시도한다.
+  const guard = `${path}.takeover`;
+  let handle;
+  try { handle = await open(guard, 'wx', 0o600); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+      const age = await stat(guard).then(s => Date.now() - s.mtimeMs, () => 0);
+      if (age > STALE_LOCK_MS) await unlink(guard).catch(() => undefined);
+    }
+    return false;
+  }
   try {
-    const raw = await readFile(path, 'utf8');
-    const owner = JSON.parse(raw) as { pid?: unknown };
+    await handle.close();
+    const owner = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
     const age = Date.now() - (await stat(path)).mtimeMs;
     if (typeof owner.pid !== 'number' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || processAlive(owner.pid) || age < STALE_LOCK_MS) return false;
-    // 두 회차가 동시에 같은 죽은 잠금을 인계하면 늦은 쪽의 rename 이 먼저 인계한 쪽의 «살아 있는 새 잠금»을 옮길 수 있다(검사와 이동 사이의 경쟁).
-    // 판단한 내용과 같은 잠금을 옮겼는지 옮긴 뒤 확인하고, 다른 잠금이면 되돌려 놓는다(link 는 이미 있으면 실패해 남의 잠금을 덮지 않는다).
-    const moved = `${path}.dead-pid-${owner.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    await rename(path, moved);
-    if ((await readFile(moved, 'utf8').catch(() => null)) === raw) return true;
-    await link(moved, path).catch(() => undefined);
-    await unlink(moved).catch(() => undefined);
-    return false;
+    await rename(path, `${path}.dead-pid-${owner.pid}-${Date.now()}`);
+    return true;
   } catch { return false; }
+  finally { await unlink(guard).catch(() => undefined); }
 }
 
 /** Crash-safe local runner state. Lock is exclusive-create. A lock whose owner process is gone and old enough is taken over

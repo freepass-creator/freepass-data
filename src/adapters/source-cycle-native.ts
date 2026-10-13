@@ -66,7 +66,10 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       if (!supplier || supplier.code !== source || hiddenRow || tab.title === '종합' || row.every(c => c === '' || c === null)) continue;
       const rowUid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
       if (!rowUid) continue;
-      const signature = JSON.stringify(row.filter((_, column) => column !== uidIndex));
+      // 의미 있는 칸만 정규화해 비교한다: 회사명(0열)·UID 칸은 제외하고 값은 NFKC·공백 정리 후 문자열로 본다. 동일 복사본에서 표기 공백만
+      // 달라도 충돌 보류가 되는 오탐을 막는다(숫자 100 과 '100' 도 같게 본다).
+      const normalizeCell = (c: unknown) => String(c ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+      const signature = JSON.stringify(row.map((c, column) => column === 0 || column === uidIndex ? '' : normalizeCell(c)));
       const prior = signatures.get(rowUid);
       if (prior === undefined) signatures.set(rowUid, signature);
       else if (prior !== signature) conflictingUids.add(rowUid);

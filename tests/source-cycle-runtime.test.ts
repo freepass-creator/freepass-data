@@ -329,6 +329,11 @@ describe('native mappings and UID', () => {
     const swapped = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
     expect(f05NativeCapture(swapped.source, swapped.capture, swapped.visibility).rows.map(r => r.record.uid)).toEqual(['TEST1002']);
   });
+  it('F05 identical copies that differ only in spacing or number formatting are not a conflict', () => {
+    const s = sheet([{ 차량번호: 'TEST1001', '12개월': 100 }, { 차량번호: 'TEST1001', '12개월': '100 ', '차명 원문': ' 합성 ' }, { 차량번호: 'TEST1001', '12개월': ' 100', '차명 원문': '합성' }]);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.heldReasons).not.toContain('DUPLICATE_UID_CONFLICT');
+  });
   it.each(['hiddenByUser', 'hiddenByFilter'] as const)('F05 excludes %s rows', key => {
     const s = sheet([{}, { 차량번호: 'TEST1002' }]);
     s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]![key] = true;
