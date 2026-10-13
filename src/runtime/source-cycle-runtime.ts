@@ -57,7 +57,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
-    observationSources: ['RP012', 'RP023'], acceptDrift });
+    observationSources: ['RP012', 'RP023'], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

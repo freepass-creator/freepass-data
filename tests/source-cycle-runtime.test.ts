@@ -58,10 +58,10 @@ function fakeFirestore(initial: CycleProduct[] = []) {
   }) as unknown as typeof fetch;
   return { docs, calls, fetcher, setConflict: () => { conflict = true; }, setCorrupt: () => { corrupt = true; }, reverse: () => { reverse = true; } };
 }
-async function setup(initial: CycleProduct[] = []) {
+async function setup(initial: CycleProduct[] = [], extra: { writeMonthlyProductType?: boolean } = {}) {
   const dir = await directory(), fake = fakeFirestore(initial);
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
-    observationSources: ['OBSERVE'], supplierDefaults: { SYNTHETIC: { provider_name: '합성공급사', policy_code: 'SYNTHETIC_POLICY' } } });
+    observationSources: ['OBSERVE'], supplierDefaults: { SYNTHETIC: { provider_name: '합성공급사', policy_code: 'SYNTHETIC_POLICY' } }, ...extra });
   return { dir, fake, commands };
 }
 async function prepare(commands: Awaited<ReturnType<typeof setup>>['commands'], records = [product().record]) {
@@ -695,6 +695,32 @@ describe('옵션 가격 키 복원과 상류 정지 처리 (이안카 2026-10-13
     expect(written.vehicle_status).toBe(written.status);
     expect(written.status_kind).toBe(statusKindOf(String(written.vehicle_status), true));
     expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);          // 멱등: 다시 쓰지 않는다
+  });
+  describe('월렌트 모델 문서의 product_type (어휘 확장 합침 뒤에만: 기본 꺼짐)', () => {
+    const monthly = () => { const p = product('MONTHLY1'); p.record.plate = null; p.record.raw = { ...p.record.raw, product_group: 'MONTHLY_RENT' }; return p; };
+    const seed = (fake: Awaited<ReturnType<typeof setup>>['fake'], p: CycleProduct) => fake.docs.set('MONTHLY1', {
+      name: 'projects/synthetic-test/databases/(default)/documents/products/MONTHLY1', updateTime: `${time}:1`, fields: encodeFields(nativeCycleFields(p)) });
+    it('does nothing while the flag is off', async () => {
+      const { commands, fake } = await setup(); const p = monthly(); seed(fake, p);
+      expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);
+    });
+    it('rewrites exactly once with product_type 월렌트 and touches no other product-facing field when the flag is on', async () => {
+      const { commands, fake } = await setup([], { writeMonthlyProductType: true }); const p = monthly(); seed(fake, p);
+      const before = decodeFields(fake.docs.get('MONTHLY1').fields);
+      const first = await prepare(commands, [p.record]);
+      expect(first.plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
+      expect((await apply(commands, first)).status).toBe('APPLIED');
+      const after = decodeFields(fake.docs.get('MONTHLY1').fields);
+      expect(after.product_type).toBe('월렌트');
+      for (const k of ['price', 'listable', 'status', 'status_kind', 'vehicle_status', 'car_number', 'provider_company_code'])
+        expect(after[k]).toEqual(before[k]);
+      expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);          // 멱등
+    });
+    it('never writes product_type to a long-term document even when the flag is on', async () => {
+      const { commands, fake } = await setup([], { writeMonthlyProductType: true }); const p = product('LONG1');
+      fake.docs.set('LONG1', { name: 'projects/synthetic-test/databases/(default)/documents/products/LONG1', updateTime: `${time}:1`, fields: encodeFields(nativeCycleFields(p)) });
+      expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);
+    });
   });
   it('an upstream that stopped refreshing is a soft hold: no failure count, no STOPPED, one alert, zero writes', async () => {
     const { commands, fake } = await setup(); const dir = await directory();

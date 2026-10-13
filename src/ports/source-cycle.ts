@@ -6,10 +6,9 @@ export type CycleProduct = {
   record: SourceProductRecord;
   locked_by_contract: boolean;
   listable: boolean;
-  /** 노출 문서의 판매 가격 칸에 옵션 키가 빠져 있어 값이 같아도 한 번 다시 써야 함(읽기 경로가 계산, 쓰기 결과에는 남지 않는다). */
-  priceLayoutStale?: boolean;
-  /** 노출 문서의 status_kind 가 저장된 vehicle_status 의 계약 값과 달라 값이 같아도 한 번 다시 써야 함(읽기 경로가 계산, 쓰기 결과에는 남지 않는다). */
-  statusKindStale?: boolean;
+  /** 노출 문서가 원천 값은 같아도 한 번 다시 써야 하는 사유(읽기 경로가 계산, 쓰기 결과에는 남지 않는다):
+   * PRICE_LAYOUT 옵션 가격 키 누락 · STATUS_KIND 저장된 vehicle_status 의 계약 값과 다름 · PRODUCT_TYPE 월렌트 상품 구분 누락. */
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE'>;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
