@@ -90,7 +90,7 @@ export type Erp5ProductInput = {
   projectId: 'freepasserp5'; collection: 'products'; documentId: string;
   sourceRevision: string; observedAt: string; data: ObjectValue;
 };
-type MappedCommercialType = CommercialType | 'OPLUS_SUBSCRIPTION' | 'MONTHLY_RENT';
+type MappedCommercialType = CommercialType | 'OPLUS_SUBSCRIPTION';
 export type Erp5ProductMapping = {
   status: 'MAPPED_FOR_REVIEW' | 'HOLD';
   canonicalWriteAuthorized: false;
@@ -122,8 +122,7 @@ function integer(x: unknown): number | undefined {
 const types: Record<string, MappedCommercialType> = {
   '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '재렌트': 'USED_RENT',
   '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION', '재구독': 'USED_SUBSCRIPTION',
-  '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION', '오플구독': 'OPLUS_SUBSCRIPTION',
-  '월렌트': 'MONTHLY_RENT'
+  '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION', '오플구독': 'OPLUS_SUBSCRIPTION'
 };
 const has = (x: ObjectValue, k: string) => Object.hasOwn(x, k);
 const present = (x: Json | undefined) => x !== undefined && x !== null && x !== '';
@@ -182,15 +181,13 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   const commercialType = text(d.product_type) && Object.hasOwn(types, d.product_type) ? types[d.product_type] : undefined;
   if (commercialType) { candidate.commercialType = commercialType; fieldSources.commercialType = ['/data/product_type']; }
   else issue('UNKNOWN_PRODUCT_TYPE');
-  if (['OGONG_SUBSCRIPTION', 'OPLUS_SUBSCRIPTION', 'MONTHLY_RENT'].includes(commercialType ?? '')) {
+  if (['OGONG_SUBSCRIPTION', 'OPLUS_SUBSCRIPTION'].includes(commercialType ?? '')) {
     issue('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
   }
   if (['OGONG_SUBSCRIPTION', 'PICKUP_SUBSCRIPTION'].includes(commercialType ?? '') && supplier !== 'RP012') {
     issue('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
   }
   if (commercialType === 'OPLUS_SUBSCRIPTION' && supplier !== 'RP023') issue('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
-  // 월렌트(MONTHLY_RENT 상품군, 대표 10-13 결정 장부 620행): 차량번호 없는 모델 단위 1개월 상품. 현재는 아이카(RP004) 월렌트 탭에서만 온다.
-  if (commercialType === 'MONTHLY_RENT' && supplier !== 'RP004') issue('MONTHLY_RENT_SUPPLIER_REVIEW_REQUIRED');
   // 상품 구분은 차량마다 `product_type`에 붙어 있다(2026-09-27 확인). 예전에는 `source_bucket`으로
   // 교차검증했으나 그 필드는 현재 원천 1,659건 어디에도 없다 — 없는 증거를 기다리면 전부 멈춘다.
   // 버킷이 «있을 때»만 교차검증하고, 없으면 product_type을 그대로 믿는다.
