@@ -35,3 +35,12 @@
 1. Cloud Scheduler→중계 보조 트리거 재개 여부 + «예약 전용 적용 모드» 설계 착수.
 2. 이안카: 운영 대사(스케줄러·pending) 실행 승인.
 3. 손오공: 읽기 시험 실행 승인(계정 사용) — 이후 정규화 연결 1차 구현.
+
+## 6. 공통 시트 15분 «적용» 연속 실패 — 원인 확정과 판정 필요 (2026-10-13)
+실측(비공개 증거 `apply.json`·`plan.json`·`live-capture.json`을 내려받아 오프라인 재현, 쓰기 0):
+- 05:30Z 회차: 사전 점검 통과 → 첫 명령이 울타리 900초 초과로 `CANONICAL_COMMAND_REJECTED`(#576 이 3600초로 완화).
+- 12:57Z 등 `SHARED_SHEET_JOB_HOLD`(출력 없음): 계획의 마스터 스냅샷 readAt(13:00:02Z)을 벽시계 기준 **5분**(`scripts/supplier-input-sheet.mjs` `vehicleMasterSnapshotRows`, `age>300000`)으로 검증하는데 적용 단계 사전 점검이 13:06:32Z 까지 걸려 `Active Data vehicle master snapshot required` 로 던지고, 바깥 catch 가 문구를 삼킨다. 같은 계획을 지금 `assertSharedSheetPlan` 에 넣으면 같은 문구로 재현된다(과거 4회 전부를 단정하진 않음 — 단계·시각 일치 근거).
+- 구조: 계획 마스터 readAt → 적용 단계(라이브 재캡처 ~1.5분 + 사전 점검 재계획 수 분) 간격이 5분 안팎이라 예약 적용은 구조적으로 경주. 두 시험이 서로 다른 불변식을 못박고 있어 코드만 고치면 한쪽을 깬다:
+  1. `does not renew an expired sealed master…`(8bc4d786) — 만료된 계획 마스터는 갱신하지 않는다.
+  2. `rejects an operational observation older than fifteen minutes…` — 관측 15분 초과 운영 갱신은 적용 거절.
+- 선택지(소유자 판정 필요): **B(권고, Codex)** 예약 회차만 적용 단계에서 라이브 캡처로 계획을 새로 만들고 5분 안에 적용(수동 승인 계획 의미 유지) — 워크플로·적용 경로 변경이라 별도 설계·시험 필요, 재계획·중복 사전 점검 시간 단축 병행. **A** 예약 갱신 계획에 한해 계획 자신의 증거 시각을 기준 시계로(라이브 대조·현재 마스터 digest 가 신선도를 보장) — 두 시험의 기대를 바꿔야 하고, 변경 후 되돌림·대조 후 변경을 digest 가 못 잡는다. 이 세션은 불변식을 임의로 바꾸지 않았다.
