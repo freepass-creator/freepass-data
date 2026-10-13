@@ -79,6 +79,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (candidates.length === 1) {
         before = candidates[0]!; r = { ...r, uid: before.record.uid }; key = sourceProductKey(r);
         seen.add(key); uidBridged++;
+      } else if (candidates.length > 1) {
+        // 같은 번호의 옛 문서가 둘 이상이면 어느 문서가 이 차인지 알 수 없다: 새 문서를 만들고 옛 문서를 내리지 않고 보류한다
+        // (보류는 부재 하향도 막아 두 문서 모두 그대로 남는다).
+        identityHolds = true; plan.held++;
+        if (!plan.warnings.includes('UID_BRIDGE_AMBIGUOUS')) plan.warnings.push('UID_BRIDGE_AMBIGUOUS');
+        continue;
       }
     }
     const errors = validateSourceRecord(r);

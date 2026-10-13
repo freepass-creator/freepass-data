@@ -3,6 +3,7 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, ty
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 } : typeof v === 'number' && Number.isSafeInteger(v) && v > 0
   ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
@@ -14,13 +15,27 @@ export function sourceUid(plate: unknown, sheetUid?: unknown): string | null {
 export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
   return { ...plugin, toRecords(read) {
     const result = plugin.toRecords(read), seen = new Set<string>(), records: SourceProductRecord[] = [];
+    const identified: Array<{ r: SourceProductRecord; uid: string }> = [];
     for (const r of result.records) {
       const uid = r.sourceId === 'RP004' && r.raw.product_group === 'MONTHLY_RENT'
         ? r.uid : sourceUid(r.plate, r.raw.sheet_uid);
       if (!uid) { result.held.push({ row: 0, reasons: r.raw.product_group === 'MONTHLY_RENT'
         ? ['MONTHLY_MODEL_REQUIRED'] : ['UID_REQUIRED', 'UNASSIGNED_PLATE'] }); continue; }
-      if (seen.has(uid)) { result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }); continue; }
-      seen.add(uid); records.push({ ...r, uid });
+      identified.push({ r, uid });
+    }
+    // 같은 UID 가 여러 행이면: 상태·가격이 모두 같은 단순 중복은 첫 행만 반영하고 나머지를 보류하고, 서로 다른 내용이면 «행 순서가
+    // 노출을 정하지 않도록» 모든 행을 보류한다(같은 차에 상반된 상태·가격). 보류는 부재 하향도 막아 기존 문서는 그대로 남는다.
+    const offerOf = (r: SourceProductRecord) => stableDigest({ status: r.status,
+      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : r.vehicleText,   // 월렌트 모델명은 대소문자·공백 표기만 다를 수 있다(UID 가 정규화)
+      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage]) });
+    const byUid = new Map<string, Array<{ r: SourceProductRecord; uid: string }>>();
+    for (const item of identified) (byUid.get(item.uid) ?? byUid.set(item.uid, []).get(item.uid)!).push(item);
+    for (const [uid, group] of byUid) {
+      const conflicting = group.length > 1 && new Set(group.map(g => offerOf(g.r))).size > 1;
+      if (conflicting) { for (let i = 0; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_CONFLICT'] }); continue; }
+      if (seen.has(uid)) continue;
+      seen.add(uid); records.push({ ...group[0]!.r, uid });
+      for (let i = 1; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] });
     }
     return { records, held: result.held };
   } };
@@ -41,6 +56,21 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     if (scopes.includes(tab.title) && (m?.properties?.hidden || !m || !grid || !Array.isArray(grid.rowMetadata) ||
       grid.rowMetadata.length < tab.rowCount || (m.properties?.gridProperties?.rowCount ?? 0) < tab.rowCount)) complete = false;
     const seen = new Set<string>();
+    // 같은 UID 가 이 탭에 여러 번 나오는데 행 내용이 다르면(상반된 상태·가격) 행 순서가 노출을 정하지 않도록 그 UID 의 모든 행을 보류한다.
+    // 내용이 같은 단순 중복은 아래에서 첫 행만 반영하고 나머지를 보류한다.
+    const conflictingUids = new Set<string>(), signatures = new Map<string, string>();
+    for (let i = 1; i < tab.values.length; i++) {
+      const row = tab.values[i]!;
+      const supplier = sharedSheetChannelOf(tab.title, row[0]);
+      const hiddenRow = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      if (!supplier || supplier.code !== source || hiddenRow || tab.title === '종합' || row.every(c => c === '' || c === null)) continue;
+      const rowUid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
+      if (!rowUid) continue;
+      const signature = JSON.stringify(row.filter((_, column) => column !== uidIndex));
+      const prior = signatures.get(rowUid);
+      if (prior === undefined) signatures.set(rowUid, signature);
+      else if (prior !== signature) conflictingUids.add(rowUid);
+    }
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!, original = [...row];
       const supplier = sharedSheetChannelOf(tab.title, row[0]);
@@ -53,8 +83,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       const uid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
-      if (!uid || seen.has(uid)) {
-        holds.push(uid ? 'DUPLICATE_UID_SUSPECT' : 'UID_REQUIRED');
+      if (!uid || seen.has(uid) || conflictingUids.has(uid)) {
+        holds.push(!uid ? 'UID_REQUIRED' : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       seen.add(uid); row[uidIndex] = uid;
@@ -73,7 +103,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
 export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
-  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [];
+  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [];
   let visibilityComplete = true, observationOnlyCount = 0;
   const money = (value: unknown): SourceAmount => {
     if (typeof value === 'string') {
@@ -106,7 +136,14 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
       if (title === '월렌트') {
         if (typeof cells[1] === 'string' && cells[1].trim() === '무보증') continue;
         const rent = money(cells[1]), name = typeof cells[0] === 'string' ? cells[0] : '';
-        if (rent.state === 'UNKNOWN') continue;
+        if (rent.state === 'UNKNOWN') {
+          // 요금 칸이 비어 있거나 «없음» 류 표시면 제안이 없는 것이다. 값이 있는데 읽을 수 없으면(잘못된 금액·음수) 조용히 버리지 않고
+          // 보류로 센다 — 버리면 기존 월렌트 모델이 «부재» 로 하향될 수 있다.
+          const raw = cells[1];
+          const marker = raw == null || (typeof raw === 'string' && ['', '-', '--', '—', 'x', 'X', '없음', 'N/A'].includes(raw.trim()));
+          if (!marker) monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+          continue;
+        }
         const normalized = name.normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
         const note = cells.slice(2).map(v => String(v ?? '')).join(' ');
         const deposit = note.includes('무보증') ? amount(0) : amount(null);
@@ -143,7 +180,7 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     }
   }
   return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
-    completedScopes, visibilityComplete, rows, heldCount: 0, observationOnlyCount };
+    completedScopes, visibilityComplete, rows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({
   sourceId: 'RP004', kind: 'AICA', scopes: [...AICA_SCOPES], maxDowngradeRatio: ratio }, read));

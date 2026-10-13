@@ -320,6 +320,15 @@ describe('native mappings and UID', () => {
     expect(c.rows[0]!.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(c.rows[0]!.record.raw.source_row).toBe(2);
   });
+  it('F05 rows sharing a plate with different content are all held, never decided by row order; identical copies keep the first', () => {
+    const s = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST1002']);                       // 1001 은 상반된 두 행이라 모두 보류, 1002 는 동일 복사본이라 첫 행
+    expect(c.heldReasons?.filter(r => r === 'DUPLICATE_UID_CONFLICT')).toHaveLength(2);
+    expect(c.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
+    const swapped = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
+    expect(f05NativeCapture(swapped.source, swapped.capture, swapped.visibility).rows.map(r => r.record.uid)).toEqual(['TEST1002']);
+  });
   it.each(['hiddenByUser', 'hiddenByFilter'] as const)('F05 excludes %s rows', key => {
     const s = sheet([{}, { 차량번호: 'TEST1002' }]);
     s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]![key] = true;
@@ -406,13 +415,14 @@ describe('native mappings and UID', () => {
   it('SPEC3D monthly numeric offers normalize identity, preserve raw and flag duplicates separately', async () => {
     const f = aicaFixture();
     f.tables[3]!.values = [['차종', '1개월', '비고'], [' Model a ', '345,678', '월렌트 무보증'],
-      ['MODEL A', 456789], ['Model B', 500000], ['Unavailable', 'x'], ['Blank', ''], ['Empty', null],
+      ['MODEL A', 345678, '월렌트 무보증'], ['Model B', 500000], ['Unavailable', 'x'], ['Blank', ''], ['Empty', null],
       ['Non numeric', '무보증'], ['Invalid', -1]];
     f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
     f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
     const before = structuredClone(f), out = await aicaRead(f);
     expect(out.read.complete).toBe(true); expect(f).toEqual(before);
-    expect(out.held).toEqual([{ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }]);
+    // 읽을 수 없는 요금(-1)은 조용히 버리지 않고 보류로 센다(비어 있거나 x·무보증 표시는 제안 없음이라 보류가 아님)
+    expect(out.held).toEqual([{ row: 0, reasons: ['MONTHLY_RENT_UNPARSEABLE'] }, { row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }]);
     const monthly = out.records.filter(r => r.raw.product_group === 'MONTHLY_RENT');
     expect(monthly.map(r => r.uid)).toEqual(['RP004:MONTHLY:MODELA', 'RP004:MONTHLY:MODELB']);
     expect(new Set(out.records.map(r => r.uid)).size).toBe(4);
@@ -588,11 +598,20 @@ describe('native mappings and UID', () => {
       { complete: true, products: [old] }, now).plan;
     expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === 'TEST9999')).toBe(true);   // 사라진 차는 내려간다
   });
+  it('Aica rows sharing a plate with different offers are all held, never decided by row order', async () => {
+    const a = aicaRow({ 차량번호: 'TEST3001', 배차상태: '배차문의' }), b = aicaRow({ 차량번호: 'TEST3001', 배차상태: '출고불가' });
+    const ok = aicaRow({ 차량번호: 'TEST3002' });
+    const out = await aicaRead(aicaFixture([a, b, ok]));
+    expect(out.records.map(r => r.uid)).toEqual(['TEST3002']);
+    expect(out.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_CONFLICT', 'DUPLICATE_UID_CONFLICT']);
+    const swapped = await aicaRead(aicaFixture([b, a, ok]));                                       // 행 순서를 바꿔도 같은 결과
+    expect(swapped.records.map(r => r.uid)).toEqual(['TEST3002']);
+  });
   it('Aica plate-only UID, duplicate and unassigned holds protect absence', async () => {
     const f = aicaFixture([aicaRow(), aicaRow(), aicaRow({ 차량번호: '' })]);
     f.tables[0]!.values[0]!.push('UID'); f.tables[0]!.values[3]!.push('DO_NOT_USE');
     const out = await aicaRead(f); expect(out.records).toHaveLength(1);
-    expect(out.held.flatMap(h => h.reasons)).toEqual(['DUPLICATE_UID_SUSPECT', 'UID_REQUIRED', 'UNASSIGNED_PLATE']);
+    expect(out.held.flatMap(h => h.reasons)).toEqual(['UID_REQUIRED', 'UNASSIGNED_PLATE', 'DUPLICATE_UID_SUSPECT']);
     const old = product('TEST9999'); old.record.sourceId = 'RP004';
     const plan = planSourceCycle(out.plugin, { records: out.records, complete: true, observedAt: time, heldCount: out.held.length },
       { complete: true, products: [old] }, now).plan;

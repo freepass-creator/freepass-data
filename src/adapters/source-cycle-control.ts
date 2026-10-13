@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, unlink, appendFile, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, appendFile, stat, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -15,11 +15,18 @@ const processAlive = (pid: number) => {
 export const STALE_LOCK_MS = 10 * 60_000;
 async function takeOverDeadLock(path: string): Promise<boolean> {
   try {
-    const owner = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
+    const raw = await readFile(path, 'utf8');
+    const owner = JSON.parse(raw) as { pid?: unknown };
     const age = Date.now() - (await stat(path)).mtimeMs;
     if (typeof owner.pid !== 'number' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || processAlive(owner.pid) || age < STALE_LOCK_MS) return false;
-    await rename(path, `${path}.dead-pid-${owner.pid}-${Date.now()}`);
-    return true;
+    // 두 회차가 동시에 같은 죽은 잠금을 인계하면 늦은 쪽의 rename 이 먼저 인계한 쪽의 «살아 있는 새 잠금»을 옮길 수 있다(검사와 이동 사이의 경쟁).
+    // 판단한 내용과 같은 잠금을 옮겼는지 옮긴 뒤 확인하고, 다른 잠금이면 되돌려 놓는다(link 는 이미 있으면 실패해 남의 잠금을 덮지 않는다).
+    const moved = `${path}.dead-pid-${owner.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    await rename(path, moved);
+    if ((await readFile(moved, 'utf8').catch(() => null)) === raw) return true;
+    await link(moved, path).catch(() => undefined);
+    await unlink(moved).catch(() => undefined);
+    return false;
   } catch { return false; }
 }
 

@@ -389,11 +389,13 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
   it('plate bridging needs exactly one candidate, an assigned plate and no direct id match', () => {
     const mk = (uid: string, plate: string | null): CycleProduct => ({ ...product(uid), record: { ...record(uid), plate } });
     const src = (uid: string, plate: string | null): SourceProductRecord => ({ ...record(uid), plate });
-    // 같은 차량번호 문서가 둘이면 어느 쪽인지 알 수 없으므로 잇지 않는다(새로 편입, 기존 둘은 부재로 내려감)
+    // 같은 차량번호 문서가 둘이면 어느 쪽인지 알 수 없으므로 잇지 않고, 새로 편입하지도 기존 둘을 내리지도 않고 보류한다
     const ambiguous = planSourceCycle(config, evidence([src('12가3456', '12가3456')]),
       { complete: true, products: [mk('a', '12가3456'), mk('b', '12가3456')] }, now);
     expect(ambiguous.plan.warnings.some(w => w.startsWith('UID_BRIDGED'))).toBe(false);
-    expect(ambiguous.plan.entries.filter(e => e.kind === 'ENROLL')).toHaveLength(1);
+    expect(ambiguous.plan.warnings).toContain('UID_BRIDGE_AMBIGUOUS');
+    expect(ambiguous.plan.entries).toEqual([]);
+    expect(ambiguous.plan.held).toBeGreaterThan(0);
     // 차량번호 자리표시(신차 등)는 차량을 식별하지 못한다
     const placeholder = planSourceCycle(config, evidence([src('N-1', '신차')]), { complete: true, products: [mk('a', '신차')] }, now);
     expect(placeholder.plan.warnings.some(w => w.startsWith('UID_BRIDGED'))).toBe(false);
@@ -484,6 +486,11 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     expect(release).not.toBeNull();
     expect((await readdir(dir)).some(n => n.includes(`.lock.dead-pid-${pid}-`))).toBe(true);
     await release!(); expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(false);
+  });
+  it('two runs racing to take over the same dead lock end with exactly one owner', async () => {
+    const pid = deadPid(), { ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
+    const results = await Promise.all([ctrl.acquire('SRC'), ctrl.acquire('SRC'), ctrl.acquire('SRC')]);
+    expect(results.filter(r => r !== null)).toHaveLength(1);
   });
   it('never takes over a recent lock, a live owner, or an unreadable lock', async () => {
     expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
