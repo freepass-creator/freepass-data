@@ -11,6 +11,13 @@ const beat = (source: string, minutesAgo: number, extra: Record<string, unknown>
   readCount: 10, heldCount: 0, sourceCount: 10, ...extra });
 
 describe('source freshness (대표 2026-10-13: 원천 신선도는 기록으로만 판단)', () => {
+  it('a source not completed for 6 hours or more is listed for escalation even while its soft hold is not a failure', () => {
+    const r = assessFreshness([beat('RP031', 359, { error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' }), beat('RP012', 361, { error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' }),
+      beat('RP004', 30)], [], { now, maxAgeMinutes: 120 });
+    expect(r.unhealthy).toEqual(['RP012:STALE', 'RP031:STALE']);
+    expect(r.escalate).toEqual(['RP012:STALE:361m']);
+    expect(assessFreshness([beat('RP031', 200)], [], { now, escalateAfterMinutes: 180 }).escalate).toEqual(['RP031:STALE:200m']);
+  });
   it('latest heartbeat per source decides; within max age is FRESH', () => {
     const r = assessFreshness([beat('RP004', 300), beat('RP004', 30), beat('RP006', 90)], [], { now, maxAgeMinutes: 120 });
     expect(r.status).toBe('HEALTHY'); expect(r.fresh).toBe(2); expect(r.sources.map(s => s.ageMinutes)).toEqual([30, 90]);

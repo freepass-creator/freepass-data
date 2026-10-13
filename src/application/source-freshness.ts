@@ -6,7 +6,10 @@ export type SourceFreshness = {
   failures: number | null; error: string | null; readCount: number | null; sourceCount: number | null; alerts: string[];
 };
 export type FreshnessReport = {
-  checkedAt: string; maxAgeMinutes: number; status: 'HEALTHY' | 'UNHEALTHY'; fresh: number; unhealthy: string[]; sources: SourceFreshness[];
+  checkedAt: string; maxAgeMinutes: number; status: 'HEALTHY' | 'UNHEALTHY'; fresh: number; unhealthy: string[];
+  /** 마지막 정상 완료가 escalateAfterMinutes(기본 6시간) 넘게 지난 원천 — 소프트 보류(상류 시각 문제)가 «조용히 계속 못 읽는 상태» 로 묻히지 않게 커맨드 센터에 올릴 대상. */
+  escalate: string[];
+  sources: SourceFreshness[];
 };
 type Beat = { source?: unknown; stopped?: unknown; lastCompleteAt?: unknown; lastAttemptAt?: unknown; failures?: unknown; error?: unknown;
   readCount?: unknown; sourceCount?: unknown };
@@ -17,7 +20,7 @@ const iso = (v: unknown): string | null => typeof v === 'string' && Number.isFin
 const num = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 
 export function assessFreshness(heartbeatLines: readonly string[], alertLines: readonly string[],
-  options: { now?: number; maxAgeMinutes?: number; expect?: readonly string[]; only?: readonly string[] } = {}): FreshnessReport {
+  options: { now?: number; maxAgeMinutes?: number; escalateAfterMinutes?: number; expect?: readonly string[]; only?: readonly string[] } = {}): FreshnessReport {
   const now = options.now ?? Date.now(), maxAgeMinutes = options.maxAgeMinutes ?? 120, expect = options.expect ?? [];
   const latest = new Map<string, Beat>();
   for (const beat of parseLines(heartbeatLines) as Beat[]) if (typeof beat.source === 'string') latest.set(beat.source, beat);
@@ -36,5 +39,7 @@ export function assessFreshness(heartbeatLines: readonly string[], alertLines: r
   });
   const unhealthy = sources.filter(s => s.status !== 'FRESH');
   return { checkedAt: new Date(now).toISOString(), maxAgeMinutes, status: unhealthy.length ? 'UNHEALTHY' : 'HEALTHY',
-    fresh: sources.length - unhealthy.length, unhealthy: unhealthy.map(s => `${s.source}:${s.status}`), sources };
+    fresh: sources.length - unhealthy.length, unhealthy: unhealthy.map(s => `${s.source}:${s.status}`),
+    escalate: unhealthy.filter(s => s.ageMinutes !== null && s.ageMinutes >= (options.escalateAfterMinutes ?? 360))
+      .map(s => `${s.source}:${s.status}:${s.ageMinutes}m`), sources };
 }
