@@ -110,6 +110,27 @@ export function withdrawalPatch(prior, { reason, supplier, digest, readAt, appro
   };
 }
 
+/** 되읽기 비교용 정규화: 키 순서 무관, null/undefined/빈 맵 가지는 «없음»과 같다(REST 응답은 키 순서와 null 표현이 쓰기 전 읽은 것과 달라질 수 있다). */
+export function canonicalValue(v) {
+  if (v === undefined || v === null) return null;
+  if (Array.isArray(v)) return v.map(canonicalValue);
+  if (typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v).sort()) { const c = canonicalValue(v[k]); if (c !== null) out[k] = c; }
+    return Object.keys(out).length ? out : null;
+  }
+  return v;
+}
+export const sameValue = (a, b) => JSON.stringify(canonicalValue(a)) === JSON.stringify(canonicalValue(b));
+/** 하향 쓰기 뒤 되읽기 판정: 표식 칸이 기대값이고 가격 행은 쓰기 전과 같다(deep 비교). */
+export function readbackMatches(after, beforeFields, { reason, approval }) {
+  if (!after) return false;
+  const f = after.fields ?? after;
+  return f.listable === false && f.status === '출고불가' && f.publication_withdrawal?.reason === reason
+    && (!approval || f.publication_withdrawal?.approvalRef === approval.ref) && f.status_kind === '불가' && !!f.publication_withdrawal_prior
+    && sameValue(f.price, beforeFields.price);
+}
+
 export const BACKUP_DIR = join(homedir(), '.codex', 'private', 'freepass-data-exposure-backups');
 
 async function main(argv) {
@@ -191,9 +212,7 @@ async function main(argv) {
       const r = await fetch(url, { method: 'PATCH', headers: H, body: JSON.stringify({ fields: Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, enc(v)])) }) });
       if (!r.ok) { failed.push(`${l4(item.id)}:HTTP${r.status}`); continue; }
       const after = await getDoc(item.id);
-      const ok = after && after.fields.listable === false && after.fields.status === '출고불가' && after.fields.publication_withdrawal?.reason === item.reason
-        && (!approval || after.fields.publication_withdrawal?.approvalRef === approval.ref) && after.fields.status_kind === '불가' && !!after.fields.publication_withdrawal_prior
-        && JSON.stringify(after.fields.price ?? null) === JSON.stringify(doc.fields.price ?? null); // 가격 행 불변
+      const ok = readbackMatches(after, doc.fields, { reason: item.reason, approval }); // 가격 행 불변은 deep 비교(키 순서·null 무시)
       if (ok) written++; else failed.push(`${l4(item.id)}:READBACK`);
     } catch (e) { failed.push(`${l4(item.id)}:${e.message}`); }
   }

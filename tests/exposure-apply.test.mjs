@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { APPROVED_REASON, buildApprovedPlan, parseArgs, planDigest, ratioGuard, selectEligible, withdrawalPatch } from '../scripts/exposure-apply.mjs';
+import { APPROVED_REASON, buildApprovedPlan, canonicalValue, parseArgs, planDigest, ratioGuard, readbackMatches, sameValue, selectEligible, withdrawalPatch } from '../scripts/exposure-apply.mjs';
 
 const REF = '대표 10-13 GHD 채팅: 에스에이=출고불가';
 const doc = (id, fields, updateTime = 't1') => ({ id, updateTime, fields });
@@ -101,5 +101,30 @@ describe('withdrawalPatch — 승인 근거 기록, 이전 값 보존, 삭제 �
     expect(p.publication_withdrawal_prior).toEqual({ listable: true, status: '판매중', vehicle_status: null, status_kind: null });
     expect(Object.keys(p)).not.toContain('price');
     expect(withdrawalPatch({}, { reason: 'SOURCE_ABSENT', supplier: 'RP004', digest: 'a'.repeat(64), readAt: 'r' }).publication_withdrawal).not.toHaveProperty('approvalRef');
+  });
+});
+
+describe('되읽기 비교 — 오탐 방지(에스에이 10대 사례)', () => {
+  const marked = { listable: false, status: '출고불가', status_kind: '불가', publication_withdrawal: { reason: APPROVED_REASON, approvalRef: REF }, publication_withdrawal_prior: { listable: true } };
+  it('가격 맵 키 순서가 달라도 같다', () => {
+    expect(sameValue({ 24: { rent: 1, deposit: 2 }, 36: { deposit: 3, rent: 4 } }, { 36: { rent: 4, deposit: 3 }, 24: { deposit: 2, rent: 1 } })).toBe(true);
+  });
+  it('null·누락·빈 맵은 같은 «없음»', () => {
+    expect(sameValue(undefined, null)).toBe(true);
+    expect(sameValue({}, undefined)).toBe(true);
+    expect(sameValue({ 12: { rent: 1, deposit: null } }, { 12: { rent: 1 } })).toBe(true);
+    expect(canonicalValue({ a: null, b: {} })).toBe(null);
+  });
+  it('값이 실제로 다르면 다르다', () => {
+    expect(sameValue({ 12: { rent: 1 } }, { 12: { rent: 2 } })).toBe(false);
+    expect(sameValue({ 12: { rent: 1 } }, undefined)).toBe(false);
+  });
+  it('readbackMatches: 가격이 null→누락, 키 순서 변경이어도 통과 / 표식 누락·가격 변경은 실패', () => {
+    const approval = { ref: REF };
+    expect(readbackMatches({ fields: { ...marked } }, { price: null }, { reason: APPROVED_REASON, approval })).toBe(true);
+    expect(readbackMatches({ fields: { ...marked, price: { 36: { deposit: 3, rent: 4 } } } }, { price: { 36: { rent: 4, deposit: 3 } } }, { reason: APPROVED_REASON, approval })).toBe(true);
+    expect(readbackMatches({ fields: { ...marked, listable: true } }, {}, { reason: APPROVED_REASON, approval })).toBe(false);
+    expect(readbackMatches({ fields: { ...marked, price: { 36: { rent: 9 } } } }, { price: { 36: { rent: 4 } } }, { reason: APPROVED_REASON, approval })).toBe(false);
+    expect(readbackMatches(null, {}, { reason: APPROVED_REASON, approval })).toBe(false);
   });
 });
