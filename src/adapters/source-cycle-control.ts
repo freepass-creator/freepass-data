@@ -1,12 +1,30 @@
-import { mkdir, open, readFile, rename, unlink, appendFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, appendFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
 import { emptyCycleState, type CycleControl, type CycleState } from '../ports/source-cycle.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 
-/** Crash-safe local runner state. Lock is exclusive-create with no automatic stale takeover:
- * a crashed process leaves HOLD until an operator confirms it is dead. Never unlink another owner. */
+const processAlive = (pid: number) => {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }   // ESRCH(없음)만 죽은 프로세스
+};
+/** 소유 프로세스가 죽어 남은 잠금만 인계한다: 같은 PC 의 잠금 파일에 기록된 pid 가 없고(ESRCH) 잠금이 STALE_LOCK_MS 보다 오래됐을 때.
+ * 강제 종료된 회차의 잠금이 남아 원천이 매 회차 «중복 회차 생략» 으로만 지나가던 사고(2026-10-13 RP030)를 막는다. 살아 있거나 판단할 수 없으면
+ * (pid 재사용·읽기 실패·최근 잠금) 인계하지 않는다. 남의 잠금을 지우지 않고 증거를 남기며 한 이름으로 옮긴다. */
+export const STALE_LOCK_MS = 10 * 60_000;
+async function takeOverDeadLock(path: string): Promise<boolean> {
+  try {
+    const owner = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
+    const age = Date.now() - (await stat(path)).mtimeMs;
+    if (typeof owner.pid !== 'number' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || processAlive(owner.pid) || age < STALE_LOCK_MS) return false;
+    await rename(path, `${path}.dead-pid-${owner.pid}-${Date.now()}`);
+    return true;
+  } catch { return false; }
+}
+
+/** Crash-safe local runner state. Lock is exclusive-create. A lock whose owner process is gone and old enough is taken over
+ * (evidence file kept); every other existing lock leaves HOLD until an operator confirms. Never unlink a live owner's lock. */
 export function fileCycleControl(directory: string, heartbeat: CycleControl['heartbeat']): CycleControl {
   const file = (source: string, suffix: string) => join(directory, `${stableDigest(source)}.${suffix}`);
   return {
@@ -15,7 +33,12 @@ export function fileCycleControl(directory: string, heartbeat: CycleControl['hea
       const path = file(source, 'lock'), token = randomUUID();
       let handle;
       try { handle = await open(path, 'wx', 0o600); }
-      catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') return null; throw e; }
+      catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        if (!(await takeOverDeadLock(path))) return null;
+        try { handle = await open(path, 'wx', 0o600); }
+        catch (e2) { if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return null; throw e2; }
+      }
       try { await handle.writeFile(JSON.stringify({ token, pid: process.pid })); await handle.sync(); }
       finally { await handle.close(); }
       return async () => {

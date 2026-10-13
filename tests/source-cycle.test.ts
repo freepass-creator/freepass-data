@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, writeFile, utimes } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planSourceCycle, applySourceCycle, deepEqual, emptyCycleState,
@@ -7,7 +8,7 @@ import { planSourceCycle, applySourceCycle, deepEqual, emptyCycleState,
 import { sourceCyclePlugin, sharedSheetCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CycleCapture, type CycleSourceKind } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
-import { fileCycleControl, sourceRunCycleHeartbeat } from '../src/adapters/source-cycle-control.js';
+import { fileCycleControl, sourceRunCycleHeartbeat, STALE_LOCK_MS } from '../src/adapters/source-cycle-control.js';
 import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { validateSourceRecord, sourceSaleAvailable, salePriceMap, type SourceProductRecord } from '../src/domain/source-engine.js';
@@ -463,5 +464,31 @@ describe('읽기 실패는 안전한 세부 코드를 남긴다 (이안카 READ_
   it('429 and 401/403 keep their existing classification', async () => {
     expect((await failWith(Object.assign(new Error('x'), { status: 429 }))).alerts).toEqual(['RATE_LIMITED']);
     expect((await failWith(new Error('HTTP_403'))).alerts).toEqual(['AUTH_FAILED']);
+  });
+});
+
+describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중복 회차 생략» 으로만 지나간 사고)', () => {
+  const dirs: string[] = [];
+  afterEach(async () => { for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true }); });
+  const lockFor = async (owner: unknown, ageMs: number) => {
+    const dir = await mkdtemp(join(tmpdir(), 'lock-')); dirs.push(dir);
+    const path = join(dir, `${stableDigest('SRC')}.lock`);
+    await writeFile(path, typeof owner === 'string' ? owner : JSON.stringify(owner));
+    const when = new Date(Date.now() - ageMs); await utimes(path, when, when);
+    return { dir, path, ctrl: fileCycleControl(dir, async () => {}) };
+  };
+  const deadPid = () => { const r = spawnSync(process.execPath, ['-e', '']); return r.pid!; };   // 방금 끝난 프로세스의 pid
+  it('takes over an old lock whose owner process is gone, keeping the evidence file', async () => {
+    const pid = deadPid(), { dir, path, ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
+    const release = await ctrl.acquire('SRC');
+    expect(release).not.toBeNull();
+    expect((await readdir(dir)).some(n => n.includes(`.lock.dead-pid-${pid}-`))).toBe(true);
+    await release!(); expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(false);
+  });
+  it('never takes over a recent lock, a live owner, or an unreadable lock', async () => {
+    expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
+    expect(await (await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();          // 살아 있음
+    expect(await (await lockFor('not json', STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();                               // 판단 불가
+    expect(await (await lockFor({ token: 'x' }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();                           // pid 없음
   });
 });
