@@ -29,6 +29,14 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         if (plugin.family !== 'IANCAR' || !plugin.syncedAt) throw new Error('SYNC_PROBE_UNAVAILABLE');
         synced = await plugin.syncedAt();
         if (!synced || !Number.isFinite(Date.parse(synced)) || Date.parse(synced) > clock()) throw new Error('SYNC_PROBE_INVALID');
+        // 상세 읽기에 약 5분이 걸리고 상류 신선도 창은 15분이다. 갱신 후 10분이 넘었으면 이번 갱신은 창 안에 끝낼 수 없어 다음 갱신을 기다린다
+        // (넘긴 채 읽으면 DETAIL_SOURCE_DRIFT 로 5분마다 되풀이 실패하며 공급사 API 만 소모한다).
+        if (clock() - Date.parse(synced) > 10 * 60_000 && synced !== state.lastSyncedAt) {
+          state.error = null;
+          await control.save(plugin.sourceId, state);
+          await control.heartbeat(plugin.sourceId, state, null);
+          return { status: 'UNCHANGED_SYNC', writes: 0, summary: 'synced_at 갱신 후 10분 초과: 신선도 창 안에 상세 읽기를 끝낼 수 없어 다음 갱신을 기다림' };
+        }
         if (synced === state.lastSyncedAt) {
           state.error = null;
           await control.save(plugin.sourceId, state);
