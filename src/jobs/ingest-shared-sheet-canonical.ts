@@ -223,7 +223,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
               x.sourceFingerprint === binding.sourceFingerprint && x.status === 'VALID') : [];
           if (operationalRefresh && previous.length !== 1) throw new Error('OPERATIONAL_PREVIOUS_CANDIDATE_NOT_UNIQUE');
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
-            maxObservationAgeSeconds: 900 } : undefined;
+            maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
           else {
@@ -305,6 +305,11 @@ export function safeErrorCode(error: unknown): string {
   if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
   return error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? `UNCODED_${error.name}` : 'UNCODED';
 }
+/** 예약 적용 울타리: 명령 시각 − 원천 관측 시각(계획 캡처 readTime)의 상한.
+ * 900초였을 때 예약 적용이 10-11 22:15Z 부터 전부 거절됐다 — 적용 단계 자체(사전 재계획·RAW 적재·listOffers)가 15~20분 걸려
+ * 첫 명령 시점에 이미 상한을 넘겼기 때문. 신선도는 적용 직전 라이브 재캡처 대조(assertLiveSharedSheetMatches, 2분)가 보장하므로
+ * 이 울타리는 «터무니없이 오래된 계획» 만 막는 2차 안전선으로 두고 적용 단계 소요를 넉넉히 덮는 값으로 둔다. */
+export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;

@@ -246,7 +246,7 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       expect(p.plan.operationalRefresh).toBe(true);
       expect(p.plan.entries[0]!.action).toBe('CHANGE');
-      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 900 });
+      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 3600 });
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
       expect(result.report).toMatchObject({ status: 'APPLIED' });
