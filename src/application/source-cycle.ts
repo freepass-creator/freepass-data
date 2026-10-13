@@ -60,6 +60,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     after.listable = false;
     after.publication_withdrawal ??= { reason, source: config.sourceId, observedAt: evidence.observedAt!, deleteAuthorized: false };
     after.publication_withdrawal_prior ??= { listable: before.listable, status: structuredClone(before.record.status) };
+    // 문서에는 압축 레코드(raw 는 digest)만 저장되고 되읽기도 그 형태로 돌아온다. 원문이 복원된 before.record 를 그대로 after 에 두면
+    // 부재 하향 적용 뒤 되읽기가 항상 불일치해 APPLY_UNCERTAIN 이 된다(2026-10-14 RP004 하향 11건 중 1건만 적용·정지 실측).
+    after.record = compactRecord(after.record);
     return after;
   };
   let identityHolds = false, depositPreserved = 0, uidBridged = 0;

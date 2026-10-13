@@ -11,7 +11,7 @@ import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
 import { fileCycleControl, sourceRunCycleHeartbeat, STALE_LOCK_MS } from '../src/adapters/source-cycle-control.js';
 import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
-import { validateSourceRecord, sourceSaleAvailable, salePriceMap, type SourceProductRecord } from '../src/domain/source-engine.js';
+import { validateSourceRecord, sourceSaleAvailable, salePriceMap, compactRaw, type SourceProductRecord } from '../src/domain/source-engine.js';
 import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 
@@ -74,7 +74,7 @@ describe('source cycle planning/application', () => {
     expect(m.data.size).toBe(6);
     expect(m.data.get('new')!.record.vehicleHold).toHaveLength(1);
     expect(m.data.get('absent1')).toMatchObject({ listable: false, publication_withdrawal: { reason: 'SOURCE_ABSENT', deleteAuthorized: false }, publication_withdrawal_prior: { listable: true } });
-    expect(m.data.get('absent1')!.record.raw).toEqual(product('absent1').record.raw);
+    expect(m.data.get('absent1')!.record.raw).toEqual(compactRaw(product('absent1').record.raw));   // 하향 문서도 압축 레코드 형태로 남는다(raw 는 digest)
     expect(build().plan.entries).toEqual([]);
     rows.forEach(r => { r.observedAt = new Date(now + 1000).toISOString(); });
     expect(planSourceCycle(config, { ...evidence(rows), observedAt: rows[0]!.observedAt }, { complete: true, products: [...m.data.values()] }, now + 1000).plan.entries).toEqual([]);

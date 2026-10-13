@@ -756,6 +756,20 @@ describe('옵션 가격 키 복원과 상류 정지 처리 (이안카 2026-10-13
       expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);
     });
   });
+  it('an absence downgrade of a document whose stored record still holds full raw (written before compaction) reads back identically', async () => {
+    const { commands, fake } = await setup();
+    const a = product('ABS1'), b = product('ABS2');
+    for (const p of [a, b]) p.record.raw = { cells: ['가'.repeat(40), '나'.repeat(40)], headers: ['차량번호', '배차상태'], source: 'aica-sheet', source_row: 2 };
+    // 압축 도입 전 엔진이 쓴 문서: source_cycle_record 에 원문 전체(raw.cells·headers)가 그대로 들어 있다.
+    for (const p of [a, b]) fake.docs.set(p.record.uid, { name: `projects/synthetic-test/databases/(default)/documents/products/${p.record.uid}`,
+      updateTime: `${time}:1`, fields: encodeFields({ ...nativeCycleFields(p), source_cycle_record: p.record }) });
+    const absent = await prepare(commands, [b.record]);                                                  // ABS1 이 원천에서 사라진다
+    expect(absent.plan.entries.map(e => [e.kind, e.after.record.uid])).toEqual([['DOWNGRADE', 'ABS1']]);
+    expect(await apply(commands, absent)).toMatchObject({ status: 'APPLIED', verified: 1, uncertain: [] });
+    const stored = decodeFields(fake.docs.get('ABS1').fields);
+    expect(stored).toMatchObject({ listable: false, status: '출고불가' });
+    expect(JSON.stringify(stored.source_cycle_record)).not.toContain('가가가가');                          // 쓴 뒤에는 압축 형태
+  });
   it('an upstream that stopped refreshing is a soft hold: no failure count, no STOPPED, one alert, zero writes', async () => {
     const { commands, fake } = await setup(); const dir = await directory();
     const alerts: string[] = [];
