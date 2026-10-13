@@ -3,7 +3,7 @@ import { normalizeSharedSheet, sharedSheetStatusPolicy } from './normalize-share
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { RawRecord } from '../domain/source.js';
 import type { SourceAmount, SourceEngine, SourceProductRecord, SourceRead, SourceRowHold } from '../domain/source-engine.js';
-import { sourceProductKey, validateSourceRecord } from '../domain/source-engine.js';
+import { classifyReadError, sourceProductKey, validateSourceRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 /** Capture transport is injected from capture-shared-sheet; no second Sheets client.
@@ -21,9 +21,11 @@ export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>
         return { raw, attemptedAt, observedAt: raw.readTime, complete: true, error: null };
       } catch (e) {
         const message = e instanceof Error ? e.message : '';
+        const classified = classifyReadError(e);
         const error = /429/.test(message) ? 'RATE_LIMITED' : /401|403|AUTH/.test(message) ? 'AUTH_FAILED' :
           /CAPTURE|SCHEMA/.test(message) ? 'SCHEMA_INVALID' : 'READ_FAILED';
-        return { raw: null, attemptedAt, observedAt: null, complete: false, error };
+        return { raw: null, attemptedAt, observedAt: null, complete: false, error,
+          ...(error === 'READ_FAILED' && classified.detail ? { detail: classified.detail } : {}) };
       }
     },
     toRecords: sharedSheetRecords,

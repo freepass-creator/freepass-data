@@ -37,8 +37,19 @@ function sheetsViaGws(url: URL): unknown {
   const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
   const bin = resolveGwsBin(process.env);
   if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
-  const out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-  return JSON.parse(out.slice(out.indexOf('{')));
+  let out: string;
+  try {
+    out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    // gws 실패는 «Command failed» 한 줄뿐이라 원인을 알 수 없었다(2026-10-13 RP017 READ_FAILED). 표준 오류에서 상태만 뽑아 코드로 남기고 본문은 남기지 않는다.
+    const err = e as NodeJS.ErrnoException & { stderr?: string | Buffer; status?: number | null; signal?: string | null };
+    const text = String(err.stderr ?? '');
+    if (err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM') throw new Error('SHARED_SHEET_GWS_TIMEOUT');
+    const http = /\b(429|401|403|5\d\d)\b/.exec(text)?.[1];
+    if (http) throw new Error(`SHARED_SHEET_HTTP_${http}`);
+    throw new Error(`SHARED_SHEET_GWS_EXIT_${typeof err.status === 'number' ? err.status : 'UNKNOWN'}`);
+  }
+  try { return JSON.parse(out.slice(out.indexOf('{'))); } catch { throw new Error('SHARED_SHEET_RESPONSE_INVALID'); }
 }
 async function sheetsGet(url: URL, ports: Ports): Promise<unknown> {
   if (process.env.SHEETS_TRANSPORT === 'gws' && !ports.fetcher && !ports.accessToken) return sheetsViaGws(url);
