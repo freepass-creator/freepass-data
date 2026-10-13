@@ -231,6 +231,11 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 공통 시트 15분 예약 적용 연속 실패 원인·완화 (shared-sheet-refresh-fence)
+- 원인(비공개 증거 apply.json 으로 확정): 10-11 22:03Z `ec840d36` 가 넣은 operationalRefresh 울타리 `maxObservationAgeSeconds=900` 을 적용 단계 자체 소요(사전 재계획+RAW 적재+listOffers, 실측 17분)가 넘겨 첫 CHANGE 명령부터 `CANONICAL_COMMAND_REJECTED`(held 1·remaining 174). 10-11 22:15Z 이후 예약 적용 전부 실패, 마지막 성공은 10-11 16:42Z 수동.
+- 완화: 울타리 상수 `OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS=3600`. Codex(gpt-6-astra) 검토: 원인 동의, 단 «임시 완화» — 라이브 재캡처 대조가 긴 전처리 «전»이라 첫 명령 시점 신선도 보장이 아님. 정식 해결 = 전처리 후 재캡처·검증시각 결합 또는 적용 단계 지연 축소(중복 preflight·반복 listOffers·직렬 저장 계측). 01:32Z~23:47Z 회차의 출력 없는 `SHARED_SHEET_JOB_HOLD` 는 별도 예외(원인 미확정) — PR #571 의 사유 코드 노출로 확정.
+- next_start_here: 반영 후 다음 예약 회차 apply.json 이 APPLIED/PARTIAL_HOLD 인지 확인 → 적용 단계 구간별 계측 → 정식 해결 설계.
+
 ### 2026-10-12 수수료 미확정 분류·아이언/우리캐피탈 신차 선출고 기준
 
 - 상세 표: [FEE-UNCONFIRMED-TRIAGE-20261012.md](FEE-UNCONFIRMED-TRIAGE-20261012.md). 계획 재실행(쓰기 0) 확정 4,880→4,976, 미확정 8,942→8,846.
