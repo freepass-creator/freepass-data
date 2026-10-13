@@ -142,22 +142,14 @@ async function readIron() {
   return { ok: true, readAt: new Date().toISOString(), records: records.filter(r => !only || last4(r.plate) === only), note: '홈페이지 HTML 있는 그대로(상세 차량당 1회)', all: records };
 }
 
+// 오토플러스: 수집 원천은 홈페이지 게시 목록뿐이다(대표 결정 10-14, 정본 = 홈페이지). 공급사 시트는 읽지 않는다(FREEPASS_AUTOPLUS_SHEET_ID 는 지우지 않고 사용만 중단).
+// 목록 API 가 화면 스크립트 전용이라 브라우저로 읽은 차량번호 파일(--homepage-plates)이 입력이다. 못 읽은 날은 시트로 대체하지 않고 «읽지 못함»으로 둔다.
 function readAutoplus(products) {
-  const sheetId = process.env.FREEPASS_AUTOPLUS_SHEET_ID;
-  const plates = new Set(), notes = [];
-  if (sheetId) {
-    for (const tab of ['판매차량리스트', '★★★  전기차(EV6,니로EV 등) 프로모션(수수료 150만원) ★★★'] /* ERP4 sheet-autoplus 와 같은 2탭 병합 */) {
-      try { const rowsAp = sheetRead(sheetId, `'${tab}'!A1:AZ1100`); if (rowsAp.length >= 1100) throw new Error('ROW_LIMIT'); for (const r of rowsAp) for (const c of r) { const m = String(c).replace(/\s/g, '').match(/\d{2,3}[가-힣]\d{4}/); if (m) plates.add(m[0]); } } catch { notes.push(`${tab} 읽기 실패`); }
-    }
-  } else notes.push('시트 주소 없음(FREEPASS_AUTOPLUS_SHEET_ID)');
-  let hp = null;
-  if (opt('homepage-plates') && existsSync(opt('homepage-plates'))) hp = new Set(readFileSync(opt('homepage-plates'), 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean));
-  if (!sheetId && !hp) return { ok: false, reason: '시트 주소와 홈페이지 목록이 모두 없음' };
-  if (hp && [...hp].filter(x => /\d{2,3}[가-힣]\d{4}/.test(x)).length < 10) return { ok: false, reason: '오토플러스 홈페이지 목록이 비정상적으로 작음(번호 형식 10건 미만) — 재읽기 필요' }; // fail-closed
-  if (notes.some(n => /읽기 실패/.test(n))) return { ok: false, reason: `오토플러스 시트 읽기 불완전(${notes.join(',')}) — 재읽기 필요` }; // fail-closed
-  const all = new Set([...plates, ...(hp ?? [])]);
-  return { ok: true, readAt: new Date().toISOString(), records: [...all].map(p => ({ plate: p, 원천: [plates.has(p) ? '시트' : null, hp?.has(p) ? '홈페이지' : null].filter(Boolean).join('+'), raw: {} })),
-    note: `시트 차량 ${plates.size}대${hp ? ` · 홈페이지 ${hp.size}대` : ' · 홈페이지는 목록 API 가 화면 스크립트 전용이라 브라우저로 읽은 파일(--homepage-plates) 필요'}${notes.length ? ' · ' + notes.join(',') : ''}`, partial: !hp || !sheetId };
+  const p = opt('homepage-plates');
+  if (!p || !existsSync(p)) return { ok: false, reason: '오토플러스 홈페이지 목록을 읽지 못함(--homepage-plates 파일 없음) — 시트로 대체하지 않는다' };
+  const hp = new Set(readFileSync(p, 'utf8').split(/\r?\n/).map(x => plateKey(x)).filter(Boolean));
+  if ([...hp].filter(x => /\d{2,3}[가-힣]\d{4}/.test(x)).length < 10) return { ok: false, reason: '오토플러스 홈페이지 목록이 비정상적으로 작음(번호 형식 10건 미만) — 재읽기 필요' }; // fail-closed
+  return { ok: true, readAt: new Date().toISOString(), records: [...hp].map(x => ({ plate: x, 원천: '홈페이지', raw: {} })), note: `홈페이지 게시 목록 ${hp.size}대(정본, 시트 미사용)`, partial: false };
 }
 
 const BLOCKED = { RP012: { ok: false, reason: "손오공은 직접 읽기 없음 — ERP4 매시 수집기 반영 결과를 원천 기준으로 본다(판매가능대수 명령 참고)" } };

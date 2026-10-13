@@ -118,15 +118,10 @@ for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/
   catch { blockers.push(`SOURCE_READ_FAILED:${code}`); src[code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
 }
 { const out = tmp('RP023'); const args = ['read', 'RP023', '--out', out]; if (opt('homepage-plates')) args.push('--homepage-plates', opt('homepage-plates'));
-  try { run('source-read.mjs', args); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.map(r => key(r.plate)));
-    const hpOnly = new Set(rows.filter(r => /홈페이지/.test(r.원천 ?? '')).map(r => key(r.plate))); // 대표 10-12: 홈페이지 게시 목록이 판매 가능 정본, 시트는 보조
-    src.RP023 = opt('homepage-plates') ? { set: hpOnly, all: set, 읽힘: true, 비고: `홈페이지 게시 목록이 정본(시트에만 있는 ${set.size - hpOnly.size}대는 판매 가능에서 제외)` } : { set, all: set, 읽힘: true, 비고: '시트 목록에 존재(홈피 목록 파일 없음 → 일부)' }; }
-  catch { blockers.push('SOURCE_READ_FAILED:RP023'); src.RP023 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
-  // 오토플러스는 홈페이지 목록이 정본이다. 목록 파일이 없거나(자동 읽기 길 없음) 비정상적으로 작으면 계획을 만들지 않는다 — 빈 목록이면 판매 중 전부가 하향 대상이 된다.
-  const hpPath = opt('homepage-plates'), hpCount = hpPath && existsSync(hpPath) ? readFileSync(hpPath, 'utf8').split(/\r?\n/).filter(x => x.trim()).length : 0;
-  if (!process.env.FREEPASS_AUTOPLUS_SHEET_ID) blockers.push('AUTOPLUS_SHEET_ID_MISSING');
-  const hpUnique = hpPath && existsSync(hpPath) ? new Set(readFileSync(hpPath, 'utf8').split(/\r?\n/).map(x => key(x)).filter(x => /\d{2,3}[가-힣]\d{4}/.test(x))).size : 0; // 같은 번호 반복·번호 형식 아닌 줄은 세지 않는다
-  if (hpCount < 10 || hpUnique < 10) blockers.push(`AUTOPLUS_HOMEPAGE_LIST_MISSING_OR_TOO_SMALL:${hpUnique}`); }
+  // 오토플러스 정본 = 홈페이지 게시 목록(대표 10-14). 시트는 읽지 않는다. 목록을 못 읽은 날은 «읽지 못함» — 시트로 대체하지 않는다.
+  try { run('source-read.mjs', args); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.map(r => key(r.plate)).filter(Boolean));
+    src.RP023 = { set, all: set, 읽힘: true, 비고: '홈페이지 게시 목록이 정본(시트 미사용)' }; }
+  catch { blockers.push('AUTOPLUS_HOMEPAGE_LIST_NOT_READ'); src.RP023 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '홈페이지 목록을 읽지 못함(시트로 대체하지 않음)' }; } }
 { const mine = docs.filter(d => d.code === 'RP012' && d.listable), last = Math.max(0, ...mine.map(d => d.upd ?? 0)); // 수집기가 읽어 온 결과를 원천 기준으로 본다(대표 10-12)
   src.RP012 = { set: new Set(mine.map(d => d.plate)), all: new Set(docs.filter(d => d.code === 'RP012').map(d => d.plate)), 읽힘: true, 비고: `ERP4 매시 수집기 반영 결과 기준(마지막 수정 ${last ? new Date(last).toISOString().slice(0, 16) + 'Z' : '-'})` }; }
 
@@ -165,11 +160,11 @@ if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.l
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
 if (diffN || blocked.length) { console.log(alert); if (opt('alert-file') && !blockers.length) appendFileSync(opt('alert-file'), alert + '\n'); } // 읽기가 불완전하면 경보 파일에도 정상 결과처럼 쓰지 않는다
-if (opt('homepage-plates') && src.RP023?.읽힘) { // 오토플러스: 홈페이지가 정본, 시트는 보조 — 시트에 있는 차는 홈페이지에도 있어야 한다(없으면 «이상»: 판매 종료·시트 낡음·홈피 누락)
-  const hp = src.RP023.set, sheetOnly = [...src.RP023.all].filter(p => !hp.has(p)), mineAp = docs.filter(d => d.code === 'RP023'), byPlate = new Map(mineAp.map(d => [d.plate, d]));
+if (opt('homepage-plates') && src.RP023?.읽힘) { // 오토플러스: 홈페이지가 정본(시트는 읽지 않음)
+  const hp = src.RP023.set, mineAp = docs.filter(d => d.code === 'RP023'), byPlate = new Map(mineAp.map(d => [d.plate, d]));
   const label = p => { const d = byPlate.get(p); return `${l4(p)}(${d ? (d.listable ? '데이터 판매중' : '데이터 판매아님') + '/' + (d.status ?? '-') : '데이터 없음'})`; };
   const hpNotData = [...hp].filter(p => !byPlate.has(p)), hpDataNotListable = [...hp].filter(p => byPlate.has(p) && !byPlate.get(p).listable);
-  console.log(`오토플러스 홈피 ${hp.size} / 데이터 판매 ${mineAp.filter(d => d.listable).length} / ERP5 ${[...erp5].filter(p => plateCode.get(p) === 'RP023').length} / 시트에만(홈피에 없음) ${sheetOnly.length} — 시트 정리 후보: [${sheetOnly.map(label).join(', ')}]`);
+  console.log(`오토플러스 홈피 ${hp.size} / 데이터 판매 ${mineAp.filter(d => d.listable).length} / ERP5 ${[...erp5].filter(p => plateCode.get(p) === 'RP023').length}`);
   console.log(`  홈피에는 있고 데이터에 없음(편입) ${hpNotData.length}: [${hpNotData.map(l4).join(',')}] · 홈피에 있으나 데이터 판매 아님(재노출) ${hpDataNotListable.length}: [${hpDataNotListable.map(label).join(', ')}]`);
   const dataOnly = mineAp.filter(d => d.listable && !hp.has(d.plate)); console.log(`  데이터 판매중인데 홈피에 없음(노출 하향 후보) ${dataOnly.length}: [${dataOnly.map(d => l4(d.plate) + '(' + (d.status ?? '-') + ')').join(', ')}]`);
 }
