@@ -88,6 +88,24 @@ export function representativeTerms<T extends Pick<SourceTerm, 'months' | 'milea
   }
   return [...best.values()];
 }
+/** 판매 가격 칸(`price` 맵). 개월 키 하나에는 대표 항, 같은 개월에 약정거리 옵션이 여럿이면 소비처(ERP5 화면·공개 카탈로그)가 읽는
+ * 옵션 키 `{개월}_월{N}km`(월 단위)·`{개월}_연{N}km`(연 단위)도 원천 값으로 함께 쓴다. 옵션 값은 {rent, deposit} 둘이다.
+ * 단일 항 원천(공통시트 등)은 옵션 키를 만들지 않아 기존 모양 그대로다. */
+export function salePriceMap(terms: readonly SourceTerm[], includeMileage = true): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const t of representativeTerms(terms)) out[String(t.months)] =
+    { rent: t.monthlyRent.value, deposit: t.deposit.value, ...(includeMileage ? { mileage: t.mileage } : {}) };
+  const perMonth = new Map<number, SourceTerm[]>();
+  for (const t of terms) (perMonth.get(t.months) ?? perMonth.set(t.months, []).get(t.months)!).push(t);
+  for (const [months, options] of perMonth) {
+    if (options.length < 2) continue;
+    for (const t of options) {
+      const m = /^(\d+)km\/(month|year)$/.exec(t.mileage ?? '');
+      if (m) out[`${months}_${m[2] === 'month' ? '월' : '연'}${m[1]}km`] = { rent: t.monthlyRent.value, deposit: t.deposit.value };
+    }
+  }
+  return out;
+}
 /** Errors are scoped: an invalid term must not obstruct an explicit stop for a known UID. */
 export function validateSourceRecord(input: unknown): string[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return ['RECORD_SHAPE_INVALID'];

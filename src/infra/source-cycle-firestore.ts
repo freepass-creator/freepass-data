@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
-import { representativeTerms, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -67,10 +67,9 @@ export function productRecord(uid: string, f: Fields, observedAt: string): Sourc
 /** 저장 digest 와 현재 price 대조. 정규화(null=누락) 일치, 또는 다른 쓰기 주체가 표시용 mileage 만 지운 경우(저장 digest 는 기록의 terms 와 일치하고 현재 price 는 mileage 를 뺀 terms 와 같음)를 허용한다. rent·deposit 변경은 여전히 DRIFT. */
 export function priceMatchesRecord(price: unknown, storedDigest: unknown, record: SourceProductRecord): boolean {
   if (priceDigest(price) === storedDigest || stableDigest(price ?? {}) === storedDigest) return true;
-  const derived = Object.fromEntries(representativeTerms(record.terms).map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
+  const derived = salePriceMap(record.terms);
   if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
-  const withoutMileage = Object.fromEntries(Object.entries(derived).map(([m, v]) => [m, { rent: v.rent, deposit: v.deposit }]));
-  return priceDigest(price) === priceDigest(withoutMileage);
+  return priceDigest(price) === priceDigest(salePriceMap(record.terms, false));
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[]): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
@@ -89,7 +88,12 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
       } else throw new Error('CATALOG_SOURCE_RECORD_DRIFT');   // 번호판 불일치와 쓰기 단계(read·backup)는 항상 DRIFT
     }
   }
-  return { record, ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
+  // 판매 가격 칸에 소비처가 읽는 옵션 키(개월_연·월N km)가 빠진 노출 문서: 값은 같아도 한 번 다시 써서 키를 채운다(되풀이되지 않음).
+  const expectedOptionKeys = Object.keys(salePriceMap(record.terms)).filter(k => k.includes('_'));
+  const priceLayoutStale = f.listable === true && f.source_cycle_record !== undefined &&
+    expectedOptionKeys.some(k => !(f.price && typeof f.price === 'object' && k in (f.price as Record<string, unknown>)));
+  return { record, ...(priceLayoutStale ? { priceLayoutStale: true } : {}),
+    ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
@@ -99,7 +103,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
   const r = p.record;
   const display = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const price = !p.listable && original.price ? original.price :
-    Object.fromEntries(representativeTerms(r.terms).map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
+    salePriceMap(r.terms);
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),

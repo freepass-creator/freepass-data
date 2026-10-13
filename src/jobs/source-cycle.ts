@@ -19,6 +19,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     let plan: CyclePlan | null = null;
     let outcome: Awaited<ReturnType<typeof applySourceCycle>> | null = null;
     let inlineStarted = false;
+    let readDetail: string | null = null;   // 읽기가 불완전했을 때의 안전한 세부 코드(알림·요약에 남긴다)
     let summary = '';
     state.lastAttemptAt = new Date(clock()).toISOString();
     state.readCount = 0; state.heldCount = 0;
@@ -37,7 +38,20 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         if (state.lastSyncedAt && Date.parse(synced) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
       }
       const read = await plugin.read();
+      // 읽기 자체가 던진 실패는 detail 이 사유 코드에 이미 합쳐진다. 읽기는 됐지만 불완전한 경우에만 별도로 남긴다.
+      readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
       if (read.raw === null && read.error) throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
+      if (!read.complete && read.detail === 'UPSTREAM_STALE') {
+        // 상류 원천(공급사)이 갱신되지 않은 것이다 — 우리 쪽 실패가 아니므로 연속 실패로 세거나 정지하지 않는다(정지하면 공급사가 다시
+        // 갱신해도 사람이 풀어야 한다). 쓰기 0, 신선도는 ERROR 로 남아 보이고, 같은 사유의 알림은 한 번만 남긴다.
+        const alreadyKnown = state.error === 'UPSTREAM_STALE';
+        state.error = 'UPSTREAM_STALE';
+        await control.save(plugin.sourceId, state);
+        await control.heartbeat(plugin.sourceId, state, null);
+        if (!alreadyKnown) await control.alert(plugin.sourceId, 'UPSTREAM_STALE');
+        return { status: 'HOLD', writes: 0, verified: 0, plan: null,
+          summary: '상류 원천 갱신 정지(UPSTREAM_STALE): 쓰기 0, 연속 실패로 세지 않음' };
+      }
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
@@ -106,9 +120,10 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       try { await control.heartbeat(plugin.sourceId, state, plan); }
       catch { await control.alert(plugin.sourceId, 'HEARTBEAT_UNAVAILABLE'); }
       await control.alert(plugin.sourceId, state.stopped ? `STOPPED:${reason}` : reason);
+      if (readDetail) await control.alert(plugin.sourceId, `INCOMPLETE_${readDetail}`);
       return { status: state.stopped ? 'STOPPED' : reason === 'APPLY_UNCERTAIN' ? 'APPLY_UNCERTAIN' : 'HOLD',
         writes: outcome?.writes ?? (options.apply || inlineStarted ? null : 0), verified: outcome?.verified ?? 0,
-        summary: `${summary ? summary + ' · ' : ''}회차 보류 ${reason} (연속 ${state.failures})`, plan };
+        summary: `${summary ? summary + ' · ' : ''}회차 보류 ${reason}${readDetail ? ` · 불완전 사유 ${readDetail}` : ''} (연속 ${state.failures})`, plan };
     }
   } finally { await release(); }
 }

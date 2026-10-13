@@ -132,7 +132,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 보정 허용 없이 통과한다(안 쓰면 digest 가 낡은 채 남아 매 회차 DRIFT HOLD 가 반복된다 — 2026-10-13 RP013 실측).
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
-        !(snapshot.acceptedDrift ?? []).includes(before.record.uid)) continue;
+        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.priceLayoutStale && after.listable)) continue;
+    delete after.priceLayoutStale;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다
     plan.entries.push({ kind: !before ? 'ENROLL' : before.listable && !after.listable ? 'DOWNGRADE' :
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }

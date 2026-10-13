@@ -10,7 +10,7 @@ import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
 import { fileCycleControl, sourceRunCycleHeartbeat } from '../src/adapters/source-cycle-control.js';
 import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
-import { validateSourceRecord, sourceSaleAvailable, type SourceProductRecord } from '../src/domain/source-engine.js';
+import { validateSourceRecord, sourceSaleAvailable, salePriceMap, type SourceProductRecord } from '../src/domain/source-engine.js';
 import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 
@@ -230,8 +230,20 @@ describe('source plugins', () => {
     expect(validateSourceRecord(record)).toEqual([]);
     expect(sourceSaleAvailable(record, 'IANCAR', now)).toBe(true);
     const price = nativeCycleFields({ record, listable: true, locked_by_contract: false, publication_withdrawal: null,
-      publication_withdrawal_prior: null }).price as Record<string, { rent: number; mileage: string }>;
-    expect(price).toEqual({ '12': { rent: 555000, deposit: 0, mileage: '20000km/year' }, '24': { rent: 555000, deposit: 0, mileage: '20000km/year' } });
+      publication_withdrawal_prior: null }).price as Record<string, unknown>;
+    // 개월 키에는 대표 항, 같은 개월의 약정거리 옵션은 소비처가 읽는 «{개월}_연{N}km» 키로 원천 값 그대로
+    expect(price).toEqual({
+      '12': { rent: 555000, deposit: 0, mileage: '20000km/year' }, '24': { rent: 555000, deposit: 0, mileage: '20000km/year' },
+      '12_연20000km': { rent: 555000, deposit: 0 }, '12_연30000km': { rent: 602000, deposit: 0 }, '12_연40000km': { rent: 648000, deposit: 0 },
+      '24_연20000km': { rent: 555000, deposit: 0 }, '24_연30000km': { rent: 602000, deposit: 0 }, '24_연40000km': { rent: 648000, deposit: 0 },
+    });
+  });
+  it('monthly-unit options use the 월 key, and single-term suppliers never get option keys', () => {
+    const t = (months: number, mileage: string | null, rent: number): SourceProductRecord['terms'][number] => ({ months, mileage, raw: {},
+      monthlyRent: { state: 'KNOWN', value: rent }, deposit: { state: 'ZERO', value: 0 } });
+    expect(Object.keys(salePriceMap([t(1, '2000km/month', 900), t(1, '3000km/month', 950), t(1, '4000km/month', 1000)])).sort())
+      .toEqual(['1', '1_월2000km', '1_월3000km', '1_월4000km']);
+    expect(Object.keys(salePriceMap([t(12, '20000km', 100), t(24, '20000km', 90)]))).toEqual(['12', '24']);
   });
   it.each(['429', '403', 'partial'])('read error %s is never complete', async reason => {
     const p = plugin(async () => { throw Error(reason); }); expect((await p.read()).complete).toBe(false);

@@ -20,6 +20,8 @@ export type CycleCapture = {
   heldCount: number;
   observationOnlyCount?: number;
   heldReasons?: string[];
+  /** complete=false 일 때 왜 불완전한지(안전한 대문자 코드). UPSTREAM_STALE 은 상류 원천이 갱신되지 않은 것이라 회차 실패로 세지 않는다. */
+  incompleteReason?: string;
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;
@@ -50,7 +52,8 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           return { raw: null, attemptedAt, observedAt: null, complete: false, error: 'SCHEMA_INVALID' };
         const complete = raw.complete === true && def.scopes.every(s => raw.completedScopes.includes(s)) &&
           (!['F05', 'AICA'].includes(def.kind) || raw.visibilityComplete === true);
-        return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL' };
+        return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL',
+          ...(!complete && raw.incompleteReason ? { detail: raw.incompleteReason } : {}) };
       } catch (e) {
         const { error, detail } = classifyReadError(e);
         return { raw: null, complete: false, attemptedAt, observedAt: null, error, detail };
@@ -161,7 +164,12 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
         }) };
       return { scope: 'ONE_FULL_FACTS', record };
     });
+    // 불완전한 이유: 상류 목록이 오래됐으면(공급사 갱신 정지) 우리 쪽 실패가 아니다. 그 밖은 첫 이슈 코드를 그대로 남긴다.
+    const stale = capture.stale || capture.issues.some(i => /SOURCE_STALE|FRESHNESS_EXCEEDED/.test(i));
+    const incompleteReason = full ? undefined : stale ? 'UPSTREAM_STALE' :
+      capture.issues.find(i => /^[A-Z][A-Z0-9_]{2,63}$/.test(i)) ?? (capture.factScope !== 'FULL_FACTS' ? 'NOT_FULL_FACTS' : 'RECORD_COUNT_MISMATCH');
     return { observedAt: capture.syncedAt, synced_at: capture.syncedAt, complete: full,
-      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: 0 };
+      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: 0,
+      ...(incompleteReason ? { incompleteReason } : {}) };
   }, clock, syncedAt);
 }

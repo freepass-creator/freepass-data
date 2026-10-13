@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields, priceDigest } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -613,6 +613,53 @@ describe('native mappings and UID', () => {
     const fetcher = vi.fn(); const r = createSourceCycleRuntime({ FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IANCAR,IRON',
       SOURCE_CYCLE_PRIVATE_DIR: await directory() }, fetcher as typeof fetch);
     expect(r.plugins.filter(p => p.absenceReason !== 'DECISION_WITHDRAWN')).toHaveLength(2); expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('옵션 가격 키 복원과 상류 정지 처리 (이안카 2026-10-13 실측)', () => {
+  const multi = (): CycleProduct => { const p = product('ONE1001');
+    p.record.terms = [20000, 30000, 40000].map((km, i) => ({ months: 12, monthlyRent: { state: 'KNOWN' as const, value: 555000 + i * 47000 },
+      deposit: { state: 'ZERO' as const, value: 0 }, mileage: `${km}km/year`, raw: {} })); return p; };
+  it('rewrites a listed document that lacks the consumer-read option keys exactly once', async () => {
+    const { commands, fake } = await setup(); const p = multi();
+    // 옛 배치(대표 항 키만 있고 옵션 키 없음)로 이미 쓰인 문서를 만든다
+    const legacyPrice = { '12': { rent: 555000, deposit: 0, mileage: '20000km/year' } };
+    const fields = { ...nativeCycleFields(p), price: legacyPrice, source_cycle_price_digest: priceDigest(legacyPrice) };
+    fake.docs.set('ONE1001', { name: 'projects/synthetic-test/databases/(default)/documents/products/ONE1001', updateTime: `${time}:1`,
+      fields: encodeFields(fields) });
+    const first = await prepare(commands, [p.record]);
+    expect(first.plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
+    expect((await apply(commands, first)).status).toBe('APPLIED');
+    const price = decodeFields(fake.docs.get('ONE1001').fields).price as Record<string, unknown>;
+    expect(Object.keys(price).sort()).toEqual(['12', '12_연20000km', '12_연30000km', '12_연40000km']);
+    expect(price['12_연30000km']).toEqual({ rent: 602000, deposit: 0 });
+    expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);          // 멱등: 다시 쓰지 않는다
+  });
+  it('an upstream that stopped refreshing is a soft hold: no failure count, no STOPPED, one alert, zero writes', async () => {
+    const { commands, fake } = await setup(); const dir = await directory();
+    const alerts: string[] = [];
+    const ctrl = { ...fileCycleControl(dir, async () => {}), async alert(_s: string, reason: string) { alerts.push(reason); } };
+    const stale = sourceCyclePlugin({ sourceId: source, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 1 }, async () => ({
+      observedAt: time, complete: false, completedScopes: [], visibilityComplete: true, rows: [], heldCount: 0, incompleteReason: 'UPSTREAM_STALE' }),
+      () => time);
+    for (let i = 0; i < 4; i++) {
+      const r = await runSourceCycle(stale, commands, ctrl, { now: () => now + i });
+      expect(r).toMatchObject({ status: 'HOLD', writes: 0 });
+    }
+    const state = await ctrl.load(source);
+    expect(state).toMatchObject({ failures: 0, stopped: false, error: 'UPSTREAM_STALE' });
+    expect(alerts).toEqual(['UPSTREAM_STALE']);
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
+  it('other incomplete reads keep counting failures and record the safe reason', async () => {
+    const { commands } = await setup(); const alerts: string[] = [];
+    const ctrl = { ...fileCycleControl(await directory(), async () => {}), async alert(_s: string, reason: string) { alerts.push(reason); } };
+    const partial = sourceCyclePlugin({ sourceId: source, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 1 }, async () => ({
+      observedAt: time, complete: false, completedScopes: [], visibilityComplete: true, rows: [], heldCount: 0,
+      incompleteReason: 'IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT' }), () => time);
+    const r = await runSourceCycle(partial, commands, ctrl, { now: () => now });
+    expect(r.status).toBe('HOLD'); expect((await ctrl.load(source)).failures).toBe(1);
+    expect(alerts).toContain('INCOMPLETE_IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
   });
 });
 
