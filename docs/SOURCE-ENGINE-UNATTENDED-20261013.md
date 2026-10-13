@@ -74,3 +74,11 @@ PLN DATA 유지보수가 관리 책임자(ai-ops 결정 장부 «원천 엔진 �
 
 - `tests/source-freshness.test.ts`(신선도 판정·사전점검·기록·CLI 가드), `tests/source-cycle-runtime.test.ts` 「unattended hourly cycle」, `tests/source-cycle.test.ts` 가드 보강 시험.
 - 관련 묶음과 build/arch/boundary 통과 여부는 NEXT-START-HERE 의 이 날짜 항목을 따른다.
+
+## 이안카 상류 갱신 주기 변화와 예약 분 이동(2026-10-14 승인: 커맨드 센터)
+
+- 근거(B3Q 실측 2026-10-13): ONE 목록 syncedAt 이 08:44:27Z·08:59:43Z·09:15:04Z(15분 간격) 뒤 정지했다가 14:51:45Z·15:52:43Z(약 60분 간격)로 재개됐다. 상류 갱신 주기가 15분에서 약 60분으로 바뀐 것이다.
+- 증상: 엔진이 매시 :25 에 돌아 상류 갱신 33~34분 뒤라 `IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED`(임계 15분, 대표 정책)가 항상 발생해 RP031 이 `UPSTREAM_STALE`(쓰기 0, 연속 실패 아님)로 STALE 이 된다. 적용 데이터에는 영향이 없고 신선도 점검만 UNHEALTHY 로 보인다.
+- 결정: 임계(15분)는 유지하고 예약 시작 분을 :25 → :05 로 옮긴다(상류 갱신 :51~:52 뒤 약 13분). ERP4 풀 회차(cron :17·dispatch)와 겹치면 :05~:08 범위에서 겹치지 않는 분으로 한다. 임계 상향(75분)은 신선도 의미가 약해져 택하지 않는다.
+- 되돌림: 이전 등록값(시작 :25, -IntervalMinutes 60)은 B3Q 가 옮기기 전에 기록한다. 상류가 15분 주기로 복구되면 :05 도 그대로 유효하다.
+- 공급사 직접 문의는 하지 않는다. 지속될 때만 09:00 KST 이후 별도 판단.
