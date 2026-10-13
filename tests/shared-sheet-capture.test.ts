@@ -25,7 +25,7 @@ function batch(extra: Record<string, unknown[][]> = {}) {
 describe('shared sheet capture reader', () => {
   it('captures the locked 12 tabs without deregistering absent suppliers or asserting stock absence', () => {
     expect(sharedSheetTabs()).toHaveLength(12);
-    expect([...new Set(sharedSheetUnavailableChannels.map(x => x.tab))]).toEqual(['연카', '스위치플랜', '에스에이']);
+    expect([...new Set(sharedSheetUnavailableChannels.map(x => x.tab))]).toEqual(['연카', '스위치플랜', '에스에이', '마춤카']);
     expect(sharedSheetRegisteredChannels.length).toBe(sharedSheetChannels.length + sharedSheetUnavailableChannels.length);
     const coverage = buildSharedSheetBatch(captureFromBatchGet(ID, batch(), T)).coverage;
     expect(coverage.mode).toBe('PARTIAL');
