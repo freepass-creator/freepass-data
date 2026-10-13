@@ -17,25 +17,40 @@ async function takeOverDeadLock(path: string): Promise<boolean> {
   // 인계 자체를 한 번에 한 회차만 하도록 배타 생성되는 인계 표식 파일을 둔다. 표식을 쥔 동안에만 잠금을 읽고 옮기므로, 여러 회차가
   // 같은 죽은 잠금을 두고 경쟁해도 «다른 회차의 살아 있는 새 잠금»을 옮기거나 지우는 일이 없다(검사와 이동 사이의 경쟁 제거).
   // 표식을 못 얻으면 이번 회차는 인계하지 않는다(HOLD). 크래시로 남은 낡은 표식은 한 번 치우고 다음 회차에 다시 시도한다.
-  const guard = `${path}.takeover`;
+  // 표식에는 소유 pid·토큰을 쓰고, 지우기·이동 직전에 «내 표식인지» 내용을 다시 확인한다(비교 후 삭제). 낡은 표식은 나이만 보지 않고
+  // 소유 프로세스가 죽었을 때만 치운다(멈췄다 재개하는 살아 있는 소유자의 표식을 지우지 않는다).
+  const guard = `${path}.takeover`, token = randomUUID(), mine = JSON.stringify({ token, pid: process.pid });
+  const readGuard = () => readFile(guard, 'utf8').catch(() => null);
+  const lockAgeMs = async (file: string) => stat(file).then(s => Date.now() - s.mtimeMs, () => 0);
   let handle;
   try { handle = await open(guard, 'wx', 0o600); }
   catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
-      const age = await stat(guard).then(s => Date.now() - s.mtimeMs, () => 0);
-      if (age > STALE_LOCK_MS) await unlink(guard).catch(() => undefined);
+      const raw = await readGuard();
+      let ownerPid: number | null = null;
+      try { const p = (JSON.parse(raw ?? '') as { pid?: unknown }).pid; ownerPid = typeof p === 'number' && Number.isSafeInteger(p) && p > 0 ? p : null; } catch { ownerPid = null; }
+      // 소유자가 죽었거나(pid 없음 = 쓰기 전 종료한 빈 표식) 오래된 경우에만, 같은 내용일 때 한 번 치운다.
+      if ((ownerPid === null || !processAlive(ownerPid)) && (await lockAgeMs(guard)) > STALE_LOCK_MS && (await readGuard()) === raw) await unlink(guard).catch(() => undefined);
     }
     return false;
   }
   try {
-    await handle.close();
-    const owner = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
-    const age = Date.now() - (await stat(path)).mtimeMs;
-    if (typeof owner.pid !== 'number' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || processAlive(owner.pid) || age < STALE_LOCK_MS) return false;
-    await rename(path, `${path}.dead-pid-${owner.pid}-${Date.now()}`);
+    await handle.writeFile(mine); await handle.close();
+    const raw = await readFile(path, 'utf8');
+    const age = await lockAgeMs(path);
+    // 소유 정보를 쓰기 전에 종료해 비어 있는 잠금은 오래되면 죽은 잠금이다(쓰기는 생성 직후 수 ms 안에 끝난다).
+    let tag: string;
+    if (raw === '') { if (age < STALE_LOCK_MS) return false; tag = 'dead-empty'; }
+    else {
+      const owner = JSON.parse(raw) as { pid?: unknown };
+      if (typeof owner.pid !== 'number' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || processAlive(owner.pid) || age < STALE_LOCK_MS) return false;
+      tag = `dead-pid-${owner.pid}`;
+    }
+    if ((await readGuard()) !== mine || (await readFile(path, 'utf8')) !== raw) return false;   // 이동 직전 재확인
+    await rename(path, `${path}.${tag}-${Date.now()}`);
     return true;
   } catch { return false; }
-  finally { await unlink(guard).catch(() => undefined); }
+  finally { if ((await readGuard()) === mine) await unlink(guard).catch(() => undefined); }
 }
 
 /** Crash-safe local runner state. Lock is exclusive-create. A lock whose owner process is gone and old enough is taken over

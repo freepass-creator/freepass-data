@@ -334,6 +334,12 @@ describe('native mappings and UID', () => {
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     expect(c.heldReasons).not.toContain('DUPLICATE_UID_CONFLICT');
   });
+  it('F05 duplicate comparison does not equate full-width digits with ASCII (the real amount parser rejects them)', () => {
+    const s = sheet([{ 차량번호: 'TEST1001', '12개월': '100' }, { 차량번호: 'TEST1001', '12개월': '１００' }]);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.heldReasons?.filter(r => r === 'DUPLICATE_UID_CONFLICT')).toHaveLength(2);
+    expect(c.rows).toEqual([]);
+  });
   it.each(['hiddenByUser', 'hiddenByFilter'] as const)('F05 excludes %s rows', key => {
     const s = sheet([{}, { 차량번호: 'TEST1002' }]);
     s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]![key] = true;
