@@ -265,6 +265,7 @@ if (cmd === 'status') {
 } else if (cmd === 'read' && code) {
   const res = await readSupplier(code, products);
   if (!res.ok) { console.error(`막힘: ${res.reason}`); process.exit(3); }
+  if (opt('out') && opt('plate4')) { console.error('OUT_WITH_PLATE4_FILTER_REFUSED — 차량 하나로 거른 결과를 원천 전체 대조 입력(--out)으로 저장하지 않는다'); process.exit(3); } // fail-closed
   if (opt('out') && res.partial) { console.error('PARTIAL_SOURCE_CANNOT_BE_EXPORTED — 부분 읽기 결과는 대조 입력(--out)으로 내보내지 않는다(부재 오판 방지)'); process.exit(3); } // fail-closed
   if (opt('out')) writeFileSync(opt('out'), JSON.stringify(res.records));
   const p4 = opt('plate4');

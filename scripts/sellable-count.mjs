@@ -164,7 +164,7 @@ console.log(`합계(읽힘 ${read.length}곳): 원천 판매가능 ${read.reduce
 if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.length || r.데이터O원천X.length) console.log(`  ${r.이름}: 원천O데이터X [${r.원천O데이터X.join(',')}] / 데이터O원천X [${r.데이터O원천X.join(',')}]`); }
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
-if (diffN || blocked.length) { console.log(alert); if (opt('alert-file')) appendFileSync(opt('alert-file'), alert + '\n'); }
+if (diffN || blocked.length) { console.log(alert); if (opt('alert-file') && !blockers.length) appendFileSync(opt('alert-file'), alert + '\n'); } // 읽기가 불완전하면 경보 파일에도 정상 결과처럼 쓰지 않는다
 if (blockers.length) console.log(`주의: 읽기가 불완전합니다 — ${blockers.join(', ')}`);
 if (opt('plan-out')) { // 노출 하향·신규 편입·재노출 «시험 실행» 계획(쓰기 0). 승인 뒤 별도 쓰기 도구가 digest 를 대조해 적용한다.
   assertPlanComplete(blockers); // fail-closed: 불완전·실패한 읽기가 하나라도 있으면 계획 파일을 만들지 않는다
@@ -182,6 +182,7 @@ if (opt('plan-out')) { // 노출 하향·신규 편입·재노출 «시험 실�
   console.log('시험 실행 계획 digest ' + digest.slice(0, 16) + ' — 공급사 | 하향 | 신규 편입 | 재노출 | 하향 중 잠금');
   for (const [c, pl] of Object.entries(plans)) if (pl.downgrade.length || pl.enroll.length || pl.reexpose.length || pl.unassignedPlateRows) console.log([`${pl.name}(${c})`, pl.downgrade.length, pl.enroll.length + (pl.unassignedPlateRows ? `(+번호미배정 ${pl.unassignedPlateRows})` : ''), pl.reexpose.length, pl.downgrade.filter(x => x.pinned).length].join(' | '));
 }
+if (opt('json')) { assertPlanComplete(blockers); } // 불완전한 읽기 결과는 저장 파일(--json)로 내보내지 않는다 — blockers 가 있으면 중단
 if (opt('json')) writeFileSync(opt('json'), JSON.stringify(rows.map(r => ({ ...r })), null, 1));
 if (global.__hiddenOk === false) console.log('주의: 숨긴 줄 메타데이터를 읽지 못함 — 숨긴 줄을 판매 가능으로 셌을 수 있음');
 else console.log(`숨긴 줄(차량번호 있는 줄) ${Object.values(globalThis.__hiddenPlateRows ?? {}).reduce((n, v) => n + v, 0)}개(행 숨기기·필터 숨김)는 출고불가로 제외: ${JSON.stringify(globalThis.__hiddenPlateRows ?? {})}`);
