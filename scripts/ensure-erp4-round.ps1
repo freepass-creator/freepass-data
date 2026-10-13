@@ -25,7 +25,15 @@ $runs = gh run list --repo $Repo --workflow $Workflow --limit 20 --json database
 if (-not $runs) { throw 'NO_RUNS_FOUND' }
 $active = @($runs | Where-Object { $_.status -in 'in_progress', 'queued', 'waiting', 'requested', 'pending' })
 $last = $runs | Sort-Object { [datetime]$_.createdAt } -Descending | Select-Object -First 1
-$ageMin = [int]($now - ([datetime]$last.createdAt).ToUniversalTime()).TotalMinutes
+# 나이 기준은 «마지막 run» 이 아니라 «수집(쓰기) 단계가 마지막으로 성공한 run»이다: 이안카 단독 회차(IANCAR_ONLY)는 수집 단계를 돌지 않아
+# 단독 회차만 성공해도 RP012·RP023 은 STALE 로 남는다. 최근 완료 run 최대 8개의 단계를 최신순으로 훑는다.
+$basis = $null
+foreach ($run in ($runs | Where-Object { $_.status -eq 'completed' } | Sort-Object { [datetime]$_.createdAt } -Descending | Select-Object -First 8)) {
+  $jobs = gh api "repos/$Repo/actions/runs/$($run.databaseId)/jobs" | ConvertFrom-Json
+  $step = $jobs.jobs | ForEach-Object { $_.steps } | Where-Object { $_.name -eq $collectionStep -and $_.conclusion -eq 'success' } | Select-Object -First 1
+  if ($step -and $step.completed_at) { $basis = ([datetime]$step.completed_at).ToUniversalTime(); break }
+}
+$ageMin = if ($basis) { [int]($now - $basis).TotalMinutes } else { 100000 }   # 성공 run 이 없으면 매우 오래된 것으로 본다(발송 후보)
 # 발송 이력(최근 순)
 $history = @()
 if (Test-Path -LiteralPath $LogPath) {
@@ -46,7 +54,7 @@ $collectionOk = {
   return ($step -and $step.conclusion -eq 'success')
 }
 $result = [ordered]@{ checkedAt = $now.ToString('o'); lastRunId = $last.databaseId; lastEvent = $last.event; lastStatus = $last.status
-  lastConclusion = $last.conclusion; lastAgeMinutes = $ageMin; activeRuns = $active.Count; maxAgeMinutes = $MaxAgeMinutes;
+  lastConclusion = $last.conclusion; lastCollectionSuccessAt = $(if ($basis) { $basis.ToString("o") } else { $null }); lastAgeMinutes = $ageMin; activeRuns = $active.Count; maxAgeMinutes = $MaxAgeMinutes;
   minutesSinceLastDispatch = $sinceDispatchMin; action = 'NONE' }
 if ($active.Count -gt 0) { $result.action = 'SKIP_ACTIVE_RUN' }
 elseif ($ageMin -le $MaxAgeMinutes) { $result.action = 'SKIP_RECENT' }
