@@ -1,4 +1,4 @@
-# ERP4 풀 회차(erp5-ssot-refresh) 누락 보완 — GitHub schedule 이 오래 비는 일이 반복돼(손오공 RP012 STALE 의 원인) 마지막 run 이 오래되면 한 번 dispatch 한다.
+﻿# ERP4 풀 회차(erp5-ssot-refresh) 누락 보완 — GitHub schedule 이 오래 비는 일이 반복돼(손오공 RP012 STALE 의 원인) 마지막 run 이 오래되면 한 번 dispatch 한다.
 # 기본은 읽기 전용(WOULD_DISPATCH 만 출력). -Dispatch 를 줘야 workflow_dispatch(입력 없음 = 판매시트 게시 안 함)를 보낸다.
 # 가드(커맨드 센터 승인 2026-10-14):
 #  - 마지막 run 이 MaxAgeMinutes(기본 75) 초과이고 진행 중/대기 중 run 이 없을 때만 발송
