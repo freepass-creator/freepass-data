@@ -30,9 +30,9 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
     const headersOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.headers) ? r.raw.headers : []) as unknown[];
     const cellsOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.cells) ? r.raw.cells : []) as unknown[];
     const norm = (c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim();
-    const offerOf = (r: SourceProductRecord) => stableDigest({ status: r.status,
-      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : r.vehicleText,
-      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage]),
+    const offerOf = (r: SourceProductRecord) => stableDigest({ status: { raw: norm(r.status.raw), saleAvailable: r.status.saleAvailable },
+      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : norm(r.vehicleText),
+      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage === null ? null : norm(t.mileage)]),
       cells: cellsOf(r).map((c, i) => headersOf(r)[i] === 'UID' || (r.raw.product_group === 'MONTHLY_RENT' && i === 0) ? '' : norm(c)) });
     const byUid = new Map<string, Array<{ r: SourceProductRecord; uid: string }>>();
     for (const item of identified) (byUid.get(item.uid) ?? byUid.set(item.uid, []).get(item.uid)!).push(item);
@@ -120,7 +120,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
 export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
-  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [];
+  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0;
   const money = (value: unknown): SourceAmount => {
     if (typeof value === 'string') {
@@ -158,7 +158,12 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
           // 보류로 센다 — 버리면 기존 월렌트 모델이 «부재» 로 하향될 수 있다.
           const raw = cells[1];
           const marker = raw == null || (typeof raw === 'string' && ['', '-', '--', '—', 'x', 'X', '없음', 'N/A'].includes(raw.trim()));
-          if (!marker) monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+          if (!marker) {
+            monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+            // 같은 모델(UID)에 해석 가능한 다른 행이 있어도 그 UID 그룹 전체를 보류한다(해석 실패 행이 있는데 한쪽만 통과시키지 않는다).
+            const unparsedUid = (typeof cells[0] === 'string' ? cells[0] : '').normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
+            if (unparsedUid) unparseableMonthlyUids.add(`RP004:MONTHLY:${unparsedUid}`);
+          }
           continue;
         }
         const normalized = name.normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
@@ -196,8 +201,14 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }
+  // 해석 실패 행이 있는 월렌트 UID 는 해석 가능한 행이 있어도 그룹 전체를 뺀다(보류로 센다: 부재 하향도 함께 막힌다).
+  const keptRows = rows.filter(row => {
+    const drop = row.scope === '월렌트' && unparseableMonthlyUids.has(row.record.uid);
+    if (drop) monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+    return !drop;
+  });
   return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
-    completedScopes, visibilityComplete, rows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount };
+    completedScopes, visibilityComplete, rows: keptRows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({
   sourceId: 'RP004', kind: 'AICA', scopes: [...AICA_SCOPES], maxDowngradeRatio: ratio }, read));

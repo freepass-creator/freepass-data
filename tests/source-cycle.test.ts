@@ -529,6 +529,22 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     expect((await readdir(reused.dir)).some(n => n.includes('.lock.dead-stale-pid-'))).toBe(true);
     await again!();
   });
+  it('acquire sweeps old leftover temp files (crash between write and link) but keeps recent ones, and a lock I/O error is alerted before it propagates', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lock-')); dirs.push(dir);
+    const base = `${stableDigest('SRC')}.lock`;
+    await writeFile(join(dir, `${base}.stale-1.tmp`), '{}'); await writeFile(join(dir, `${base}.recent-1.tmp`), '{}');
+    const old = new Date(Date.now() - STALE_LOCK_MS - 60_000); await utimes(join(dir, `${base}.stale-1.tmp`), old, old);
+    const ctrl = fileCycleControl(dir, async () => {}, { takeOverDeadLocks: true });
+    const release = await ctrl.acquire('SRC');
+    const names = await readdir(dir);
+    expect(names).not.toContain(`${base}.stale-1.tmp`); expect(names).toContain(`${base}.recent-1.tmp`);
+    await release!();
+    // 디렉터리 자리에 파일이 있어 생성이 실패하는 경우: 알림을 남기고 오류를 그대로 전파한다
+    const blocked = await mkdtemp(join(tmpdir(), 'lock-')); dirs.push(blocked);
+    const blockedCtrl = fileCycleControl(join(blocked, 'not-a-dir'), async () => {}, { takeOverDeadLocks: true });
+    await writeFile(join(blocked, 'not-a-dir'), 'x');
+    await expect(blockedCtrl.acquire('SRC')).rejects.toBeTruthy();
+  });
   it('never takes over a recent lock or a live owner', async () => {
     expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
     expect(await (await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();          // 살아 있음

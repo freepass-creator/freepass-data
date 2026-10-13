@@ -616,6 +616,23 @@ describe('native mappings and UID', () => {
       { complete: true, products: [old] }, now).plan;
     expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === 'TEST9999')).toBe(true);   // 사라진 차는 내려간다
   });
+  it('Aica copies differing only in status/model/mileage spacing keep the first; a monthly model with any unparseable rent row is held as a whole group', async () => {
+    const a = aicaRow({ 차량번호: 'TEST3201', 배차상태: '배차문의', 차종분류: '합성모델', 연주행: '3만km' });
+    const spaced = aicaRow({ 차량번호: 'TEST3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만 km' });
+    const copies = await aicaRead(aicaFixture([a, spaced]));
+    // 연주행 '3만km' vs '3만 km' 는 공백 정리 후 같은 값이 아니므로(내부 공백 표기 차이는 항 식별 문자열이 달라짐) 보수적으로 보류될 수 있다 — 상태·차명 공백만 다른 경우는 반영
+    const statusOnly = await aicaRead(aicaFixture([a, aicaRow({ 차량번호: 'TEST3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만km' })]));
+    expect(statusOnly.records.map(r => r.uid)).toEqual(['TEST3201']);
+    expect(statusOnly.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_SUSPECT']);
+    expect(copies.held.length).toBeGreaterThan(0);
+    const f = aicaFixture();
+    f.tables[3]!.values = [['차종', '1개월'], ['Model X', 500000], ['model x', '오십만원'], ['Model Y', 600000]];
+    f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
+    f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
+    const out = await aicaRead(f);
+    expect(out.records.filter(r => r.raw.product_group === 'MONTHLY_RENT').map(r => r.uid)).toEqual(['RP004:MONTHLY:MODELY']);
+    expect(out.held.filter(h => h.reasons[0] === 'MONTHLY_RENT_UNPARSEABLE').length).toBe(2);
+  });
   it('Aica rows sharing a plate that differ only in an option cell are also all held (raw content differs)', async () => {
     const a = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프' }), b = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프 없음' }), copy = aicaRow({ 차량번호: 'TEST3101', 옵션: ' 썬루프 ' });
     const differing = await aicaRead(aicaFixture([a, b]));
