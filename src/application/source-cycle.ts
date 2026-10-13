@@ -55,7 +55,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
-    if (observed) after.record = structuredClone(observed);
+    // 문서에는 압축된 record 가 쓰이고 되읽기는 그 압축 형태를 돌려준다. 예전 엔진이 원문 전체를 record 에 쓴 문서도 있으므로 하향 결과도 같은 압축 형태로 맞춘다(compactRaw 는 멱등).
+    after.record = compactRecord(observed ?? before.record);
     after.record.status.saleAvailable = false;
     after.listable = false;
     after.publication_withdrawal ??= { reason, source: config.sourceId, observedAt: evidence.observedAt!, deleteAuthorized: false };

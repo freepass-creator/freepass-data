@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planSourceCycle, applySourceCycle, deepEqual, emptyCycleState,
   type CycleProduct, type CycleCommands, type CycleControl, type CycleEvidence, type CycleConfig } from '../src/application/source-cycle.js';
+import { compactRecord } from '../src/domain/source-engine.js';
 import { sourceCyclePlugin, sharedSheetCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CycleCapture, type CycleSourceKind } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
@@ -74,10 +75,24 @@ describe('source cycle planning/application', () => {
     expect(m.data.size).toBe(6);
     expect(m.data.get('new')!.record.vehicleHold).toHaveLength(1);
     expect(m.data.get('absent1')).toMatchObject({ listable: false, publication_withdrawal: { reason: 'SOURCE_ABSENT', deleteAuthorized: false }, publication_withdrawal_prior: { listable: true } });
-    expect(m.data.get('absent1')!.record.raw).toEqual(product('absent1').record.raw);
+    expect(m.data.get('absent1')!.record.raw).toEqual(compactRecord(product('absent1').record).raw);   // 쓰기 형태(압축)로 저장
     expect(build().plan.entries).toEqual([]);
     rows.forEach(r => { r.observedAt = new Date(now + 1000).toISOString(); });
     expect(planSourceCycle(config, { ...evidence(rows), observedAt: rows[0]!.observedAt }, { complete: true, products: [...m.data.values()] }, now + 1000).plan.entries).toEqual([]);
+  });
+  it('absence downgrade of a legacy full-raw document is verified against the compact form the store reads back', async () => {
+    const legacy = (uid: string): CycleProduct => { const p = product(uid);
+      p.record.raw = { cells: ['수리중', '재렌트', uid, 'x'.repeat(80)], headers: ['a', 'b'], original: { 차량번호: uid, memo: 'y'.repeat(80) }, source: 'sheet' }; return p; };
+    const m = memory(['keep', 'gone1', 'gone2'].map(legacy));
+    // 실제 저장소 모사: 쓸 때 record 를 압축해 저장하고 되읽기는 압축 형태를 돌려준다.
+    const compactStore: CycleCommands = { ...m.commands,
+      async compareAndApply(digest, after, key) { await m.commands.compareAndApply(digest, { ...after, record: compactRecord(after.record) }, key); } };
+    const rows = [record('keep')];
+    rows[0]!.raw = legacy('keep').record.raw;
+    const built = planSourceCycle({ ...config, maxDowngradeRatio: 1 }, evidence(rows), { products: [...m.data.values()], complete: true }, now);
+    expect(built.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(2);
+    expect(await apply(compactStore, built)).toMatchObject({ status: 'APPLIED', writes: 2, verified: 2, uncertain: [] });
+    expect(m.data.get('gone1')).toMatchObject({ listable: false, publication_withdrawal: { reason: 'SOURCE_ABSENT' } });
   });
   it('partial read and row identity HOLD never infer absence', () => {
     const snapshot = { products: [product('missing')], complete: true };
