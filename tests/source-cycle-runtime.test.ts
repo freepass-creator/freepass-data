@@ -38,6 +38,11 @@ function fakeFirestore(initial: CycleProduct[] = []) {
       let result = uid === 'products' ? { documents: [...docs.values()] } : docs.get(uid);
       if (!result) return new Response('{}', { status: 404 });
       result = structuredClone(result);
+      // 목록 읽기의 필드 마스크를 실제 Firestore 처럼 적용한다(마스크에 없는 필드는 읽기 경로에서 항상 undefined — 2026-10-14 statusKindStale 실측).
+      const masked = url.searchParams.getAll('mask.fieldPaths').map(p => p.replace(/`/g, ''));
+      if (uid === 'products' && masked.length) for (const d of (result as any).documents) {
+        d.fields = Object.fromEntries(Object.entries(d.fields ?? {}).filter(([k]) => masked.includes(k)));
+      }
       const reorder = (v: any): any => Array.isArray(v) ? v.map(reorder) : v && typeof v === 'object'
         ? Object.fromEntries(Object.entries(v).reverse().map(([k, child]) => [k, reorder(child)])) : v;
       return Response.json(reverse ? reorder(result) : result);

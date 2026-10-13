@@ -185,7 +185,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract',
-          'publication_withdrawal', 'publication_withdrawal_prior']) query.append('mask.fieldPaths', fieldPath(field));
+          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status']) query.append('mask.fieldPaths', fieldPath(field));
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {
