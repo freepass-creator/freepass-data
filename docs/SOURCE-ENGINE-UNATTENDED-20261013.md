@@ -33,6 +33,13 @@ schtasks /Query /TN FreePass-Source-Cycle /V /FO LIST
 - `unattended-runs.jsonl` 두 회차 이상: 첫 회차 `stage: APPLY, status: APPLIED`(또는 변경 0), 다음 회차 `변경 0: 적용 생략`.
 - ERP5 되읽기: 반영된 UID 표본의 listable·가격이 원천과 같음. HOLD/STOPPED 가 나오면 원인 코드와 함께 PLN 커맨드 센터에 올린다(자동 재시도로 덮지 않음).
 
+## 계획 가드 보강(Codex 상의 2026-10-13, 실사고 근거)
+
+- **보증금 UNKNOWN 보존**: 원천 보증금이 UNKNOWN(빈칸·해석 불가)이면 확인된 원천 값이 아니므로, 같은 개월의 기존 KNOWN/ZERO 보증금을 덮지 않는다(저장소 불변식 «unknown/null 은 마지막 정상값 보존»). 대여료·ZERO·KNOWN 은 원천 값 그대로. 계획 경고 `DEPOSIT_PRESERVED:n`. 신규 편입은 해당 없음. 근거 사고: 보정 허용 수동 회차에서 RP013 2문서 12개월 보증금이 null 로 쓰여 백업 롤백으로 복구함.
+- **하향 비율 사유 분리**: 런타임 기본 절대 개수 하한 3(`SOURCE_CYCLE_DOWNGRADE_FLOOR`, 0 이면 옛 합산 비율). 부재 추론(SOURCE_ABSENT)은 비율 초과 AND 하한 초과일 때만, 시트가 명시한 불가·계약중은 max(상한, 0.5) 초과 AND 하한 초과일 때만 차단. 소규모 공급사의 정당한 상태 변경이 회차 전체를 막지 않고, 대량 부재·상태 열 오매핑은 계속 막는다.
+- **일회성 구조적 대량 하향(예: 이안카 기존 301 vs 원천 110)**: 상한 임시 상향·단계적 하향 금지. 수동 경로로 계획을 만들어 하향 대상 목록(원천 완전성·UID 대응)을 검토하고 그 계획 digest 로 한 번 적용한다(백업·CAS 유지, 적용 직전 재계획).
+- **accept-drift 는 영구 설정이 아니다**: price 를 쓰는 다른 주체를 확인하고 단일 쓰기 경로로 고정한 뒤 특정 코드·회차에만 한시적으로 쓴다.
+
 ## 신선도 감시(대표 10-13 「데이터 원천 신선하게 erp5에 반영되게 확실하게 관리해」)
 
 - `scripts/check-source-freshness.mjs`: `heartbeats.jsonl`·`alerts.jsonl` 만 읽어 원천별 마지막 정상 완료 나이를 판정. 기본 허용 120분(60분 회차 두 번). `STALE`·`STOPPED`·`ERROR`·`NEVER_COMPLETED`·`MISSING(--expect)` 는 UNHEALTHY, 종료 코드 1. 네트워크·Firestore 접근 없음.

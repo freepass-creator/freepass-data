@@ -27,7 +27,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     snapshot = { ...snapshot, products: snapshot.products.filter(p => vehicle(p.record)) };
   }
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
-    maxDowngradeRatio: config.maxDowngradeRatio }, plannedAt: now,
+    maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -56,7 +56,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     after.publication_withdrawal_prior ??= { listable: before.listable, status: structuredClone(before.record.status) };
     return after;
   };
-  let identityHolds = false;
+  let identityHolds = false, depositPreserved = 0;
   for (const r of evidence.records) {
     const key = sourceProductKey(r), before = mine.get(key) ?? null, errors = validateSourceRecord(r);
     if (r.sourceId !== config.sourceId || duplicates.has(key) ||
@@ -73,6 +73,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
     const next = structuredClone(r);
     if (errors.includes('TERMS_HOLD') && before) next.terms = structuredClone(before.record.terms);
+    else if (before) {
+      // 원천 보증금 UNKNOWN(빈칸·해석 불가)은 확인된 원천 값이 아니다 — 같은 개월의 기존 KNOWN/ZERO 보증금을 지우지 않는다
+      // (저장소 불변식: unknown/null 은 마지막 정상값 보존. Codex 상의 2026-10-13). 대여료·ZERO·KNOWN 은 원천 값 그대로.
+      for (const term of next.terms) {
+        const prior = before.record.terms.find(p => p.months === term.months);
+        if (term.deposit.state === 'UNKNOWN' && prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
+          term.deposit = structuredClone(prior.deposit); depositPreserved++;
+        }
+      }
+    }
     next.status.saleAvailable = sale;
     let after: CycleProduct = { ...(before ? structuredClone(before) : {}), record: next, listable: sale, locked_by_contract: false,
       publication_withdrawal: null, publication_withdrawal_prior: before?.publication_withdrawal_prior ?? null };
@@ -104,8 +114,20 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, 'SOURCE_ABSENT') });
     }
   }
-  const down = plan.entries.filter(e => e.kind === 'DOWNGRADE').length;
-  if (plan.exposedBefore && down / plan.exposedBefore > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
+  if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
+  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE');
+  const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
+  const explicitDown = downs.length - absentDown;
+  const floor = config.downgradeFloor ?? 0;
+  if (plan.exposedBefore) {
+    // floor 0(기본·옛 동작): 합산 비율. floor>0(런타임 기본 3, Codex 상의): 사유별 분리 — 부재 추론(SOURCE_ABSENT)은 비율 AND 절대 개수 초과일 때만 차단,
+    // 시트가 명시한 불가·계약중 등은 상태 열 오매핑 같은 대량 오작동 방지로 max(상한, 0.5) AND 절대 개수 초과일 때만 차단한다.
+    const over = floor > 0
+      ? (absentDown > floor && absentDown / plan.exposedBefore > config.maxDowngradeRatio) ||
+        (explicitDown > floor && explicitDown / plan.exposedBefore > Math.max(config.maxDowngradeRatio, 0.5))
+      : downs.length / plan.exposedBefore > config.maxDowngradeRatio;
+    if (over) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
+  }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   return { plan, digest: stableDigest(plan), writes: 0 as const };

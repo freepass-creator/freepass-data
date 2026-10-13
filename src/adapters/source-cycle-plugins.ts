@@ -24,7 +24,7 @@ export type CycleCapture = {
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;
   observationCountOfRead?(read: SourceRead<T>): number;
-  sourceId: string; family: SourceFamily; maxDowngradeRatio: number;
+  sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
 }

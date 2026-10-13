@@ -20,7 +20,7 @@ export interface CycleCommands {
   readBackup(key: string): Promise<CycleProduct | null>;
   compareAndApply(beforeDigest: string, after: CycleProduct, commandKey: string): Promise<void>;
 }
-export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number };
+export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
   unassignedPlateCount?: number };
 export type CycleEntry = { kind: 'DOWNGRADE' | 'ENROLL' | 'REEXPOSE' | 'UPDATE'; before: CycleProduct | null; after: CycleProduct };

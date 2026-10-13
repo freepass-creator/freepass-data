@@ -314,3 +314,52 @@ describe('local control persistence', () => {
     } finally { output.mockRestore(); }
   });
 });
+
+describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 가드', () => {
+  type Deposit = SourceProductRecord['terms'][number]['deposit'];
+  const withDeposit = (uid: string, deposit: Deposit, rent = 100): SourceProductRecord => {
+    const r = record(uid); r.terms[0]!.deposit = deposit; r.terms[0]!.monthlyRent = { state: 'KNOWN', value: rent }; return r;
+  };
+  const known = (value: number): Deposit => ({ state: 'KNOWN', value });
+  const unknown: Deposit = { state: 'UNKNOWN', value: null };
+  const stored = (uid: string, deposit: Deposit): CycleProduct => ({ ...product(uid), record: withDeposit(uid, deposit) });
+  it('source UNKNOWN deposit keeps the stored KNOWN/ZERO deposit while rent still follows the source', async () => {
+    const m = memory([stored('a', known(500)), stored('z', { state: 'ZERO', value: 0 })]);
+    const built = planSourceCycle(config, evidence([withDeposit('a', unknown, 120), withDeposit('z', unknown, 100)]),
+      await m.commands.list(config.sourceId), now);
+    expect(built.plan.warnings).toContain('DEPOSIT_PRESERVED:2');
+    expect(built.plan.entries).toHaveLength(1);
+    const after = built.plan.entries[0]!.after.record.terms[0]!;
+    expect(after.deposit).toEqual(known(500)); expect(after.monthlyRent).toEqual({ state: 'KNOWN', value: 120 });
+  });
+  it('explicit source ZERO deposit still overwrites, and enrollment is unaffected', async () => {
+    const m = memory([stored('a', known(500))]);
+    const built = planSourceCycle(config, evidence([withDeposit('a', { state: 'ZERO', value: 0 }), withDeposit('n', unknown)]),
+      await m.commands.list(config.sourceId), now);
+    expect(built.plan.warnings.some(w => w.startsWith('DEPOSIT_PRESERVED'))).toBe(false);
+    const byUid = Object.fromEntries(built.plan.entries.map(e => [e.after.record.uid, e]));
+    expect(byUid.a!.after.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
+    expect(byUid.n!.kind).toBe('ENROLL'); expect(byUid.n!.after.record.terms[0]!.deposit).toEqual(unknown);
+  });
+  it('floor 0 keeps the combined ratio; floor 3 lets a small supplier change status without blocking the run', async () => {
+    const products = ['a', 'b', 'c', 'd', 'e', 'f'].map(u => product(u));
+    const notSellable = ['a', 'b', 'c'].map(u => ({ ...record(u, '계약중'), status: { raw: '계약중', saleAvailable: false } }));
+    const rest = ['d', 'e', 'f'].map(u => record(u));
+    const snapshot = { complete: true, products };
+    const legacy = planSourceCycle({ ...config, maxDowngradeRatio: 0.2 }, evidence([...notSellable, ...rest]), snapshot, now);
+    expect(legacy.plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    const floored = planSourceCycle({ ...config, maxDowngradeRatio: 0.2, downgradeFloor: 3 }, evidence([...notSellable, ...rest]), snapshot, now);
+    expect(floored.plan.blockers).toEqual([]);
+    expect(floored.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(3);
+  });
+  it('floor still blocks mass absence inference and mass explicit status flips above the floor', () => {
+    const products = Array.from({ length: 20 }, (_, i) => product('p' + i));
+    const floored = { ...config, maxDowngradeRatio: 0.2, downgradeFloor: 3 };
+    const absent = planSourceCycle(floored, evidence(products.slice(0, 10).map(p => p.record)), { complete: true, products }, now);
+    expect(absent.plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    const flipped = products.map((p, i) => i < 12 ? { ...p.record, status: { raw: '출고불가', saleAvailable: false } } : p.record);
+    expect(planSourceCycle(floored, evidence(flipped), { complete: true, products }, now).plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    const fewAbsent = planSourceCycle(floored, evidence(products.slice(0, 17).map(p => p.record)), { complete: true, products }, now);
+    expect(fewAbsent.plan.blockers).toEqual([]);
+  });
+});

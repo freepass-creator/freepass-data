@@ -124,6 +124,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   if (new Set(plugins.map(p => p.sourceId)).size !== plugins.length) throw new Error('CYCLE_DUPLICATE_WRITER');
+  // 하향 가드 절대 개수 하한(기본 3): 노출 10~30대 소규모 공급사의 정당한 상태 변경이 매 회차 전체를 막지 않게 한다. 0 이면 옛 합산 비율.
+  const floor = Number(env.SOURCE_CYCLE_DOWNGRADE_FLOOR ?? '3');
+  if (!Number.isSafeInteger(floor) || floor < 0 || floor > 50) throw new Error('CYCLE_CONFIG_INVALID');
+  for (const plugin of plugins) plugin.downgradeFloor = floor;
   return { plugins, commands, control, directory };
 }
 
