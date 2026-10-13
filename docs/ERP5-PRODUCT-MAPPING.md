@@ -99,6 +99,10 @@ Firestore Timestamp/GeoPoint/DocumentReference 등 SDK 객체를 `JSON.stringify
    OGONG_SUBSCRIPTION은 base domain에는 있으나 ERP public 계약에 없고, OPLUS_SUBSCRIPTION은
    base domain과 public 계약 모두에 없다. 두 값은 계약 전체가 합의될 때까지 HOLD하며 캐스팅으로
    소비처 검증을 우회하지 않는다.
+   월렌트(`product_type` «월렌트», MONTHLY_RENT 상품군, 대표 10-13 결정 장부 620행)도 같은 방식이다:
+   매핑은 값을 알아보고 아이카(RP004) 외 공급사는 `MONTHLY_RENT_SUPPLIER_REVIEW_REQUIRED` 로 검토하며,
+   Catalog V1 에 상품 구분이 추가될 때까지 `CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED` 로 HOLD 한다.
+   Kakao 조회 참조는 모르는 값을 `UNKNOWN` 으로 처리하므로 값 추가로 깨지지 않는다(Catalog V1·카톡 스키마 enum 은 이번에 바꾸지 않았다).
 5. Canonical 입력은 기존 검토/권한/lineage/expectedRevision 경로로만 반영한다.
    이 결과를 곧바로 ERP·화이트라벨·F01·F86·Admin에 발행하지 않는다.
 
