@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
-import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
+import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
@@ -303,6 +303,33 @@ describe('native mappings and UID', () => {
       { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now);
     expect(built.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(0);
     expect(built.plan.warnings).toContain('ABSENCE_DOWNGRADE_SKIPPED');
+  });
+  it('the approved alias maps «경진렌트» to RP015 on the 경진 tab only; RP016 and other tabs are unchanged (대표 10-13)', () => {
+    expect(sharedSheetChannelOf('경진', '경진렌트')?.code).toBe('RP015');
+    expect(sharedSheetChannelOf('경진', ' 경진렌트 ')?.code).toBe('RP015');
+    expect(sharedSheetChannelOf('경진', '경진')?.code).toBe('RP015');
+    expect(sharedSheetChannelOf('경진', '경진카')?.code).toBe('RP016');
+    expect(sharedSheetChannelOf('빌린카', '경진렌트')).toBeUndefined();          // 별칭은 탭 단위로만
+    expect(sharedSheetChannelOf('경진', '경진렌트카')).toBeUndefined();           // 비슷한 이름은 추론하지 않는다
+    const aliased = sharedSheetChannels.filter(c => (c as { aliases?: string[] }).aliases?.length);
+    expect(aliased.map(c => `${c.code}:${c.tab}`)).toEqual(['RP015:경진']);
+  });
+  it('an aliased row is read as the RP015 vehicle, so it is never held as unmapped nor read as absent', () => {
+    const ch = sharedSheetChannels.find(c => c.code === 'RP015')!;
+    const headers = [...sharedSheetHeaders, 'UID'];
+    const row = headers.map(h => ({ 회사명: '경진렌트', 차량번호: 'TEST3003', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 100,
+      단기보증: '무보증', 장기보증: '무보증', 연주행: '20000km', '차명 원문': '합성' } as Record<string, SheetCell>)[h] ?? '');
+    const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only', layoutVersion: '2026-10-04-no-account',
+      readTime: time, revision: 'synthetic', tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {
+        const values = [headers, ...(title === ch.tab ? [row] : [])];
+        return { title, readTime: time, complete: true, rowCount: values.length, values };
+      }) };
+    const visibility = { sheets: capture.tabs.map(t => ({ properties: { title: t.title, gridProperties: { rowCount: t.rowCount } },
+      data: [{ startRow: 0, rowMetadata: t.values.map(() => ({})) }] })) };
+    const c = f05NativeCapture('RP015', capture, visibility);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST3003']);
+    expect(c.heldReasons ?? []).not.toContain('COMPANY_UNMAPPED');
+    expect(f05NativeCapture('RP016', capture, visibility).rows).toHaveLength(0);   // 같은 탭의 경진카는 이 행을 가져가지 않는다
   });
   it('hidden rows of an unmapped company do not hold the source', () => {
     const s = sheet([{ 차량번호: 'TEST1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: 'TEST2002' }]);

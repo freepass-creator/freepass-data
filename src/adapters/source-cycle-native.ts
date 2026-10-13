@@ -1,5 +1,5 @@
 import { sharedSheetEngine } from './shared-sheet-engine.js';
-import { sharedSheetChannels, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
+import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
@@ -43,7 +43,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     const seen = new Set<string>();
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!, original = [...row];
-      const supplier = sharedSheetChannels.find(c => c.tab === tab.title && c.companyName === String(row[0] ?? '').trim());
+      const supplier = sharedSheetChannelOf(tab.title, row[0]);
       const hidden = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
       const blank = row.every(c => c === '' || c === null);
       // 이 원천의 탭에 있는 보이는 데이터 행인데 회사명이 어느 공급사 코드에도 매핑되지 않으면 «없는 차량»이 아니라 «알 수 없는 행»이다.

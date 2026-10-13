@@ -49,6 +49,12 @@ const configuredTabs = [...spec.changeControl.activeSupplierTabs, ...spec.change
 if (stableDigest(registeredTabs) !== stableDigest(configuredTabs)) throw new Error('SHARED_SHEET_SCOPE_CONTRACT_INVALID');
 export const sharedSheetChannels = sharedSheetRegisteredChannels.filter(channel =>
   (spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
+/** 탭·시트의 회사명 칸 → 공급사 채널. 등록 회사명 또는 규격이 승인한 별칭(aliases)만 매핑하고, 다른 이름은 추론하지 않는다. */
+export function sharedSheetChannelOf(tab: string, company: unknown) {
+  const name = String(company ?? '').trim();
+  return sharedSheetChannels.find(c => c.tab === tab &&
+    (c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name)));
+}
 export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
   !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
 const timestamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
@@ -85,7 +91,7 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
         typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)));
       if (values.every(v => v === '' || v === null || v === undefined)) continue;
       const company = String(values[0] ?? '').trim();
-      const supplier = sharedSheetChannels.find(x => x.tab === tab.title && x.companyName === company);
+      const supplier = sharedSheetChannelOf(tab.title, company);
       // Placeholders such as 「신차」 are not vehicle identities: keep RAW by position and let normalization HOLD the row.
       // A readable plate counts for cross-supplier checks even on a malformed row; identity still needs a valid row.
       const plate = isAssignedPlate(values[4]) ? plateIdentityKey(values[4]) : '';
