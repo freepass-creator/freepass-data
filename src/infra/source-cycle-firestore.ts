@@ -93,7 +93,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   const expectedOptionKeys = Object.keys(salePriceMap(record.terms)).filter(k => k.includes('_'));
   const priceLayoutStale = f.listable === true && f.source_cycle_record !== undefined &&
     expectedOptionKeys.some(k => !(f.price && typeof f.price === 'object' && k in (f.price as Record<string, unknown>)));
-  return { record, ...(priceLayoutStale ? { priceLayoutStale: true } : {}),
+  // 저장된 status_kind 가 저장된 vehicle_status 의 계약 값과 다른 노출 문서(검토된 상태만): 쓰면 표시 상태·status_kind 가 함께 맞춰져 되풀이되지 않는다.
+  const storedKind = resolveErp5InventoryStatus(f.vehicle_status);
+  const statusKindStale = f.listable === true && f.source_cycle_record !== undefined && storedKind.known && f.status_kind !== storedKind.statusKind;
+  return { record, ...(priceLayoutStale ? { priceLayoutStale: true } : {}), ...(statusKindStale ? { statusKindStale: true } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',

@@ -666,6 +666,20 @@ describe('옵션 가격 키 복원과 상류 정지 처리 (이안카 2026-10-13
     expect(price['12_연30000km']).toEqual({ rent: 602000, deposit: 0 });
     expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);          // 멱등: 다시 쓰지 않는다
   });
+  it('rewrites an engine-owned listed document whose status_kind disagrees with its vehicle_status exactly once', async () => {
+    const { commands, fake } = await setup(); const p = product('ONE1002');
+    // 예전 엔진은 표시 상태와 무관하게 «가용» 을 썼다: 상품화중 문서의 계약 값은 «준비»
+    const fields = { ...nativeCycleFields(p), status: '상품화중', vehicle_status: '상품화중', status_kind: '가용' };
+    fake.docs.set('ONE1002', { name: 'projects/synthetic-test/databases/(default)/documents/products/ONE1002', updateTime: `${time}:1`,
+      fields: encodeFields(fields) });
+    const first = await prepare(commands, [p.record]);
+    expect(first.plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
+    expect((await apply(commands, first)).status).toBe('APPLIED');
+    const written = decodeFields(fake.docs.get('ONE1002').fields);
+    expect(written.vehicle_status).toBe(written.status);
+    expect(written.status_kind).toBe(statusKindOf(String(written.vehicle_status), true));
+    expect((await prepare(commands, [p.record])).plan.entries).toEqual([]);          // 멱등: 다시 쓰지 않는다
+  });
   it('an upstream that stopped refreshing is a soft hold: no failure count, no STOPPED, one alert, zero writes', async () => {
     const { commands, fake } = await setup(); const dir = await directory();
     const alerts: string[] = [];

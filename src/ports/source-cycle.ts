@@ -8,6 +8,8 @@ export type CycleProduct = {
   listable: boolean;
   /** 노출 문서의 판매 가격 칸에 옵션 키가 빠져 있어 값이 같아도 한 번 다시 써야 함(읽기 경로가 계산, 쓰기 결과에는 남지 않는다). */
   priceLayoutStale?: boolean;
+  /** 노출 문서의 status_kind 가 저장된 vehicle_status 의 계약 값과 달라 값이 같아도 한 번 다시 써야 함(읽기 경로가 계산, 쓰기 결과에는 남지 않는다). */
+  statusKindStale?: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
