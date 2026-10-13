@@ -14,6 +14,7 @@ import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' wit
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
+import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -158,7 +159,30 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         return ironNativeCapture(await (await get(url, false)).text(), new Date().toISOString());
       })));
     } else if (kind === 'SONOGONG' || kind === 'AUTOPLUS') {
-      plugins.push(collectorObservationPlugin(kind, ratio, sourceId => commands.documents(sourceId), Date.now, collectionEvidence));
+      // 오토플러스 홈피 관측 병행(대표 2026-10-14: 홈피가 정본): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_REPORT=<보고 파일 경로> 일 때만, 문서를 읽을 때
+      // 홈피 전수를 직렬로 읽어 번호 기준 비교 요약(건수·끝 4자리)을 파일에 쓴다. 쓰기 0, 실패는 회차에 영향 없음(best-effort).
+      const homepageReport = kind === 'AUTOPLUS' ? env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_REPORT?.trim() : '';
+      const documents = async (sourceId: string) => {
+        const docs = await commands.documents(sourceId);
+        if (homepageReport) {
+          try {
+            const client = createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never });
+            const collected = await collectAutoplusHomepage(client);
+            const codes: Record<string, number> = {};
+            for (const f of collected.failures) codes[f.code] = (codes[f.code] ?? 0) + 1;
+            const comparison = compareAutoplusHomepage(collected.records, docs.map(d => {
+              const f = decodeFields(d.fields as never) as Record<string, unknown>;
+              return { plate: typeof f.car_number === 'string' ? f.car_number : null, listable: f.listable === true };
+            }));
+            await writeFile(homepageReport, JSON.stringify({ at: new Date().toISOString(), complete: collected.complete, productCount: collected.productCount,
+              failureCodes: codes, held: collected.held.map(h => h.reason), duplicatePlates: collected.duplicatePlates.length, comparison }, null, 1), { mode: 0o600 });
+          } catch (e) {
+            await writeFile(homepageReport, JSON.stringify({ at: new Date().toISOString(), error: e instanceof Error && /^[A-Z][A-Z0-9_]{2,40}$/.test(e.message) ? e.message : 'HOMEPAGE_OBSERVE_FAILED' }), { mode: 0o600 }).catch(() => undefined);
+          }
+        }
+        return docs;
+      };
+      plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, collectionEvidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.
