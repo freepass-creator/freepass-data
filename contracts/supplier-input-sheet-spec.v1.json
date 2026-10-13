@@ -2160,6 +2160,12 @@
         "companyName": "경진",
         "aliases": ["경진렌트"],
         "aliasNote": "2026-10-13 대표 승인(커맨드 센터 «1번으로 해, 추천대로»): 시트의 회사명 «경진렌트» 는 같은 탭 «경진»(RP015) 의 별칭이다. 수집 매핑에만 쓰며 탭·회사명 입력 규격은 바꾸지 않는다. 사유: 같은 차량이 «경진» → «경진렌트» 로 표기가 바뀌어 원천에 없는 것으로 오인되고 하향됨."
+      },
+      {
+        "code": "RP034",
+        "tab": "마춤카",
+        "companyName": "마춤카",
+        "decisionNote": "2026-10-14 대표 직접 지시(«마춤카는 현재 양식에 맞춰서 탭 하나 만들고 업데이트»): 2026-10-03 공동 시트 제외 결정(마음카 = 마춤카, RP034)을 대체한다. 입력 원천은 공급사 카톡방의 일일 이미지+엑셀. 실제 탭이 만들어지고 되읽기로 확인되기 전까지 absentRegisteredTabs 에 두어 수집 범위에 넣지 않는다."
       }
     ],
     "sharedFiles": {
@@ -2223,11 +2229,14 @@
     ],
     "membershipRule": "2026-10-03 대표 결정: 공동 시트에는 프리패스가 제공한 시트를 쓰던 공급사만 둔다. ERP·API·홈페이지 연동 공급사와 아이카(자체 원본 시트)는 모두 뺀다. notInSharedSheet 공급사가 공동 시트에 묶이면 실행기는 HOLD한다.",
     "exclusionVerifiedAt": "2026-10-03 Codex 구글 커넥터 읽기 전용: 5곳 탭 0, 공급사 탭·종합 회사명에 5곳 0행, 정책원문·정책확인에 5곳 코드·이름 0행, 관리안내에 직접 연동 업체 제외 문구 있음",
-    "excludedFromSharedSheet": [
+    "excludedFromSharedSheet": [],
+    "supersededExclusions": [
       {
         "code": "RP034",
         "tab": "마음카",
-        "decision": "2026-10-03 대표: 공동 시트 제외, 탭 숨김 보관, 수수료 규칙 없음"
+        "decision": "2026-10-03 대표: 공동 시트 제외, 탭 숨김 보관, 수수료 규칙 없음",
+        "supersededAt": "2026-10-14",
+        "supersededBy": "대표 직접 지시: 마춤카는 현재 양식에 맞춰서 탭 하나 만들고 업데이트(탭 이름 «마춤카»). 수수료 규칙은 여전히 없음(NOT_APPLICABLE 유지)."
       }
     ],
     "archivedTabs": [
@@ -3645,7 +3654,7 @@
   },
   "changeControl": {
     "status": "LOCKED_BY_USER",
-    "baselineVersion": "supplier-input-presentation/2026-10-07.3",
+    "baselineVersion": "supplier-input-presentation/2026-10-14.1",
     "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
     "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
     "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
@@ -3666,7 +3675,8 @@
     "absentRegisteredTabs": [
       "연카",
       "스위치플랜",
-      "에스에이"
+      "에스에이",
+      "마춤카"
     ],
     "absentTabPolicy": "현재 구성에 없는 등록 탭은 새 대표 지시 없이 재생성·숨김해제·등록삭제하지 않는다. 원천/코드 등록과 실제 입력 탭 구성은 분리한다.",
     "futureChangeRequirements": [

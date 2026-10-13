@@ -539,3 +539,10 @@ fields는 위치 식별자와 gridProperties/conditionalFormats, userEnteredForm
 - Claude ANSWERED/exit0: 비율 기준·최소최대·0/없음 구분·원문 보존·소유권 guard를 반영했다. 전체 항목명을 화면에 남기자는 의미 보존 문제는 사용자의 짧은 표시 지시에 맞춰 필요한 수리비/개인·법인/최소·최대만 유지하고 세부는 note와 archive에 보존했다. 단위/범위/소유권/재실행을 포함한 Sheets 테스트45개와 build 통과.
 
 - **차종 드롭다운(2026-10-03 대표 결정):** 제조사·모델·세부모델·세부트림은 F03 전체 목록을 숨김 `차종목록`(sheetId 9100)의 A:D에 담아 범위 드롭다운으로 쓴다. 공급사는 글자를 입력해 목록을 거르며, 목록 밖 값도 입력되고 경고만 보인다(`strict:false`). 행별 자동 연동은 나중 Apps Script 범위다. F03가 바뀌면 새 `master={source,readAt,header,rows}`와 공동 시트의 fresh 조회·전체 inventory·binding을 입력으로 `--vehicle-master=<input.json>`(표준입력은 `-`) 계획기를 다시 실행한다. source는 규격 `vehicleMaster.source` 또는 탭 설명을 뺀 같은 F03 출처여야 한다. 자동 갱신은 없으며, 계획기는 요청만 반환하고 적용하지 않는다. 기존 목록 탭의 행·열이 부족하면 HOLD하므로 크기 확장은 별도 작업이다.
+
+### 2026-10-14.1 마춤카(RP034) 탭 등록 — 대표 직접 지시
+
+- 지시(2026-10-14): «마춤카는 현재 양식에 맞춰서 탭 하나 만들고 업데이트해 줬으면 좋겠다.» 2026-10-03 «공동 시트 제외» 결정을 대체한다(`supersededExclusions`). 수수료 규칙은 여전히 없음.
+- 규격: `supplierChannels.sharedInputSheet` 에 RP034/마춤카/마춤카 등록, `absentRegisteredTabs` 에 «마춤카» 추가(탭이 라이브에 만들어지고 되읽기로 확인되기 전까지 수집 범위 밖), baselineVersion 2026-10-14.1.
+- **적용 순서(중요)**: 등록 탭은 수집 캡처·캐스케이드 묶음이 «존재해야 하는 탭»으로 묶으므로 라이브 탭을 먼저 만들고 되읽은 뒤 이 규격을 배포한다. 규격만 먼저 배포하면 F05 캡처가 탭 부재로 실패한다.
+- 남은 일: 입력 원천(공급사 카톡방 일일 이미지+엑셀) 변환·탭 생성·초기 입력 plan(커맨드 센터 확인), activeSupplierTabs 로 이동은 라이브 확인 뒤.

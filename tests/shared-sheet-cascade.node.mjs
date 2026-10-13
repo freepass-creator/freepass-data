@@ -62,11 +62,11 @@ test('missing lookup key after a valid parent does not invent a child or erase v
   const f=fixture();f.ctx.FREEPASS_CASCADE_CONFIG.expectedLookupRows=[['@snapshot','test-digest'],['M|*','기아'],['D|기아','K3']];const index=f.ctx.fpCascadeIndex(f.ctx.FREEPASS_CASCADE_CONFIG.expectedLookupRows);
   assert.equal(JSON.stringify(f.ctx.fpCascadeChoices(['기아','K3','기존 값'],index)),JSON.stringify([['기아'],['K3'],[],[]]));
 });
-test('bundle exact-binds the existing 15 physical supplier tabs; no external-file scope',()=>{
+test('bundle exact-binds the registered 16 supplier tabs (15 existing + 마춤카, which must exist in the book once registered); no external-file scope',()=>{
   const titles=[...new Set(inputSpec.supplierChannels.sharedInputSheet.map(s=>s.tab))];
   const meta={spreadsheetId:'book',sheets:[...titles.map((title,i)=>({properties:{title,sheetId:i+1,gridProperties:{rowCount:1000}}})),{properties:{title:'차종연쇄',sheetId:92}}]};
   const data={maker:'기아',model:'K3',sub_model:'K3 BD'},body={readAt:new Date().toISOString(),masters:[{id:'m',data}],trims:[{id:'t',data:{...data,master_id:'m',trim:'스탠다드'}}]};meta.vehicleMasterSnapshot={source:'freepasserp5/vehicle_master+vehicle_trim_master',complete:true,...body,digest:createHash('sha256').update(JSON.stringify(body)).digest('hex')};
-  const b=buildCascadeBundle(meta,inputSpec);assert.equal(b.config.suppliers.length,15);assert.equal(b.config.firstColumn,6);
+  const b=buildCascadeBundle(meta,inputSpec);assert.equal(b.config.suppliers.length,16);assert.equal(b.config.firstColumn,6);
   assert.deepEqual(JSON.parse(b.files[0].source).oauthScopes,['https://www.googleapis.com/auth/spreadsheets.currentonly']);
   assert.throws(()=>buildCascadeBundle({...meta,sheets:meta.sheets.slice(1)},inputSpec),/supplier tab missing/);
   const now=Date.now(),input={master:meta.vehicleMasterSnapshot,capturedAt:new Date(now).toISOString(),metadata:meta,headers:b.config.headers,lookupSheetId:92,lookupRows:b.lookupRows,rows:[{tab:titles[0],sheetId:1,row:2,values:['기아','K3','K3 BD','스탠다드']}]};

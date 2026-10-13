@@ -9,6 +9,16 @@ import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planP
 // Earlier-policy fixtures keep historical planner coverage; current policy has its own regression below.
 // Historical layout deletion fixtures explicitly exclude today's no-deletion lock.
 const inputSpec=structuredClone(currentSpec);delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
+// 아래 기존 시험은 2026-10-03/04 대표 결정 시점(마음카 RP034 공동 시트 제외)의 계획기를 검증한다. 2026-10-14 대표 지시로 현행 규격은 «마춤카» 탭을
+// 등록(부재 등록 탭)하고 제외 결정을 supersededExclusions 로 옮겼으므로, 이 이력 시험은 제외 상태의 규격 사본으로 돌린다. 현행 규격 시험은 아래 별도 케이스.
+const withHistoricalExclusion=spec=>{
+  spec.supplierChannels.sharedInputSheet=spec.supplierChannels.sharedInputSheet.filter(r=>r.code!=='RP034');
+  spec.supplierChannels.excludedFromSharedSheet=spec.supplierChannels.supersededExclusions.map(({supersededAt,supersededBy,...x})=>x);
+  delete spec.supplierChannels.supersededExclusions;
+  spec.changeControl.absentRegisteredTabs=spec.changeControl.absentRegisteredTabs.filter(t=>t!=='마춤카');
+  return spec;
+};
+withHistoricalExclusion(inputSpec);
 const now=Date.parse('2026-10-03T12:00:00Z');
 delete inputSpec.changeControl;
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
@@ -146,7 +156,10 @@ test('canon: conditional formats rebase own ranges and summary input validation 
   assert.ok(!p.requests.some(r=>r.setDataValidation?.range.sheetId===0));assert.equal(p.requests.find(r=>r.addConditionalFormatRule).addConditionalFormatRule.rule.ranges[0].sheetId,0);
 });
 test('canon: CLI reports nonzero for differences and accepts stdin without network',()=>{
-  const f=fixture();const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--check-canon=-'],{input:JSON.stringify(f.spreadsheet),encoding:'utf8',maxBuffer:20*1024*1024});
+  const f=fixture();
+  // CLI 는 현행 규격 파일을 읽는다: 현행 규격은 «마춤카» 를 등록 탭으로 가지므로 픽스처에도 그 탭을 둔다(경진 탭의 사본).
+  const donor=f.spreadsheet.sheets.find(s=>s.properties.title==='경진'),extra=structuredClone(donor);extra.properties.title='마춤카';extra.properties.sheetId=998;f.spreadsheet.sheets.push(extra);
+  const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--check-canon=-'],{input:JSON.stringify(f.spreadsheet),encoding:'utf8',maxBuffer:20*1024*1024});
   assert.equal(r.status,1,r.stderr);assert.ok(JSON.parse(r.stdout).tabs.holds.length>0);
 });
 test('annual mileage: representative 2만km decision is persistent and idempotent',()=>{
@@ -270,7 +283,7 @@ test('exclude RP034: exact two requests, 15-tab formula, only A2 value changes, 
   f.binding.suppliers.pop();f.spreadsheet.sheets.at(-1).properties.hidden=true;
   assert.equal(planSupplierInput(f,inputSpec,now).status,'LAYOUT_VERIFIED');
   assert.ok(!planSupplierDropdowns(f,inputSpec,now).requests.some(r=>r.setDataValidation.range.sheetId===999));
-  assert.equal(auditTabConsistency(f.spreadsheet).coverage.length,16);
+  assert.equal(auditTabConsistency(f.spreadsheet,inputSpec).coverage.length,16);
   assert.ok(!planTabConsistencyFix(f.spreadsheet,inputSpec).coverage.some(t=>t.tab==='마음카'));
 });
 test('exclude RP034: reuse freshness, binding, inventory, layout and hidden-archive gates',()=>{
@@ -539,4 +552,4 @@ test('summary formula keeps every row except 출고불가 and drops blank rows; 
   for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:bad}),/summaryExcludeStatuses invalid/);
 });
 
-test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const removalSpec=structuredClone(currentSpec);delete removalSpec.dropdownPolicy.lightweight;const p=planSupplierDropdowns(fixture(),removalSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(removalSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});
+test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const removalSpec=withHistoricalExclusion(structuredClone(currentSpec));delete removalSpec.dropdownPolicy.lightweight;const p=planSupplierDropdowns(fixture(),removalSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(removalSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});
