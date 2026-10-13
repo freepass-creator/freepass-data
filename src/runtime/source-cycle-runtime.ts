@@ -11,7 +11,7 @@ import { sourceCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CyclePlugin } f
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
-import { runSourceCycle } from '../jobs/source-cycle.js';
+import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
@@ -145,6 +145,20 @@ export async function runtimeCli(args: string[], env = process.env) {
   }
   const source = get('--source'), selected = runtime.plugins.filter(p => !source || p.sourceId === source);
   if (!selected.length || (args.includes('--apply') && selected.length !== 1)) throw new Error('ONE_SOURCE_REQUIRED');
+  // 무인 회차(스케줄러용): 명시 env 옵트인 + 플래그 둘 다 있어야 하며, 수동 승인 인자와 섞지 않는다.
+  const unattended = args.includes('--unattended');
+  if (unattended) {
+    if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
+    if (args.includes('--apply') || get('--plan')) throw new Error('UNATTENDED_ARGS_INVALID');
+    const reports = [];
+    for (const plugin of selected) {
+      const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
+        { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+      reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
+        digest: 'planDigest' in result ? result.planDigest : null });
+    }
+    return reports;
+  }
   const planFile = get('--plan');
   const approvedPlan: CyclePlan | undefined = args.includes('--apply') && planFile
     ? JSON.parse(await readFile(resolve(planFile), 'utf8')) : undefined;

@@ -1,0 +1,36 @@
+﻿param(
+  [string]$EnvFile,
+  [switch]$OnlyWhenSynced,
+  [string]$Source
+)
+# 원천 엔진 무인 회차 실행기(작업 스케줄러가 부른다). 대표 2026-10-13: ERP5 원천 반영을 개발 PC 에서 1시간 간격 무인 적용.
+#  - EnvFile: 저장소 밖 비공개 PowerShell 파일. $env:FIREBASE_PROJECT_ID, $env:SOURCE_CYCLE_SOURCES, $env:SOURCE_CYCLE_PRIVATE_DIR,
+#             $env:SOURCE_CYCLE_*_SHEET_ID 등을 설정한다. 비밀값은 저장소에 두지 않는다.
+#  - 무인 적용은 $env:SOURCE_CYCLE_UNATTENDED = '1' 과 --unattended 둘 다 있어야 켜진다(코드 가드).
+#  - 결과 한 줄(JSON)을 $env:SOURCE_CYCLE_PRIVATE_DIR\unattended-runs.jsonl 에 남긴다. 원문·토큰은 기록하지 않는다.
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent $PSScriptRoot
+if ($EnvFile) {
+  $envPath = (Resolve-Path -LiteralPath $EnvFile).Path
+  if ($envPath.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'EnvFile must live outside the repository.' }
+  . $envPath
+}
+if (!$env:SOURCE_CYCLE_SOURCES) { throw 'SOURCE_CYCLE_SOURCES is required (set it in EnvFile or user environment).' }
+$env:SOURCE_CYCLE_UNATTENDED = '1'
+if (!$env:NODE_ENV) { $env:NODE_ENV = 'production' }
+$job = Join-Path $repo 'dist\src\runtime\source-cycle-runtime.js'
+if (!(Test-Path -LiteralPath $job)) { throw 'Run npm.cmd run build first.' }
+$node = (Get-Command node.exe -ErrorAction Stop).Source
+$cliArgs = @($job, '--unattended')
+if ($OnlyWhenSynced) { $cliArgs += '--only-when-synced' }
+if ($Source) { $cliArgs += @('--source', $Source) }
+$started = (Get-Date).ToUniversalTime().ToString('o')
+$stdout = & $node @cliArgs 2>$null
+$exit = $LASTEXITCODE
+$privateDir = $env:SOURCE_CYCLE_PRIVATE_DIR
+if (!$privateDir) { $privateDir = Join-Path $env:USERPROFILE '.codex\private\source-cycle' }
+if (!(Test-Path -LiteralPath $privateDir)) { New-Item -ItemType Directory -Path $privateDir -Force | Out-Null }
+$line = @{ started = $started; finished = (Get-Date).ToUniversalTime().ToString('o'); exit = $exit; report = ($stdout -join '') } | ConvertTo-Json -Compress
+Add-Content -LiteralPath (Join-Path $privateDir 'unattended-runs.jsonl') -Value $line -Encoding UTF8
+Write-Output $line
+exit $exit

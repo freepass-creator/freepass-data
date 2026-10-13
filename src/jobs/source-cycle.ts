@@ -4,6 +4,7 @@ import { resolve, join } from 'node:path';
 import { planSourceCycle, applySourceCycle, deepEqual, type CycleCommands, type CyclePlan, type CycleControl, type CycleProduct } from '../application/source-cycle.js';
 import { sourceCyclePlugin, type CyclePlugin, type CycleCapture, type CycleSourceDefinition } from '../adapters/source-cycle-plugins.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number } = {}) {
@@ -102,6 +103,21 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         summary: `${summary ? summary + ' · ' : ''}회차 보류 ${reason} (연속 ${state.failures})`, plan };
     }
   } finally { await release(); }
+}
+
+/** 무인 회차(대표 2026-10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔」):
+ * 같은 회차 안에서 ① 새 읽기로 계획을 세우고(DRY_RUN) ② 변경이 있으면 그 계획을 승인 digest 로 삼아
+ * 즉시 적용한다. 적용 단계는 기존 승인 경로(runSourceCycle + approvedPlan)를 그대로 재사용하므로
+ * 재읽기·사실 불일치 CYCLE_REPLAN_REQUIRED·blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·
+ * 백업·CAS·되읽기·3회 실패 정지가 전부 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. */
+export async function runUnattendedSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
+  options: { onlyWhenSynced?: boolean; now?: () => number } = {}) {
+  const planned = await runSourceCycle(plugin, commands, control, options);
+  if (planned.status !== 'DRY_RUN' || !('plan' in planned) || !planned.plan) return { ...planned, stage: 'PLAN' as const };
+  if (!planned.plan.entries.length) return { ...planned, stage: 'PLAN' as const, summary: `${planned.summary} · 변경 0: 적용 생략` };
+  const digest = stableDigest(planned.plan);
+  const applied = await runSourceCycle(plugin, commands, control, { ...options, apply: true, approvedPlan: planned.plan, digest, approval: digest });
+  return { ...applied, stage: 'APPLY' as const, planDigest: digest };
 }
 
 /** The scheduler loads a reviewed local runtime composition. No default credentials, target,

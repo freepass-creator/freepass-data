@@ -231,6 +231,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 원천 엔진 무인 회차 — ERP5 1시간 간격 자동 반영 (PLN)
+
+- 목적/정본: 대표 10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔 해」(ai-ops 결정 장부 10-13 «원천 엔진 실행 기반»). 가지 `work/freepass-data/plate-mask-20261013`(PR #567 head `9ca4308` 기반), 설계·절차 [SOURCE-ENGINE-UNATTENDED-20261013](SOURCE-ENGINE-UNATTENDED-20261013.md).
+- 변경: `runUnattendedSourceCycle`(계획→변경 있으면 같은 회차에 기존 승인 경로로 적용, 변경 0 이면 생략), runtime CLI `--unattended`(env `SOURCE_CYCLE_UNATTENDED=1` 옵트인 필수, `--apply`/`--plan` 혼용 거부), `scripts/run-source-cycle.ps1` 실행기(비공개 EnvFile·결과 jsonl), `register-source-cycle.ps1 -Unattended -IntervalMinutes 60`. 기존 blockers·백업·CAS·되읽기·3회 정지·수동 승인 경로 유지.
+- 검증: 관련 3파일 137 PASS(신규 4건 포함), build/arch/boundary PASS, ps1 5.1 구문 0오류·등록 DRY_RUN 확인. 운영 등록·실제 적용은 미실행.
+- 남음/next_start_here: B3Q(DEV)가 문서 절차대로 env 파일 준비 → 1회 수동 실행 → 60분 등록 → 두 회차 jsonl·ERP5 되읽기 보고. PR 은 gh 연결 PC 에서 생성.
+
 ### 2026-10-13 SOURCE-ENGINE SPEC3D + 3E 오프라인 구현
 
 - 목적/정본: `SOURCE-ENGINE-SPEC3D-20261012.md`; 시작 revision `a044f43f60bc9172ef343154ab9fc93f2324d955`, 기존 WIP 보정 보존. SPEC 영수증으로 사전점검 갈음, 외부 도구 미사용.

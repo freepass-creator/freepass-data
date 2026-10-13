@@ -7,9 +7,9 @@ import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironN
 import { sourceCyclePlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
-import { runSourceCycle } from '../src/jobs/source-cycle.js';
+import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli } from '../src/runtime/source-cycle-runtime.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -538,5 +538,41 @@ describe('native mappings and UID', () => {
     const fetcher = vi.fn(); const r = createSourceCycleRuntime({ FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IANCAR,IRON',
       SOURCE_CYCLE_PRIVATE_DIR: await directory() }, fetcher as typeof fetch);
     expect(r.plugins).toHaveLength(2); expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('unattended hourly cycle (대표 2026-10-13: 1시간 간격 무인 적용)', () => {
+  const plugin = (record = product().record) => sourceCyclePlugin({ sourceId: source, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 1 },
+    async () => ({ observedAt: time, complete: true, completedScopes: ['inventory'], visibilityComplete: true, heldCount: 0,
+      rows: [{ scope: 'inventory', record }] }));
+  it('plans then applies in one run, and the next run has nothing to apply', async () => {
+    const { commands, fake } = await setup(); const ctrl = fileCycleControl(await directory(), async () => {});
+    const first = await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 1000 });
+    expect(first).toMatchObject({ stage: 'APPLY', status: 'APPLIED', writes: 1, verified: 1 });
+    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
+    const second = await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 2000 });
+    expect(second).toMatchObject({ stage: 'PLAN', status: 'DRY_RUN', writes: 0 });
+    expect(second.summary).toContain('변경 0');
+    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
+  });
+  it('never writes when the plan is blocked', async () => {
+    const { commands, fake } = await setup([product('TEST1001'), product('TEST1002'), product('TEST1003')]);
+    const strict = sourceCyclePlugin({ sourceId: source, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 0.1 },
+      async () => ({ observedAt: time, complete: true, completedScopes: ['inventory'], visibilityComplete: true, heldCount: 0, rows: [] }));
+    const result = await runUnattendedSourceCycle(strict, commands, fileCycleControl(await directory(), async () => {}), { now: () => now + 1000 });
+    expect(result.stage).toBe('PLAN'); expect(result.status).toBe('HOLD');
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
+  it('observation-only sources finish at OBSERVED without product writes', async () => {
+    const { commands, fake } = await setup();
+    const result = await runUnattendedSourceCycle({ ...plugin(), observationOnly: true }, commands, fileCycleControl(await directory(), async () => {}), { now: () => now + 1000 });
+    expect(result).toMatchObject({ stage: 'PLAN', status: 'OBSERVED', writes: 0 });
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
+  it('runtime CLI refuses --unattended without the explicit env opt-in or with manual approval args', async () => {
+    const env = { FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IRON', SOURCE_CYCLE_PRIVATE_DIR: await directory() };
+    await expect(runtimeCli(['--unattended'], env)).rejects.toThrow('UNATTENDED_NOT_ENABLED');
+    await expect(runtimeCli(['--unattended', '--apply'], { ...env, SOURCE_CYCLE_UNATTENDED: '1' })).rejects.toThrow('UNATTENDED_ARGS_INVALID');
+    await expect(runtimeCli(['--unattended', '--plan', 'x.json'], { ...env, SOURCE_CYCLE_UNATTENDED: '1' })).rejects.toThrow('UNATTENDED_ARGS_INVALID');
   });
 });
