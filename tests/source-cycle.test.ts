@@ -10,7 +10,8 @@ import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
 import { fileCycleControl, sourceRunCycleHeartbeat } from '../src/adapters/source-cycle-control.js';
 import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
-import type { SourceProductRecord } from '../src/domain/source-engine.js';
+import { validateSourceRecord, sourceSaleAvailable, type SourceProductRecord } from '../src/domain/source-engine.js';
+import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 
 const time = '2026-10-12T00:00:00.000Z', now = Date.parse(time);
@@ -212,6 +213,23 @@ describe('source plugins', () => {
     expect(p.toRecords(read).records[0]).toMatchObject({ uid: 'synthetic-one', status: { saleAvailable: true },
       terms: [{ months: 12, deposit: { state: 'ZERO', value: 0 }, mileage: '20000km/year' }] });
     c.factScope = 'PHASE_ONE_FACTS'; expect((await p.read()).complete).toBe(false);
+  });
+  it('ONE rates with three contracted-mileage options per month stay valid and sellable (이안카 검증 보류 96/96 사고)', async () => {
+    const options: Array<[number, number]> = [[40000, 648000], [20000, 555000], [30000, 602000]];
+    const rates = [12, 24].flatMap(months => options.map(([km, rent]) => ({
+      rental_period: months, monthly_rate: rent, deposit: 0, currency: 'KRW', vat_included: true, contracted_mileage: km, mileage_period: 'year' })));
+    const c: IancarOneListCapture = { version: 'iancar-one-api/1', capturedAt: time, origin: 'synthetic', syncedAt: time,
+      stale: false, total: 1, pages: 1, sourceDigest: 'synthetic', issues: [], readyForRawIngest: true, factScope: 'FULL_FACTS',
+      records: [{ vehicleId: 'synthetic-one', fingerprint: 'synthetic', payload: { inventory_status: 'AVAILABLE', plate_number: 'synthetic',
+        detail: { data: { name: '합성' } }, rates: { data: rates } } }] };
+    const p = iancarCyclePlugin(0.5, async () => c, () => time);
+    const record = p.toRecords(await p.read()).records[0]!;
+    expect(record.terms).toHaveLength(6);                                  // 원천 기록에는 옵션 전부 남는다
+    expect(validateSourceRecord(record)).toEqual([]);
+    expect(sourceSaleAvailable(record, 'IANCAR', now)).toBe(true);
+    const price = nativeCycleFields({ record, listable: true, locked_by_contract: false, publication_withdrawal: null,
+      publication_withdrawal_prior: null }).price as Record<string, { rent: number; mileage: string }>;
+    expect(price).toEqual({ '12': { rent: 555000, deposit: 0, mileage: '20000km/year' }, '24': { rent: 555000, deposit: 0, mileage: '20000km/year' } });
   });
   it.each(['429', '403', 'partial'])('read error %s is never complete', async reason => {
     const p = plugin(async () => { throw Error(reason); }); expect((await p.read()).complete).toBe(false);

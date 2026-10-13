@@ -51,6 +51,23 @@ export function validSourceAmount(a: SourceAmount): boolean {
   return !!a && (a.state === 'UNKNOWN' ? a.value === null : a.state === 'ZERO' ? a.value === 0 :
     a.state === 'KNOWN' && Number.isSafeInteger(a.value) && a.value > 0);
 }
+/** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,
+ * 개월 키 하나만 갖는 판매 가격 칸에는 대표 항 하나(연 환산 약정거리가 가장 작은 기본 옵션)를 쓴다. 대여료 최저가 선택이 아니다. */
+const annualKm = (mileage: string | null): number => {
+  const m = /^(\d+)\s*km(?:\/(month|year))?$/.exec((mileage ?? '').trim());
+  return m ? Number(m[1]) * (m[2] === 'month' ? 12 : 1) : Number.POSITIVE_INFINITY;
+};
+export const termIdentity = (t: Pick<SourceTerm, 'months' | 'mileage'>) => `${t.months}|${t.mileage ?? ''}`;
+export function representativeTerms<T extends Pick<SourceTerm, 'months' | 'mileage' | 'monthlyRent'>>(terms: readonly T[]): T[] {
+  const best = new Map<number, T>();
+  for (const t of terms) {
+    const cur = best.get(t.months);
+    if (!cur) { best.set(t.months, t); continue; }
+    const a = annualKm(t.mileage), b = annualKm(cur.mileage);
+    if (a < b || (a === b && (t.monthlyRent.value ?? Infinity) < (cur.monthlyRent.value ?? Infinity))) best.set(t.months, t);
+  }
+  return [...best.values()];
+}
 /** Errors are scoped: an invalid term must not obstruct an explicit stop for a known UID. */
 export function validateSourceRecord(input: unknown): string[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return ['RECORD_SHAPE_INVALID'];
@@ -65,7 +82,7 @@ export function validateSourceRecord(input: unknown): string[] {
   if (!Array.isArray(r.terms) || !r.terms.length || r.terms.some(t => !t || !Number.isSafeInteger(t.months) || t.months <= 0 ||
     !validSourceAmount(t.monthlyRent) || !validSourceAmount(t.deposit) || t.monthlyRent.state === 'UNKNOWN' ||
     (t.mileage !== null && typeof t.mileage !== 'string') || !t.raw || typeof t.raw !== 'object' || Array.isArray(t.raw)) ||
-    new Set(r.terms.map(t => t.months)).size !== r.terms.length) reasons.push('TERMS_HOLD');
+    new Set(r.terms.map(termIdentity)).size !== r.terms.length) reasons.push('TERMS_HOLD');
   return reasons;
 }
 export type SourceHeartbeat = { lastCompleteAt: string | null; lastAttemptAt: string | null; readCount: number; heldCount: number; error: string | null };

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
-import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
+import { representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -67,7 +67,7 @@ export function productRecord(uid: string, f: Fields, observedAt: string): Sourc
 /** 저장 digest 와 현재 price 대조. 정규화(null=누락) 일치, 또는 다른 쓰기 주체가 표시용 mileage 만 지운 경우(저장 digest 는 기록의 terms 와 일치하고 현재 price 는 mileage 를 뺀 terms 와 같음)를 허용한다. rent·deposit 변경은 여전히 DRIFT. */
 export function priceMatchesRecord(price: unknown, storedDigest: unknown, record: SourceProductRecord): boolean {
   if (priceDigest(price) === storedDigest || stableDigest(price ?? {}) === storedDigest) return true;
-  const derived = Object.fromEntries(record.terms.map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
+  const derived = Object.fromEntries(representativeTerms(record.terms).map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
   if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
   const withoutMileage = Object.fromEntries(Object.entries(derived).map(([m, v]) => [m, { rent: v.rent, deposit: v.deposit }]));
   return priceDigest(price) === priceDigest(withoutMileage);
@@ -99,7 +99,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
   const r = p.record;
   const display = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const price = !p.listable && original.price ? original.price :
-    Object.fromEntries(r.terms.map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
+    Object.fromEntries(representativeTerms(r.terms).map(t => [String(t.months), { rent: t.monthlyRent.value, deposit: t.deposit.value, mileage: t.mileage }]));
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),

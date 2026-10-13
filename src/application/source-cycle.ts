@@ -1,4 +1,4 @@
-import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, SOURCE_EXPIRY_SECONDS,
+import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
@@ -84,7 +84,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       // 원천 보증금 UNKNOWN(빈칸·해석 불가)은 확인된 원천 값이 아니다 — 같은 개월의 기존 KNOWN/ZERO 보증금을 지우지 않는다
       // (저장소 불변식: unknown/null 은 마지막 정상값 보존. Codex 상의 2026-10-13). 대여료·ZERO·KNOWN 은 원천 값 그대로.
       for (const term of next.terms) {
-        const prior = before.record.terms.find(p => p.months === term.months);
+        const prior = before.record.terms.find(p => termIdentity(p) === termIdentity(term)) ??
+          // 기존 문서가 개월 키 하나(대표 항)만 가진 경우: 같은 개월의 유일한 항과만 짝짓는다
+          (before.record.terms.filter(p => p.months === term.months).length === 1 ? before.record.terms.find(p => p.months === term.months) : undefined);
         if (term.deposit.state === 'UNKNOWN' && prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
           term.deposit = structuredClone(prior.deposit); depositPreserved++;
         }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runSharedSheetCli } from '../src/jobs/ingest-shared-sheet-canonical.js';
-import { sourceHeartbeat, sourceSaleAvailable, sourceProductKey, validateSourceRecord, type SourceProductRecord, type SourceRead } from '../src/domain/source-engine.js';
+import { sourceHeartbeat, sourceSaleAvailable, sourceProductKey, validateSourceRecord, representativeTerms, classifyReadError,
+  type SourceProductRecord, type SourceRead } from '../src/domain/source-engine.js';
 import { applySourceRecords, planSourceRecords, type SourceRecordCommands } from '../src/application/source-engine.js';
 import { sharedSheetEngine, sharedSheetRecords } from '../src/adapters/shared-sheet-engine.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -170,4 +171,33 @@ it('CLI failure emits parseable HOLD JSON instead of Unexpected end of JSON inpu
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ mode: 'APPLY', status: 'HOLD', reason: 'SHARED_SHEET_JOB_HOLD' });
   } finally { process.exitCode = oldExit; log.mockRestore(); error.mockRestore(); }
+});
+
+describe('약정거리 옵션이 여럿인 원천의 항 식별 (이안카 ONE: 개월마다 약정거리 3옵션)', () => {
+  const term = (months: number, mileage: string | null, rent: number) => ({ months, mileage, raw: {},
+    monthlyRent: { state: 'KNOWN' as const, value: rent }, deposit: { state: 'ZERO' as const, value: 0 } });
+  const three = () => [12, 24].flatMap(m => [term(m, '40000km/year', 648000), term(m, '20000km/year', 555000), term(m, '30000km/year', 602000)]);
+  it('same months with different contracted mileage is valid; identical months and mileage is still a duplicate', () => {
+    const r = { ...record(), terms: three() };
+    expect(validateSourceRecord(r)).not.toContain('TERMS_HOLD');
+    expect(validateSourceRecord({ ...r, terms: [...three(), term(12, '20000km/year', 999000)] })).toContain('TERMS_HOLD');
+  });
+  it('the sale-price map takes the smallest annual mileage per month deterministically, not the cheapest rent', () => {
+    const rep = representativeTerms(three());
+    expect(rep.map(t => [t.months, t.mileage])).toEqual([[12, '20000km/year'], [24, '20000km/year']]);
+    expect(representativeTerms([...three()].reverse()).map(t => t.mileage)).toEqual(['20000km/year', '20000km/year']);
+    expect(representativeTerms([term(12, '2500km/month', 700000), term(12, '20000km/year', 650000)])[0]!.mileage).toBe('20000km/year');
+    expect(representativeTerms([term(1, '월렌트', 800000)])).toHaveLength(1);
+  });
+});
+
+describe('읽기 오류 분류', () => {
+  it('keeps 429/401/403 classes and records only safe detail for the rest', () => {
+    expect(classifyReadError(Object.assign(new Error('x'), { status: 429 }))).toEqual({ error: 'RATE_LIMITED', detail: null });
+    expect(classifyReadError(new Error('HTTP_403'))).toEqual({ error: 'AUTH_FAILED', detail: null });
+    expect(classifyReadError(Object.assign(new Error('x'), { status: 503 }))).toEqual({ error: 'READ_FAILED', detail: 'HTTP_503' });
+    expect(classifyReadError(Object.assign(new Error('x'), { name: 'TimeoutError' }))).toEqual({ error: 'READ_FAILED', detail: 'TIMEOUT' });
+    expect(classifyReadError(new Error('IANCAR_ONE_DETAIL_SOURCE_DRIFT'))).toEqual({ error: 'READ_FAILED', detail: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' });
+    expect(classifyReadError(new Error('secret body text'))).toEqual({ error: 'READ_FAILED', detail: null });
+  });
 });
