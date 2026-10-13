@@ -35,7 +35,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
           state.error = null;
           await control.save(plugin.sourceId, state);
           await control.heartbeat(plugin.sourceId, state, null);
-          return { status: 'UNCHANGED_SYNC', writes: 0, summary: 'synced_at 갱신 후 10분 초과: 신선도 창 안에 상세 읽기를 끝낼 수 없어 다음 갱신을 기다림' };
+          return { status: 'UNCHANGED_SYNC', writes: 0, summary: `synced_at 갱신 후 10분 초과(synced_at ${synced}, ${Math.round((clock() - Date.parse(synced)) / 60_000)}분 경과): 신선도 창 안에 상세 읽기를 끝낼 수 없어 다음 갱신을 기다림` };
         }
         if (synced === state.lastSyncedAt) {
           state.error = null;

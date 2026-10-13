@@ -162,8 +162,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 오토플러스 홈피 관측 병행(대표 2026-10-14: 홈피가 정본): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_REPORT=<보고 파일 경로> 일 때만, 문서를 읽을 때
       // 홈피 전수를 직렬로 읽어 번호 기준 비교 요약(건수·끝 4자리)을 파일에 쓴다. 쓰기 0, 실패는 회차에 영향 없음(best-effort).
       const homepageReport = kind === 'AUTOPLUS' ? env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_REPORT?.trim() : '';
+      // 홈피 전수 읽기가 불완전 없이 끝난 시각 — 오토플러스 신선도 근거(대표: 홈피가 정본). ERP4 수집 단계 성공 시각과 더 최근 쪽을 쓴다.
+      let homepageFreshAt: string | null = null;
       const documents = async (sourceId: string) => {
         const docs = await commands.documents(sourceId);
+        homepageFreshAt = null;
         if (homepageReport) {
           try {
             const client = createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never });
@@ -174,15 +177,22 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
               const f = decodeFields(d.fields as never) as Record<string, unknown>;
               return { plate: typeof f.car_number === 'string' ? f.car_number : null, listable: f.listable === true };
             }));
+            if (collected.complete) homepageFreshAt = collected.observedAt;
             await writeFile(homepageReport, JSON.stringify({ at: new Date().toISOString(), complete: collected.complete, productCount: collected.productCount,
-              failureCodes: codes, held: collected.held.map(h => h.reason), duplicatePlates: collected.duplicatePlates.length, comparison }, null, 1), { mode: 0o600 });
+              excluded: collected.excluded.length, failureCodes: codes, held: collected.held.map(h => h.reason),
+              duplicatePlates: collected.duplicatePlates.length, comparison }, null, 1), { mode: 0o600 });
           } catch (e) {
             await writeFile(homepageReport, JSON.stringify({ at: new Date().toISOString(), error: e instanceof Error && /^[A-Z][A-Z0-9_]{2,40}$/.test(e.message) ? e.message : 'HOMEPAGE_OBSERVE_FAILED' }), { mode: 0o600 }).catch(() => undefined);
           }
         }
         return docs;
       };
-      plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, collectionEvidence));
+      const evidence = kind === 'AUTOPLUS' && homepageReport ? async () => {
+        const erp4 = await collectionEvidence?.().catch(() => null) ?? null;
+        const home = homepageFreshAt as string | null;
+        return home && (!erp4 || Date.parse(home) > Date.parse(erp4)) ? home : erp4;
+      } : collectionEvidence;
+      plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.
