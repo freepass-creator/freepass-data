@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
+import { resolveGwsBin } from '../infra/gws-bin.js';
+import { assessFreshness } from '../application/source-freshness.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
 import { sourceCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CyclePlugin } from '../adapters/source-cycle-plugins.js';
@@ -27,12 +28,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   });
   // 시트 읽기는 이미 인증된 gws(회사 계정 위임)로 한다 — gcloud 사용자 토큰에는 Sheets 권한이 없다. 비밀은 건드리지 않는다.
   const gwsBin = () => {
-    if (env.GWS_BIN) return env.GWS_BIN;
-    if (process.platform !== 'win32') return 'gws';
-    const where = (execFileSync('where', ['gws.cmd'], { encoding: 'utf8' }).split('\n')[0] ?? '').trim();
-    const exe = readFileSync(where, 'utf8').match(/"([^"]+gws\.exe)"/)?.[1];
-    if (!exe) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
-    return exe;
+    const bin = resolveGwsBin(env);
+    if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
+    return bin;
   };
   const sheetsViaGws = (url: URL): Response => {
     const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
@@ -137,10 +135,68 @@ export const plugins = configured?.plugins ?? [];
 export const commands = configured?.commands;
 export const control = configured?.control;
 
+/** 무인 회차 실행 전 필수 조건 점검. 없으면 회차를 돌리지 않고 코드만 돌려준다(원천별 AUTH_FAILED 로 3회 정지되는 사고 방지). */
+export type UnattendedProbes = { gwsBin(env: NodeJS.ProcessEnv): string | null; gcloudToken(): Promise<string> };
+const defaultProbes: UnattendedProbes = { gwsBin: resolveGwsBin, gcloudToken: gcloudUserToken };
+export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonly string[], probes: UnattendedProbes = defaultProbes) {
+  const missing: string[] = [];
+  const sheets = kinds.includes('F05') || kinds.includes('AICA');
+  if (sheets && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
+  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
+  try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
+  catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
+  return missing;
+}
+
+/** 스케줄러가 부르는 한 회차: 사전점검 → 계획·적용(원천별) → 신선도 판정 → 실행 기록 한 줄(unattended-runs.jsonl). 토큰·원문은 기록하지 않는다. */
+export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
+  const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+  const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
+  const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string;
+    reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null }>;
+    freshness?: ReturnType<typeof assessFreshness> } = { started: new Date().toISOString(), finished: '', exit: 0 };
+  const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
+    JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+  await mkdir(directory, { recursive: true });
+  try {
+    const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(x => x.trim()).filter(Boolean);
+    record.preflight = await unattendedPreflight(env, kinds, probes);
+    if (record.preflight.length) { record.exit = 1; await alert(record.preflight.join(',')); }
+    else {
+      const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
+      const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
+      if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
+      record.reports = [];
+      for (const plugin of selected) {
+        const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+        record.reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
+          digest: 'planDigest' in result ? result.planDigest : null });
+      }
+      const lines = async (name: string) => (await readFile(join(directory, name), 'utf8').catch(() => '')).split('\n');
+      record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
+        { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), expect: selected.map(p => p.sourceId) });
+      if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
+    }
+  } catch (e) {
+    const code = e instanceof Error && /^[A-Z_]+$/.test(e.message) ? e.message : 'UNATTENDED_RUN_ERROR';
+    record.exit = 1; record.error = code; await alert(code);
+  }
+  record.finished = new Date().toISOString();
+  await appendFile(join(directory, 'unattended-runs.jsonl'), JSON.stringify(record) + '\n', { mode: 0o600 });
+  return record;
+}
+
 export async function runtimeCli(args: string[], env = process.env) {
   const get = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
   const acceptDrift = (get('--accept-drift') ?? '').split(',').map(x => x.trim()).filter(Boolean);
   if (acceptDrift.some(c => !/^RP\d{3}$/.test(c))) throw new Error('ACCEPT_DRIFT_CODE_INVALID');
+  // 무인 회차(스케줄러용): 명시 env 옵트인 + 플래그 둘 다 있어야 하며, 수동 승인 인자와 섞지 않는다.
+  if (args.includes('--unattended')) {
+    if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
+    if (args.includes('--apply') || get('--plan') || get('--rollback')) throw new Error('UNATTENDED_ARGS_INVALID');
+    return runUnattended(args, env, acceptDrift);
+  }
   const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
   const key = get('--rollback');
   if (key) {
@@ -149,20 +205,6 @@ export async function runtimeCli(args: string[], env = process.env) {
   }
   const source = get('--source'), selected = runtime.plugins.filter(p => !source || p.sourceId === source);
   if (!selected.length || (args.includes('--apply') && selected.length !== 1)) throw new Error('ONE_SOURCE_REQUIRED');
-  // 무인 회차(스케줄러용): 명시 env 옵트인 + 플래그 둘 다 있어야 하며, 수동 승인 인자와 섞지 않는다.
-  const unattended = args.includes('--unattended');
-  if (unattended) {
-    if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
-    if (args.includes('--apply') || get('--plan')) throw new Error('UNATTENDED_ARGS_INVALID');
-    const reports = [];
-    for (const plugin of selected) {
-      const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-        { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
-      reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
-        digest: 'planDigest' in result ? result.planDigest : null });
-    }
-    return reports;
-  }
   const planFile = get('--plan');
   const approvedPlan: CyclePlan | undefined = args.includes('--apply') && planFile
     ? JSON.parse(await readFile(resolve(planFile), 'utf8')) : undefined;
@@ -184,5 +226,6 @@ export async function runtimeCli(args: string[], env = process.env) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runtimeCli(process.argv.slice(2)).then(result => { console.log(JSON.stringify(result));
     if (Array.isArray(result) && result.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status))) process.exitCode = 1;
+    if (result && !Array.isArray(result) && 'exit' in result && typeof result.exit === 'number') process.exitCode = result.exit;
   }, () => { console.error('SOURCE_CYCLE_RUNTIME_HOLD'); process.exitCode = 1; });
 }

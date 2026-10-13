@@ -42,15 +42,20 @@ schtasks /Query /TN FreePass-Source-Cycle /V /FO LIST
 
 ## 신선도 감시(대표 10-13 「데이터 원천 신선하게 erp5에 반영되게 확실하게 관리해」)
 
-- `scripts/check-source-freshness.mjs`: `heartbeats.jsonl`·`alerts.jsonl` 만 읽어 원천별 마지막 정상 완료 나이를 판정. 기본 허용 120분(60분 회차 두 번). `STALE`·`STOPPED`·`ERROR`·`NEVER_COMPLETED`·`MISSING(--expect)` 는 UNHEALTHY, 종료 코드 1. 네트워크·Firestore 접근 없음.
-- `run-source-cycle.ps1` 이 매 회차 끝에 이 판정을 `unattended-runs.jsonl` 의 `freshness` 칸에 함께 남긴다. UNHEALTHY 면 회차 종료 코드도 1 → 작업 스케줄러 「마지막 실행 결과」로 바로 보인다.
-- 책임: PLN DATA 유지보수가 관리 책임자(ai-ops 결정 장부 10-13 «원천 엔진 신선도 감시»). B3Q DEV 는 UNHEALTHY 가 나오면 원인 코드와 함께 즉시 커맨드 센터에 올리고, 정상이어도 하루 두 번 `freshness` 요약을 보고한다. 신선도 판단은 기억이 아니라 이 파일과 ERP5 되읽기 근거로만.
+## 한 회차의 흐름(코드 한 곳: `runUnattended`, src/runtime/source-cycle-runtime.ts)
 
-```powershell
-node scripts\check-source-freshness.mjs --dir <SOURCE_CYCLE_PRIVATE_DIR> --max-age-minutes 120 --expect RP004,RP006,RP012,RP023
-```
+1. **사전점검**: 시트 원천이면 gws 경로(`resolveGwsBin` 단일 규칙), F05 면 `SHEETS_TRANSPORT=gws`, 항상 gcloud 사용자 토큰. 하나라도 없으면 회차를 돌리지 않고 `PREFLIGHT_*` 코드 + 알림(RUNNER) + 실행 기록 한 줄, 종료 코드 1 — 원천별 AUTH_FAILED 3회 정지를 막는다.
+2. **원천별 계획→적용**: `runUnattendedSourceCycle`(기존 승인 경로 재사용, blockers·백업·CAS·되읽기·3회 정지 그대로).
+3. **신선도 판정**: `assessFreshness`(src/application/source-freshness.ts, 순수). heartbeats·alerts 만 읽어 원천별 마지막 정상 완료 나이 기본 120분 초과(STALE)·STOPPED·ERROR·NEVER_COMPLETED·MISSING 이면 UNHEALTHY.
+4. **실행 기록**: `unattended-runs.jsonl` 한 줄(preflight·reports·freshness·exit). 종료 코드 1 이면 작업 스케줄러 「마지막 실행 결과」로 바로 보인다. 토큰·원문은 기록하지 않는다.
+
+`run-source-cycle.ps1` 은 환경 파일을 읽어 node 를 부르고 종료 코드를 전달할 뿐이다.
+
+## 책임·보고(대표 10-13 「데이터 원천 신선하게 erp5에 반영되게 확실하게 관리해」)
+
+PLN DATA 유지보수가 관리 책임자(ai-ops 결정 장부 «원천 엔진 신선도 감시»). B3Q DEV 는 UNHEALTHY 면 원인 코드와 함께 즉시 커맨드 센터에 올리고, 정상이어도 하루 두 번 `freshness` 요약을 보고한다. 판단은 기억이 아니라 `unattended-runs.jsonl` 과 ERP5 되읽기 근거로만 한다.
 
 ## 검증(이 변경)
 
-- `tests/source-cycle-runtime.test.ts` 「unattended hourly cycle」 4건: 계획→적용→다음 회차 변경 0, blocker 시 쓰기 0, 관측 전용 OBSERVED, CLI 옵트인·인자 가드.
+- `tests/source-freshness.test.ts`(신선도 판정·사전점검·기록·CLI 가드), `tests/source-cycle-runtime.test.ts` 「unattended hourly cycle」, `tests/source-cycle.test.ts` 가드 보강 시험.
 - 관련 묶음과 build/arch/boundary 통과 여부는 NEXT-START-HERE 의 이 날짜 항목을 따른다.

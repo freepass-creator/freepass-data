@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { GoogleAuth } from 'google-auth-library';
+import { resolveGwsBin } from './gws-bin.js';
 
 type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch };
 
@@ -35,12 +35,8 @@ function sheetsViaGws(url: URL): unknown {
   for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else params[k] = v === 'true' ? true : v; }
   if (ranges.length) params.ranges = ranges;
   const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
-  const bin = process.env.GWS_BIN ?? (() => {
-    const where = (execFileSync('where', ['gws.cmd'], { encoding: 'utf8' }).split('\n')[0] ?? '').trim();
-    const exe = readFileSync(where, 'utf8').match(/"([^"]+gws\.exe)"/)?.[1];
-    if (!exe) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
-    return exe;
-  })();
+  const bin = resolveGwsBin(process.env);
+  if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
   const out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   return JSON.parse(out.slice(out.indexOf('{')));
 }
