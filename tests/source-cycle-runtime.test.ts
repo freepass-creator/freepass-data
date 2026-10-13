@@ -213,6 +213,32 @@ describe('Firestore REST runtime offline', () => {
     expect(built.plan.blockers).toContain('CATALOG_SOURCE_RECORD_DRIFT');
     await expect(commands.read(source, 'TEST1001')).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
   });
+  it('a stored full-raw record is compared in compact form, so compaction itself never causes a mass update', async () => {
+    const stored = product(); stored.record.raw = { ...stored.record.raw, rates: Array.from({ length: 5 }, () => ({ text: 'x'.repeat(5000) })) };
+    const { commands } = await setup([stored]);
+    const same = product(); same.record.raw = structuredClone(stored.record.raw);
+    expect((await prepare(commands, [same.record])).plan.entries).toEqual([]);
+  });
+  it('writes a compact record: large raw values become digests in the stored document', async () => {
+    const { commands, fake } = await setup(); const fat = product().record;
+    fat.raw = { ...fat.raw, rates: Array.from({ length: 30 }, () => ({ text: 'x'.repeat(20_000) })) };
+    expect((await apply(commands, await prepare(commands, [fat]))).status).toBe('APPLIED');
+    const body = JSON.stringify(fake.docs.get('TEST1001'));
+    expect(body.length).toBeLessThan(20_000);
+    expect(decodeFields(fake.docs.get('TEST1001').fields)).not.toHaveProperty('source_cycle_raw');
+    expect((decodeFields(fake.docs.get('TEST1001').fields).source_cycle_record as any).raw.rates).toHaveProperty('__digest');
+  });
+  it('an oversize write blocks the whole plan before any backup or write (DOC_TOO_LARGE)', async () => {
+    const { commands, fake, dir } = await setup([product('A1'), product('A2')]);
+    const small = product('A1').record; small.terms[0]!.monthlyRent = { state: 'KNOWN', value: 111 };
+    const huge = product('A2').record; huge.terms[0]!.monthlyRent = { state: 'KNOWN', value: 222 };
+    // 문서에 이미 큰 비원천 필드가 붙어 있어 갱신 뒤 크기가 한도를 넘는 경우(사진 목록·정책 본문 등)
+    fake.docs.get('A2').fields.attachment = encodeFields({ attachment: 'y'.repeat(950_000) }).attachment;
+    const built = await prepare(commands, [small, huge]);
+    await expect(apply(commands, built)).rejects.toThrow('DOC_TOO_LARGE');
+    expect(fake.calls.some(c => c.method === 'PATCH')).toBe(false);
+    expect(await readdir(dir)).toEqual([]);                                  // 백업도 시작하지 않음
+  });
   it('--accept-drift 는 지정 코드의 가격 보정만 받아들이고 번호판 변경과 다른 코드는 계속 DRIFT', async () => {
     const { fake, dir } = await setup([product()]);
     const mk = (acceptDrift: string[]) => firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' },

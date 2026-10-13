@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
-import { representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { representativeTerms, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -108,7 +108,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
     vehicle_status: p.listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,
     ...(r.raw.product_group ? { product_group: r.raw.product_group } : {}),
-    source_observed_at: r.observedAt, source_cycle_record: r, source_cycle_raw: r.raw,
+    source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
 /** ERP5 제목은 maker·(sub_model||model)·trim_name 만 읽는다(차량 정보 확인 필요 방지). 마스터로 특정되기 전 신규 편입은 maker·model 을 비워 두고 원문 차명을 sub_model 에 임시로 둔다(vehicle_review_required 가 true 인 동안만; 마스터 정리 때 덮어쓴다). */
@@ -207,6 +207,17 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       const b = await load(key);
       if (stableDigest(b.document ? envelope(b.document, accept) : null) !== stableDigest(b.before)) throw new Error('BACKUP_MISMATCH');
       return b.before;
+    },
+    async precheck(afters) {
+      // Firestore 문서 한도 1MiB. 쓰기 뒤 문서 크기 = 기존 문서에서 덮일 필드를 뺀 나머지 + 새 필드. 900,000B 를 넘는 쓰기가 하나라도 있으면
+      // 어떤 백업·쓰기도 시작하기 전에 계획 전체를 막는다(일부만 적용되고 멈추는 상태 방지).
+      const size = (v: unknown) => Buffer.byteLength(JSON.stringify(v));
+      for (const after of afters) {
+        const current = await getDoc(after.record.uid);   // 목록은 필드 마스크라 전체 문서가 아니다 — 크기는 전체 문서로 잰다
+        const incoming = encodeFields(nativeCycleFields(after, current ? decodeFields(current.fields) : {}));
+        const kept = Object.entries(current?.fields ?? {}).filter(([k]) => !(k in incoming));
+        if (size(Object.fromEntries(kept)) + size(incoming) > 900_000) throw new Error('DOC_TOO_LARGE');
+      }
     },
     async compareAndApply(beforeDigest, after, key) {
       if (options.observationSources?.includes(after.record.sourceId)) throw new Error('OBSERVATION_ONLY');

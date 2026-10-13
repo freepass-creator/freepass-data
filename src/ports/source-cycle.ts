@@ -21,6 +21,8 @@ export interface CycleCommands {
   backup(key: string, before: CycleProduct | null): Promise<void>;
   readBackup(key: string): Promise<CycleProduct | null>;
   compareAndApply(beforeDigest: string, after: CycleProduct, commandKey: string): Promise<void>;
+  /** 쓰기 전 일괄 점검(백업·쓰기 시작 전). 저장소가 거절할 쓰기(문서 크기 한도 등)가 있으면 던져 «일부만 적용된 상태»를 막는다. */
+  precheck?(afters: readonly CycleProduct[]): Promise<void>;
 }
 export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;

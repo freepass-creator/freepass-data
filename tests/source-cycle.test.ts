@@ -115,7 +115,9 @@ describe('source cycle planning/application', () => {
   });
   it('readback compares deep maps without key-order sensitivity', async () => {
     const m = memory(), built = planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now);
-    m.commands.read = async (_id, uid) => { const p = structuredClone(m.data.get(uid)!); p.record.raw.price = { b: 2, a: 1 }; return p; };
+    // 저장 레코드의 raw 는 압축(digest)이므로 키 순서만 다른 중첩 맵은 타입 있는 칸(금액)으로 확인한다.
+    m.commands.read = async (_id, uid) => { const p = structuredClone(m.data.get(uid)!);
+      const rent = p.record.terms[0]!.monthlyRent; p.record.terms[0]!.monthlyRent = { value: rent.value, state: rent.state } as typeof rent; return p; };
     expect(deepEqual({ x: [{ b: 2, a: 1 }] }, { x: [{ a: 1, b: 2 }] })).toBe(true);
     expect(deepEqual([1, 2], [2, 1])).toBe(false);
     expect((await apply(m.commands, built)).verified).toBe(1);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runSharedSheetCli } from '../src/jobs/ingest-shared-sheet-canonical.js';
-import { sourceHeartbeat, sourceSaleAvailable, sourceProductKey, validateSourceRecord, representativeTerms, classifyReadError,
+import { sourceHeartbeat, sourceSaleAvailable, sourceProductKey, validateSourceRecord, representativeTerms, classifyReadError, compactRecord,
   type SourceProductRecord, type SourceRead } from '../src/domain/source-engine.js';
 import { applySourceRecords, planSourceRecords, type SourceRecordCommands } from '../src/application/source-engine.js';
 import { sharedSheetEngine, sharedSheetRecords } from '../src/adapters/shared-sheet-engine.js';
@@ -188,6 +188,27 @@ describe('약정거리 옵션이 여럿인 원천의 항 식별 (이안카 ONE: 
     expect(representativeTerms([...three()].reverse()).map(t => t.mileage)).toEqual(['20000km/year', '20000km/year']);
     expect(representativeTerms([term(12, '2500km/month', 700000), term(12, '20000km/year', 650000)])[0]!.mileage).toBe('20000km/year');
     expect(representativeTerms([term(1, '월렌트', 800000)])).toHaveLength(1);
+  });
+});
+
+describe('저장용 압축 레코드 (이안카 문서 1MiB 초과 사고: 요금 원본이 term.raw·record.raw·source_cycle_raw 에 중복)', () => {
+  const big = { contract_conditions: 'x'.repeat(19_700), insurance: { items: Array.from({ length: 40 }, (_, i) => ({ i, text: '보장 내용 '.repeat(20) })) } };
+  const full = (): SourceProductRecord => ({ ...record(), raw: { source: 'iancar', source_tab: 'ONE', rates: Array.from({ length: 24 }, () => big), cells: [1, 2, 3] },
+    terms: Array.from({ length: 24 }, (_, i) => ({ months: 12, mileage: `${20000 + i}km/year`, raw: { rental_period: 12, monthly_rate: 555000 + i, ...big },
+      monthlyRent: { state: 'KNOWN' as const, value: 555000 + i }, deposit: { state: 'ZERO' as const, value: 0 } })) });
+  it('keeps short scalars and typed facts, digests large raw values, and is idempotent', () => {
+    const c = compactRecord(full());
+    expect(c.raw.source).toBe('iancar'); expect(c.raw.source_tab).toBe('ONE');
+    expect(c.raw.rates).toEqual({ __digest: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect(c.terms[0]!.raw.monthly_rate).toBe(555000); expect(c.terms[0]!.raw.contract_conditions).toHaveProperty('__digest');
+    expect(c.terms[3]).toMatchObject({ months: 12, mileage: '20003km/year', monthlyRent: { state: 'KNOWN', value: 555003 } });
+    expect(compactRecord(c)).toEqual(c);
+    expect(JSON.stringify(c).length).toBeLessThan(20_000);
+    expect(JSON.stringify(full()).length).toBeGreaterThan(1_000_000);
+  });
+  it('a changed raw detail changes the digest, so change detection survives compaction', () => {
+    const a = full(), b = full(); (b.terms[0]!.raw as Record<string, unknown>).contract_conditions = 'changed';
+    expect(compactRecord(a)).not.toEqual(compactRecord(b));
   });
 });
 

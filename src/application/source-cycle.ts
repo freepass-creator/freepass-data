@@ -1,4 +1,4 @@
-import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, SOURCE_EXPIRY_SECONDS,
+import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -16,7 +16,8 @@ const withoutObservationClocks = (value: unknown): unknown => {
     .map(([key, child]) => [key, withoutObservationClocks(child)]));
   return value;
 };
-const facts = (r: SourceProductRecord) => withoutObservationClocks(r);
+// 변경 판정은 압축 형태로 한다: 문서에는 압축 레코드만 저장하므로 저장된 값과 새 원천 값을 같은 기준으로 비교한다(원문이 바뀌면 digest 가 바뀐다).
+const facts = (r: SourceProductRecord) => withoutObservationClocks(compactRecord(r));
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
@@ -96,7 +97,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       plan.held++; continue;
     }
-    const next = structuredClone(r);
+    const next = compactRecord(r);   // 문서에 쓰이는 형태. 원천 원문 전체는 계획 evidence·백업에만 있고 문서에는 digest 로 남는다
     if (errors.includes('TERMS_HOLD') && before) next.terms = structuredClone(before.record.terms);
     else if (before) {
       // 원천 보증금 UNKNOWN(빈칸·해석 불가)은 확인된 원천 값이 아니다 — 같은 개월의 기존 KNOWN/ZERO 보증금을 지우지 않는다
@@ -175,6 +176,7 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
   if (!deepEqual(replay.plan, plan) || planSourceCycle(plan.config, plan.evidence, snapshot, options.now).plan.blockers.length ||
       plan.entries.some(e => e.after.listable && !sourceSaleAvailable(e.after.record, plan.config.family, options.now)))
     throw new Error('CYCLE_REPLAN_REQUIRED');
+  await commands.precheck?.(plan.entries.map(e => e.after));   // 크기 한도 등 거절될 쓰기는 백업·쓰기 전에 전체 계획을 막는다
   for (const e of plan.entries) {
     const key = `${digest}:${sourceProductKey(e.after.record)}`;
     await commands.backup(key, e.before);

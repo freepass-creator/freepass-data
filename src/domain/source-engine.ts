@@ -51,6 +51,26 @@ export function validSourceAmount(a: SourceAmount): boolean {
   return !!a && (a.state === 'UNKNOWN' ? a.value === null : a.state === 'ZERO' ? a.value === 0 :
     a.state === 'KNOWN' && Number.isSafeInteger(a.value) && a.value > 0);
 }
+/** 저장·비교용 압축 레코드. record.raw 와 term.raw 의 큰 값(객체·배열·긴 문자열)은 digest 로 바꾸고 짧은 스칼라만 남긴다.
+ * 원천 원문 전체는 문서에 중복 보관하지 않는다(요금 원본이 term.raw·record.raw 에 이중으로 들어가 이안카 문서가 Firestore 1MiB 를
+ * 넘은 사고 2026-10-13). 원문이 바뀌면 digest 가 바뀌므로 변경 감지는 그대로이고, 판매 사실(개월·금액·약정거리·상태)은 유지된다. 멱등. */
+const SMALL_STRING = 256;
+const rawDigestMark = (v: unknown): v is { __digest: string } =>
+  !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && typeof (v as { __digest?: unknown }).__digest === 'string';
+export function compactRaw(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === undefined) continue;
+    out[key] = value === null || typeof value === 'number' || typeof value === 'boolean' ||
+      (typeof value === 'string' && value.length <= SMALL_STRING) || rawDigestMark(value)
+      ? value : { __digest: stableDigest(value).slice(0, 32) };
+  }
+  return out;
+}
+export function compactRecord(record: SourceProductRecord): SourceProductRecord {
+  return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw: compactRaw(record.raw ?? {}),
+    terms: (record.terms ?? []).map(t => ({ ...structuredClone({ ...t, raw: {} }), raw: compactRaw(t.raw ?? {}) })) };
+}
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,
  * 개월 키 하나만 갖는 판매 가격 칸에는 대표 항 하나(연 환산 약정거리가 가장 작은 기본 옵션)를 쓴다. 대여료 최저가 선택이 아니다. */
 const annualKm = (mileage: string | null): number => {
