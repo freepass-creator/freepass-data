@@ -165,6 +165,14 @@ if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.l
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
 if (diffN || blocked.length) { console.log(alert); if (opt('alert-file') && !blockers.length) appendFileSync(opt('alert-file'), alert + '\n'); } // 읽기가 불완전하면 경보 파일에도 정상 결과처럼 쓰지 않는다
+if (opt('homepage-plates') && src.RP023?.읽힘) { // 오토플러스: 홈페이지가 정본, 시트는 보조 — 시트에 있는 차는 홈페이지에도 있어야 한다(없으면 «이상»: 판매 종료·시트 낡음·홈피 누락)
+  const hp = src.RP023.set, sheetOnly = [...src.RP023.all].filter(p => !hp.has(p)), mineAp = docs.filter(d => d.code === 'RP023'), byPlate = new Map(mineAp.map(d => [d.plate, d]));
+  const label = p => { const d = byPlate.get(p); return `${l4(p)}(${d ? (d.listable ? '데이터 판매중' : '데이터 판매아님') + '/' + (d.status ?? '-') : '데이터 없음'})`; };
+  const hpNotData = [...hp].filter(p => !byPlate.has(p)), hpDataNotListable = [...hp].filter(p => byPlate.has(p) && !byPlate.get(p).listable);
+  console.log(`오토플러스 홈피 ${hp.size} / 데이터 판매 ${mineAp.filter(d => d.listable).length} / ERP5 ${[...erp5].filter(p => plateCode.get(p) === 'RP023').length} / 시트에만(홈피에 없음) ${sheetOnly.length} — 시트 정리 후보: [${sheetOnly.map(label).join(', ')}]`);
+  console.log(`  홈피에는 있고 데이터에 없음(편입) ${hpNotData.length}: [${hpNotData.map(l4).join(',')}] · 홈피에 있으나 데이터 판매 아님(재노출) ${hpDataNotListable.length}: [${hpDataNotListable.map(label).join(', ')}]`);
+  const dataOnly = mineAp.filter(d => d.listable && !hp.has(d.plate)); console.log(`  데이터 판매중인데 홈피에 없음(노출 하향 후보) ${dataOnly.length}: [${dataOnly.map(d => l4(d.plate) + '(' + (d.status ?? '-') + ')').join(', ')}]`);
+}
 if (blockers.length) console.log(`주의: 읽기가 불완전합니다 — ${blockers.join(', ')}`);
 if (opt('plan-out')) { // 노출 하향·신규 편입·재노출 «시험 실행» 계획(쓰기 0). 승인 뒤 별도 쓰기 도구가 digest 를 대조해 적용한다.
   assertPlanComplete(blockers); // fail-closed: 불완전·실패한 읽기가 하나라도 있으면 계획 파일을 만들지 않는다
