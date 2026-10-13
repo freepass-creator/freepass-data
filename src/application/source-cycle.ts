@@ -1,5 +1,6 @@
 import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
+import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
@@ -58,9 +59,26 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     after.publication_withdrawal_prior ??= { listable: before.listable, status: structuredClone(before.record.status) };
     return after;
   };
-  let identityHolds = false, depositPreserved = 0;
-  for (const r of evidence.records) {
-    const key = sourceProductKey(r), before = mine.get(key) ?? null, errors = validateSourceRecord(r);
+  let identityHolds = false, depositPreserved = 0, uidBridged = 0;
+  // 문서 ID 가 다른 같은 차량(옛 ID 체계로 만든 문서): 같은 공급사 안에서 차량번호가 같은 문서가 정확히 하나이고 어떤 원천 행과도 직접
+  // 대응하지 않으면 그 문서를 갱신 대상으로 잇는다. 새 문서를 만들고 옛 문서를 내리면 문서에 붙은 사진·정책 등이 새 문서에 없어
+  // 화면이 퇴보한다(2026-10-13 이안카: 옛 iancar_* ID 문서 21건 하향 + 번호판 ID 23건 편입 계획). 문서 ID 는 옮기지 않는다.
+  const platePool = new Map<string, CycleProduct[]>();
+  for (const p of snapshot.products) if (isAssignedPlate(p.record.plate)) {
+    const k = plateIdentityKey(p.record.plate);
+    (platePool.get(k) ?? platePool.set(k, []).get(k)!).push(p);
+  }
+  for (const original of evidence.records) {
+    let r = original;
+    let key = sourceProductKey(r), before = mine.get(key) ?? null;
+    if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
+      const candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      if (candidates.length === 1) {
+        before = candidates[0]!; r = { ...r, uid: before.record.uid }; key = sourceProductKey(r);
+        seen.add(key); uidBridged++;
+      }
+    }
+    const errors = validateSourceRecord(r);
     if (r.sourceId !== config.sourceId || duplicates.has(key) ||
         errors.some(e => ['RECORD_SHAPE_INVALID', 'IDENTITY_REQUIRED', 'OBSERVATION_INVALID'].includes(e))) {
       identityHolds = true; plan.held++; continue;
@@ -127,6 +145,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
   }
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
+  if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE');
   const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
   const explicitDown = downs.length - absentDown;

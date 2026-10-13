@@ -359,6 +359,34 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     expect(byUid.a!.after.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(byUid.n!.kind).toBe('ENROLL'); expect(byUid.n!.after.record.terms[0]!.deposit).toEqual(unknown);
   });
+  it('a document with a different id but the same plate is updated in place, never enrolled twice nor withdrawn as absent', () => {
+    const legacy = { ...product('iancar_legacy-1'), record: { ...record('iancar_legacy-1'), plate: '12가3456' } };
+    const other = { ...product('iancar_legacy-2'), record: { ...record('iancar_legacy-2'), plate: '34나7890' } };
+    const fresh = (uid: string, plate: string, rent: number): SourceProductRecord => {
+      const r = { ...record(uid), plate }; r.terms[0]!.monthlyRent = { state: 'KNOWN', value: rent }; return r;
+    };
+    const built = planSourceCycle(config, evidence([fresh('12가3456', '12가3456', 150), fresh('34나7890', '34나7890', 100)]),
+      { complete: true, products: [legacy, other] }, now);
+    expect(built.plan.entries.map(e => [e.kind, e.after.record.uid])).toEqual([['UPDATE', 'iancar_legacy-1']]);   // 34나7890 은 값 동일 → 변경 0
+    expect(built.plan.warnings).toContain('UID_BRIDGED:2');
+    expect(built.plan.entries.some(e => e.kind === 'ENROLL' || e.kind === 'DOWNGRADE')).toBe(false);
+  });
+  it('plate bridging needs exactly one candidate, an assigned plate and no direct id match', () => {
+    const mk = (uid: string, plate: string | null): CycleProduct => ({ ...product(uid), record: { ...record(uid), plate } });
+    const src = (uid: string, plate: string | null): SourceProductRecord => ({ ...record(uid), plate });
+    // 같은 차량번호 문서가 둘이면 어느 쪽인지 알 수 없으므로 잇지 않는다(새로 편입, 기존 둘은 부재로 내려감)
+    const ambiguous = planSourceCycle(config, evidence([src('12가3456', '12가3456')]),
+      { complete: true, products: [mk('a', '12가3456'), mk('b', '12가3456')] }, now);
+    expect(ambiguous.plan.warnings.some(w => w.startsWith('UID_BRIDGED'))).toBe(false);
+    expect(ambiguous.plan.entries.filter(e => e.kind === 'ENROLL')).toHaveLength(1);
+    // 차량번호 자리표시(신차 등)는 차량을 식별하지 못한다
+    const placeholder = planSourceCycle(config, evidence([src('N-1', '신차')]), { complete: true, products: [mk('a', '신차')] }, now);
+    expect(placeholder.plan.warnings.some(w => w.startsWith('UID_BRIDGED'))).toBe(false);
+    // 다른 원천 행이 이미 문서 ID 로 직접 대응하면 그 문서를 가로채지 않는다
+    const direct = planSourceCycle(config, evidence([src('a', '12가3456'), src('12가3456', '12가3456')]),
+      { complete: true, products: [mk('a', '12가3456')] }, now);
+    expect(direct.plan.warnings.some(w => w.startsWith('UID_BRIDGED'))).toBe(false);
+  });
   it('a price-drifted document blocks the run only when the cycle would write over it', () => {
     const p = [stored('a', known(500)), stored('b', known(700))];
     // b 는 이번 회차 원천에 대응 행이 없다(원천 행 없음) → 쓰지 않으므로 회차를 막지 않고, 부재 하향도 하지 않는다
