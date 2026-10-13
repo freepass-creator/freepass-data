@@ -153,7 +153,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
   const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string;
-    reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null }>;
+    reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null;
+      /** 공급사별 노출(listable=true) 수 전후: before=이번 회차 시작 전, after=이번 회차 적용 뒤(미적용이면 before 와 같다).
+       *  prior=직전 회차 기록의 after. unexplained=before-prior(회차 밖에서 바뀐 수, 0 이면 설명됨). */
+      exposure?: { before: number; after: number; applied: boolean; prior: number | null; unexplained: number | null } }>;
     freshness?: ReturnType<typeof assessFreshness> } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
@@ -167,11 +170,32 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
       record.reports = [];
+      // 직전 회차 기록의 원천별 «적용 뒤 노출 수» — 이번 회차 시작 노출 수와 비교해 회차 밖 증감(다른 쓰기 주체·수동 작업)을 표시한다.
+      const priorAfter = new Map<string, number>();
+      try {
+        // 한 원천만 돌린 회차(-Source)가 끼어도 다른 원천의 직전 값을 잃지 않도록 최근 기록 줄들을 오래된 순으로 훑어 원천별 마지막 값을 쓴다.
+        const recent = (await readFile(join(directory, 'unattended-runs.jsonl'), 'utf8')).split('\n').filter(l => l.trim()).slice(-100);
+        for (const line of recent) {
+          let parsed: { reports?: Array<{ source: string; exposure?: { after?: number } }> };
+          try { parsed = JSON.parse(line.replace(/^﻿/, '')); } catch { continue; }
+          for (const r of parsed.reports ?? []) if (typeof r.exposure?.after === 'number') priorAfter.set(r.source, r.exposure.after);
+        }
+      } catch { /* 첫 회차 또는 기록 없음 */ }
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
           { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+        let exposure: NonNullable<typeof record.reports>[number]['exposure'];
+        const plan = 'plan' in result ? result.plan : null;
+        if (plan && typeof plan.exposedBefore === 'number') {
+          const count = (kind: string) => plan.entries.filter(e => e.kind === kind).length;
+          const applied = result.stage === 'APPLY' && result.status === 'APPLIED';
+          const before = plan.exposedBefore;
+          const after = applied ? before - count('DOWNGRADE') + count('ENROLL') + count('REEXPOSE') : before;
+          const prior = priorAfter.get(plugin.sourceId) ?? null;
+          exposure = { before, after, applied, prior, unexplained: prior === null ? null : before - prior };
+        }
         record.reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
-          digest: 'planDigest' in result ? result.planDigest : null });
+          digest: 'planDigest' in result ? result.planDigest : null, ...(exposure ? { exposure } : {}) });
       }
       const lines = async (name: string) => (await readFile(join(directory, name), 'utf8').catch(() => '')).split('\n');
       record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
