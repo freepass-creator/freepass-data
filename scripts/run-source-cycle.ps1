@@ -21,6 +21,31 @@ if (!$env:NODE_ENV) { $env:NODE_ENV = 'production' }
 $job = Join-Path $repo 'dist\src\runtime\source-cycle-runtime.js'
 if (!(Test-Path -LiteralPath $job)) { throw 'Run npm.cmd run build first.' }
 $node = (Get-Command node.exe -ErrorAction Stop).Source
+# 사전점검(대표 10-13 「왜 자꾸 멈추냐」 — 예약 환경에 gws·gcloud 토큰이 없어 AUTH_FAILED 로 멈춘 사고): 회차를 돌리기 전에
+# 시트 읽기 gws 와 gcloud 사용자 토큰을 확인하고, 없으면 원천별 AUTH_FAILED 로 3회 정지시키지 말고 환경 오류 한 줄로 끝낸다.
+$privateDir = $env:SOURCE_CYCLE_PRIVATE_DIR
+if (!$privateDir) { $privateDir = Join-Path $env:USERPROFILE '.codex\private\source-cycle' }
+if (!(Test-Path -LiteralPath $privateDir)) { New-Item -ItemType Directory -Path $privateDir -Force | Out-Null }
+$preflight = @()
+if ($env:SOURCE_CYCLE_SOURCES -match 'F05|AICA') {
+  $gws = $env:GWS_BIN
+  if (!$gws) { $gws = (Get-Command gws.cmd -ErrorAction SilentlyContinue).Source }
+  if (!$gws -or !(Test-Path -LiteralPath $gws)) { $preflight += 'PREFLIGHT_GWS_MISSING' }
+}
+$gcloud = (Get-Command gcloud.cmd -ErrorAction SilentlyContinue).Source
+if (!$gcloud) { $preflight += 'PREFLIGHT_GCLOUD_MISSING' }
+else {
+  $token = & $gcloud auth print-access-token 2>$null
+  if ($LASTEXITCODE -ne 0 -or !$token) { $preflight += 'PREFLIGHT_GCLOUD_TOKEN_MISSING' }
+  $token = $null
+}
+if ($preflight.Count -gt 0) {
+  $line = @{ started = (Get-Date).ToUniversalTime().ToString('o'); finished = (Get-Date).ToUniversalTime().ToString('o'); exit = 1; preflight = ($preflight -join ',') } | ConvertTo-Json -Compress
+  Add-Content -LiteralPath (Join-Path $privateDir 'unattended-runs.jsonl') -Value $line -Encoding UTF8
+  Add-Content -LiteralPath (Join-Path $privateDir 'alerts.jsonl') -Value (@{ source = 'RUNNER'; reason = ($preflight -join ','); at = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress) -Encoding UTF8
+  Write-Output $line
+  exit 1
+}
 $cliArgs = @($job, '--unattended')
 if ($OnlyWhenSynced) { $cliArgs += '--only-when-synced' }
 if ($Source) { $cliArgs += @('--source', $Source) }
