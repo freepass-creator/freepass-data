@@ -3,13 +3,13 @@ import { sharedSheetEngine } from './shared-sheet-engine.js';
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
 
-export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG';
+export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION';
 export type CycleSourceDefinition = {
   sourceId: string; kind: CycleSourceKind; scopes: string[]; maxDowngradeRatio: number;
 };
 export const AICA_SCOPES = ['장기특별이벤트', '신차선출고', '중고재렌트', '월렌트'] as const;
 export const CYCLE_FAMILIES: Record<CycleSourceKind, SourceFamily> = {
-  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER',
+  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER', DECISION: 'OTHER',
 };
 /** Transport/converter outputs from existing collectors. UID must be an upstream stable key;
  * no row-number or plate fallback. Scope names are config, never guessed from legacy products. */
@@ -25,6 +25,8 @@ export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;
   observationCountOfRead?(read: SourceRead<T>): number;
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
+  /** 원천에 없는 노출 문서를 내릴 때 남기는 사유. 기본은 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN. */
+  absenceReason?: string;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
 }
@@ -120,6 +122,15 @@ export function sharedSheetCyclePlugin(sourceId: string, maxDowngradeRatio: numb
     return { observedAt: result.observedAt ?? input.capture.readTime, complete: result.complete,
       completedScopes: result.complete ? scopes : [], visibilityComplete: metadataComplete, rows, heldCount };
   }, clock);
+}
+
+/** 대표 지시로 판매 목록에서 내린 공급사(contracts/withdrawn-suppliers.v1.json). 원천이 «없다»가 아니라 «내리라는 결정»이므로
+ * 완전한 빈 원천으로 읽고 사유를 DECISION_WITHDRAWN 으로 남긴다. 다른 쓰기 주체가 다시 올려도 다음 회차에 다시 내린다. */
+export function decisionWithdrawnPlugin(sourceId: string, clock: () => string = () => new Date().toISOString()) {
+  const plugin = sourceCyclePlugin({ sourceId, kind: 'DECISION', scopes: ['decision'], maxDowngradeRatio: 1 }, async () => ({
+    observedAt: clock(), complete: true, completedScopes: ['decision'], visibilityComplete: true, rows: [], heldCount: 0 }), clock);
+  plugin.absenceReason = 'DECISION_WITHDRAWN';
+  return plugin;
 }
 
 /** Read an existing ONE full-facts result. No second API client; PREPARING is a sellable source

@@ -8,7 +8,8 @@ import { resolveGwsBin } from '../infra/gws-bin.js';
 import { assessFreshness } from '../application/source-freshness.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
-import { sourceCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CyclePlugin } from '../adapters/source-cycle-plugins.js';
+import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin } from '../adapters/source-cycle-plugins.js';
+import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
@@ -121,6 +122,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       plugins.push({ ...plugin, observationOnly: true });
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
+  // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.
+  for (const supplier of withdrawnSuppliers.suppliers) plugins.push(decisionWithdrawnPlugin(supplier.code));
   if (new Set(plugins.map(p => p.sourceId)).size !== plugins.length) throw new Error('CYCLE_DUPLICATE_WRITER');
   // 하향 가드 절대 개수 하한(기본 3): 노출 10~30대 소규모 공급사의 정당한 상태 변경이 매 회차 전체를 막지 않게 한다. 0 이면 옛 합산 비율.
   const floor = Number(env.SOURCE_CYCLE_DOWNGRADE_FLOOR ?? '3');

@@ -29,7 +29,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     snapshot = { ...snapshot, products: snapshot.products.filter(p => vehicle(p.record)) };
   }
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
-    maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}) }, plannedAt: now,
+    maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
+    ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -142,12 +143,13 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     for (const before of snapshot.products) {
       if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before) || driftHeld.has(before.record.uid)) continue;
       if (Date.parse(before.record.observedAt) > at) { plan.held++; continue; }
-      plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, 'SOURCE_ABSENT') });
+      plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
   }
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
-  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE');
+  // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
+  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason !== 'DECISION_WITHDRAWN');
   const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
-import { sourceCyclePlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
+import { sourceCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
@@ -612,7 +612,48 @@ describe('native mappings and UID', () => {
   it('runtime construction/import does not fetch or authenticate', async () => {
     const fetcher = vi.fn(); const r = createSourceCycleRuntime({ FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IANCAR,IRON',
       SOURCE_CYCLE_PRIVATE_DIR: await directory() }, fetcher as typeof fetch);
-    expect(r.plugins).toHaveLength(2); expect(fetcher).not.toHaveBeenCalled();
+    expect(r.plugins.filter(p => p.absenceReason !== 'DECISION_WITHDRAWN')).toHaveLength(2); expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('대표 지시로 내린 공급사 (에스에이 PT-0023: 탭·공급사 입력 없음 → 엔진의 일반 부재 하향 대상이 아님)', () => {
+  const sa = (uid: string, listable = true): CycleProduct => { const p = product(uid); p.record.sourceId = 'PT-0023'; p.listable = listable;
+    p.record.status.saleAvailable = listable; return p; };
+  const plugin = () => decisionWithdrawnPlugin('PT-0023', () => time);
+  it('is registered by the contract and read as a complete empty source with its own reason', () => {
+    const r = createSourceCycleRuntime({ FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IANCAR', SOURCE_CYCLE_PRIVATE_DIR: '.' }, vi.fn() as unknown as typeof fetch);
+    const d = r.plugins.find(p => p.sourceId === 'PT-0023')!;
+    expect(d.absenceReason).toBe('DECISION_WITHDRAWN'); expect(d.maxDowngradeRatio).toBe(1);
+  });
+  it('withdraws every exposed document with DECISION_WITHDRAWN regardless of the ratio guard, with backups, and is idempotent', async () => {
+    const { commands, fake, dir } = await setup(); const seeded = ['SA1', 'SA2', 'SA3', 'SA4'].map(u => sa(u));
+    for (const p of seeded) fake.docs.set(p.record.uid, { name: `projects/synthetic-test/databases/(default)/documents/products/${p.record.uid}`,
+      updateTime: `${time}:${p.record.uid}`, fields: encodeFields({ ...nativeCycleFields(p), unrelated: { keep: true } }) });
+    const ctrl = fileCycleControl(await directory(), async () => {});
+    const result = await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 1000 });
+    expect(result).toMatchObject({ stage: 'APPLY', status: 'APPLIED', writes: 4, verified: 4 });
+    for (const uid of ['SA1', 'SA2', 'SA3', 'SA4']) {
+      const f = decodeFields(fake.docs.get(uid).fields);
+      expect(f).toMatchObject({ listable: false, status: '출고불가', unrelated: { keep: true } });
+      expect((f.publication_withdrawal as any).reason).toBe('DECISION_WITHDRAWN');
+    }
+    expect((await readdir(dir)).length).toBeGreaterThan(0);                        // 되돌릴 백업
+    const again = await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 2000 });
+    expect(again).toMatchObject({ stage: 'PLAN', status: 'DRY_RUN', writes: 0 });
+  });
+  it('withdraws again when another writer re-exposes the supplier (재노출 방지)', async () => {
+    const { commands, fake } = await setup(); const p = sa('SA9');
+    fake.docs.set('SA9', { name: 'projects/synthetic-test/databases/(default)/documents/products/SA9', updateTime: `${time}:1`,
+      fields: encodeFields(nativeCycleFields(p)) });
+    const ctrl = fileCycleControl(await directory(), async () => {});
+    await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 1000 });
+    expect(decodeFields(fake.docs.get('SA9').fields).listable).toBe(false);
+    const f = decodeFields(fake.docs.get('SA9').fields);                           // 다른 쓰기 주체가 다시 노출
+    fake.docs.set('SA9', { ...fake.docs.get('SA9'), updateTime: `${time}:2`,
+      fields: encodeFields({ ...f, listable: true, status: '출고가능', status_kind: '가용', publication_withdrawal: null }) });
+    const result = await runUnattendedSourceCycle(plugin(), commands, ctrl, { now: () => now + 2000 });
+    expect(result).toMatchObject({ stage: 'APPLY', status: 'APPLIED', writes: 1 });
+    expect(decodeFields(fake.docs.get('SA9').fields).listable).toBe(false);
   });
 });
 
