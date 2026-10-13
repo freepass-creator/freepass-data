@@ -62,7 +62,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
-  }, { takeOverDeadLocks: env.SOURCE_CYCLE_UNATTENDED === '1' });   // 죽은 잠금 인계는 무인 예약 회차 하나만 한다(수동 실행은 보류+알림)
+  }, { takeOverDeadLocks: env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER !== '0' });   // 인계자는 «전체 정시 예약» 하나: 수동 실행·단독 원천 예약(-Source)은 보류+알림만
   // ERP4 수집(쓰기) 단계의 마지막 성공 시각(SOURCE_CYCLE_ERP4_REPO=owner/repo 일 때만). 한 회차 안에서 두 원천이 같은 조회를 공유한다.
   const erp4Repo = env.SOURCE_CYCLE_ERP4_REPO && /^[\w.-]+\/[\w.-]+$/.test(env.SOURCE_CYCLE_ERP4_REPO) ? env.SOURCE_CYCLE_ERP4_REPO : null;
   let evidenceCache: { at: number; value: Promise<string | null> } | null = null;
