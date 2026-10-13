@@ -1,7 +1,8 @@
 ﻿param(
   [string]$EnvFile,
   [switch]$OnlyWhenSynced,
-  [string]$Source
+  [string]$Source,
+  [string]$AcceptDrift
 )
 # 원천 엔진 무인 회차 실행기(작업 스케줄러가 부른다). 대표 2026-10-13: ERP5 원천 반영을 개발 PC 에서 1시간 간격 무인 적용.
 #  - EnvFile: 저장소 밖 비공개 PowerShell 파일. $env:FIREBASE_PROJECT_ID, $env:SOURCE_CYCLE_SOURCES, $env:SOURCE_CYCLE_PRIVATE_DIR,
@@ -49,6 +50,11 @@ if ($preflight.Count -gt 0) {
 $cliArgs = @($job, '--unattended')
 if ($OnlyWhenSynced) { $cliArgs += '--only-when-synced' }
 if ($Source) { $cliArgs += @('--source', $Source) }
+# 승인된 가격 보정(예: 아이카 정책 보증금)만 코드별로 받아들인다 — 번호판 불일치는 코드가 항상 DRIFT 로 막는다.
+if ($AcceptDrift) {
+  if ($AcceptDrift -notmatch '^RP\d{3}(,RP\d{3})*$') { throw 'ACCEPT_DRIFT_CODE_INVALID' }
+  $cliArgs += @('--accept-drift', $AcceptDrift)
+}
 $started = (Get-Date).ToUniversalTime().ToString('o')
 $stdout = & $node @cliArgs 2>$null
 $exit = $LASTEXITCODE

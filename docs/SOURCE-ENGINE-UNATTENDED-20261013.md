@@ -17,6 +17,8 @@ git pull ; npm.cmd ci ; npm.cmd run build
 # 비공개 env 파일(저장소 밖, 예: %USERPROFILE%\.codex\private\source-cycle\env.ps1):
 #   $env:FIREBASE_PROJECT_ID='freepasserp5'; $env:SOURCE_CYCLE_SOURCES='F05,AICA,IANCAR,IRON,SONOGONG,AUTOPLUS'
 #   $env:SOURCE_CYCLE_PRIVATE_DIR='…'; $env:SOURCE_CYCLE_*_SHEET_ID='…' (RESULT3 문서의 env 목록)
+#   $env:SHEETS_TRANSPORT='gws'; $env:GWS_BIN='<gws.exe 절대경로>'   # F05 캡처(shared-sheet-capture-reader)는 SHEETS_TRANSPORT=gws 일 때만 gws 로 읽는다 — 없으면 토큰 경로로 가서 AUTH_FAILED. 예약 환경엔 PATH 에 gws 가 없을 수 있어 GWS_BIN 절대경로(10-13 B3Q 실측)
+#   $env:EANCAR_ONE_API_KEY 는 파일에 적지 말고 실행 시 Secret Manager 에서 읽는다(gcloud secrets versions access). 아이카 가격 보정은 실행기 -AcceptDrift RP004
 powershell -File scripts\run-source-cycle.ps1 -EnvFile <env.ps1>            # 1회 수동 실행으로 결과 줄 확인
 powershell -File scripts\register-source-cycle.ps1 -Unattended -EnvFile <env.ps1> -IntervalMinutes 60   # DRY_RUN 출력 확인
 powershell -File scripts\register-source-cycle.ps1 -Unattended -EnvFile <env.ps1> -IntervalMinutes 60 -Register

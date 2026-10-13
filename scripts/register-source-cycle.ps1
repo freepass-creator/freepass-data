@@ -2,6 +2,7 @@
   [string]$Runtime,
   [string]$TaskName = 'FreePass-Source-Cycle',
   [switch]$OnlyWhenSynced,
+  [string]$AcceptDrift,
   [switch]$Unattended,
   [string]$EnvFile,
   [int]$IntervalMinutes = 60,
@@ -29,6 +30,10 @@ if ($Unattended) {
     $taskCommand += ' -EnvFile "' + $envPath + '"'
   }
   if ($OnlyWhenSynced) { $taskCommand += ' -OnlyWhenSynced' }
+  if ($AcceptDrift) {
+    if ($AcceptDrift -notmatch '^RP\d{3}(,RP\d{3})*$') { throw 'ACCEPT_DRIFT_CODE_INVALID' }
+    $taskCommand += ' -AcceptDrift ' + $AcceptDrift
+  }
 } else {
   if (!$Runtime) { throw 'Runtime is required unless -Unattended.' }
   $runtimePath = (Resolve-Path -LiteralPath $Runtime).Path
