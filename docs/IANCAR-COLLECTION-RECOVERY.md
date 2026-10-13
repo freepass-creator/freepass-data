@@ -59,12 +59,12 @@
 | rates[] | price{기간_월/연거리km: rent, deposit} | 이미 ONE 따라감(2,040조건 일치) |
 | mileage | mileage | 매 동기화 ONE 값으로 갱신(ONE 이 현재 값, 숫자). 문자열 쉼표 표기는 소비처 표시용으로 유지 |
 | color | ext_color | ONE 표기(흰색·검정)를 정제 규칙으로 우리 표기(화이트·블랙)로 변환해 갱신. 매핑표 확정 필요 |
-| year | year | **우리 연식 = 최초등록 연도**(최초등록일 있는 64대 전부 일치), **ONE year = 모델연식**(41대 +1, 2대 -1). 규칙: year 칸은 최초등록 연도 유지, ONE year 는 `model_year_source` 로 따로 보존(덮어쓰기 금지). 최초등록일이 없는 18대는 ONE year 를 임시 연식으로 쓰고 확인 동선 등록 |
+| year | year | **우리 연식 = 최초등록 연도**(최초등록일 있는 64대 전부 일치), **ONE year = 모델연식**(41대 +1, 2대 -1). **결정(DEV 커맨드 10-13): 연식 칸(year) = 공급사 원천 연식(ONE year) 그대로, 최초등록은 별도 칸(first_registration_date)이 맡고 덮어쓰지 않는다**(차종 기준 한 장: 연식·최초등록은 따로, 공급사 값은 덮지 않고 보존). 옛 year 값은 `year_source_original` 에 보존. (이전 규칙: year 를 최초등록 연도로 유지 — 폐기) |
 | fuel | fuel_type | 정제 규칙 변환(전기차→전기). 값 충돌 시 ONE 우선 |
 | manufacturer·model·name·trim | maker·model·sub_model·trim_name | 차종 마스터(F03)를 거쳐서만 — ONE 원문은 보존, 우리 4단 값은 기존 보존(차종-기준-한장). ONE 값과 마스터가 충돌하면 확인 필요 표시 |
 | photos | image_urls·photo_cache·iancar_one_photo_ids | §3-2: ONE 사진은 열쇠 필요 → Data 사진 길로만. 별칭 주소 금지 |
 
-**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 ONE 연식은 `model_year_source` 로만 보존한다. `year` 는 덮어쓰지 않는다. 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
+**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 연식(`year`)은 ONE 연식으로 맞추고 옛 값은 `year_source_original` 에, 사본은 `model_year_source` 에 둔다(최초등록 칸은 그대로). 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
 - 백업 버킷 재사용 판정: 새로 만들지 않는다. `freepasserp5-data-audit-evidence`(asia-northeast3)가 이미 있고 코드가 이 버킷만 허용(`IANCAR_BACKUP_WRONG_BUCKET`). 단발 적용 때 `EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET` 으로 지정.
 - 복원: `--restore-sync=<백업> --expected-digest=<원천 digest>`(계획) / `--apply` + `IANCAR_SYNC_RESTORE_APPROVED=true`.
 
