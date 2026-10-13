@@ -11,7 +11,7 @@ const sample = {
   lookup: { kind: 'PLATE_LAST4', value: '0001' },
   status: 'OK',
   productId: 'product-1',
-  plate: '00가0001',
+  plate: '11가0001',
   supplierCode: 'RP001',
   listable: true,
   fields: [
