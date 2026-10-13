@@ -7,6 +7,7 @@ import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -99,6 +100,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
     publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
 }
+/** 표시 상태가 정하는 status_kind (ERP5 재고 계약표). 예전에는 노출이면 무조건 «가용» 이어서 계약중·상품화중 문서가 계약 검사의
+ * status_kind 드리프트로 잡혔다(2026-10-13 발행 단계 33건). 검토되지 않은 상태는 기존대로 «가용»(노출 판단은 listable 이 소유). */
+export const statusKindOf = (display: string, listable: boolean) =>
+  !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : '가용'; })();
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Fields {
   const r = p.record;
   const display = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
@@ -108,7 +113,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw } } : {}),
     price, source_cycle_price_digest: priceDigest(price),
-    listable: p.listable, status: p.listable ? display : '출고불가', status_kind: p.listable ? '가용' : '불가',
+    listable: p.listable, status: p.listable ? display : '출고불가', status_kind: statusKindOf(display, p.listable),
     vehicle_status: p.listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,
     ...(r.raw.product_group ? { product_group: r.raw.product_group } : {}),

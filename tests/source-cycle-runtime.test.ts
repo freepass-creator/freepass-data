@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, readFile, writeFile, appendFile } from 'node:fs/p
 import { assessFreshness } from '../src/application/source-freshness.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields, priceDigest } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, statusKindOf, rawTitleBackfillFields, priceDigest } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -782,5 +782,17 @@ describe('unattended hourly cycle (대표 2026-10-13: 1시간 간격 무인 적�
     await expect(runtimeCli(['--unattended'], env)).rejects.toThrow('UNATTENDED_NOT_ENABLED');
     await expect(runtimeCli(['--unattended', '--apply'], { ...env, SOURCE_CYCLE_UNATTENDED: '1' })).rejects.toThrow('UNATTENDED_ARGS_INVALID');
     await expect(runtimeCli(['--unattended', '--plan', 'x.json'], { ...env, SOURCE_CYCLE_UNATTENDED: '1' })).rejects.toThrow('UNATTENDED_ARGS_INVALID');
+  });
+});
+
+describe('status_kind 는 표시 상태가 정한다 (발행 단계 status_kind 드리프트 33건)', () => {
+  it('maps each reviewed status to its contract kind; closed is 불가; unreviewed listable keeps 가용', () => {
+    expect(statusKindOf('출고가능', true)).toBe('가용');
+    expect(statusKindOf('즉시출고', true)).toBe('가용');
+    expect(statusKindOf('계약중', true)).toBe('선점');
+    expect(statusKindOf('상품화중', true)).toBe('준비');
+    expect(statusKindOf('출고협의', true)).toBe('협의');
+    expect(statusKindOf('출고가능', false)).toBe('불가');
+    expect(statusKindOf('알 수 없음', true)).toBe('가용');
   });
 });
