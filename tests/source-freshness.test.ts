@@ -23,6 +23,13 @@ describe('source freshness (대표 2026-10-13: 원천 신선도는 기록으로�
     expect(r.unhealthy).toEqual(['RP004:STALE', 'RP006:STOPPED', 'RP012:ERROR', 'RP023:NEVER_COMPLETED', 'RP099:MISSING']);
     expect(r.sources.find(s => s.source === 'RP006')!.alerts).toEqual(['STOPPED:SOURCE_HTTP_503']);
   });
+  it('only= judges just the sources this run reads, so an excluded source cannot stay UNHEALTHY forever', () => {
+    const lines = [beat('RP004', 10), beat('RP031', 500, { stopped: true, failures: 3 })];
+    expect(assessFreshness(lines, [], { now }).unhealthy).toEqual(['RP031:STOPPED']);
+    const scoped = assessFreshness(lines, [], { now, only: ['RP004'] });
+    expect(scoped.status).toBe('HEALTHY'); expect(scoped.sources.map(s => s.source)).toEqual(['RP004']);
+    expect(assessFreshness(lines, [], { now, only: ['RP004', 'RP099'] }).unhealthy).toEqual(['RP099:MISSING']);
+  });
   it('ignores malformed lines and old alerts', () => {
     const r = assessFreshness(['not json', beat('RP004', 5)], ['{"source":"RP004","reason":"OLD","at":"2026-10-01T00:00:00.000Z"}'], { now });
     expect(r.status).toBe('HEALTHY'); expect(r.sources[0]!.alerts).toEqual([]);

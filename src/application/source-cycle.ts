@@ -99,8 +99,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       after.supplierFields = structuredClone(snapshot.enrollmentSupplier);
     }
     // Vehicle master review stays attached; source facts/conditions may enroll without inventing a model.
+    // 보정 허용으로 통과한 문서는 값이 원천과 같아도 한 번 다시 쓴다: 저장된 가격 digest 를 현재 값에 맞춰야 다음 회차부터
+    // 보정 허용 없이 통과한다(안 쓰면 digest 가 낡은 채 남아 매 회차 DRIFT HOLD 가 반복된다 — 2026-10-13 RP013 실측).
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
-        deepEqual(before.publication_withdrawal, after.publication_withdrawal)) continue;
+        deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
+        !(snapshot.acceptedDrift ?? []).includes(before.record.uid)) continue;
     plan.entries.push({ kind: !before ? 'ENROLL' : before.listable && !after.listable ? 'DOWNGRADE' :
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }

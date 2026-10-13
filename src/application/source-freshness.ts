@@ -17,12 +17,14 @@ const iso = (v: unknown): string | null => typeof v === 'string' && Number.isFin
 const num = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 
 export function assessFreshness(heartbeatLines: readonly string[], alertLines: readonly string[],
-  options: { now?: number; maxAgeMinutes?: number; expect?: readonly string[] } = {}): FreshnessReport {
+  options: { now?: number; maxAgeMinutes?: number; expect?: readonly string[]; only?: readonly string[] } = {}): FreshnessReport {
   const now = options.now ?? Date.now(), maxAgeMinutes = options.maxAgeMinutes ?? 120, expect = options.expect ?? [];
   const latest = new Map<string, Beat>();
   for (const beat of parseLines(heartbeatLines) as Beat[]) if (typeof beat.source === 'string') latest.set(beat.source, beat);
   const alerts = parseLines(alertLines).filter(a => iso(a.at) && now - Date.parse(a.at as string) <= maxAgeMinutes * 60_000);
-  const sources: SourceFreshness[] = [...new Set([...expect, ...latest.keys()])].sort().map(source => {
+  // only: 이번 회차가 실제로 읽는 원천만 판정한다(제외한 원천의 옛 heartbeat 가 영원히 UNHEALTHY 로 남는 것을 막는다).
+  const scope = options.only ? [...options.only] : [...latest.keys()];
+  const sources: SourceFreshness[] = [...new Set([...expect, ...scope])].sort().map(source => {
     const beat = latest.get(source), completeAt = iso(beat?.lastCompleteAt);
     const ageMinutes = completeAt === null ? null : Math.round((now - Date.parse(completeAt)) / 60_000);
     const error = typeof beat?.error === 'string' ? beat.error : null;

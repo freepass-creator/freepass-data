@@ -341,6 +341,14 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     expect(byUid.a!.after.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(byUid.n!.kind).toBe('ENROLL'); expect(byUid.n!.after.record.terms[0]!.deposit).toEqual(unknown);
   });
+  it('an accepted-drift document with unchanged facts is rewritten once so its price digest resyncs', async () => {
+    const same = [stored('a', known(500)), stored('b', known(700))];
+    const driftBefore = planSourceCycle(config, evidence(same.map(p => p.record)),
+      { complete: true, products: same, acceptedDrift: ['a'] }, now);
+    expect(driftBefore.plan.entries.map(e => [e.after.record.uid, e.kind])).toEqual([['a', 'UPDATE']]);
+    const next = planSourceCycle(config, evidence(same.map(p => p.record)), { complete: true, products: same }, now);
+    expect(next.plan.entries).toEqual([]);                                     // 다음 회차(드리프트 없음)는 쓰지 않는다 — 멱등
+  });
   it('floor 0 keeps the combined ratio; floor 3 lets a small supplier change status without blocking the run', async () => {
     const products = ['a', 'b', 'c', 'd', 'e', 'f'].map(u => product(u));
     const notSellable = ['a', 'b', 'c'].map(u => ({ ...record(u, '계약중'), status: { raw: '계약중', saleAvailable: false } }));
