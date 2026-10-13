@@ -604,6 +604,20 @@ describe('unattended hourly cycle (대표 2026-10-13: 1시간 간격 무인 적�
     expect(second.summary).toContain('변경 0');
     expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
   });
+  it('reads the source exactly once per cycle, so a slow source that changes mid-run cannot abort the apply (이안카 5분 읽기)', async () => {
+    const { commands, fake } = await setup(); const ctrl = fileCycleControl(await directory(), async () => {});
+    let reads = 0;
+    const slow = sourceCyclePlugin({ sourceId: source, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 1 }, async () => {
+      reads++;
+      const r = product().record; r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 100 * reads };   // 읽을 때마다 값이 달라지는 원천
+      return { observedAt: time, complete: true, completedScopes: ['inventory'], visibilityComplete: true, heldCount: 0,
+        rows: [{ scope: 'inventory', record: r }] };
+    });
+    const result = await runUnattendedSourceCycle(slow, commands, ctrl, { now: () => now + 1000 });
+    expect(reads).toBe(1);
+    expect(result).toMatchObject({ stage: 'APPLY', status: 'APPLIED', writes: 1, verified: 1 });
+    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
+  });
   it('never writes when the plan is blocked', async () => {
     const { commands, fake } = await setup([product('TEST1001'), product('TEST1002'), product('TEST1003')]);
     const strict = sourceCyclePlugin({ sourceId: source, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 0.1 },

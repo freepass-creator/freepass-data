@@ -4,10 +4,11 @@ import { resolve, join } from 'node:path';
 import { planSourceCycle, applySourceCycle, deepEqual, type CycleCommands, type CyclePlan, type CycleControl, type CycleProduct } from '../application/source-cycle.js';
 import { sourceCyclePlugin, type CyclePlugin, type CycleCapture, type CycleSourceDefinition } from '../adapters/source-cycle-plugins.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
-import { stableDigest } from '../shared/stable-digest.js';
 
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
-  options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number } = {}) {
+  options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
+    /** 같은 회차에서 방금 읽어 세운 계획을 바로 적용한다(무인 회차 전용). 사람이 검토한 계획 파일 승인 경로(approvedPlan)와 섞지 않는다. */
+    autoApprove?: boolean } = {}) {
   const release = await control.acquire(plugin.sourceId);
   if (!release) return { status: 'LOCKED', writes: 0, summary: '원천 잠금: 중복 회차 생략' };
   const clock = options.now ?? Date.now;
@@ -17,6 +18,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     const previousFailures = state.failures;
     let plan: CyclePlan | null = null;
     let outcome: Awaited<ReturnType<typeof applySourceCycle>> | null = null;
+    let inlineStarted = false;
     let summary = '';
     state.lastAttemptAt = new Date(clock()).toISOString();
     state.readCount = 0; state.heldCount = 0;
@@ -71,10 +73,16 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       state.heldCount = plan.held;
       if (options.approvedPlan && !deepEqual(plan, options.approvedPlan)) throw new Error('CYCLE_REPLAN_REQUIRED');
       if (plan.blockers.length) throw new Error(plan.blockers.join(','));
-      const applied = await applySourceCycle(commands, plan, { ...options, now: clock() });
+      // 무인 회차(autoApprove): 방금 읽은 계획을 그대로 적용한다. 같은 회차라 사람의 지연이 없고, 문서별 CAS·백업·되읽기가 막아 주므로
+      // 승인 계획 재검증용 «두 번째 읽기»가 필요 없다 — 읽기가 긴 원천(이안카 약 5분)은 두 읽기 사이에 원천이 바뀌어 매번 중단되던 문제.
+      const inline = options.autoApprove === true && !options.approvedPlan && plan.entries.length > 0;
+      const applying = options.apply === true || inline;
+      inlineStarted = inline;
+      const applied = await applySourceCycle(commands, plan, inline
+        ? { apply: true, digest: built.digest, approval: built.digest, now: clock() } : { ...options, now: clock() });
       outcome = applied;
       const counts = (kind: string) => plan!.entries.filter(e => e.kind === kind).length;
-      summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL') + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${options.apply ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
+      summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL') + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${applying ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
@@ -85,7 +93,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
       state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
       // A dry-run must never consume the change token for a later authorized apply.
-      if (options.apply && !plan.held) state.lastSyncedAt = synced;
+      if (applying && !plan.held) state.lastSyncedAt = synced;
       await control.save(plugin.sourceId, state);
       await control.heartbeat(plugin.sourceId, state, plan);
       return { ...applied, planDigest: built.digest, summary, plan };
@@ -99,25 +107,22 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       catch { await control.alert(plugin.sourceId, 'HEARTBEAT_UNAVAILABLE'); }
       await control.alert(plugin.sourceId, state.stopped ? `STOPPED:${reason}` : reason);
       return { status: state.stopped ? 'STOPPED' : reason === 'APPLY_UNCERTAIN' ? 'APPLY_UNCERTAIN' : 'HOLD',
-        writes: outcome?.writes ?? (options.apply ? null : 0), verified: outcome?.verified ?? 0,
+        writes: outcome?.writes ?? (options.apply || inlineStarted ? null : 0), verified: outcome?.verified ?? 0,
         summary: `${summary ? summary + ' · ' : ''}회차 보류 ${reason} (연속 ${state.failures})`, plan };
     }
   } finally { await release(); }
 }
 
-/** 무인 회차(대표 2026-10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔」):
- * 같은 회차 안에서 ① 새 읽기로 계획을 세우고(DRY_RUN) ② 변경이 있으면 그 계획을 승인 digest 로 삼아
- * 즉시 적용한다. 적용 단계는 기존 승인 경로(runSourceCycle + approvedPlan)를 그대로 재사용하므로
- * 재읽기·사실 불일치 CYCLE_REPLAN_REQUIRED·blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·
- * 백업·CAS·되읽기·3회 실패 정지가 전부 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. */
+/** 무인 회차(대표 2026-10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔」): 한 번 읽어 계획을 세우고 변경이 있으면
+ * 그 계획을 바로 적용한다. blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·문서별 CAS·백업·되읽기·3회 실패 정지가 그대로
+ * 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. 변경이 없으면 적용하지 않는다(stage PLAN). */
 export async function runUnattendedSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { onlyWhenSynced?: boolean; now?: () => number } = {}) {
-  const planned = await runSourceCycle(plugin, commands, control, options);
-  if (planned.status !== 'DRY_RUN' || !('plan' in planned) || !planned.plan) return { ...planned, stage: 'PLAN' as const };
-  if (!planned.plan.entries.length) return { ...planned, stage: 'PLAN' as const, summary: `${planned.summary} · 변경 0: 적용 생략` };
-  const digest = stableDigest(planned.plan);
-  const applied = await runSourceCycle(plugin, commands, control, { ...options, apply: true, approvedPlan: planned.plan, digest, approval: digest });
-  return { ...applied, stage: 'APPLY' as const, planDigest: digest };
+  const result = await runSourceCycle(plugin, commands, control, { ...options, autoApprove: true });
+  const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN';
+  const noChange = result.status === 'DRY_RUN' && 'plan' in result && result.plan && result.plan.entries.length === 0;
+  return { ...result, stage: (reachedApply ? 'APPLY' : 'PLAN') as 'APPLY' | 'PLAN',
+    ...(noChange ? { summary: `${result.summary} · 변경 0: 적용 생략` } : {}) };
 }
 
 /** The scheduler loads a reviewed local runtime composition. No default credentials, target,
