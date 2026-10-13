@@ -25,9 +25,15 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
     }
     // 같은 UID 가 여러 행이면: 상태·가격이 모두 같은 단순 중복은 첫 행만 반영하고 나머지를 보류하고, 서로 다른 내용이면 «행 순서가
     // 노출을 정하지 않도록» 모든 행을 보류한다(같은 차에 상반된 상태·가격). 보류는 부재 하향도 막아 기존 문서는 그대로 남는다.
+    // 비교는 해석된 업무 값(상태·차명·항)과 «원문 칸 전체(공백 정리)»를 함께 쓴다: 옵션·원문 칸만 달라도(raw.original 로 들어가는 값) 충돌이다.
+    // 월렌트 모델명 칸(0열)은 UID 를 만드는 값이라 대소문자·공백 표기 차이는 제외한다. UID 칸은 비교하지 않는다.
+    const headersOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.headers) ? r.raw.headers : []) as unknown[];
+    const cellsOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.cells) ? r.raw.cells : []) as unknown[];
+    const norm = (c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim();
     const offerOf = (r: SourceProductRecord) => stableDigest({ status: r.status,
-      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : r.vehicleText,   // 월렌트 모델명은 대소문자·공백 표기만 다를 수 있다(UID 가 정규화)
-      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage]) });
+      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : r.vehicleText,
+      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage]),
+      cells: cellsOf(r).map((c, i) => headersOf(r)[i] === 'UID' || (r.raw.product_group === 'MONTHLY_RENT' && i === 0) ? '' : norm(c)) });
     const byUid = new Map<string, Array<{ r: SourceProductRecord; uid: string }>>();
     for (const item of identified) (byUid.get(item.uid) ?? byUid.set(item.uid, []).get(item.uid)!).push(item);
     for (const [uid, group] of byUid) {

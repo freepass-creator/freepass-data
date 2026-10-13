@@ -504,6 +504,22 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
       await release!();
     }
   });
+  it('a new lock always holds owner info (no empty window), and a lock older than 36 stale periods is dead even if the pid looks alive (pid reuse)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lock-')); dirs.push(dir);
+    const ctrl = fileCycleControl(dir, async () => {}, { takeOverDeadLocks: true });
+    const release = await ctrl.acquire('SRC');
+    expect(release).not.toBeNull();
+    const lockName = (await readdir(dir)).find(n => n.endsWith('.lock'))!;
+    const content = JSON.parse(await readFile(join(dir, lockName), 'utf8'));
+    expect(content).toMatchObject({ pid: process.pid }); expect(typeof content.token).toBe('string'); expect(typeof content.startedAt).toBe('string');
+    expect((await readdir(dir)).some(n => n.endsWith('.tmp'))).toBe(false);          // 임시 파일이 남지 않는다
+    await release!();
+    const reused = await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 36 + 60_000);
+    const again = await reused.ctrl.acquire('SRC');
+    expect(again).not.toBeNull();
+    expect((await readdir(reused.dir)).some(n => n.includes('.lock.dead-stale-pid-'))).toBe(true);
+    await again!();
+  });
   it('never takes over a recent lock or a live owner', async () => {
     expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
     expect(await (await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();          // 살아 있음

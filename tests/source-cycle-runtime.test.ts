@@ -433,7 +433,7 @@ describe('native mappings and UID', () => {
   it('SPEC3D monthly numeric offers normalize identity, preserve raw and flag duplicates separately', async () => {
     const f = aicaFixture();
     f.tables[3]!.values = [['차종', '1개월', '비고'], [' Model a ', '345,678', '월렌트 무보증'],
-      ['MODEL A', 345678, '월렌트 무보증'], ['Model B', 500000], ['Unavailable', 'x'], ['Blank', ''], ['Empty', null],
+      ['MODEL A', '345,678', '월렌트 무보증'], ['Model B', 500000], ['Unavailable', 'x'], ['Blank', ''], ['Empty', null],
       ['Non numeric', '무보증'], ['Invalid', -1]];
     f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
     f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
@@ -615,6 +615,15 @@ describe('native mappings and UID', () => {
     const plan = planSourceCycle(onlyGuidance.plugin, { records: onlyGuidance.records, complete: true, observedAt: time, heldCount: 0 },
       { complete: true, products: [old] }, now).plan;
     expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === 'TEST9999')).toBe(true);   // 사라진 차는 내려간다
+  });
+  it('Aica rows sharing a plate that differ only in an option cell are also all held (raw content differs)', async () => {
+    const a = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프' }), b = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프 없음' }), copy = aicaRow({ 차량번호: 'TEST3101', 옵션: ' 썬루프 ' });
+    const differing = await aicaRead(aicaFixture([a, b]));
+    expect(differing.records).toEqual([]);
+    expect(differing.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_CONFLICT', 'DUPLICATE_UID_CONFLICT']);
+    const identical = await aicaRead(aicaFixture([a, copy]));                     // 공백만 다른 복사본
+    expect(identical.records.map(r => r.uid)).toEqual(['TEST3101']);
+    expect(identical.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_SUSPECT']);
   });
   it('Aica rows sharing a plate with different offers are all held, never decided by row order', async () => {
     const a = aicaRow({ 차량번호: 'TEST3001', 배차상태: '배차문의' }), b = aicaRow({ 차량번호: 'TEST3001', 배차상태: '출고불가' });

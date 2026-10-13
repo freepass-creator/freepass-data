@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, unlink, appendFile, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, appendFile, stat, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -13,34 +13,57 @@ const processAlive = (pid: number) => {
  * 강제 종료된 회차의 잠금이 남아 원천이 매 회차 «중복 회차 생략» 으로만 지나가던 사고(2026-10-13 RP030)를 막는다. 살아 있거나 판단할 수 없으면
  * (pid 재사용·읽기 실패·최근 잠금) 인계하지 않는다. 남의 잠금을 지우지 않고 증거를 남기며 한 이름으로 옮긴다. */
 export const STALE_LOCK_MS = 10 * 60_000;
-async function takeOverDeadLock(path: string): Promise<boolean> {
+async function takeOverDeadLock(path: string, onIoError?: (code: string) => Promise<void>): Promise<boolean> {
   // 파일 시스템만으로 «검사 후 이동» 을 원자적으로 만들 수 없다(Codex 독립 검토가 비원자 구간을 계속 지적). 그래서 경쟁 자체를 없앤다:
   // 인계는 무인 예약 회차(SOURCE_CYCLE_UNATTENDED=1, 작업 스케줄러가 한 번에 한 인스턴스만 실행) 하나만 하고, 수동 실행은 죽은 잠금을 만나면
   // 인계하지 않고 보류+알림만 한다. 인계자가 하나뿐이면 두 인계자의 경쟁(검사~이동 사이 끼어들기)이 성립하지 않는다.
   // 죽은 잠금: 소유 pid 가 없고(ESRCH) STALE_LOCK_MS 이상 오래됐거나, 소유 정보가 비어 있거나 읽을 수 없고 STALE_LOCK_MS 이상 오래된 잠금.
+  // 새 잠금은 소유 정보가 이미 든 파일로만 생긴다(임시 파일에 쓰고 link). «빈 잠금»은 예전 엔진이 남긴 것뿐이다.
+  // pid 재사용으로 무관한 프로세스가 살아 있어도 STALE_LOCK_MS 의 36배(6시간)가 지나면 죽은 잠금으로 본다(회차가 6시간 도는 일은 없다).
   try {
-    const raw = await readFile(path, 'utf8');
-    const age = Date.now() - (await stat(path)).mtimeMs;
+    const before = await stat(path), raw = await readFile(path, 'utf8');
+    const age = Date.now() - before.mtimeMs;
     if (age < STALE_LOCK_MS) return false;
     let tag = 'dead-unreadable';
     try {
       const owner = JSON.parse(raw) as { pid?: unknown };
       if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0) {
-        if (processAlive(owner.pid)) return false;
-        tag = `dead-pid-${owner.pid}`;
+        if (processAlive(owner.pid) && age < STALE_LOCK_MS * 36) return false;
+        tag = processAlive(owner.pid) ? `dead-stale-pid-${owner.pid}` : `dead-pid-${owner.pid}`;
       }
-    } catch { /* 비어 있거나 일부만 쓰인 잠금은 오래되면 죽은 잠금으로 본다 */ }
+    } catch { /* 레거시 빈 잠금·손상 잠금은 오래되면 죽은 잠금으로 본다 */ }
+    // 이동 직전 같은 파일인지(mtime·크기·내용) 한 번 더 확인한다.
+    const again = await stat(path);
+    if (again.mtimeMs !== before.mtimeMs || again.size !== before.size || (await readFile(path, 'utf8')) !== raw) return false;
     await rename(path, `${path}.${tag}-${Date.now()}`);
     return true;
-  } catch { return false; }
+  } catch (e) {
+    // 잠금이 그 사이 사라졌으면 정상(인계할 것이 없다). 그 밖의 파일 오류는 «죽은 잠금 보류» 와 구분되는 알림을 남긴다.
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') await onIoError?.((e as NodeJS.ErrnoException).code ?? 'UNKNOWN').catch(() => undefined);
+    return false;
+  }
 }
 /** 인계 가능한 죽은 잠금인지(수동 실행이 보류+알림만 하기 위한 판정). */
 async function deadLockPresent(path: string): Promise<boolean> {
   try {
     const raw = await readFile(path, 'utf8');
-    if (Date.now() - (await stat(path)).mtimeMs < STALE_LOCK_MS) return false;
-    try { const p = (JSON.parse(raw) as { pid?: unknown }).pid; return !(typeof p === 'number' && p > 0 && processAlive(p)); } catch { return true; }
+    const age = Date.now() - (await stat(path)).mtimeMs;
+    if (age < STALE_LOCK_MS) return false;
+    try {
+      const p = (JSON.parse(raw) as { pid?: unknown }).pid;
+      return !(typeof p === 'number' && p > 0 && processAlive(p)) || age >= STALE_LOCK_MS * 36;
+    } catch { return true; }
   } catch { return false; }
+}
+/** 소유 정보가 이미 든 잠금을 한 번에 만든다: 임시 파일에 쓰고 fsync 한 뒤 link(이미 있으면 EEXIST). 빈 잠금 구간이 없다. */
+async function createLock(path: string, token: string): Promise<boolean> {
+  const temp = `${path}.${randomUUID()}.tmp`;
+  const handle = await open(temp, 'wx', 0o600);
+  try { await handle.writeFile(JSON.stringify({ token, pid: process.pid, startedAt: new Date().toISOString() })); await handle.sync(); }
+  finally { await handle.close(); }
+  try { await link(temp, path); return true; }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false; throw e; }
+  finally { await unlink(temp).catch(() => undefined); }
 }
 
 /** Crash-safe local runner state. Lock is exclusive-create. A lock whose owner process is gone and old enough is taken over
@@ -52,23 +75,16 @@ export function fileCycleControl(directory: string, heartbeat: CycleControl['hea
     async acquire(source) {
       await mkdir(directory, { recursive: true });
       const path = file(source, 'lock'), token = randomUUID();
-      let handle;
-      try { handle = await open(path, 'wx', 0o600); }
-      catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      const note = (reason: string) => appendFile(join(directory, 'alerts.jsonl'), JSON.stringify({ source, reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+      if (!(await createLock(path, token))) {
         if (!options.takeOverDeadLocks) {
           // 수동 실행: 죽은 잠금은 인계하지 않는다. 사람이 볼 수 있게 알림만 남기고 보류한다.
-          if (await deadLockPresent(path)) {
-            await appendFile(join(directory, 'alerts.jsonl'), JSON.stringify({ source, reason: 'DEAD_LOCK_HELD', at: new Date().toISOString() }) + '\n', { mode: 0o600 });
-          }
+          if (await deadLockPresent(path)) await note('DEAD_LOCK_HELD');
           return null;
         }
-        if (!(await takeOverDeadLock(path))) return null;
-        try { handle = await open(path, 'wx', 0o600); }
-        catch (e2) { if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return null; throw e2; }
+        if (!(await takeOverDeadLock(path, code => note(`LOCK_IO_ERROR:${code}`)))) return null;
+        if (!(await createLock(path, token))) return null;
       }
-      try { await handle.writeFile(JSON.stringify({ token, pid: process.pid })); await handle.sync(); }
-      finally { await handle.close(); }
       return async () => {
         const current = JSON.parse(await readFile(path, 'utf8')) as { token: string };
         if (current.token !== token) throw new Error('CYCLE_LOCK_OWNER_CHANGED');
