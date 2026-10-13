@@ -6,3 +6,10 @@ dist/
 coverage/
 *.log
 tmp/
+
+# 비밀·로컬 산출물: 실수로 커밋되지 않게 한다(2026-10-14 로컬 .local/ 아래 비공개 키 파일 발견)
+.local/
+*.pem
+*.key
+*-private.*
+private-key*
