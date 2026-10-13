@@ -477,7 +477,7 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     const path = join(dir, `${stableDigest('SRC')}.lock`);
     await writeFile(path, typeof owner === 'string' ? owner : JSON.stringify(owner));
     const when = new Date(Date.now() - ageMs); await utimes(path, when, when);
-    return { dir, path, ctrl: fileCycleControl(dir, async () => {}) };
+    return { dir, path, ctrl: fileCycleControl(dir, async () => {}, { takeOverDeadLocks: true }) };
   };
   const deadPid = () => { const r = spawnSync(process.execPath, ['-e', '']); return r.pid!; };   // 방금 끝난 프로세스의 pid
   it('takes over an old lock whose owner process is gone, keeping the evidence file', async () => {
@@ -487,44 +487,25 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     expect((await readdir(dir)).some(n => n.includes(`.lock.dead-pid-${pid}-`))).toBe(true);
     await release!(); expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(false);
   });
-  it('two runs racing to take over the same dead lock end with exactly one owner', async () => {
-    const pid = deadPid(), { ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
-    const results = await Promise.all([ctrl.acquire('SRC'), ctrl.acquire('SRC'), ctrl.acquire('SRC')]);
-    expect(results.filter(r => r !== null)).toHaveLength(1);
+  it('a manual run never takes over a dead lock: it holds and leaves an alert', async () => {
+    const pid = deadPid(), { dir, path } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
+    const manual = fileCycleControl(dir, async () => {});                     // takeOverDeadLocks 기본 꺼짐
+    expect(await manual.acquire('SRC')).toBeNull();
+    expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(true);   // 잠금은 그대로
+    expect(await readFile(join(dir, 'alerts.jsonl'), 'utf8')).toContain('DEAD_LOCK_HELD');
   });
-  it('a held takeover marker keeps other runs out; a crashed (old) marker is cleared once and the next run takes over', async () => {
-    const pid = deadPid(), { dir, path, ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
-    const guard = `${path}.takeover`;
-    await writeFile(guard, '');                                                   // 다른 회차가 인계 중
-    expect(await ctrl.acquire('SRC')).toBeNull();
-    expect((await readdir(dir)).includes(guard.split(/[\\/]/).at(-1)!)).toBe(true);   // 최근 표식은 지우지 않는다
-    const old = new Date(Date.now() - STALE_LOCK_MS - 60_000); await utimes(guard, old, old);   // 크래시로 남은 낡은 표식
-    expect(await ctrl.acquire('SRC')).toBeNull();                                 // 이번엔 치우기만 하고 인계하지 않는다
-    const release = await ctrl.acquire('SRC');                                    // 다음 회차가 인계
-    expect(release).not.toBeNull();
-    await release!();
+  it('the scheduled run also takes over an empty or unreadable old lock (crash before/while writing owner info), never a recent one', async () => {
+    expect(await (await lockFor('', 30_000)).ctrl.acquire('SRC')).toBeNull();                         // 최근 빈 잠금
+    for (const owner of ['', '{"token":"partial"', { token: 'x' }] as unknown[]) {
+      const l = await lockFor(owner, STALE_LOCK_MS + 60_000);
+      const release = await l.ctrl.acquire('SRC');
+      expect(release).not.toBeNull();
+      expect((await readdir(l.dir)).some(n => n.includes('.lock.dead-unreadable-'))).toBe(true);
+      await release!();
+    }
   });
-  it('a crash-left marker whose owner is alive is never cleared by age alone; a recent or foreign marker is not deleted by the finishing run', async () => {
-    const pid = deadPid(), { dir, path, ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
-    const guard = `${path}.takeover`, name = guard.split(/[\\/]/).at(-1)!;
-    await writeFile(guard, JSON.stringify({ token: 'other', pid: process.pid }));          // 살아 있는(멈췄을 뿐인) 소유자의 표식
-    const old = new Date(Date.now() - STALE_LOCK_MS * 3); await utimes(guard, old, old);
-    expect(await ctrl.acquire('SRC')).toBeNull();
-    expect((await readdir(dir)).includes(name)).toBe(true);                               // 오래됐어도 살아 있는 소유자의 표식은 그대로
-  });
-  it('an empty lock left by a crash before the owner info was written is taken over once old enough, never while recent', async () => {
-    const recent = await lockFor('', 30_000);
-    expect(await recent.ctrl.acquire('SRC')).toBeNull();
-    const old = await lockFor('', STALE_LOCK_MS + 60_000);
-    const release = await old.ctrl.acquire('SRC');
-    expect(release).not.toBeNull();
-    expect((await readdir(old.dir)).some(n => n.includes('.lock.dead-empty-'))).toBe(true);
-    await release!();
-  });
-  it('never takes over a recent lock, a live owner, or an unreadable lock', async () => {
+  it('never takes over a recent lock or a live owner', async () => {
     expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
     expect(await (await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();          // 살아 있음
-    expect(await (await lockFor('not json', STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();                               // 판단 불가
-    expect(await (await lockFor({ token: 'x' }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();                           // pid 없음
   });
 });

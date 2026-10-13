@@ -334,6 +334,13 @@ describe('native mappings and UID', () => {
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     expect(c.heldReasons).not.toContain('DUPLICATE_UID_CONFLICT');
   });
+  it('F05 identical duplicates differing only in inner spacing give the same output whatever the row order', () => {
+    const a = { 차량번호: 'TEST1001', 연주행: '20000 km' }, b = { 차량번호: 'TEST1001', 연주행: '20000  km' };
+    const first = f05NativeCapture(sheet([a, b]).source, sheet([a, b]).capture, sheet([a, b]).visibility);
+    const second = f05NativeCapture(sheet([b, a]).source, sheet([b, a]).capture, sheet([b, a]).visibility);
+    expect(first.rows.map(r => r.record.terms.map(t => t.mileage))).toEqual(second.rows.map(r => r.record.terms.map(t => t.mileage)));
+    expect(first.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
+  });
   it('F05 duplicate comparison does not equate full-width digits with ASCII (the real amount parser rejects them)', () => {
     const s = sheet([{ 차량번호: 'TEST1001', '12개월': '100' }, { 차량번호: 'TEST1001', '12개월': '１００' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);

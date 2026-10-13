@@ -34,7 +34,9 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
       const conflicting = group.length > 1 && new Set(group.map(g => offerOf(g.r))).size > 1;
       if (conflicting) { for (let i = 0; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_CONFLICT'] }); continue; }
       if (seen.has(uid)) continue;
-      seen.add(uid); records.push({ ...group[0]!.r, uid });
+      // 내용이 같은 복사본 중 반영할 행은 순서가 아니라 원문 칸의 사전순 최소로 정한다(순서와 무관한 출력).
+      const pick = [...group].sort((x, y) => JSON.stringify(x.r.raw?.cells ?? '') < JSON.stringify(y.r.raw?.cells ?? '') ? -1 : 1)[0]!;
+      seen.add(uid); records.push({ ...pick.r, uid });
       for (let i = 1; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] });
     }
     return { records, held: result.held };
@@ -59,6 +61,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     // 같은 UID 가 이 탭에 여러 번 나오는데 행 내용이 다르면(상반된 상태·가격) 행 순서가 노출을 정하지 않도록 그 UID 의 모든 행을 보류한다.
     // 내용이 같은 단순 중복은 아래에서 첫 행만 반영하고 나머지를 보류한다.
     const conflictingUids = new Set<string>(), signatures = new Map<string, string>();
+    // 내용이 같은 복사본 중 어느 행을 반영할지는 행 순서가 아니라 원문이 사전순으로 가장 작은 행으로 정한다(내부 공백 표기가 달라도 순서와 무관한 출력).
+    const chosen = new Map<string, { index: number; raw: string }>();
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!;
       const supplier = sharedSheetChannelOf(tab.title, row[0]);
@@ -70,6 +74,9 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       // 달라도 충돌 보류가 되는 오탐을 막는다(숫자 100 과 '100' 도 같게 본다).
       const normalizeCell = (c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim();   // NFKC 는 쓰지 않는다: 전각 숫자는 실제 금액 파서가 거절하므로 반각과 같게 보면 행 순서에 따라 검증 결과가 달라진다
       const signature = JSON.stringify(row.map((c, column) => column === 0 || column === uidIndex ? '' : normalizeCell(c)));
+      const rawKey = JSON.stringify(row.map((c, column) => column === uidIndex ? '' : String(c ?? '')));
+      const pick = chosen.get(rowUid);
+      if (!pick || rawKey < pick.raw) chosen.set(rowUid, { index: i, raw: rawKey });
       const prior = signatures.get(rowUid);
       if (prior === undefined) signatures.set(rowUid, signature);
       else if (prior !== signature) conflictingUids.add(rowUid);
@@ -86,7 +93,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       const uid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
-      if (!uid || seen.has(uid) || conflictingUids.has(uid)) {
+      const notChosen = !!uid && !conflictingUids.has(uid) && chosen.get(uid)?.index !== i;
+      if (!uid || seen.has(uid) || conflictingUids.has(uid) || notChosen) {
         holds.push(!uid ? 'UID_REQUIRED' : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
