@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { assessFreshness } from '../src/application/source-freshness.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, rawTitleBackfillFields, priceDigest } from '../src/infra/source-cycle-firestore.js';
@@ -9,7 +10,7 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type Sha
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime, runtimeCli } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin } from '../src/runtime/source-cycle-runtime.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -613,6 +614,36 @@ describe('native mappings and UID', () => {
     const fetcher = vi.fn(); const r = createSourceCycleRuntime({ FIREBASE_PROJECT_ID: 'synthetic-test', SOURCE_CYCLE_SOURCES: 'IANCAR,IRON',
       SOURCE_CYCLE_PRIVATE_DIR: await directory() }, fetcher as typeof fetch);
     expect(r.plugins.filter(p => p.absenceReason !== 'DECISION_WITHDRAWN')).toHaveLength(2); expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('ERP4 단독 수집 원천의 관측 전용 신선도 (손오공·오토플러스: 수집이 멈춰도 정상으로 보이던 결함)', () => {
+  const doc = (uid: string, fields: Record<string, unknown>, updateTime: string) => ({
+    name: `projects/synthetic-test/databases/(default)/documents/products/${uid}`, updateTime, fields: encodeFields(fields) as Record<string, unknown> });
+  const row = (listable: boolean, source: string, status = '출고가능') => ({ provider_company_code: 'RP023', car_number: 'T1', car_name: 'x', source,
+    listable, status, status_kind: listable ? '가용' : '불가', vehicle_status: status, price: { '12': { rent: 100, deposit: 0 } } });
+  it('observed time is the exposed documents\' last update, not now, and every source value is counted', async () => {
+    const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T03:50:00Z'), doc('A2', row(true, 'website'), '2026-10-13T03:53:21Z'),
+      doc('A3', row(true, 'legacy_provider_atom'), '2026-10-13T03:40:00Z'), doc('A4', row(false, 'sheet', '출고불가'), '2026-10-13T09:59:00Z')];
+    const p = collectorObservationPlugin('AUTOPLUS', 1, async () => docs, () => Date.parse('2026-10-13T10:30:00Z'));
+    const read = await p.read();
+    expect(read.observedAt).toBe('2026-10-13T03:53:21.000Z');           // 노출 문서 최신(비노출 문서의 더 늦은 갱신은 신선도 근거가 아님)
+    expect(p.toRecords(read).records.filter(r => r.status.saleAvailable === true)).toHaveLength(3);   // source 값과 무관
+  });
+  it('a stalled collector shows up as STALE in the freshness verdict', async () => {
+    const dir = await directory();
+    const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T03:53:21Z')];
+    const p = collectorObservationPlugin('AUTOPLUS', 1, async () => docs);
+    const ctrl = fileCycleControl(dir, async (source, state) => {
+      await appendFile(join(dir, 'heartbeats.jsonl'), JSON.stringify({ source, ...state }) + '\n');
+    });
+    const result = await runSourceCycle(p, { list: async () => ({ products: [], complete: true }) } as never, ctrl, { now: () => Date.parse('2026-10-13T10:30:00Z') });
+    expect(result).toMatchObject({ status: 'OBSERVED', writes: 0 });
+    expect(result.summary).toContain('수집기 최종 갱신 2026-10-13T03:53:21.000Z');
+    const beats = (await readFile(join(dir, 'heartbeats.jsonl'), 'utf8')).split('\n');
+    const report = assessFreshness(beats, [], { now: Date.parse('2026-10-13T10:30:00Z'), only: ['RP023'] });
+    expect(report.unhealthy).toEqual(['RP023:STALE']);
+    expect(report.sources[0]!.ageMinutes).toBe(397);
   });
 });
 

@@ -64,7 +64,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
         await control.save(plugin.sourceId, state);
         await control.heartbeat(plugin.sourceId, state, null);
-        return { status: 'OBSERVED', writes: 0, summary: `관측 전용 원천 ${converted.records.filter(r => r.status.saleAvailable === true).length} · 번호미배정 ${unassigned} · 상품 쓰기 0` };
+        return { status: 'OBSERVED', writes: 0, summary: `관측 전용 원천 ${converted.records.filter(r => r.status.saleAvailable === true).length} · 번호미배정 ${unassigned} · 상품 쓰기 0 · 수집기 최종 갱신 ${read.observedAt}` };
       }
       if (options.approvedPlan) {
         // A fresh transport read naturally has a new observation clock. Pin approved facts,

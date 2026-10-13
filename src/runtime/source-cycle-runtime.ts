@@ -17,6 +17,26 @@ import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.j
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
+/** ERP4 단독 수집 원천(손오공 RP012·오토플러스 RP023)의 관측 전용 플러그인. 엔진은 쓰지 않고, 공급사 문서 전체(source 값과 무관)를 세며
+ * 관측 시각은 «지금»이 아니라 노출 문서의 마지막 수정 시각이다 — 수집기가 멈추면 시각이 늙어 신선도 감시가 STALE 로 잡는다
+ * (이전에는 관측 시각을 지금으로 찍어 수집이 6.5시간 멈춰도 정상으로 보였다: 2026-10-13 실측). */
+type ObservedDoc = { name: string; updateTime?: string; fields: Record<string, unknown> };
+export function collectorObservationPlugin(kind: 'SONOGONG' | 'AUTOPLUS', ratio: number,
+  documents: (sourceId: string) => Promise<ObservedDoc[]>, now: () => number = Date.now) {
+  const sourceId = kind === 'SONOGONG' ? 'RP012' : 'RP023';
+  const plugin = sourceCyclePlugin({ sourceId, kind, scopes: ['collector'], maxDowngradeRatio: ratio }, async () => {
+    const decoded = (await documents(sourceId)).map(d => ({ d, f: decodeFields(d.fields as never) as Record<string, unknown> }));
+    const latest = (list: typeof decoded) => Math.max(0, ...list.map(x => Date.parse(x.d.updateTime ?? '')).filter(Number.isFinite));
+    const exposed = decoded.filter(x => x.f.listable === true);
+    const stamp = latest(exposed.length ? exposed : decoded);
+    const observedAt = new Date(stamp > 0 ? stamp : now()).toISOString();
+    return { observedAt, complete: true, completedScopes: ['collector'], visibilityComplete: true, heldCount: 0,
+      rows: decoded.map(({ d, f }) => ({ scope: 'collector',
+        record: productRecord(decodeURIComponent(d.name.split('/').at(-1)!), f as never, observedAt) })) };
+  });
+  return { ...plugin, observationOnly: true };
+}
+
 export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch, acceptDrift: string[] = []) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
@@ -110,16 +130,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         return ironNativeCapture(await (await get(url, false)).text(), new Date().toISOString());
       })));
     } else if (kind === 'SONOGONG' || kind === 'AUTOPLUS') {
-      const sourceId = kind === 'SONOGONG' ? 'RP012' : 'RP023';
-      const source = kind === 'SONOGONG' ? 'sonokong' : 'website';
-      const plugin = sourceCyclePlugin({ sourceId, kind, scopes: ['collector'], maxDowngradeRatio: ratio }, async () => {
-        const observedAt = new Date().toISOString();
-        const documents = await commands.documents(sourceId);
-        return { observedAt, complete: true, completedScopes: ['collector'], visibilityComplete: true, heldCount: 0,
-          rows: documents.filter(d => decodeFields(d.fields).source === source).map(d => ({ scope: 'collector',
-            record: productRecord(decodeURIComponent(d.name.split('/').at(-1)!), decodeFields(d.fields), observedAt) })) };
-      });
-      plugins.push({ ...plugin, observationOnly: true });
+      plugins.push(collectorObservationPlugin(kind, ratio, sourceId => commands.documents(sourceId)));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.
