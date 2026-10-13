@@ -161,6 +161,49 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).not.toContain('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
   });
 
+  it('recognizes the 월렌트 product type from RP004 but holds the missing canonical contract extension', () => {
+    const input = fixture();
+    Object.assign(input.data, { provider_company_code: 'RP004', product_type: '월렌트' });
+    const result = mapErp5Product(input);
+    expect(result.status).toBe('HOLD');
+    expect(result.candidate.commercialType).toBe('MONTHLY_RENT');
+    expect(result.candidate.issues).toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    expect(result.candidate.issues).not.toContain('UNKNOWN_PRODUCT_TYPE');
+    expect(result.candidate.issues).not.toContain('MONTHLY_RENT_SUPPLIER_REVIEW_REQUIRED');
+  });
+
+  it('does not accept a 월렌트 label from a supplier other than RP004', () => {
+    const input = fixture();
+    input.data.product_type = '월렌트';
+    const result = mapErp5Product(input);
+    expect(result.status).toBe('HOLD');
+    expect(result.canonicalWriteAuthorized).toBe(false);
+    expect(result.candidate.commercialType).toBe('MONTHLY_RENT');
+    expect(result.candidate.issues).toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    expect(result.candidate.issues).toContain('MONTHLY_RENT_SUPPLIER_REVIEW_REQUIRED');
+  });
+
+  it('keeps a plate-less monthly model product held with the contract extension and its own plate issues', () => {
+    const input = fixture();
+    delete input.data.car_number;
+    Object.assign(input.data, { provider_company_code: 'RP004', product_type: '월렌트', product_group: 'MONTHLY_RENT', price: { '1': { rent: '990000', deposit: 0 } } });
+    const result = mapErp5Product(input);
+    expect(result.status).toBe('HOLD');
+    expect(result.canonicalWriteAuthorized).toBe(false);
+    expect(result.candidate.commercialType).toBe('MONTHLY_RENT');
+    expect(result.candidate.issues).toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    expect(result.candidate.issues).not.toContain('UNKNOWN_PRODUCT_TYPE');
+  });
+
+  it.each([['신차렌트', 'NEW_RENT'], ['중고렌트', 'USED_RENT']])('keeps %s mapping unaffected by the 월렌트 vocabulary', (label) => {
+    const input = fixture();
+    input.data.product_type = label;
+    const result = mapErp5Product(input);
+    expect(result.candidate.issues).not.toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    expect(result.candidate.issues).not.toContain('MONTHLY_RENT_SUPPLIER_REVIEW_REQUIRED');
+    expect(result.candidate.commercialType).not.toBe('MONTHLY_RENT');
+  });
+
   it('does not accept an Oplus label from a supplier other than RP023', () => {
     const input = fixture();
     input.data.product_type = '오플구독';
