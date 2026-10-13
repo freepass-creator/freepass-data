@@ -205,7 +205,13 @@ describe('Firestore REST runtime offline', () => {
   });
   it('source_cycle_record cannot mask an external price change', async () => {
     const { commands, fake } = await setup([product()]); fake.docs.get('TEST1001').fields.price = encodeFields({ price: {} }).price;
-    await expect(commands.list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+    // 목록은 가격 불일치 문서의 uid 만 표시하고, 계획이 그 문서를 쓰게 되면 막는다. 번호판 불일치·쓰기 단계(read)는 계속 DRIFT 로 던진다.
+    const snap = await commands.list(source);
+    expect(snap.driftHeld).toEqual(['TEST1001']);
+    const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 },
+      { records: [product().record], observedAt: time, heldCount: 0, complete: true }, snap, now);
+    expect(built.plan.blockers).toContain('CATALOG_SOURCE_RECORD_DRIFT');
+    await expect(commands.read(source, 'TEST1001')).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
   });
   it('--accept-drift 는 지정 코드의 가격 보정만 받아들이고 번호판 변경과 다른 코드는 계속 DRIFT', async () => {
     const { fake, dir } = await setup([product()]);
@@ -214,8 +220,8 @@ describe('Firestore REST runtime offline', () => {
     const price = decodeFields(fake.docs.get('TEST1001').fields).price as Record<string, any>;
     const corrected = Object.fromEntries(Object.entries(price).map(([m, v]) => [m, { ...v, deposit: 777000 }]));
     fake.docs.get('TEST1001').fields.price = encodeFields({ price: corrected }).price;
-    await expect(mk([]).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
-    await expect(mk(['OTHER_CODE']).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+    expect((await mk([]).list(source)).driftHeld).toEqual(['TEST1001']);
+    expect((await mk(['OTHER_CODE']).list(source)).driftHeld).toEqual(['TEST1001']);
     const snap = await mk([source]).list(source);
     expect(snap.acceptedDrift).toEqual(['TEST1001']);
     expect(snap.products[0]!.record.terms.every(t => t.deposit.value === 777000)).toBe(true);
@@ -286,6 +292,22 @@ describe('native mappings and UID', () => {
     const s = sheet([{}, { 차량번호: 'TEST1002' }]);
     s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]![key] = true;
     expect(f05NativeCapture(s.source, s.capture, s.visibility).rows.map(r => r.record.uid)).toEqual(['TEST1002']);
+  });
+  it('a visible row whose company name maps to no supplier is held, so the same vehicle is never read as absent (경진 → 경진렌트)', () => {
+    const s = sheet([{ 차량번호: 'TEST1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: 'TEST2002' }]);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST1001']);
+    expect(c.heldReasons).toContain('COMPANY_UNMAPPED'); expect(c.heldCount).toBeGreaterThan(0);
+    const p = product('TEST2002'); p.record.sourceId = s.source;
+    const built = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
+      { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now);
+    expect(built.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(0);
+    expect(built.plan.warnings).toContain('ABSENCE_DOWNGRADE_SKIPPED');
+  });
+  it('hidden rows of an unmapped company do not hold the source', () => {
+    const s = sheet([{ 차량번호: 'TEST1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: 'TEST2002' }]);
+    s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[2]!.hiddenByUser = true;
+    expect(f05NativeCapture(s.source, s.capture, s.visibility).heldReasons ?? []).not.toContain('COMPANY_UNMAPPED');
   });
   it('missing row metadata makes source incomplete', () => {
     const s = sheet([{}]); expect(f05NativeCapture(s.source, s.capture, {}).complete).toBe(false);

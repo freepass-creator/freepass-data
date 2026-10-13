@@ -72,16 +72,21 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
   const withoutMileage = Object.fromEntries(Object.entries(derived).map(([m, v]) => [m, { rent: v.rent, deposit: v.deposit }]));
   return priceDigest(price) === priceDigest(withoutMileage);
 }
-function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[]): CycleProduct {
+function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[]): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
   if (f.source_cycle_record) {
     if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate) {
-      // 승인된 외부 보정(예: 정책 보증금)을 코드별 명시 옵션으로만 받아들인다. 번호판 불일치는 항상 DRIFT.
-      if (!acceptDrift.has(String(f.provider_company_code)) || f.car_number !== record.plate) throw new Error('CATALOG_SOURCE_RECORD_DRIFT');
-      const current = productRecord(uid, f, record.observedAt);
-      record.terms = current.terms; drifted?.push(uid);
+      const plateSame = f.car_number === record.plate;
+      if (acceptDrift.has(String(f.provider_company_code)) && plateSame) {
+        // 승인된 외부 보정(예: 정책 보증금)을 코드별 명시 옵션으로만 받아들인다.
+        const current = productRecord(uid, f, record.observedAt);
+        record.terms = current.terms; drifted?.push(uid);
+      } else if (heldDrift && plateSame) {
+        // 가격만 다른 문서는 목록 조립 단계에서 전체를 막지 않고 UID 만 표시한다. 계획이 그 문서를 실제로 쓰게 될 때만 막는다.
+        heldDrift.push(uid);
+      } else throw new Error('CATALOG_SOURCE_RECORD_DRIFT');   // 번호판 불일치와 쓰기 단계(read·backup)는 항상 DRIFT
     }
   }
   return { record, ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
@@ -162,7 +167,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const commands: CycleCommands = {
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
-      const products: CycleProduct[] = [], drifted: string[] = []; let page = ''; const pages = new Set<string>();
+      const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = []; let page = ''; const pages = new Set<string>();
       do {
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
@@ -175,13 +180,14 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           const f = decodeFields(d.fields);
           if (f.provider_company_code !== source) continue;
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
-      return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}) };
+      return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
+        ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}) };
     },
     async read(source, uid) {
       const d = await getDoc(uid);

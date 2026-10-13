@@ -47,6 +47,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     seen.add(key);
   }
   const mine = new Map(snapshot.products.map(p => [sourceProductKey(p.record), p]));
+  const driftHeld = new Set(snapshot.driftHeld ?? []);
+  if (driftHeld.size) plan.warnings.push(`DRIFT_HELD:${driftHeld.size}:${stableDigest([...driftHeld].sort()).slice(0, 12)}`);
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     if (observed) after.record = structuredClone(observed);
@@ -66,6 +68,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
     if (before && locked(before)) { plan.held++; continue; }
+    if (before && driftHeld.has(before.record.uid)) {
+      // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
+      if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
+      continue;
+    }
     if (errors.includes('STATUS_UNKNOWN')) { plan.held++; continue; }
     if (errors.includes('TERMS_HOLD')) plan.held++;
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
@@ -112,7 +119,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
-      if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before)) continue;
+      if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before) || driftHeld.has(before.record.uid)) continue;
       if (Date.parse(before.record.observedAt) > at) { plan.held++; continue; }
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, 'SOURCE_ABSENT') });
     }

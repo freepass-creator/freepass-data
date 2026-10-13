@@ -45,7 +45,11 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       const row = tab.values[i]!, original = [...row];
       const supplier = sharedSheetChannels.find(c => c.tab === tab.title && c.companyName === String(row[0] ?? '').trim());
       const hidden = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
-      if (!supplier || supplier.code !== source || hidden || tab.title === '종합' || row.every(c => c === '' || c === null)) {
+      const blank = row.every(c => c === '' || c === null);
+      // 이 원천의 탭에 있는 보이는 데이터 행인데 회사명이 어느 공급사 코드에도 매핑되지 않으면 «없는 차량»이 아니라 «알 수 없는 행»이다.
+      // 조용히 버리면 같은 차량이 부재로 오인돼 내려간다(2026-10-13 경진 → 경진렌트 표기 변경 실측). 보류로 세어 부재 하향을 막는다.
+      if (!supplier && scopes.includes(tab.title) && !hidden && tab.title !== '종합' && !blank) holds.push('COMPANY_UNMAPPED');
+      if (!supplier || supplier.code !== source || hidden || tab.title === '종합' || blank) {
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       const uid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);

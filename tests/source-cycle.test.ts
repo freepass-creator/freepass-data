@@ -341,6 +341,18 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     expect(byUid.a!.after.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(byUid.n!.kind).toBe('ENROLL'); expect(byUid.n!.after.record.terms[0]!.deposit).toEqual(unknown);
   });
+  it('a price-drifted document blocks the run only when the cycle would write over it', () => {
+    const p = [stored('a', known(500)), stored('b', known(700))];
+    // b 는 이번 회차 원천에 대응 행이 없다(원천 행 없음) → 쓰지 않으므로 회차를 막지 않고, 부재 하향도 하지 않는다
+    const untouched = planSourceCycle(config, evidence([p[0]!.record]), { complete: true, products: p, driftHeld: ['b'] }, now);
+    expect(untouched.plan.blockers).toEqual([]);
+    expect(untouched.plan.entries).toEqual([]);
+    expect(untouched.plan.warnings.some(w => w.startsWith('DRIFT_HELD:1'))).toBe(true);
+    // 원천 행이 있어 쓰게 되면 막는다(보정 허용이 있어야 통과)
+    const clobber = planSourceCycle(config, evidence([p[0]!.record, withDeposit('b', known(900))]),
+      { complete: true, products: p, driftHeld: ['b'] }, now);
+    expect(clobber.plan.blockers).toContain('CATALOG_SOURCE_RECORD_DRIFT');
+  });
   it('an accepted-drift document with unchanged facts is rewritten once so its price digest resyncs', async () => {
     const same = [stored('a', known(500)), stored('b', known(700))];
     const driftBefore = planSourceCycle(config, evidence(same.map(p => p.record)),
