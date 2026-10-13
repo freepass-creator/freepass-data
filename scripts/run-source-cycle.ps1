@@ -23,7 +23,10 @@ $env:SOURCE_CYCLE_UNATTENDED = '1'
 if (!$env:NODE_ENV) { $env:NODE_ENV = 'production' }
 $cliArgs = @($job, '--unattended')
 if ($OnlyWhenSynced) { $cliArgs += '--only-when-synced' }
-if ($Source) { $cliArgs += @('--source', $Source) }
+if ($Source) {
+  $cliArgs += @('--source', $Source)
+  $env:SOURCE_CYCLE_TAKEOVER = '0'   # 단독 원천 예약은 죽은 잠금 인계 권한이 없다(인계자는 전체 정시 예약 하나)
+}
 if ($AcceptDrift) {
   if ($AcceptDrift -notmatch '^RP\d{3}(,RP\d{3})*$') { throw 'ACCEPT_DRIFT_CODE_INVALID' }
   $cliArgs += @('--accept-drift', $AcceptDrift)

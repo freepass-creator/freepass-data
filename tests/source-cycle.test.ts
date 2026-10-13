@@ -509,6 +509,18 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     expect((await readdir(dir)).some(n => n.includes(`.lock.dead-pid-${pid}-`))).toBe(true);
     await release!(); expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(false);
   });
+  it('a single-source scheduled run (SOURCE_CYCLE_TAKEOVER=0) never takes over a dead lock; only the full scheduled run does', async () => {
+    const pid = deadPid(), { dir, path, ctrl } = await lockFor({ token: 'dead', pid }, STALE_LOCK_MS + 60_000);
+    const previous = process.env.SOURCE_CYCLE_TAKEOVER;
+    process.env.SOURCE_CYCLE_TAKEOVER = '0';
+    try {
+      expect(await ctrl.acquire('SRC')).toBeNull();
+      expect((await readdir(dir)).includes(path.split(/[\\/]/).at(-1)!)).toBe(true);   // 잠금 그대로
+    } finally { if (previous === undefined) delete process.env.SOURCE_CYCLE_TAKEOVER; else process.env.SOURCE_CYCLE_TAKEOVER = previous; }
+    const release = await ctrl.acquire('SRC');                                      // 전체 정시 예약은 인계
+    expect(release).not.toBeNull();
+    await release!();
+  });
   it('never takes over a recent lock, a live owner, or an unreadable lock', async () => {
     expect(await (await lockFor({ token: 'x', pid: deadPid() }, 60_000)).ctrl.acquire('SRC')).toBeNull();                       // 최근
     expect(await (await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 3)).ctrl.acquire('SRC')).toBeNull();          // 살아 있음

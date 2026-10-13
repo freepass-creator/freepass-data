@@ -35,7 +35,8 @@ export function fileCycleControl(directory: string, heartbeat: CycleControl['hea
       try { handle = await open(path, 'wx', 0o600); }
       catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        if (!(await takeOverDeadLock(path))) return null;
+        // 죽은 잠금 인계는 «전체 정시 예약» 하나만 한다: 단독 원천 예약(-Source)은 run-source-cycle.ps1 이 SOURCE_CYCLE_TAKEOVER=0 으로 호출해 인계하지 않는다.
+        if (process.env.SOURCE_CYCLE_TAKEOVER === '0' || !(await takeOverDeadLock(path))) return null;
         try { handle = await open(path, 'wx', 0o600); }
         catch (e2) { if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return null; throw e2; }
       }
