@@ -9,6 +9,8 @@ export type FreshnessReport = {
   checkedAt: string; maxAgeMinutes: number; status: 'HEALTHY' | 'UNHEALTHY'; fresh: number; unhealthy: string[];
   /** 마지막 정상 완료가 escalateAfterMinutes(기본 6시간) 넘게 지난 원천 — 소프트 보류(상류 시각 문제)가 «조용히 계속 못 읽는 상태» 로 묻히지 않게 커맨드 센터에 올릴 대상. */
   escalate: string[];
+  /** 임시 오탐 표기(ERP4 가 «바뀐 문서만 쓰기» 라 문서 갱신 시각이 수집 성공 시각이 아닌 원천). 24시간 안에서만 적용하며 unhealthy·escalate 에서 뺀다. */
+  knownFalsePositive: string[];
   sources: SourceFreshness[];
 };
 type Beat = { source?: unknown; stopped?: unknown; lastCompleteAt?: unknown; lastAttemptAt?: unknown; failures?: unknown; error?: unknown;
@@ -20,7 +22,7 @@ const iso = (v: unknown): string | null => typeof v === 'string' && Number.isFin
 const num = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 
 export function assessFreshness(heartbeatLines: readonly string[], alertLines: readonly string[],
-  options: { now?: number; maxAgeMinutes?: number; escalateAfterMinutes?: number; expect?: readonly string[]; only?: readonly string[] } = {}): FreshnessReport {
+  options: { now?: number; maxAgeMinutes?: number; escalateAfterMinutes?: number; knownFalsePositive?: readonly string[]; expect?: readonly string[]; only?: readonly string[] } = {}): FreshnessReport {
   const now = options.now ?? Date.now(), maxAgeMinutes = options.maxAgeMinutes ?? 120, expect = options.expect ?? [];
   const latest = new Map<string, Beat>();
   for (const beat of parseLines(heartbeatLines) as Beat[]) if (typeof beat.source === 'string') latest.set(beat.source, beat);
@@ -37,9 +39,12 @@ export function assessFreshness(heartbeatLines: readonly string[], alertLines: r
       error, readCount: num(beat?.readCount), sourceCount: num(beat?.sourceCount),
       alerts: alerts.filter(a => a.source === source).map(a => String(a.reason)) };
   });
-  const unhealthy = sources.filter(s => s.status !== 'FRESH');
+  const falsePositive = new Set(options.knownFalsePositive ?? []);
+  const isFalsePositive = (s: SourceFreshness) => falsePositive.has(s.source) && s.status === 'STALE' && s.ageMinutes !== null && s.ageMinutes < 24 * 60;
+  const unhealthy = sources.filter(s => s.status !== 'FRESH' && !isFalsePositive(s));
   return { checkedAt: new Date(now).toISOString(), maxAgeMinutes, status: unhealthy.length ? 'UNHEALTHY' : 'HEALTHY',
-    fresh: sources.length - unhealthy.length, unhealthy: unhealthy.map(s => `${s.source}:${s.status}`),
+    fresh: sources.length - unhealthy.length - sources.filter(isFalsePositive).length, unhealthy: unhealthy.map(s => `${s.source}:${s.status}`),
+    knownFalsePositive: sources.filter(isFalsePositive).map(s => `${s.source}:${s.ageMinutes}m`),
     escalate: unhealthy.filter(s => s.ageMinutes !== null && s.ageMinutes >= (options.escalateAfterMinutes ?? 360))
       .map(s => `${s.source}:${s.status}:${s.ageMinutes}m`), sources };
 }

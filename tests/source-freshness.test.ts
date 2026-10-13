@@ -11,6 +11,14 @@ const beat = (source: string, minutesAgo: number, extra: Record<string, unknown>
   readCount: 10, heldCount: 0, sourceCount: 10, ...extra });
 
 describe('source freshness (대표 2026-10-13: 원천 신선도는 기록으로만 판단)', () => {
+  it('a listed known false positive is reported separately only while STALE and under 24 hours; it never hides STOPPED or older ages', () => {
+    const lines = [beat('RP012', 300), beat('RP023', 1500), beat('RP031', 300, { stopped: true, failures: 3, error: 'X' }), beat('RP004', 10)];
+    const r = assessFreshness(lines, [], { now, maxAgeMinutes: 120, knownFalsePositive: ['RP012', 'RP023', 'RP031'] });
+    expect(r.knownFalsePositive).toEqual(['RP012:300m']);
+    expect(r.unhealthy).toEqual(['RP023:STALE', 'RP031:STOPPED']);
+    expect(r.escalate).toEqual(['RP023:STALE:1500m']);
+    expect(r.fresh).toBe(1);
+  });
   it('a source not completed for 6 hours or more is listed for escalation even while its soft hold is not a failure', () => {
     const r = assessFreshness([beat('RP031', 359, { error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' }), beat('RP012', 361, { error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' }),
       beat('RP004', 30)], [], { now, maxAgeMinutes: 120 });

@@ -213,7 +213,8 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       }
       const lines = async (name: string) => (await readFile(join(directory, name), 'utf8').catch(() => '')).split('\n');
       record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
-        { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId) });
+        { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId),
+          knownFalsePositive: (env.SOURCE_CYCLE_STALE_FALSE_POSITIVE ?? '').split(',').map(v => v.trim()).filter(Boolean) });
       if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
     }
   } catch (e) {
