@@ -573,6 +573,21 @@ describe('native mappings and UID', () => {
     const wrong = aicaFixture(); wrong.tables[0]!.values[0] = ['wrong'];
     expect((await aicaRead(wrong)).read.complete).toBe(false);
   });
+  it('Aica guidance text rows (no plate, model, trim or price) are not vehicles and do not block absence downgrades', async () => {
+    const blank = Object.fromEntries(aicaHeaders.map(h => [h, '']));
+    const guidance = aicaRow({ ...blank, 배차상태: '수수료 고정 50만원' });
+    const priceOnly = aicaRow({ ...blank, 배차상태: '배차문의', '36개월': '123,456' });        // 요금만 있고 번호·차종이 없으면 차량 행 후보: 여전히 보류
+    const f = aicaFixture([aicaRow(), guidance, priceOnly]);
+    const out = await aicaRead(f);
+    expect(out.records).toHaveLength(1);
+    expect(out.held.flatMap(h => h.reasons)).toEqual(['UID_REQUIRED', 'UNASSIGNED_PLATE']);       // 안내 행은 세지 않고 요금 행 1건만 보류
+    const old = product('TEST9999'); old.record.sourceId = 'RP004';
+    const onlyGuidance = await aicaRead(aicaFixture([aicaRow(), guidance]));
+    expect(onlyGuidance.held).toEqual([]);
+    const plan = planSourceCycle(onlyGuidance.plugin, { records: onlyGuidance.records, complete: true, observedAt: time, heldCount: 0 },
+      { complete: true, products: [old] }, now).plan;
+    expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === 'TEST9999')).toBe(true);   // 사라진 차는 내려간다
+  });
   it('Aica plate-only UID, duplicate and unassigned holds protect absence', async () => {
     const f = aicaFixture([aicaRow(), aicaRow(), aicaRow({ 차량번호: '' })]);
     f.tables[0]!.values[0]!.push('UID'); f.tables[0]!.values[3]!.push('DO_NOT_USE');

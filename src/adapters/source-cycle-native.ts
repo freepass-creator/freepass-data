@@ -128,8 +128,13 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         return [{ months, monthlyRent: typeof rent === 'string' && rent.trim() === '무보증' ? amount(null) : money(rent), deposit: money(deposit),
           mileage: typeof get('연주행') === 'string' ? String(get('연주행')) : null, raw: { rent, deposit: deposit ?? null } }];
       });
+      const vehicleText = [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' ');
+      // 차량 행이 아닌 안내 문구 행(차량번호·차종·트림·요금이 모두 비고 배차상태 칸에만 글, 예: «수수료 고정 50만원»)은 «번호 미배정 차량»이 아니다.
+      // 보류로 세면 RP004 전체의 부재 하향이 막힌다(2026-10-14 5411 실측). 번호·차종·요금 중 하나라도 있으면 지금처럼 보류한다.
+      const plateCell = get('차량번호');
+      if (!plate && vehicleText === '' && terms.length === 0 && (plateCell == null || String(plateCell).trim() === '')) continue;
       rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
-        vehicleText: [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' '),
+        vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
           source_row: index + 2, product_group: 'LONG_TERM',
