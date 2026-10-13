@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { assessFreshness } from '../application/source-freshness.js';
+import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
 import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin } from '../adapters/source-cycle-plugins.js';
@@ -22,13 +23,19 @@ import { stableDigest } from '../shared/stable-digest.js';
  * (이전에는 관측 시각을 지금으로 찍어 수집이 6.5시간 멈춰도 정상으로 보였다: 2026-10-13 실측). */
 type ObservedDoc = { name: string; updateTime?: string; fields: Record<string, unknown> };
 export function collectorObservationPlugin(kind: 'SONOGONG' | 'AUTOPLUS', ratio: number,
-  documents: (sourceId: string) => Promise<ObservedDoc[]>, now: () => number = Date.now) {
+  documents: (sourceId: string) => Promise<ObservedDoc[]>, now: () => number = Date.now,
+  /** ERP4 수집(쓰기) 단계의 마지막 성공 시각. 있으면 «바뀐 문서만 쓰기» 로 문서 갱신 시각이 낡아 보이는 오탐을 막는 더 정확한 근거다. */
+  collectionSuccessAt?: () => Promise<string | null>) {
   const sourceId = kind === 'SONOGONG' ? 'RP012' : 'RP023';
   const plugin = sourceCyclePlugin({ sourceId, kind, scopes: ['collector'], maxDowngradeRatio: ratio }, async () => {
     const decoded = (await documents(sourceId)).map(d => ({ d, f: decodeFields(d.fields as never) as Record<string, unknown> }));
     const latest = (list: typeof decoded) => Math.max(0, ...list.map(x => Date.parse(x.d.updateTime ?? '')).filter(Number.isFinite));
     const exposed = decoded.filter(x => x.f.listable === true);
-    const stamp = latest(exposed.length ? exposed : decoded);
+    const docStamp = latest(exposed.length ? exposed : decoded);
+    // 증거를 못 읽으면(gh 오류·한도) 문서 시각으로 되돌아간다: 신선하게 «보이게» 만드는 방향으로는 절대 폴백하지 않는다.
+    const evidence = await collectionSuccessAt?.().then(v => v ? Date.parse(v) : NaN, () => NaN) ?? NaN;
+    const evidenceStamp = Number.isFinite(evidence) && evidence <= now() + 60_000 ? evidence : 0;
+    const stamp = Math.max(docStamp, evidenceStamp);
     const observedAt = new Date(stamp > 0 ? stamp : now()).toISOString();
     return { observedAt, complete: true, completedScopes: ['collector'], visibilityComplete: true, heldCount: 0,
       rows: decoded.map(({ d, f }) => ({ scope: 'collector',
@@ -37,7 +44,15 @@ export function collectorObservationPlugin(kind: 'SONOGONG' | 'AUTOPLUS', ratio:
   return { ...plugin, observationOnly: true };
 }
 
-export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch, acceptDrift: string[] = []) {
+/** 인증된 gh CLI 로 GitHub REST 를 읽는다(읽기 전용, 토큰은 gh 가 관리·기록하지 않음). 시간 제한을 둔다. */
+async function defaultGhApi(path: string): Promise<unknown> {
+  const { execFile } = await import('node:child_process');
+  const out = await new Promise<string>((resolveOut, reject) => execFile('gh', ['api', path], { encoding: 'utf8', windowsHide: true,
+    timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (e, stdout) => e ? reject(e) : resolveOut(stdout)));
+  return JSON.parse(out);
+}
+export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch, acceptDrift: string[] = [],
+  ghApi: (path: string) => Promise<unknown> = defaultGhApi) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
@@ -47,6 +62,19 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
   });
+  // ERP4 수집(쓰기) 단계의 마지막 성공 시각(SOURCE_CYCLE_ERP4_REPO=owner/repo 일 때만). 한 회차 안에서 두 원천이 같은 조회를 공유한다.
+  const erp4Repo = env.SOURCE_CYCLE_ERP4_REPO && /^[\w.-]+\/[\w.-]+$/.test(env.SOURCE_CYCLE_ERP4_REPO) ? env.SOURCE_CYCLE_ERP4_REPO : null;
+  let evidenceCache: { at: number; value: Promise<string | null> } | null = null;
+  const collectionEvidence = erp4Repo ? () => {
+    if (!evidenceCache || Date.now() - evidenceCache.at > 60_000) {
+      const workflow = encodeURIComponent(env.SOURCE_CYCLE_ERP4_WORKFLOW || 'erp5-ssot-refresh.yml');
+      evidenceCache = { at: Date.now(), value: latestCollectionSuccess({
+        runs: async () => ((await ghApi(`repos/${erp4Repo}/actions/workflows/${workflow}/runs?per_page=8&status=completed`)) as { workflow_runs?: never[] })
+          .workflow_runs ?? [],
+        jobs: async runId => await ghApi(`repos/${erp4Repo}/actions/runs/${runId}/jobs`) as never }) };
+    }
+    return evidenceCache.value;
+  } : undefined;
   // 시트 읽기는 이미 인증된 gws(회사 계정 위임)로 한다 — gcloud 사용자 토큰에는 Sheets 권한이 없다. 비밀은 건드리지 않는다.
   const gwsBin = () => {
     const bin = resolveGwsBin(env);
@@ -130,7 +158,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         return ironNativeCapture(await (await get(url, false)).text(), new Date().toISOString());
       })));
     } else if (kind === 'SONOGONG' || kind === 'AUTOPLUS') {
-      plugins.push(collectorObservationPlugin(kind, ratio, sourceId => commands.documents(sourceId)));
+      plugins.push(collectorObservationPlugin(kind, ratio, sourceId => commands.documents(sourceId), Date.now, collectionEvidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.

@@ -627,6 +627,17 @@ describe('ERP4 단독 수집 원천의 관측 전용 신선도 (손오공·오�
     name: `projects/synthetic-test/databases/(default)/documents/products/${uid}`, updateTime, fields: encodeFields(fields) as Record<string, unknown> });
   const row = (listable: boolean, source: string, status = '출고가능') => ({ provider_company_code: 'RP023', car_number: 'T1', car_name: 'x', source,
     listable, status, status_kind: listable ? '가용' : '불가', vehicle_status: status, price: { '12': { rent: 100, deposit: 0 } } });
+  it('ERP4 collection-step success time replaces a stale document time but never a newer one, and unreadable evidence falls back to documents', async () => {
+    const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T14:39:00Z')];
+    const nowAt = Date.parse('2026-10-13T20:00:00Z');
+    const observed = async (evidence: (() => Promise<string | null>) | undefined) =>
+      (await collectorObservationPlugin('SONOGONG', 1, async () => docs, () => nowAt, evidence).read()).observedAt;
+    expect(await observed(async () => '2026-10-13T19:30:00Z')).toBe('2026-10-13T19:30:00.000Z');   // 쓰기 성공이 더 최근
+    expect(await observed(async () => '2026-10-13T10:00:00Z')).toBe('2026-10-13T14:39:00.000Z');   // 문서가 더 최근이면 그대로
+    expect(await observed(async () => { throw new Error('GH_UNAVAILABLE'); })).toBe('2026-10-13T14:39:00.000Z');
+    expect(await observed(async () => '2026-10-14T20:00:00Z')).toBe('2026-10-13T14:39:00.000Z');   // 미래 시각은 버린다
+    expect(await observed(undefined)).toBe('2026-10-13T14:39:00.000Z');
+  });
   it('observed time is the exposed documents\' last update, not now, and every source value is counted', async () => {
     const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T03:50:00Z'), doc('A2', row(true, 'website'), '2026-10-13T03:53:21Z'),
       doc('A3', row(true, 'legacy_provider_atom'), '2026-10-13T03:40:00Z'), doc('A4', row(false, 'sheet', '출고불가'), '2026-10-13T09:59:00Z')];
