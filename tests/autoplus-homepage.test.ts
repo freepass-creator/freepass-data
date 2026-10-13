@@ -72,6 +72,14 @@ describe('오토플러스 홈피 어댑터(관측 전용)', () => {
     expect(out.duplicatePlates).toEqual(['12가3456']);
     expect(out.records).toHaveLength(1);
   });
+  it('collect: a discontinued sitemap address (resultCode 1400) is excluded, not a failure, and keeps the collection complete', async () => {
+    const urls = [1, 2].map(i => ({ productId: `C1234567890${i}`, url: `https://x/rent/ab12/C1234567890${i}` }));
+    const client: AutoplusHomepageClient = { listProductUrls: async () => urls, detail: async p => p.productId.endsWith('1')
+      ? { ok: true, productId: p.productId, data: detail() } : { ok: false, productId: p.productId, code: 'RESULT_1400' } };
+    const out = await collectAutoplusHomepage(client, () => '2026-10-14T00:00:00Z');
+    expect(out).toMatchObject({ complete: true, productCount: 2, failures: [], excluded: ['C12345678902'] });
+    expect(out.records).toHaveLength(1);
+  });
   it('compare: set differences by plate, last 4 digits only', () => {
     const records = [mapAutoplusDetail(detail(), 't'), mapAutoplusDetail(detail({ productId: 'C12345678902', carNumber: '34나7890' }), 't')]
       .map(m => ('record' in m ? m.record : null)!);

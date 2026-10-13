@@ -116,14 +116,17 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
 export type AutoplusHomepageCollection = {
   observedAt: string; complete: boolean; productCount: number; records: SourceProductRecord[];
   failures: Array<{ productId: string; code: string }>; held: Array<{ productId: string; reason: string }>; duplicatePlates: string[];
+  /** 사이트맵에는 있으나 상세가 폐기 주소(resultCode 1400/HTTP 400)라 «제외»로 센 상품(실패가 아니다, ERP4 수집기와 같은 분류). */
+  excluded: string[];
 };
 /** 사이트맵 전수를 직렬로 읽어 레코드를 만든다. 실패·보류·중복 번호가 하나라도 있으면 complete=false(부재 추론에 쓰지 않는다). */
 export async function collectAutoplusHomepage(client: AutoplusHomepageClient, now: () => string = () => new Date().toISOString()): Promise<AutoplusHomepageCollection> {
   const urls = await client.listProductUrls();
   const records: SourceProductRecord[] = [], failures: AutoplusHomepageCollection['failures'] = [], held: AutoplusHomepageCollection['held'] = [];
-  const platesSeen = new Set<string>(), duplicatePlates = new Set<string>();
+  const platesSeen = new Set<string>(), duplicatePlates = new Set<string>(), excluded: string[] = [];
   for (const product of urls) {
     const result = await client.detail(product);
+    if (!result.ok && (result.code === 'RESULT_1400' || result.code === 'PAGE_HTTP_400')) { excluded.push(product.productId); continue; }
     if (!result.ok) { failures.push({ productId: product.productId, code: result.code }); continue; }
     const mapped = mapAutoplusDetail(result.data, now());
     if ('hold' in mapped) { held.push({ productId: product.productId, reason: mapped.hold }); continue; }
@@ -132,7 +135,7 @@ export async function collectAutoplusHomepage(client: AutoplusHomepageClient, no
   }
   const observedAt = now();
   return { observedAt, complete: urls.length > 0 && failures.length === 0 && held.length === 0 && duplicatePlates.size === 0,
-    productCount: urls.length, records, failures, held, duplicatePlates: [...duplicatePlates] };
+    productCount: urls.length, records, failures, held, duplicatePlates: [...duplicatePlates], excluded };
 }
 
 /** Firestore RP023 문서와의 비교(순수): 번호 기준 집합 차이와 가격 있는 대수만 센다. 값·전체 번호는 담지 않고 끝 4자리만 나열한다. */
