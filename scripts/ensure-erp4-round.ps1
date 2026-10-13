@@ -14,6 +14,9 @@ param(
   [switch]$Dispatch
 )
 $ErrorActionPreference = 'Stop'
+# gh 출력(한글 워크플로·단계 이름)을 PowerShell 5.1 기본 코드페이지(CP949)로 읽으면 JSON 이 깨진다(2026-10-14 B3Q 실측). UTF-8 로 고정한다.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 if (-not $Repo) { throw 'ERP4_REPO_REQUIRED' }
 if (-not $LogPath) {
   $dir = if ($env:SOURCE_CYCLE_PRIVATE_DIR) { $env:SOURCE_CYCLE_PRIVATE_DIR } else { Join-Path $env:USERPROFILE '.codex\private\source-cycle' }
