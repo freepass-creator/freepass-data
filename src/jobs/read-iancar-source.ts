@@ -20,6 +20,15 @@ const assertOutsideRepo = (path: string | undefined) => {
 };
 assertOutsideRepo(out); assertOutsideRepo(arg('--map-out'));
 const maskPlates = (text: string) => text.replace(/\d{2,3}\s?[가-힣]\s?(\d{4})/g, '…$1'); // 화면 출력의 차량번호는 끝 4자리만
+// 요금 조건 검증(어댑터 deposit-evidence 기준): 목록·단건 두 경로가 같은 함수를 쓴다
+const validRateTerm = (t: Record<string, unknown>) => Number.isInteger(t.rental_period) && (t.rental_period as number) >= 1 && (t.rental_period as number) <= 60
+  && Number.isInteger(t.contracted_mileage) && (t.contracted_mileage as number) >= 1 && ['month', 'year'].includes(String(t.mileage_period))
+  && Number.isInteger(t.monthly_rate) && (t.monthly_rate as number) >= 100_000 && (t.monthly_rate as number) <= 20_000_000
+  && Number.isInteger(t.deposit) && (t.deposit as number) >= 0 && t.currency === 'KRW' && t.vat_included === true;
+const assertRates = (data: Array<Record<string, unknown>>) => {
+  const seen = new Set<string>();
+  for (const t of data) { const k = `${t.rental_period}:${t.contracted_mileage}:${t.mileage_period}`; if (!validRateTerm(t) || seen.has(k)) { console.error('IANCAR_RATES_DUPLICATE_OR_INVALID_TERM'); process.exit(3); } seen.add(k); }
+};
 const apiKey = execFileSync('gcloud', ['secrets', 'versions', 'access', 'latest', `--secret=${process.env.IANCAR_ONE_API_SECRET || 'freepass-data-iancar-one-api'}`,
   `--project=${process.env.FIREBASE_PROJECT_ID || 'freepasserp5'}`], { encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const client = createIancarOneApiClient({ apiKey });
@@ -51,6 +60,7 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
   const worker = async () => { for (;;) { const r = records[next++]; if (!r) return;
     const rates = await client.getRates(String(r.vehicle_id)) as { success?: boolean; data?: Array<Record<string, unknown>> };
     if (rates.success !== true || !Array.isArray(rates.data)) { console.error('IANCAR_RATES_RESPONSE_INVALID'); process.exit(3); }
+    assertRates(rates.data);
     const price: Record<string, { rent: unknown; deposit: unknown }> = {}; const lowest = new Map<number, number>();
     for (const t of rates.data ?? []) { const m = Number(t.rental_period), km = Number(t.contracted_mileage);
       const key = `${m}_${t.mileage_period === 'month' ? '월' : '연'}${km}km`; const rate = t.monthly_rate as number, dep = t.deposit as number; // 어댑터(deposit-evidence)의 기간 조건 검증과 같은 기준
@@ -71,6 +81,7 @@ if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보
     const [vehicle, rates] = await Promise.all([client.getVehicle(id), client.getRates(id)]) as [{ success?: boolean; data?: unknown }, { success?: boolean; data?: unknown }];
     // fail-closed: 상세·요금이 실패 응답이면 목록값·빈 요금으로 대체하지 않고 중단
     if (vehicle.success !== true || typeof vehicle.data !== 'object' || vehicle.data === null || rates.success !== true || !Array.isArray(rates.data)) { console.error('IANCAR_DETAIL_OR_RATES_RESPONSE_INVALID'); process.exit(3); }
+    assertRates(rates.data as Array<Record<string, unknown>>); // 단건 경로에도 같은 요금 조건 검증
     // 상세에도 목록과 같은 상태·신선도·식별자 검증(상세가 목록과 다른 상태를 주면 중단)
     const dv = vehicle.data as Record<string, unknown>;
     if (!['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'].includes(String(dv.inventory_status)) || typeof dv.available !== 'boolean' || dv.available !== (dv.inventory_status === 'AVAILABLE')
