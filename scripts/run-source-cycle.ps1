@@ -30,7 +30,10 @@ $exit = $LASTEXITCODE
 $privateDir = $env:SOURCE_CYCLE_PRIVATE_DIR
 if (!$privateDir) { $privateDir = Join-Path $env:USERPROFILE '.codex\private\source-cycle' }
 if (!(Test-Path -LiteralPath $privateDir)) { New-Item -ItemType Directory -Path $privateDir -Force | Out-Null }
-$line = @{ started = $started; finished = (Get-Date).ToUniversalTime().ToString('o'); exit = $exit; report = ($stdout -join '') } | ConvertTo-Json -Compress
+# 회차 뒤 신선도 판정(heartbeats 기준, 기본 120분). 정상이 아니면 freshness.status 가 UNHEALTHY 로 남고 종료 코드도 1.
+$freshness = & $node (Join-Path $repo 'scripts\check-source-freshness.mjs') --dir $privateDir 2>$null
+if ($LASTEXITCODE -ne 0 -and $exit -eq 0) { $exit = 1 }
+$line = @{ started = $started; finished = (Get-Date).ToUniversalTime().ToString('o'); exit = $exit; report = ($stdout -join ''); freshness = ($freshness -join '') } | ConvertTo-Json -Compress
 Add-Content -LiteralPath (Join-Path $privateDir 'unattended-runs.jsonl') -Value $line -Encoding UTF8
 Write-Output $line
 exit $exit
