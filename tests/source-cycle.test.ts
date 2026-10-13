@@ -307,6 +307,15 @@ describe('runner safety and heartbeat', () => {
     expect((await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => now })).status).toBe('UNCHANGED_SYNC');
     expect(read).toHaveBeenCalledTimes(1);
   });
+  it('only-when-synced skips a sync older than 10 minutes (the detail read cannot finish inside the 15-minute freshness window) without reading', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 11 * 60_000).toISOString();
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => old);
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time) });
+    expect(r.status).toBe('UNCHANGED_SYNC'); expect(r.summary).toContain('10분 초과');
+    expect(read).not.toHaveBeenCalled();
+    expect((await ctrl.load(config.sourceId))).toMatchObject({ failures: 0, stopped: false, lastSyncedAt: null });   // 토큰을 소비하지 않는다
+  });
   it('CLI cannot enable scheduled writes', async () => {
     await expect(sourceCycleCli(['--runtime', 'unused', '--apply'])).rejects.toThrow('SCHEDULED_APPLY_NOT_AUTHORIZED');
   });

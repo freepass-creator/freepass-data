@@ -3,6 +3,7 @@
   [string]$TaskName = 'FreePass-Source-Cycle',
   [switch]$OnlyWhenSynced,
   [string]$AcceptDrift,
+  [string]$Source,
   [switch]$Unattended,
   [string]$EnvFile,
   [int]$IntervalMinutes = 60,
@@ -30,6 +31,11 @@ if ($Unattended) {
     $taskCommand += ' -EnvFile "' + $envPath + '"'
   }
   if ($OnlyWhenSynced) { $taskCommand += ' -OnlyWhenSynced' }
+  # 한 원천만 따로 도는 예약(예: 이안카 RP031 을 5분마다 -OnlyWhenSynced 로 갱신 직후에만 읽기). 코드 형식만 허용한다.
+  if ($Source) {
+    if ($Source -notmatch '^(RP\d{3}|PT-\d{4})$') { throw 'SOURCE_CODE_INVALID' }
+    $taskCommand += ' -Source ' + $Source
+  }
   if ($AcceptDrift) {
     if ($AcceptDrift -notmatch '^RP\d{3}(,RP\d{3})*$') { throw 'ACCEPT_DRIFT_CODE_INVALID' }
     $taskCommand += ' -AcceptDrift ' + $AcceptDrift
