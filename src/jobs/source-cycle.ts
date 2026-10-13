@@ -40,17 +40,20 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const read = await plugin.read();
       // 읽기 자체가 던진 실패는 detail 이 사유 코드에 이미 합쳐진다. 읽기는 됐지만 불완전한 경우에만 별도로 남긴다.
       readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
-      if (read.raw === null && read.error) throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
-      if (!read.complete && read.detail === 'UPSTREAM_STALE') {
+      // 상류 원천의 갱신 시각 때문에 읽기를 마치지 못한 경우(정지 UPSTREAM_STALE, 상세를 읽는 사이 신선도 창을 넘긴 DETAIL_SOURCE_DRIFT)는 우리 쪽 실패가 아니다.
+      const upstreamTiming = !read.complete && (read.detail === 'UPSTREAM_STALE' || read.detail === 'IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+      if (read.raw === null && read.error && !upstreamTiming) throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
+      if (upstreamTiming) {
         // 상류 원천(공급사)이 갱신되지 않은 것이다 — 우리 쪽 실패가 아니므로 연속 실패로 세거나 정지하지 않는다(정지하면 공급사가 다시
         // 갱신해도 사람이 풀어야 한다). 쓰기 0, 신선도는 ERROR 로 남아 보이고, 같은 사유의 알림은 한 번만 남긴다.
-        const alreadyKnown = state.error === 'UPSTREAM_STALE';
-        state.error = 'UPSTREAM_STALE';
+        const reasonCode = read.detail as string;
+        const alreadyKnown = state.error === reasonCode;
+        state.error = reasonCode;
         await control.save(plugin.sourceId, state);
         await control.heartbeat(plugin.sourceId, state, null);
-        if (!alreadyKnown) await control.alert(plugin.sourceId, 'UPSTREAM_STALE');
+        if (!alreadyKnown) await control.alert(plugin.sourceId, reasonCode);
         return { status: 'HOLD', writes: 0, verified: 0, plan: null,
-          summary: '상류 원천 갱신 정지(UPSTREAM_STALE): 쓰기 0, 연속 실패로 세지 않음' };
+          summary: `상류 원천 갱신 시각 문제(${reasonCode}): 쓰기 0, 연속 실패로 세지 않음` };
       }
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
       const converted = plugin.toRecords(read);

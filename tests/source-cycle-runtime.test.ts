@@ -696,6 +696,20 @@ describe('옵션 가격 키 복원과 상류 정지 처리 (이안카 2026-10-13
     expect(alerts).toEqual(['UPSTREAM_STALE']);
     expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
   });
+  it('a detail read that outlives the upstream freshness window (DETAIL_SOURCE_DRIFT) is also a soft hold, never STOPPED', async () => {
+    const { commands, fake } = await setup(); const dir = await directory();
+    const alerts: string[] = [];
+    const ctrl = { ...fileCycleControl(dir, async () => {}), async alert(_s: string, reason: string) { alerts.push(reason); } };
+    const drift = sourceCyclePlugin({ sourceId: source, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 1 },
+      async () => { throw new Error('IANCAR_ONE_DETAIL_SOURCE_DRIFT'); }, () => time);
+    for (let i = 0; i < 4; i++) {
+      const r = await runSourceCycle(drift, commands, ctrl, { now: () => now + i });
+      expect(r).toMatchObject({ status: 'HOLD', writes: 0 });
+    }
+    expect(await ctrl.load(source)).toMatchObject({ failures: 0, stopped: false, error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' });
+    expect(alerts).toEqual(['IANCAR_ONE_DETAIL_SOURCE_DRIFT']);
+    expect(fake.calls.every(c => c.method === 'GET')).toBe(true);
+  });
   it('other incomplete reads keep counting failures and record the safe reason', async () => {
     const { commands } = await setup(); const alerts: string[] = [];
     const ctrl = { ...fileCycleControl(await directory(), async () => {}), async alert(_s: string, reason: string) { alerts.push(reason); } };
