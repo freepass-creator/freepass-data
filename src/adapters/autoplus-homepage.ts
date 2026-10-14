@@ -70,7 +70,13 @@ export function createAutoplusHomepageClient(options: {
           try { body = JSON.parse(await res.text()); } catch { return { ok: false, productId: product.productId, code: 'RESPONSE_INVALID' }; }
           const code = String(body.header?.resultCode ?? '');
           if (code === '1020' && typeof body.header?.msg === 'string' && attempt < 4) { token = body.header.msg; await sleep(60); continue; }
-          if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) return { ok: true, productId: product.productId, data: body.data };
+          // 성공 판정(독립 검토 2026-10-14): HTTP 200 + 정상 resultCode(0 계열) + 요청한 상품 id 와 응답 productId 일치. 오류 코드에 data 가 실려 와도 성공이 아니다.
+          if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+            if (!res.ok) return { ok: false, productId: product.productId, code: `DETAIL_HTTP_${res.status}` };
+            if (!/^0+$/.test(code)) return { ok: false, productId: product.productId, code: code ? `RESULT_${code}` : 'RESULT_MISSING' };
+            if (String((body.data as Record<string, unknown>).productId ?? '').trim() !== product.productId) return { ok: false, productId: product.productId, code: 'PRODUCT_ID_MISMATCH' };
+            return { ok: true, productId: product.productId, data: body.data };
+          }
           return { ok: false, productId: product.productId, code: code ? `RESULT_${code}` : 'NO_DATA' };
         }
         return { ok: false, productId: product.productId, code: 'TOKEN_REFRESH_EXHAUSTED' };
@@ -136,7 +142,8 @@ export async function collectAutoplusHomepage(client: AutoplusHomepageClient, no
   const platesSeen = new Set<string>(), duplicatePlates = new Set<string>(), excluded: string[] = [];
   for (const product of urls) {
     const result = await client.detail(product);
-    if (!result.ok && (result.code === 'RESULT_1400' || result.code === 'PAGE_HTTP_400')) { excluded.push(product.productId); continue; }
+    // 폐기 상품으로 «제외»하는 것은 명시적 resultCode 1400 뿐이다. 일반 HTTP 4xx/5xx 는 실패다(독립 검토 2026-10-14).
+    if (!result.ok && result.code === 'RESULT_1400') { excluded.push(product.productId); continue; }
     if (!result.ok) { failures.push({ productId: product.productId, code: result.code }); continue; }
     const mapped = mapAutoplusDetail(result.data, now());
     if ('hold' in mapped) { held.push({ productId: product.productId, reason: mapped.hold }); continue; }

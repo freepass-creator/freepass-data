@@ -237,11 +237,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지) — 켜는 순서는 설계 문서 §2.
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1') {
         plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => {
-          // 사이트맵이 기존 노출 문서의 80% 미만이면 부분 목록으로 보고 쓰기·부재 하향을 막는다(독립 검토 2026-10-14).
+          // 부분 목록 방어(독립 검토 2026-10-14): 사이트맵 상품 수가 ① 기존 노출 문서 수의 95% 미만이거나 ② 직전 정상 회차 사이트맵 수의 80% 미만이면
+          // incomplete 로 두어 쓰기·부재 하향을 막는다. 노출 문서가 0 이면 하한 0 이지만 하향할 대상도 없다.
           const exposedDocs = (await commands.documents('RP023')).filter(d => (decodeFields(d.fields as never) as Record<string, unknown>).listable === true).length;
-          return collectAutoplusHomepage(
+          const countFile = join(directory, 'autoplus-sitemap-count.json');
+          const previous = await readFile(countFile, 'utf8').then(t => Number((JSON.parse(t) as { count?: unknown }).count), () => 0);
+          const floor = Math.max(Math.ceil(exposedDocs * 0.95), Number.isFinite(previous) ? Math.ceil(previous * 0.8) : 0);
+          const collected = await collectAutoplusHomepage(
             createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
-            undefined, { minExpectedProducts: Math.ceil(exposedDocs * 0.8) });
+            undefined, { minExpectedProducts: floor });
+          if (collected.complete) await writeFile(countFile, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 }).catch(() => undefined);
+          return collected;
         })));
       } else plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');

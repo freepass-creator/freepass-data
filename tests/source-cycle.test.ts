@@ -113,13 +113,19 @@ describe('source cycle planning/application', () => {
     const stopped = record('n2'); stopped.status.saleAvailable = false; stopped.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
     expect(planSourceCycle(config, evidence([stopped]), { products: [], complete: true }, now).plan.entries).toHaveLength(0);
   });
-  it('caps new enrollments per cycle at the source sellable count (min 30) and carries the rest over', () => {
+  it('caps new enrollments per cycle at max(100, 50% of existing exposed documents) and carries the rest over', () => {
     const rows = Array.from({ length: 5 }, (_, i) => record(`c${i}`));
-    const capped = planSourceCycle({ ...config, minEnrollPerCycle: 2, maxEnrollPerCycle: 3 }, evidence(rows), { products: [], complete: true }, now).plan;
+    const capped = planSourceCycle({ ...config, maxEnrollPerCycle: 3 }, evidence(rows), { products: [], complete: true }, now).plan;
     expect(capped.entries).toHaveLength(3);
     expect(capped.warnings.some(w => w.startsWith('ENROLL_CAP_DEFERRED:2'))).toBe(true);
-    const uncapped = planSourceCycle(config, evidence(rows), { products: [], complete: true }, now).plan;
-    expect(uncapped.entries).toHaveLength(5);
+    expect(planSourceCycle(config, evidence(rows), { products: [], complete: true }, now).plan.entries).toHaveLength(5);   // 기본 상한 100
+    const many = Array.from({ length: 130 }, (_, i) => record(`m${i}`));
+    const base = planSourceCycle(config, evidence(many), { products: [], complete: true }, now).plan;
+    expect(base.entries).toHaveLength(100);                                                                              // 기존 노출 0 → 하한 100
+    expect(base.warnings.some(w => w.startsWith('ENROLL_CAP_DEFERRED:30:cap100'))).toBe(true);
+    const exposed = Array.from({ length: 300 }, (_, i) => product(`e${i}`));
+    const wide = planSourceCycle(config, evidence([...exposed.map(p => p.record), ...many]), { products: exposed, complete: true }, now).plan;
+    expect(wide.entries.filter(e => e.kind === 'ENROLL')).toHaveLength(130);                                             // 기존 노출 300 → 상한 150
   });
   it('identical-copy holds (DUPLICATE_UID_SUSPECT) do not hide other cars, unidentified holds still do', () => {
     const snapshot = { products: [product('missing')], complete: true };
