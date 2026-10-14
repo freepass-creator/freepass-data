@@ -100,6 +100,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         observedAt: read.observedAt, heldCount: converted.held.length,
         ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
+      state.reconciliation = built.reconciliation;
       state.heldCount = plan.held;
       if (options.approvedPlan && !deepEqual(plan, options.approvedPlan)) throw new Error('CYCLE_REPLAN_REQUIRED');
       if (plan.blockers.length) throw new Error(plan.blockers.join(','));

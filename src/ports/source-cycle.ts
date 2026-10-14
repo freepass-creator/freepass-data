@@ -41,6 +41,8 @@ export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: str
   observationOnlyCount?: number;
   /** 읽기 단계 보류 사유 코드별 건수(대수 대조에서 «왜 못 들어왔나» 를 가르는 근거). 번호·원문은 담지 않는다. */
   heldReasons?: Record<string, number>;
+  /** 원천 ↔ ERP5 판매 가능 차량 키 집합 비교(SAME/NEW/MISSING/값 불일치, 끝4만). 회차 기록·감독 점검이 읽는다. */
+  reconciliation?: import('../application/source-reconciliation.js').SourceReconciliation;
   observedSellableCount?: number; unassignedPlateCount?: number;
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,
