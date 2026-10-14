@@ -190,7 +190,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
-  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason !== 'DECISION_WITHDRAWN');
+  // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.
+  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && !['DECISION_WITHDRAWN', 'REPLACED_BY_API'].includes(e.after.publication_withdrawal?.reason ?? ''));
   const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
