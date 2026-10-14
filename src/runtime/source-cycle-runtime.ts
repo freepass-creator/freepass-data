@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { firestoreCycleControl } from '../infra/source-cycle-control-firestore.js';
+import { fileRunnerFiles, firestoreRunnerFiles } from '../infra/runner-files.js';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { assessFreshness, parseFreshnessExempt } from '../application/source-freshness.js';
@@ -73,11 +74,6 @@ async function defaultGhApi(path: string): Promise<unknown> {
     timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (e, stdout) => e ? reject(e) : resolveOut(stdout)));
   return JSON.parse(out);
 }
-async function writeJsonAtomic(path: string, value: unknown): Promise<boolean> {
-  const tmp = `${path}.${process.pid}.tmp`;
-  try { await writeFile(tmp, JSON.stringify(value), { mode: 0o600 }); await rename(tmp, path); return true; }
-  catch { await unlink(tmp).catch(() => undefined); return false; }
-}
 /** 손오공 공식 API 쓰기 플러그인: API 읽기 결과(번호 키·계약중=선점 표시·요금·사진)를 엔진 레코드로 넘긴다. 읽기가 불완전하면 부재 하향·적용이 막힌다. */
 export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<SonogongApiRead>) {
   return sourceCyclePlugin({ sourceId: 'RP012', kind: 'SONOGONG', scopes: ['api'], maxDowngradeRatio: ratio }, async () => {
@@ -97,7 +93,18 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
-  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
+  // 실행기 상태 파일(기준 건수·한 회차 표식·적용 전 백업·영수증): 기본은 개인 폴더(B3Q). SOURCE_CYCLE_CONTROL=firestore 면 Firestore(온라인 실행기).
+  const firestoreControl = env.SOURCE_CYCLE_CONTROL === 'firestore';
+  const runnerFiles = firestoreControl ? firestoreRunnerFiles({ env, fetcher }) : fileRunnerFiles(directory);
+  const backupFiles = firestoreControl ? runnerFiles : fileRunnerFiles(join(directory, 'backups'));
+  /** 없으면 ENOENT 오류로(기존 «최초는 허용, 손상은 불인정» 분기를 그대로 쓴다). */
+  const writeRunnerJson = (name: string, value: unknown) => runnerFiles.write(name, JSON.stringify(value));
+  const readRunnerFile = async (name: string) => {
+    const text = await runnerFiles.read(name);
+    if (text === null) throw Object.assign(new Error('RUNNER_FILE_MISSING'), { code: 'ENOENT' });
+    return text;
+  };
+  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), files: backupFiles, fetcher,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
@@ -109,7 +116,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   };
   // 회차 제어 저장소: 기본은 파일(B3Q). 온라인 실행기(러너 휘발)는 SOURCE_CYCLE_CONTROL=firestore 로 잠금·상태·알림을 Firestore 에 둔다.
   const takeOver = env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER !== '0';   // 인계자는 «전체 정시 예약» 하나: 수동 실행·단독 원천 예약(-Source)은 보류+알림만
-  const control = env.SOURCE_CYCLE_CONTROL === 'firestore'
+  const control = firestoreControl
     ? firestoreCycleControl({ env, heartbeat: cycleHeartbeat, takeOverExpired: takeOver, fetcher })
     : fileCycleControl(directory, cycleHeartbeat, { takeOverDeadLocks: takeOver });
   // ERP4 수집(쓰기) 단계의 마지막 성공 시각(SOURCE_CYCLE_ERP4_REPO=owner/repo 일 때만). 한 회차 안에서 두 원천이 같은 조회를 공유한다.
@@ -204,7 +211,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
       // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
       // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.
-      const countFile = join(directory, 'iron-homepage-count.json');
+      const countFile = 'iron-homepage-count.json';
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const fetchHtml = async (url: string) => {
           const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
@@ -223,13 +230,13 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         }).length;
         let previous = 0, stateError: string | null = null;
         try {
-          const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+          const parsed = JSON.parse(await readRunnerFile(countFile)) as { count?: unknown };
           if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'IRON_COUNT_STATE_INVALID';
         } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'IRON_COUNT_STATE_INVALID'; }
         // 판정은 손오공 API 와 같은 순수 함수: 축소·불완전 읽기는 기준 파일에 저장하지 않고 하한은 고유 차량번호 수 기준.
         const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
         let complete = verdict.complete, reason = verdict.incompleteReason;
-        if (verdict.saveCount !== null && !(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
+        if (verdict.saveCount !== null && !(await writeRunnerJson(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
           complete = false; reason = 'IRON_COUNT_STATE_WRITE_FAILED';
         }
         return { observedAt: read.observedAt, complete, completedScopes: complete ? ['homepage'] : [], visibilityComplete: true,
@@ -308,8 +315,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 키가 없으면 이 분기에 들어오지 않아 호출 0(아래 관측 플러그인 유지). 키·URL·응답 본문은 코드·로그·시험에 남기지 않는다.
       if (kind === 'SONOGONG' && sonogongApiEnabled(env)) {
         const apiBase = env.SONOGONG_API_BASE!.trim(), apiKey = env.SONOGONG_API_KEY!.trim();
-        const passFile = join(directory, 'sonogong-api-pass.json'), countFile = join(directory, 'sonogong-api-count.json');
-        const oncePath = join(directory, 'sonogong-enroll-cap-once.done');
+        const passFile = 'sonogong-api-pass.json', countFile = 'sonogong-api-count.json';
+        const oncePath = 'sonogong-enroll-cap-once.done';
         const onceCap = Number(env.SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE ?? '0');
         const apiPlugin = plateUidPlugin(sonogongApiWritePlugin(ratio, async () => {
           const observedAt = new Date().toISOString();
@@ -319,7 +326,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // 간격 기록은 «무인 정시 회차»만 남기고 지킨다: 수동 계획(DRY_RUN) 읽기가 간격을 소비해 같은 시간대 무인 APPLY 를 막지 않게 한다(B3Q 10-14).
           const unattended = env.SOURCE_CYCLE_UNATTENDED === '1';
           if (unattended) try {
-            const pass = JSON.parse(await readFile(passFile, 'utf8')) as { at?: unknown };
+            const pass = JSON.parse(await readRunnerFile(passFile)) as { at?: unknown };
             if (typeof pass.at === 'string' && Date.now() - Date.parse(pass.at) < SONOGONG_API_POLICY.minPassIntervalMinutes * 60_000) return soft('SONOGONG_API_PASS_INTERVAL');
           } catch { /* 최초·읽기 불가는 허용 — 아래 읽기 안전장치가 막는다 */ }
           const client = createSonogongApiClient({ base: apiBase, key: apiKey });
@@ -333,15 +340,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }).length;
           let previous = 0, stateError: string | null = null;
           try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+            const parsed = JSON.parse(await readRunnerFile(countFile)) as { count?: unknown };
             if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'API_COUNT_STATE_INVALID';
           } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'API_COUNT_STATE_INVALID'; }
           // 판정은 순수 함수(시험 가능): 축소·불완전 읽기는 기준 파일에 저장하지 않고, 하한은 고유 차량번호 수 기준이다(#601 독립 검토).
           const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
           let complete = verdict.complete, reason = verdict.incompleteReason;
           if (verdict.saveCount !== null) {
-            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
-              (!verdict.complete || !unattended || await writeJsonAtomic(passFile, { at: observedAt }));
+            const saved = (await writeRunnerJson(countFile, { count: verdict.saveCount, at: observedAt })) &&
+              (!verdict.complete || !unattended || await writeRunnerJson(passFile, { at: observedAt }));
             if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
           }
           // 한 회차 한정 편입 상한: 이 읽기 콜백은 원천 잠금 «안»에서 실행된다. 적용 «전에» 표식을 원자적으로 기록하고,
@@ -349,9 +356,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           delete apiPlugin.enrollCapOnce;
           if (complete && Number.isSafeInteger(onceCap) && onceCap > 100 && env.SOURCE_CYCLE_UNATTENDED === '1') {
             const claim = await claimEnrollCapOnce({
-              read: async () => readFile(oncePath, 'utf8').catch(e => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e; }),
-              write: async text => { const tmp = `${oncePath}.${process.pid}.tmp`;
-                try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, oncePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
+              read: () => runnerFiles.read(oncePath),
+              write: text => runnerFiles.write(oncePath, text),
             }, onceCap, observedAt);
             if (claim.granted) apiPlugin.enrollCapOnce = onceCap;
           }
@@ -361,11 +367,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // 일반 부재 하향의 사유 라벨은 NOT_IN_API(API 에 없음, 같은 비율 가드). 교체 철회 회차에만 REPLACED_BY_API(잠금 문서 노출도 내림).
           apiPlugin.absenceReason = 'NOT_IN_API';
           if (complete && env.SOURCE_CYCLE_SONOGONG_REPLACE_ONCE === '1' && env.SOURCE_CYCLE_UNATTENDED === '1') {
-            const replacePath = join(directory, 'sonogong-replace-once.done');
+            const replacePath = 'sonogong-replace-once.done';
             const claim = await claimEnrollCapOnce({
-              read: async () => readFile(replacePath, 'utf8').catch(e => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e; }),
-              write: async text => { const tmp = `${replacePath}.${process.pid}.tmp`;
-                try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, replacePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
+              read: () => runnerFiles.read(replacePath),
+              write: text => runnerFiles.write(replacePath, text),
             }, 1, observedAt);
             if (claim.granted) apiPlugin.absenceReason = 'REPLACED_BY_API';
           }
@@ -399,21 +404,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
               || f.status === '계약중' || f.status_kind === '계약중';
             return f.listable === true && !locked;
           }).length;
-          const countFile = join(directory, 'autoplus-sheet-count.json');
+          const countFile = 'autoplus-sheet-count.json';
           let previous = 0, stateError: string | null = null;
           try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+            const parsed = JSON.parse(await readRunnerFile(countFile)) as { count?: unknown };
             if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
           } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
           const floor = autoplusSheetRowFloor(exposedDocs, previous);
           let complete = read.complete, reason = read.incompleteReason;
           if (complete && read.rowCount < floor) { complete = false; reason = 'SHEET_SHRUNK'; }
           if (complete && stateError) { complete = false; reason = stateError; }
-          if (complete) {
-            const tmp = `${countFile}.${process.pid}.tmp`;
-            try { await writeFile(tmp, JSON.stringify({ count: read.rowCount, at: observedAt }), { mode: 0o600 }); await rename(tmp, countFile); }
-            catch { await unlink(tmp).catch(() => undefined); }
-          }
+          if (complete) await writeRunnerJson(countFile, { count: read.rowCount, at: observedAt });
           return { observedAt, complete, completedScopes: complete ? ['sheet'] : [], visibilityComplete: true, ...(reason ? { incompleteReason: reason } : {}),
             heldCount: read.held.length + read.duplicatePlates.length, rows: read.records.map(record => ({ scope: 'sheet', record })) };
         })));
@@ -430,11 +431,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
               || f.status === '계약중' || f.status_kind === '계약중';
             return f.listable === true && !locked;
           }).length;
-          const countFile = join(directory, 'autoplus-sitemap-count.json');
+          const countFile = 'autoplus-sitemap-count.json';
           // 직전 사이트맵 수 기준 파일: 없음(ENOENT, 최초)만 허용하고, 읽기 실패·손상·형식 오류는 완전 읽기로 인정하지 않는다(독립 검토 2026-10-14).
           let previous = 0, stateError: string | null = null;
           try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+            const parsed = JSON.parse(await readRunnerFile(countFile)) as { count?: unknown };
             if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count;
             else stateError = 'SITEMAP_COUNT_STATE_INVALID';
           } catch (e) {
@@ -446,14 +447,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
             undefined, { minExpectedProducts: floor });
           // 기준 파일은 임시 파일에 쓴 뒤 rename 으로 원자 교체한다(쓰기 실패가 빈 파일·부분 JSON 을 남겨 영구 불인정이 되지 않게).
-          const saveCount = async () => {
-            const tmp = `${countFile}.${process.pid}.tmp`;
-            try {
-              await writeFile(tmp, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 });
-              await rename(tmp, countFile);
-              return true;
-            } catch { await unlink(tmp).catch(() => undefined); return false; }
-          };
+          const saveCount = () => writeRunnerJson(countFile, { count: collected.productCount, at: collected.observedAt });
           if (collected.complete) {
             const saved = await saveCount();
             // 기준 파일이 손상이었으면 이번 회차만 불인정(쓰기·하향 차단)하고, 같은 회차에서 확인된 완전 수집으로 파일을 복구해 한 회차 손실로 끝낸다.

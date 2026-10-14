@@ -1,9 +1,8 @@
 import supplierSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
+import { fileRunnerFiles, type RunnerFiles } from './runner-files.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
@@ -166,7 +165,7 @@ export const rawTitleBackfillFields = (f: Fields): Fields | null =>
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean }) {
+  token?: () => Promise<string>; files?: RunnerFiles; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
   const monthly = options.writeMonthlyProductType === true;
@@ -183,17 +182,19 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     return response.json();
   };
   const getDoc = async (uid: string): Promise<Doc | null> => request(docPath(uid));
-  const path = (key: string) => join(options.directory, `${stableDigest(key)}.backup.json`);
+  // 백업·영수증 저장 위치: 기본은 개인 폴더 파일(B3Q), 온라인 실행기는 Firestore(files 주입). 이름만 넘기고 위치는 저장소가 정한다.
+  const files = options.files ?? fileRunnerFiles(options.directory);
+  const path = (key: string) => `${stableDigest(key)}.backup.json`;
+  const readJson = async (name: string) => { const text = await files.read(name); if (text === null) throw new Error('BACKUP_MISSING'); return JSON.parse(text); };
   const load = async (key: string): Promise<Backup> => {
-    const b = JSON.parse(await readFile(path(key), 'utf8')) as Backup;
+    const b = await readJson(path(key)) as Backup;
     if (b.key !== key || b.project !== project) throw new Error('BACKUP_TARGET_MISMATCH');
     return b;
   };
-  const immutable = async (file: string, value: unknown) => {
-    await mkdir(options.directory, { recursive: true, mode: 0o700 });
-    try { await writeFile(file, JSON.stringify(value), { flag: 'wx', mode: 0o600 }); }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST' ||
-      stableDigest(JSON.parse(await readFile(file, 'utf8'))) !== stableDigest(value)) throw new Error('BACKUP_IMMUTABLE'); }
+  const immutable = async (name: string, value: unknown) => {
+    if (await files.createOnce(name, JSON.stringify(value))) return;
+    const existing = await files.read(name);
+    if (existing === null || stableDigest(JSON.parse(existing)) !== stableDigest(value)) throw new Error('BACKUP_IMMUTABLE');
   };
   const supplierFields = (source: string): SupplierFields | null => {
     const fields = [...cache.values()].map(d => decodeFields(d.fields)).filter(f => f.provider_company_code === source);
@@ -319,13 +320,13 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       const reread = await getDoc(after.record.uid);
       if (!reread || reread.updateTime !== result.updateTime || Object.entries(fields).some(([k, v]) =>
         fieldDigest(k, decodeFields(reread.fields)[k]) !== fieldDigest(k, v))) throw new Error('READBACK_UNCERTAIN');
-      await immutable(join(options.directory, `${stableDigest(key)}.receipt.json`), { project, key, after: reread });
+      await immutable(`${stableDigest(key)}.receipt.json`, { project, key, after: reread });
     },
   };
   return { ...commands,
     async documents(source: string) { await commands.list(source); return [...cache.values()].filter(d => decodeFields(d.fields).provider_company_code === source); },
     async rollback(key: string, approval: string) {
-      const b = await load(key), receipt = JSON.parse(await readFile(join(options.directory, `${stableDigest(key)}.receipt.json`), 'utf8'));
+      const b = await load(key), receipt = await readJson(`${stableDigest(key)}.receipt.json`);
       if (receipt.project !== project || receipt.key !== key || approval !== stableDigest({ backup: b, receipt })) throw new Error('ROLLBACK_APPROVAL_REQUIRED');
       const uid = decodeURIComponent(receipt.after.name.split('/').at(-1));
       const current = await getDoc(uid);
@@ -334,14 +335,14 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       // Newly enrolled documents are withdrawn, never deleted.
       const fields = b.document?.fields ?? { ...current.fields, ...encodeFields({ listable: false, status: '출고불가', status_kind: '불가',
         vehicle_status: '출고불가', publication_withdrawal: { reason: 'ROLLBACK_ENROLL', deleteAuthorized: false } }) };
-      await immutable(join(options.directory, `${stableDigest(key)}.rollback-before.json`), current);
+      await immutable(`${stableDigest(key)}.rollback-before.json`, current);
       const result = await request(docPath(uid) + '?currentDocument.updateTime=' + encodeURIComponent(current.updateTime), 'PATCH', { fields });
       const reread = await getDoc(uid);
       if (!reread || result.updateTime !== reread.updateTime || stableDigest(reread.fields) !== stableDigest(fields)) throw new Error('ROLLBACK_READBACK_UNCERTAIN');
       return { status: 'ROLLED_BACK' };
     },
     async rollbackDigest(key: string) { const backup = await load(key);
-      const receipt = JSON.parse(await readFile(join(options.directory, `${stableDigest(key)}.receipt.json`), 'utf8'));
+      const receipt = await readJson(`${stableDigest(key)}.receipt.json`);
       return stableDigest({ backup, receipt }); },
   };
 }
