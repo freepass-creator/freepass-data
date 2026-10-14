@@ -1,8 +1,8 @@
 // 드라이브 번호 폴더 이미지 → products/{차량번호}.photo_original_refs[] 등록(승인 사진, 방법 AUTO_KAKAO_COLLECT).
 // 입력: CSV(헤더 «번호,폴더» 또는 «차량번호,폴더링크»; 폴더는 ID 또는 drive.google.com/drive/folders/<ID> 링크).
-// 사용: node scripts/ops/register-approved-photos.mjs <링크목록.csv | --root <공급사 폴더 ID·링크>> [--apply] [--max 10] [--by <등록자 이름>] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY|SONOGONG_DRIVE_COPY]
-// --root: 공급사 사진 루트 폴더(예: freepasspics/손오공)의 직계 «번호 [차종]» 폴더를 전부 읽어 CSV 대신 쓴다. 같은 번호 폴더가 둘 이상이면 그 번호는 등록하지 않는다.
-// SONOGONG_DRIVE_COPY(손오공 드라이브 사본, 2026-10-15 대표 «구글 드라이브에 오니까 데이터 담당이 연결»): 공급사 RP012 문서이고 photo_original_refs 가 «비어 있을 때만» 쓴다.
+// 사용: node scripts/ops/register-approved-photos.mjs <링크목록.csv | --root <공급사 폴더 ID·링크>> [--apply] [--max 10] [--by <등록자 이름>] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY]
+// --root: 공급사 사진 루트 폴더(예: freepasspics/이안카)의 직계 «번호 [차종]» 폴더를 전부 읽어 CSV 대신 쓴다. 같은 번호 폴더가 둘 이상이면 그 번호는 등록하지 않는다.
+// 대표 2026-10-15 «이안카는 구글 드라이브에 오니까 데이터 담당이 연결, 손오공은 API 연동»: 드라이브 사본 등록은 이안카, 손오공 사진은 원천 엔진이 API 주소로 쓴다.
 // IANCAR_COMPRESSED_COPY(이안카 압축 사본, copy:iancar-photos 결과 CSV): 공급사 RP031 문서이고 photo_original_refs 가 «비어 있을 때만» 쓴다(있으면 건너뜀, 덮어쓰지 않음).
 // 안전: 기본은 계획만(쓰기 0). 적용 시 문서별 백업(비공개 디렉터리)·updateTime 조건·한 건씩 되읽기. 서류 하위 폴더는 직계 이미지만 읽어 자동 제외.
 // 필요: gws(드라이브 읽기, sha256Checksum 사용 — 바이트를 내려받지 않는다), gcloud 사용자 토큰, FIREBASE_PROJECT_ID(없으면 freepasserp5), dist 빌드.
@@ -19,9 +19,9 @@ const maxAt = process.argv.indexOf('--max'); const MAX = Math.max(1, Math.min(50
 const byAt = process.argv.indexOf('--by'); const BY = (byAt > 0 ? process.argv[byAt + 1] : 'b3q-auto-register').slice(0, 60);
 const methodAt = process.argv.indexOf('--method'); const METHOD = methodAt > 0 ? process.argv[methodAt + 1] : 'AUTO_KAKAO_COLLECT';
 // 공급사 사본 등록 방법 → 허용 공급사(그 공급사 문서이고 사진 칸이 비어 있을 때만 쓴다).
-const SUPPLIER_COPY = { IANCAR_COMPRESSED_COPY: 'RP031', SONOGONG_DRIVE_COPY: 'RP012' };
+const SUPPLIER_COPY = { IANCAR_COMPRESSED_COPY: 'RP031' };
 if (!['AUTO_KAKAO_COLLECT', ...Object.keys(SUPPLIER_COPY)].includes(METHOD)) throw new Error('METHOD_NOT_ALLOWED');
-if (!csvPath && !ROOT) throw new Error('usage: register-approved-photos <csv | --root <폴더>> [--apply] [--max N] [--by 이름] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY|SONOGONG_DRIVE_COPY]');
+if (!csvPath && !ROOT) throw new Error('usage: register-approved-photos <csv | --root <폴더>> [--apply] [--max N] [--by 이름] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY]');
 const project = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR || '.';
 const gws = process.env.GWS_BIN || 'gws';
