@@ -27,6 +27,10 @@ describe('오토플러스 시트 어댑터', () => {
     // 대표 2026-10-14 «계약중이라고 되어 있는 거는 연동해서 계약중으로»: 상담중(계약 진행)도 «계약중» 으로 노출, 시트 표기는 sheet_status 에 남는다
     expect(by['5678']!.status).toEqual({ raw: '계약중', saleAvailable: true });
     expect(by['5678']!.raw.sheet_status).toBe('상담중');
+    // 출고불가 = 대표 10-14 «출고불가만 안 올린다» — 보류(STATUS_UNKNOWN)가 아니라 판매 불가로 읽는다(보류는 회차 부재 하향 전체를 멈춘다)
+    const blocked = readAutoplusSheet([{ title: 't', values: [header, car(1, '09버1111', '출고불가')] }], NOW);
+    expect(blocked.held).toEqual([]);
+    expect(blocked.records[0]!.status).toEqual({ raw: '출고불가', saleAvailable: false });
     expect(by['4216']!.terms.map(t => [t.months, t.mileage, t.monthlyRent.value])).toEqual([[12, '20000km/year', 770000], [24, '20000km/year', 730000], [36, '30000km/year', 700000]]);
     expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: 'EV', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
     expect(by['4216']!.vehicleText).toBe('디 올뉴니로EV 에어');   // 모델명이 차종을 이미 포함하면 앞에 붙이지 않는다

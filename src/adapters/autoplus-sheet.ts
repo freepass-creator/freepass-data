@@ -14,7 +14,7 @@ export type AutoplusSheetRead = {
 };
 
 const SELLABLE = new Set(['판매중', '할인판매', '상품대기']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
-const NOT_SELLABLE = new Set(['보류', '판매완료', '출고완료', '판매불가']);
+const NOT_SELLABLE = new Set(['보류', '판매완료', '출고완료', '판매불가', '출고불가']);   // 출고불가 = 대표 10-14 «출고불가만 안 올린다»(보류로 빠지면 회차 부재 하향 전체가 멈춘다)
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
 const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
 const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
