@@ -242,7 +242,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // 계약 잠금·계약중 차는 홈피에서 내려가도 정산이 끝날 때까지 노출을 유지하므로 사이트맵 하한 계산에서 뺀다(2026-10-14 실측: 잠금 6 때문에 50 의 95%=48 > 사이트맵 45 로 SITEMAP_SHRUNK 보류).
           const exposedDocs = (await commands.documents('RP023')).filter(d => {
             const f = decodeFields(d.fields as never) as Record<string, unknown>;
-            return f.listable === true && f.locked_by_contract !== true && f.status !== '계약중';
+            // 잠금 판정은 source-cycle-firestore.ts envelope 과 같게: locked_by_contract(true 또는 LEDGER·정산원장 같은 값)·status/status_kind «계약중».
+            const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+              || f.status === '계약중' || f.status_kind === '계약중';
+            return f.listable === true && !locked;
           }).length;
           const countFile = join(directory, 'autoplus-sitemap-count.json');
           // 직전 사이트맵 수 기준 파일: 없음(ENOENT, 최초)만 허용하고, 읽기 실패·손상·형식 오류는 완전 읽기로 인정하지 않는다(독립 검토 2026-10-14).
