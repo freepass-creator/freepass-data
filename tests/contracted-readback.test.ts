@@ -86,6 +86,47 @@ describe('엔진이 쓴 «계약중» 문서의 되읽기·후속 갱신', () =>
     expect(built.plan.entries).toEqual([]);
   });
 
+  describe('Codex P1: lock values and writer evidence', () => {
+    const planFor = async (commands: Awaited<ReturnType<typeof setup>>['commands'], plate: string, raw: string) =>
+      planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 },
+        { records: [rec(plate, raw, '2026-10-14T12:00:00.000Z')], observedAt: '2026-10-14T12:00:00.000Z', heldCount: 0, complete: true },
+        await commands.list(source), Date.parse('2026-10-14T12:05:00.000Z'));
+    const engineContracted = async () => {
+      const s = await setup();
+      await run(s.commands, [rec('12가5000', '계약중')]);
+      return s;
+    };
+    it('the engine-written 계약중 document carries the writer mark', async () => {
+      const { fake } = await engineContracted();
+      expect(decodeFields(fake.docs.get('12가5000').fields).source_cycle_write).toMatchObject({ by: 'source-engine', status: '계약중' });
+    });
+    it("protects a string lock like 'LEDGER' even on an engine-written 계약중 document", async () => {
+      const { commands, fake } = await engineContracted();
+      Object.assign(fake.docs.get('12가5000').fields, encodeFields({ locked_by_contract: 'LEDGER' }));
+      expect((await planFor(commands, '12가5000', '출고가능')).plan.entries).toEqual([]);
+    });
+    it('protects an unknown lock value conservatively, and a plain status document with LEDGER', async () => {
+      const { commands, fake } = await engineContracted();
+      Object.assign(fake.docs.get('12가5000').fields, encodeFields({ locked_by_contract: { by: 'erp' } }));
+      expect((await planFor(commands, '12가5000', '출고가능')).plan.entries).toEqual([]);
+      const erp: CycleProduct = { record: rec('12가5001', '출고가능', '2026-10-14T00:00:00.000Z'), listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null };
+      const s2 = await setup([{ ...nativeCycleFields(erp), status: '계약중', status_kind: '선점', vehicle_status: '계약중', locked_by_contract: 'LEDGER', provider_name: '합성손오공' }]);
+      expect((await planFor(s2.commands, '12가5001', '출고가능')).plan.entries).toEqual([]);
+    });
+    it('keeps protecting a 계약중 document without the writer mark (including pre-fix writes), and one whose status_kind ERP changed', async () => {
+      const { commands, fake } = await engineContracted();
+      const fields = fake.docs.get('12가5000').fields; delete fields.source_cycle_write;   // 표식 없는 기존 문서(수정 전 쓰기)
+      expect((await planFor(commands, '12가5000', '출고가능')).plan.entries).toEqual([]);
+      const s2 = await engineContracted();
+      Object.assign(s2.fake.docs.get('12가5000').fields, encodeFields({ status_kind: '계약중' }));   // ERP 가 별도 계약 잠금
+      expect((await planFor(s2.commands, '12가5000', '출고가능')).plan.entries).toEqual([]);
+    });
+    it('updates a marked engine-written 계약중 document when the source returns to 출고가능', async () => {
+      const { commands } = await engineContracted();
+      expect((await planFor(commands, '12가5000', '출고가능')).plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
+    });
+  });
+
   it('reports the failing stage and top-level fields (codes only) when a readback does differ', async () => {
     let written: CycleProduct | null = null;
     const commands = {
