@@ -310,6 +310,19 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             }, onceCap, observedAt);
             if (claim.granted) apiPlugin.enrollCapOnce = onceCap;
           }
+          // API 교체 철회(대표 «손오공 기존 거 지우고 API 로»): 첫 «완전 읽기» 회차 한 번만, API 에 없는 기존 노출 문서를 부재 하향 대신 REPLACED_BY_API 로
+          // 철회한다(삭제 아님, 계약 잠금은 건드리지 않음, 비율 가드 제외). 표식을 잠금 안에서 적용 전에 원자적으로 기록하고, 기록 실패·소진이면 철회하지 않는다.
+          // 읽기 실패·API_SHRUNK 등 불완전이면 이 블록에 오지 않아 기존 문서는 그대로 남는다(공백 방지).
+          delete apiPlugin.absenceReason;
+          if (complete && env.SOURCE_CYCLE_SONOGONG_REPLACE_ONCE === '1' && env.SOURCE_CYCLE_UNATTENDED === '1') {
+            const replacePath = join(directory, 'sonogong-replace-once.done');
+            const claim = await claimEnrollCapOnce({
+              read: async () => readFile(replacePath, 'utf8').catch(e => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e; }),
+              write: async text => { const tmp = `${replacePath}.${process.pid}.tmp`;
+                try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, replacePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
+            }, 1, observedAt);
+            if (claim.granted) apiPlugin.absenceReason = 'REPLACED_BY_API';
+          }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
         plugins.push(apiPlugin);
