@@ -25,6 +25,19 @@ const rentOf = (v: unknown): SourceAmount | null => {
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
 };
 
+/** 보증금 칸: 1원~1억 정수 = KNOWN, **명시 문구(«무보증»·«보증금없음»)만 ZERO**. 숫자 0·문자열 «0»·빈칸·형식 밖 = UNKNOWN —
+ * 산출 근거 없는 0 은 확정 0원이 아니다(대표 정산 규칙 «0원 확정 금지», Codex 독립 검토 2026-10-15). 열이 없으면 전부 UNKNOWN. */
+const DEPOSIT_MAX = 100_000_000;
+const EXPLICIT_NO_DEPOSIT = new Set(['무보증', '보증금없음']);
+const depositOf = (v: unknown): SourceAmount => {
+  const t = clean(v).replace(/[,\s원]/g, '');
+  if (t === '') return unknownAmount;
+  if (EXPLICIT_NO_DEPOSIT.has(t)) return { state: 'ZERO', value: 0 };
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > DEPOSIT_MAX) return unknownAmount;
+  return { state: 'KNOWN', value: n };
+};
+
 /** 머리글 행을 찾는다: «차량번호»와 «판매상태» 가 같은 행에 있어야 한다(앞 30행 안). */
 const headerRow = (values: unknown[][]) => values.slice(0, 30).findIndex(r => {
   const cells = r.map(clean);
@@ -41,6 +54,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
     const headers = tab.values[hi]!.map(clean);
     const iPlate = headers.indexOf('차량번호'), iStatus = headers.indexOf('판매상태');
     const iKind = headers.indexOf('차종'), iModel = headers.indexOf('모델명'), iColor = headers.indexOf('색상'), iFuel = headers.indexOf('연료');
+    const iDeposit = headers.findIndex(h => h.replace(/\s+/g, '') === '보증금');
     const iFirst = headers.indexOf('최초등록일'), iMileage = headers.findIndex(h => h.replace(/\s+/g, '') === '예상주행거리');
     // 요금 열: «<개월>개월 <1|2|3>만km» (줄바꿈·공백 차이는 무시)
     const rateColumns = headers.map((h, index) => {
@@ -64,9 +78,10 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       const sellable = SELLABLE.has(status) || contracted;
       if (!sellable && !NOT_SELLABLE.has(status)) { held.push({ tab: tab.title, row: i + 1, reason: 'STATUS_UNKNOWN' }); continue; }
       const terms: SourceTerm[] = [];
+      const deposit = iDeposit >= 0 ? depositOf(row[iDeposit]) : unknownAmount;   // 시트 보증금 열(있으면) — 전에는 읽지 않아 RP023 보증금이 전부 미상이었다
       for (const col of rateColumns) {
         const rent = rentOf(row[col.index]);
-        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit: unknownAmount, mileage: `${col.km}km/year`, raw: {} });
+        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit, mileage: `${col.km}km/year`, raw: {} });
       }
       const kind = iKind >= 0 ? clean(row[iKind]) : '', model = iModel >= 0 ? clean(row[iModel]) : '';
       const vehicleText = model && kind && !model.includes(kind) ? `${kind} ${model}` : (model || kind);

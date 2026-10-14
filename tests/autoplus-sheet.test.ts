@@ -35,6 +35,23 @@ describe('오토플러스 시트 어댑터', () => {
     expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: 'EV', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
     expect(by['4216']!.vehicleText).toBe('디 올뉴니로EV 에어');   // 모델명이 차종을 이미 포함하면 앞에 붙이지 않는다
   });
+  it('보증금 열이 있으면 읽는다: 금액 = KNOWN, «무보증»·«보증금없음» 명시 문구만 ZERO, 숫자 0·«0»·빈칸·형식 밖 = 미상(0원 확정 금지)', () => {
+    const h = [...header.slice(0, 9), '보증금', ...header.slice(9)];
+    const row = (no: number, plate: string, dep: unknown) => { const c = car(no, plate, '판매중'); return [...c.slice(0, 9), dep, ...c.slice(9)]; };
+    const read = readAutoplusSheet([{ title: 't', values: [h, row(1, '05수4216', '1,540,000'), row(2, '36너2705', '0'), row(3, '01하1234', ''), row(4, '02하5678', '154만'),
+      row(5, '03하1111', 0), row(6, '04하2222', '무보증'), row(7, '06하3333', '보증금 없음')] }], NOW);
+    const dep = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.terms.map(t => t.deposit)]));
+    expect(dep['4216']![0]).toEqual({ state: 'KNOWN', value: 1540000 });
+    expect(dep['4216']).toHaveLength(3);
+    expect(dep['2705']![0]!.state).toBe('UNKNOWN');                     // 문자열 «0» 은 산출 근거 없는 0 → 미확정
+    expect(dep['1111']![0]!.state).toBe('UNKNOWN');                     // 숫자 0 도 같다
+    expect(dep['2222']![0]).toEqual({ state: 'ZERO', value: 0 });       // 명시 문구만 확정 0
+    expect(dep['3333']![0]).toEqual({ state: 'ZERO', value: 0 });
+    expect(dep['1234']![0]!.state).toBe('UNKNOWN');
+    expect(dep['5678']![0]!.state).toBe('UNKNOWN');
+    // 열이 없는 시트(기존 모양)는 그대로 미상
+    expect(readAutoplusSheet([{ title: 't', values: [header, car(1, '05수4216', '판매중')] }], NOW).records[0]!.terms[0]!.deposit.state).toBe('UNKNOWN');
+  });
   it('모르는 판매상태·잘못된 번호는 보류하고, 중복 번호는 읽기를 불완전으로 둔다', () => {
     const held = readAutoplusSheet([{ title: 't', values: [header, car(1, '05수4216', '이상한상태'), car(2, 'ABC', '판매중'), car(3, '36너2705', '판매중'), car(4, '12가-3456', '판매중'), car(5, 'ABC1', '판매중')] }], NOW);
     expect(held.held.map(h => h.reason).sort()).toEqual(['PLATE_INVALID', 'PLATE_INVALID', 'PLATE_INVALID', 'STATUS_UNKNOWN']);
