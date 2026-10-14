@@ -253,9 +253,9 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const products = {
       rawShort: { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', 원문: { 전체: { 단기보증: '1,000,000' } },
         price: { '12': { rent: 500000, deposit: 0 } } },
-      'TEST-FAKE-109호1780': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: false, 원문: { 전체: { 단기보증: '1,000,000' } },
+      'TEST-FAKE-101가1780': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: false, 원문: { 전체: { 단기보증: '1,000,000' } },
         price: { '12': { rent: 500000, deposit: 0 } } },
-      'TEST-FAKE-109호3432': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: 'N', 원문: { 전체: { 장기보증: '500,000' } },
+      'TEST-FAKE-101가3432': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: 'N', 원문: { 전체: { 장기보증: '500,000' } },
         price: { '48': { rent: 500000, deposit: 0 } } },
       'TEST-FAKE-conflicting-waiver-note': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000' } },
         price: { '12': { rent: 500000, deposit: 0 } } },
@@ -307,12 +307,12 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       questionTemplateId: 'conflicting-zero-deposit-evidence',
       rawDepositAmount: 1000000,
     });
-    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호1780')).toMatchObject({
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-101가1780')).toMatchObject({
       classification: 'RAW_AMOUNT_NOT_REFLECTED',
       questionTemplateId: null,
       rawDepositAmount: 1000000,
     });
-    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호3432')).toMatchObject({
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-101가3432')).toMatchObject({
       classification: 'RAW_AMOUNT_NOT_REFLECTED',
       questionTemplateId: null,
       rawDepositAmount: 500000,

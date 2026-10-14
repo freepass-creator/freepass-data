@@ -24,3 +24,7 @@ export function resolveErp5InventoryStatus(value: unknown): Erp5InventoryStatusR
   const status = value as Erp5InventoryStatus;
   return { known: true, status, statusKind: ERP5_INVENTORY_STATUS_KINDS[status], listable: status !== ERP5_UNAVAILABLE_STATUS };
 }
+
+/** 공급사 입력 시트가 쓰는 검토된 배차상태 표기. 판매 가능으로 읽고 status_kind 는 «가용» 이다(대표 규칙: 출고불가만 명시 정지).
+ * 이 목록에 없는 새 값은 판매 가능으로 추정하지 않고 보류한다(fail-closed). */
+export const PROVIDER_AVAILABLE_STATUS_LABELS: ReadonlySet<string> = new Set(['배차중', '배차가능']);

@@ -1,8 +1,9 @@
 import { sharedSheetEngine } from './shared-sheet-engine.js';
-import { sharedSheetChannels, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
+import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 } : typeof v === 'number' && Number.isSafeInteger(v) && v > 0
   ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
@@ -14,13 +15,35 @@ export function sourceUid(plate: unknown, sheetUid?: unknown): string | null {
 export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
   return { ...plugin, toRecords(read) {
     const result = plugin.toRecords(read), seen = new Set<string>(), records: SourceProductRecord[] = [];
+    const identified: Array<{ r: SourceProductRecord; uid: string }> = [];
     for (const r of result.records) {
       const uid = r.sourceId === 'RP004' && r.raw.product_group === 'MONTHLY_RENT'
         ? r.uid : sourceUid(r.plate, r.raw.sheet_uid);
       if (!uid) { result.held.push({ row: 0, reasons: r.raw.product_group === 'MONTHLY_RENT'
         ? ['MONTHLY_MODEL_REQUIRED'] : ['UID_REQUIRED', 'UNASSIGNED_PLATE'] }); continue; }
-      if (seen.has(uid)) { result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] }); continue; }
-      seen.add(uid); records.push({ ...r, uid });
+      identified.push({ r, uid });
+    }
+    // 같은 UID 가 여러 행이면: 상태·가격이 모두 같은 단순 중복은 첫 행만 반영하고 나머지를 보류하고, 서로 다른 내용이면 «행 순서가
+    // 노출을 정하지 않도록» 모든 행을 보류한다(같은 차에 상반된 상태·가격). 보류는 부재 하향도 막아 기존 문서는 그대로 남는다.
+    // 비교는 해석된 업무 값(상태·차명·항)과 «원문 칸 전체(공백 정리)»를 함께 쓴다: 옵션·원문 칸만 달라도(raw.original 로 들어가는 값) 충돌이다.
+    // 월렌트 모델명 칸(0열)은 UID 를 만드는 값이라 대소문자·공백 표기 차이는 제외한다. UID 칸은 비교하지 않는다.
+    const headersOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.headers) ? r.raw.headers : []) as unknown[];
+    const cellsOf = (r: SourceProductRecord) => (Array.isArray(r.raw?.cells) ? r.raw.cells : []) as unknown[];
+    const norm = (c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim();
+    const offerOf = (r: SourceProductRecord) => stableDigest({ status: { raw: norm(r.status.raw), saleAvailable: r.status.saleAvailable },
+      vehicleText: r.raw.product_group === 'MONTHLY_RENT' ? '' : norm(r.vehicleText),
+      terms: r.terms.map(t => [t.months, t.monthlyRent, t.deposit, t.mileage === null ? null : norm(t.mileage)]),
+      cells: cellsOf(r).map((c, i) => headersOf(r)[i] === 'UID' || (r.raw.product_group === 'MONTHLY_RENT' && i === 0) ? '' : norm(c)) });
+    const byUid = new Map<string, Array<{ r: SourceProductRecord; uid: string }>>();
+    for (const item of identified) (byUid.get(item.uid) ?? byUid.set(item.uid, []).get(item.uid)!).push(item);
+    for (const [uid, group] of byUid) {
+      const conflicting = group.length > 1 && new Set(group.map(g => offerOf(g.r))).size > 1;
+      if (conflicting) { for (let i = 0; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_CONFLICT'] }); continue; }
+      if (seen.has(uid)) continue;
+      // 내용이 같은 복사본 중 반영할 행은 순서가 아니라 원문 칸의 사전순 최소로 정한다(순서와 무관한 출력).
+      const pick = [...group].sort((x, y) => JSON.stringify(x.r.raw?.cells ?? '') < JSON.stringify(y.r.raw?.cells ?? '') ? -1 : 1)[0]!;
+      seen.add(uid); records.push({ ...pick.r, uid });
+      for (let i = 1; i < group.length; i++) result.held.push({ row: 0, reasons: ['DUPLICATE_UID_SUSPECT'] });
     }
     return { records, held: result.held };
   } };
@@ -41,16 +64,44 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     if (scopes.includes(tab.title) && (m?.properties?.hidden || !m || !grid || !Array.isArray(grid.rowMetadata) ||
       grid.rowMetadata.length < tab.rowCount || (m.properties?.gridProperties?.rowCount ?? 0) < tab.rowCount)) complete = false;
     const seen = new Set<string>();
+    // 같은 UID 가 이 탭에 여러 번 나오는데 행 내용이 다르면(상반된 상태·가격) 행 순서가 노출을 정하지 않도록 그 UID 의 모든 행을 보류한다.
+    // 내용이 같은 단순 중복은 아래에서 첫 행만 반영하고 나머지를 보류한다.
+    const conflictingUids = new Set<string>(), signatures = new Map<string, string>();
+    // 내용이 같은 복사본 중 어느 행을 반영할지는 행 순서가 아니라 원문이 사전순으로 가장 작은 행으로 정한다(내부 공백 표기가 달라도 순서와 무관한 출력).
+    const chosen = new Map<string, { index: number; raw: string }>();
+    for (let i = 1; i < tab.values.length; i++) {
+      const row = tab.values[i]!;
+      const supplier = sharedSheetChannelOf(tab.title, row[0]);
+      const hiddenRow = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      if (!supplier || supplier.code !== source || hiddenRow || tab.title === '종합' || row.every(c => c === '' || c === null)) continue;
+      const rowUid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
+      if (!rowUid) continue;
+      // 의미 있는 칸만 정규화해 비교한다: 회사명(0열)·UID 칸은 제외하고 값은 공백 정리 후 문자열로 본다. 동일 복사본에서 표기 공백만
+      // 달라도 충돌 보류가 되는 오탐을 막는다(숫자 100 과 '100' 도 같게 본다).
+      const normalizeCell = (c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim();   // NFKC 는 쓰지 않는다: 전각 숫자는 실제 금액 파서가 거절하므로 반각과 같게 보면 행 순서에 따라 검증 결과가 달라진다
+      const signature = JSON.stringify(row.map((c, column) => column === 0 || column === uidIndex ? '' : normalizeCell(c)));
+      const rawKey = JSON.stringify(row.map((c, column) => column === uidIndex ? '' : String(c ?? '')));
+      const pick = chosen.get(rowUid);
+      if (!pick || rawKey < pick.raw) chosen.set(rowUid, { index: i, raw: rawKey });
+      const prior = signatures.get(rowUid);
+      if (prior === undefined) signatures.set(rowUid, signature);
+      else if (prior !== signature) conflictingUids.add(rowUid);
+    }
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!, original = [...row];
-      const supplier = sharedSheetChannels.find(c => c.tab === tab.title && c.companyName === String(row[0] ?? '').trim());
+      const supplier = sharedSheetChannelOf(tab.title, row[0]);
       const hidden = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
-      if (!supplier || supplier.code !== source || hidden || tab.title === '종합' || row.every(c => c === '' || c === null)) {
+      const blank = row.every(c => c === '' || c === null);
+      // 이 원천의 탭에 있는 보이는 데이터 행인데 회사명이 어느 공급사 코드에도 매핑되지 않으면 «없는 차량»이 아니라 «알 수 없는 행»이다.
+      // 조용히 버리면 같은 차량이 부재로 오인돼 내려간다(2026-10-13 경진 → 경진렌트 표기 변경 실측). 보류로 세어 부재 하향을 막는다.
+      if (!supplier && scopes.includes(tab.title) && !hidden && tab.title !== '종합' && !blank) holds.push('COMPANY_UNMAPPED');
+      if (!supplier || supplier.code !== source || hidden || tab.title === '종합' || blank) {
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       const uid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
-      if (!uid || seen.has(uid)) {
-        holds.push(uid ? 'DUPLICATE_UID_SUSPECT' : 'UID_REQUIRED');
+      const notChosen = !!uid && !conflictingUids.has(uid) && chosen.get(uid)?.index !== i;
+      if (!uid || seen.has(uid) || conflictingUids.has(uid) || notChosen) {
+        holds.push(!uid ? 'UID_REQUIRED' : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       seen.add(uid); row[uidIndex] = uid;
@@ -69,7 +120,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
 export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
-  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [];
+  const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0;
   const money = (value: unknown): SourceAmount => {
     if (typeof value === 'string') {
@@ -102,7 +153,19 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
       if (title === '월렌트') {
         if (typeof cells[1] === 'string' && cells[1].trim() === '무보증') continue;
         const rent = money(cells[1]), name = typeof cells[0] === 'string' ? cells[0] : '';
-        if (rent.state === 'UNKNOWN') continue;
+        if (rent.state === 'UNKNOWN') {
+          // 요금 칸이 비어 있거나 «없음» 류 표시면 제안이 없는 것이다. 값이 있는데 읽을 수 없으면(잘못된 금액·음수) 조용히 버리지 않고
+          // 보류로 센다 — 버리면 기존 월렌트 모델이 «부재» 로 하향될 수 있다.
+          const raw = cells[1];
+          const marker = raw == null || (typeof raw === 'string' && ['', '-', '--', '—', 'x', 'X', '없음', 'N/A'].includes(raw.trim()));
+          if (!marker) {
+            monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+            // 같은 모델(UID)에 해석 가능한 다른 행이 있어도 그 UID 그룹 전체를 보류한다(해석 실패 행이 있는데 한쪽만 통과시키지 않는다).
+            const unparsedUid = (typeof cells[0] === 'string' ? cells[0] : '').normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
+            if (unparsedUid) unparseableMonthlyUids.add(`RP004:MONTHLY:${unparsedUid}`);
+          }
+          continue;
+        }
         const normalized = name.normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
         const note = cells.slice(2).map(v => String(v ?? '')).join(' ');
         const deposit = note.includes('무보증') ? amount(0) : amount(null);
@@ -124,8 +187,13 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         return [{ months, monthlyRent: typeof rent === 'string' && rent.trim() === '무보증' ? amount(null) : money(rent), deposit: money(deposit),
           mileage: typeof get('연주행') === 'string' ? String(get('연주행')) : null, raw: { rent, deposit: deposit ?? null } }];
       });
+      const vehicleText = [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' ');
+      // 차량 행이 아닌 안내 문구 행(차량번호·차종·트림·요금이 모두 비고 배차상태 칸에만 글, 예: «수수료 고정 50만원»)은 «번호 미배정 차량»이 아니다.
+      // 보류로 세면 RP004 전체의 부재 하향이 막힌다(2026-10-14 5411 실측). 번호·차종·요금 중 하나라도 있으면 지금처럼 보류한다.
+      const plateCell = get('차량번호');
+      if (!plate && vehicleText === '' && terms.length === 0 && (plateCell == null || String(plateCell).trim() === '')) continue;
       rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
-        vehicleText: [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' '),
+        vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
           source_row: index + 2, product_group: 'LONG_TERM',
@@ -133,8 +201,14 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }
+  // 해석 실패 행이 있는 월렌트 UID 는 해석 가능한 행이 있어도 그룹 전체를 뺀다(보류로 센다: 부재 하향도 함께 막힌다).
+  const keptRows = rows.filter(row => {
+    const drop = row.scope === '월렌트' && unparseableMonthlyUids.has(row.record.uid);
+    if (drop) monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+    return !drop;
+  });
   return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
-    completedScopes, visibilityComplete, rows, heldCount: 0, observationOnlyCount };
+    completedScopes, visibilityComplete, rows: keptRows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({
   sourceId: 'RP004', kind: 'AICA', scopes: [...AICA_SCOPES], maxDowngradeRatio: ratio }, read));

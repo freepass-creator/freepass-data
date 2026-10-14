@@ -1,15 +1,17 @@
-import type { SourceEngine, SourceFamily, SourceProductRecord, SourceRead } from '../domain/source-engine.js';
+import { classifyReadError, type SourceEngine, type SourceFamily, type SourceProductRecord, type SourceRead } from '../domain/source-engine.js';
 import { sharedSheetEngine } from './shared-sheet-engine.js';
+import { ERP5_INVENTORY_STATUS_KINDS, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
+const KNOWN_SALE_STATUS: ReadonlySet<string> = new Set([...Object.keys(ERP5_INVENTORY_STATUS_KINDS), ...PROVIDER_AVAILABLE_STATUS_LABELS, '배차문의', '수리중']);
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
 
-export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG';
+export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION';
 export type CycleSourceDefinition = {
   sourceId: string; kind: CycleSourceKind; scopes: string[]; maxDowngradeRatio: number;
 };
 export const AICA_SCOPES = ['장기특별이벤트', '신차선출고', '중고재렌트', '월렌트'] as const;
 export const CYCLE_FAMILIES: Record<CycleSourceKind, SourceFamily> = {
-  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER',
+  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER', DECISION: 'OTHER',
 };
 /** Transport/converter outputs from existing collectors. UID must be an upstream stable key;
  * no row-number or plate fallback. Scope names are config, never guessed from legacy products. */
@@ -20,11 +22,15 @@ export type CycleCapture = {
   heldCount: number;
   observationOnlyCount?: number;
   heldReasons?: string[];
+  /** complete=false 일 때 왜 불완전한지(안전한 대문자 코드). UPSTREAM_STALE 은 상류 원천이 갱신되지 않은 것이라 회차 실패로 세지 않는다. */
+  incompleteReason?: string;
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;
   observationCountOfRead?(read: SourceRead<T>): number;
-  sourceId: string; family: SourceFamily; maxDowngradeRatio: number;
+  sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
+  /** 원천에 없는 노출 문서를 내릴 때 남기는 사유. 기본은 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN. */
+  absenceReason?: string;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
 }
@@ -48,11 +54,11 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           return { raw: null, attemptedAt, observedAt: null, complete: false, error: 'SCHEMA_INVALID' };
         const complete = raw.complete === true && def.scopes.every(s => raw.completedScopes.includes(s)) &&
           (!['F05', 'AICA'].includes(def.kind) || raw.visibilityComplete === true);
-        return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL' };
+        return { raw, attemptedAt, observedAt: raw.observedAt, complete, error: complete ? null : 'PARTIAL',
+          ...(!complete && raw.incompleteReason ? { detail: raw.incompleteReason } : {}) };
       } catch (e) {
-        const text = e instanceof Error ? e.message : '';
-        return { raw: null, complete: false, attemptedAt, observedAt: null,
-          error: /429/.test(text) ? 'RATE_LIMITED' : /403|401/.test(text) ? 'AUTH_FAILED' : 'READ_FAILED' };
+        const { error, detail } = classifyReadError(e);
+        return { raw: null, complete: false, attemptedAt, observedAt: null, error, detail };
       }
     },
     toRecords(read) {
@@ -67,11 +73,12 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
         switch (def.kind) {
           case 'F05':
-            r.status.saleAvailable = read.raw.visibilityComplete !== true ? null : !row.hiddenTab && !row.hiddenByUser &&
-              !row.hiddenByFilter && status !== '출고불가';
+            // 모르는 상태값은 판매 가능으로 추정하지 않는다(null → STATUS_UNKNOWN 보류). 알려진 값 = 검토된 어휘 + 공급사 표기(배차문의·수리중).
+            r.status.saleAvailable = read.raw.visibilityComplete !== true ? null :
+              row.hiddenTab || row.hiddenByUser || row.hiddenByFilter || status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             break;
           case 'AICA':
-            r.status.saleAvailable = status !== '출고불가';
+            r.status.saleAvailable = status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             // Preserve the provider spelling in status.raw; expose its common label as evidence.
             r.raw = { ...r.raw, sourceCycleDisplayStatus: status === '배차문의' ? '출고협의' : status === '수리중' ? '상품화중' : status };
             break;
@@ -123,6 +130,15 @@ export function sharedSheetCyclePlugin(sourceId: string, maxDowngradeRatio: numb
   }, clock);
 }
 
+/** 대표 지시로 판매 목록에서 내린 공급사(contracts/withdrawn-suppliers.v1.json). 원천이 «없다»가 아니라 «내리라는 결정»이므로
+ * 완전한 빈 원천으로 읽고 사유를 DECISION_WITHDRAWN 으로 남긴다. 다른 쓰기 주체가 다시 올려도 다음 회차에 다시 내린다. */
+export function decisionWithdrawnPlugin(sourceId: string, clock: () => string = () => new Date().toISOString()) {
+  const plugin = sourceCyclePlugin({ sourceId, kind: 'DECISION', scopes: ['decision'], maxDowngradeRatio: 1 }, async () => ({
+    observedAt: clock(), complete: true, completedScopes: ['decision'], visibilityComplete: true, rows: [], heldCount: 0 }), clock);
+  plugin.absenceReason = 'DECISION_WITHDRAWN';
+  return plugin;
+}
+
 /** Read an existing ONE full-facts result. No second API client; PREPARING is a sellable source
  * state by SPEC2 even when provider `available` is false. Missing rates remain UNKNOWN/HOLD. */
 export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise<IancarOneListCapture>,
@@ -151,7 +167,12 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
         }) };
       return { scope: 'ONE_FULL_FACTS', record };
     });
+    // 불완전한 이유: 상류 목록이 오래됐으면(공급사 갱신 정지) 우리 쪽 실패가 아니다. 그 밖은 첫 이슈 코드를 그대로 남긴다.
+    const stale = capture.stale || capture.issues.some(i => /SOURCE_STALE|FRESHNESS_EXCEEDED/.test(i));
+    const incompleteReason = full ? undefined : stale ? 'UPSTREAM_STALE' :
+      capture.issues.find(i => /^[A-Z][A-Z0-9_]{2,63}$/.test(i)) ?? (capture.factScope !== 'FULL_FACTS' ? 'NOT_FULL_FACTS' : 'RECORD_COUNT_MISMATCH');
     return { observedAt: capture.syncedAt, synced_at: capture.syncedAt, complete: full,
-      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: 0 };
+      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: 0,
+      ...(incompleteReason ? { incompleteReason } : {}) };
   }, clock, syncedAt);
 }

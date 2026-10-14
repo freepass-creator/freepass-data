@@ -9,7 +9,7 @@
 3. 하트비트 기록(원천별): lastCompleteAt, lastAttemptAt, readCount, heldCount, error. 저장은 기존 Firestore 컬렉션 규칙 재사용 판정 후 결정(새 모음이면 CREATE_NEW_JUSTIFIED).
 4. 만료 규칙 함수: 원천별 기준(공통시트 10분·아이카 5분·이안카 60분·기타 30분, 설정값)을 넘기면 판매 가능 false. ERP5·카톡 읽기 쪽이 호출할 순수 함수로(소비처 연결은 다음 단계).
 5. 반영기: 표준 레코드를 행 단위로 검증·반영(차종 판정 HOLD 와 판매 조건 분리 — 상태·가격·보증금·기간은 바로 반영, 차종 3칸만 보류+확인 동선), 판매중지는 우선 반영, 시험 실행 기본(쓰기 0, digest 출력), 적용은 digest+승인 환경변수 외부 필수·원본 문서 백업·되읽기.
-6. 공통시트 엔진(F05)을 이 골격으로 이식: 기존 src/jobs/capture-shared-sheet.ts·ingest-shared-sheet-canonical.ts 재사용(새로 짜지 말고 어댑터로 감싸기). 증상 재현·수정: HOLD 직후 "SyntaxError: Unexpected end of JSON input"(워크플로 .github/workflows 의 Shared sheet 15-minute change refresh 로그), 회차 전체가 HOLD 로 멈추는 구조. 완료 시험 사례: 리더스 G90(차량번호 125호6774) F05=무보증 → 데이터 반영 시 보증금 ZERO(옛 개별시트 값 150만 덮어쓰기), 렌트존 신차 4줄(차량번호 칸이 모두 «신차») → UID 4개로 4대, 경진 161호8320 2줄 → 중복 의심 표시.
+6. 공통시트 엔진(F05)을 이 골격으로 이식: 기존 src/jobs/capture-shared-sheet.ts·ingest-shared-sheet-canonical.ts 재사용(새로 짜지 말고 어댑터로 감싸기). 증상 재현·수정: HOLD 직후 "SyntaxError: Unexpected end of JSON input"(워크플로 .github/workflows 의 Shared sheet 15-minute change refresh 로그), 회차 전체가 HOLD 로 멈추는 구조. 완료 시험 사례: 리더스 G90(차량번호 ***6774) F05=무보증 → 데이터 반영 시 보증금 ZERO(옛 개별시트 값 150만 덮어쓰기), 렌트존 신차 4줄(차량번호 칸이 모두 «신차») → UID 4개로 4대, 경진 ***8320 2줄 → 중복 의심 표시.
 7. 시험: 합성 시험(위 사례 포함) + 읽기 전용 실데이터 시험 실행 결과 숫자(F05 판매 가능 줄 수 = 103 기준과 대조: 빌린카30·우리캐피탈13·스타13·KH11·경진9·웰릭스6·제이앤제이6·에코5·렌트존4·리더스3·센트로2·퍼시픽1).
 
 ## 규칙
