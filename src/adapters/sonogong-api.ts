@@ -1,11 +1,13 @@
 /** 손오공 렌터카 공식 파트너 API(partner/v1) 읽기 어댑터 — 로그인 수집 대체(대표 2026-10-14).
  * 계약: 기준 주소 SONOGONG_API_BASE(https://sokrc.com/api/partner/…), 모든 요청에 헤더 x-partner-key(SONOGONG_API_KEY), 읽기 GET 만,
  * 목록 GET /vehicles?tab=rent|sub|pick&page&pageSize(≤50), 상세 GET /vehicles/{id}(보증금·보험은 상세에만 있음), 데이터는 1시간 단위 갱신.
+ * 보증금은 공급사 정책 정제 표(domain/supplier-deposit-policy)를 따른다: 중고렌트 = 상세 원문 양수 금액, 구독·픽업구독 = 월 대여료×약정연수(최대 3개월). 0 은 무보증이 아니다.
  * 안전: 직렬·요청 간 최소 간격·재시도 0·429/401/403 즉시 정지·redirect 거부·허용 호스트 고정. 키·URL 쿼리·응답 본문은 오류·로그에 남기지 않는다.
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { fuelName } from './normalize-sonogong.js';
+import { computeSupplierRuleDeposit, supplierDepositPolicy } from '../domain/supplier-deposit-policy.js';
 
 export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
@@ -101,7 +103,9 @@ export type SonogongApiRead = {
   records: SourceProductRecord[]; held: Array<{ tab: SonogongApiTab; reason: string }>; duplicatePlates: string[];
   listed: number; detailsRead: number;
   /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이),
-   * AMOUNT_UNPARSEABLE:n(값은 있으나 읽을 수 없어 UNKNOWN 으로 둔 월 대여료·보증금 칸 수), FUEL_UNRESOLVED:n(허용 목록·별칭에 없는 연료 — 칸을 비우고 원문만 보존). */
+   * AMOUNT_UNPARSEABLE:n(값은 있으나 읽을 수 없어 UNKNOWN 으로 둔 월 대여료·보증금 칸 수), FUEL_UNRESOLVED:n(허용 목록·별칭에 없는 연료 — 칸을 비우고 원문만 보존),
+   * DEPOSIT_RULE_DIFFERS:n(구독 항의 API 양수 보증금이 정책 계산값과 다름 — 계산값을 쓰고 API 값은 raw.api_deposit 에 대조용으로 남김),
+   * DEPOSIT_PLACEHOLDER_ZERO:n(중고렌트 항의 API 보증금 0 — 자리채움이라 UNKNOWN 으로 둠). */
   notes: string[];
 };
 
@@ -146,6 +150,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // 같은 탭 안에서 같은 번호가 두 번이면(정상·보류 무관) 원천 오류라 읽기를 불완전으로 둔다.
   const accepted = new Map<string, { tab: SonogongApiTab; ym: string }>();
   let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
+  let depositRuleDiffers = 0, depositPlaceholderZero = 0;
   for (const tab of SONOGONG_API_TABS) {
     const inTab = new Set<string>();
     for (const row of rowsByTab.get(tab) ?? []) {
@@ -190,17 +195,33 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const monthly = object(priced?.monthly) ? priced.monthly as Record<string, unknown> : {};
       const deposit = detail && object(priced?.deposit) ? priced.deposit as Record<string, unknown> : {};
       const terms: SourceTerm[] = [];
+      const policy = supplierDepositPolicy('RP012', tab);
       for (const months of MONTHS) {
         const rent = parseSonogongAmount(monthly[String(months)]);
         if (rent.unparseable) amountUnparseable++;
         if (rent.amount.state !== 'KNOWN') continue;
+        // 공급사 정책 정제(domain/supplier-deposit-policy, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»):
+        // rent(중고렌트) = 상세 보증금 원문 금액(양수만 KNOWN, 0·빈칸 = 자리채움 → UNKNOWN — API 에 무보증 표시 칸이 없다),
+        // sub·pick(구독) = 손오공 정책 «월 대여료 × 약정연수(최대 3개월)» 계산값(KNOWN, raw.deposit_rule). API 의 0·빈칸은 자리채움이라 ZERO 가 되지 않는다.
         let depositAmount: SourceAmount = { state: 'UNKNOWN', value: null };
+        let apiDeposit: SourceAmount | null = null;
         if (detail) {
           const parsed = parseSonogongAmount(deposit[String(months)]);
           if (parsed.unparseable) amountUnparseable++;
-          depositAmount = parsed.amount;
+          apiDeposit = parsed.amount;
         }
-        terms.push({ months, monthlyRent: rent.amount, deposit: depositAmount, mileage: null, raw: { priceType: RETURN_TYPE[tab] } });
+        const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab] };
+        if (policy?.deposit === 'RULE') {
+          const rule = policy.rules[0]!;
+          const computed = computeSupplierRuleDeposit(rule, months, rent.amount.value);
+          if (computed) {
+            depositAmount = { state: 'KNOWN', value: computed.amount }; raw.deposit_rule = rule;
+            if (apiDeposit?.state === 'KNOWN' && apiDeposit.value !== computed.amount) depositRuleDiffers++;
+          }
+          if (apiDeposit && apiDeposit.state !== 'UNKNOWN') raw.api_deposit = apiDeposit.value;   // 원문 값은 대조용으로만 남긴다
+        } else if (apiDeposit?.state === 'KNOWN') depositAmount = apiDeposit;
+        else if (apiDeposit?.state === 'ZERO') depositPlaceholderZero++;
+        terms.push({ months, monthlyRent: rent.amount, deposit: depositAmount, mileage: null, raw });
       }
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
       const spec: Record<string, string> = {};
@@ -253,6 +274,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (generationDifferences) notes.push(`CROSS_TAB_GENERATION_DIFFERENCE:${generationDifferences}`);
   if (amountUnparseable) notes.push(`AMOUNT_UNPARSEABLE:${amountUnparseable}`);
   if (fuelUnresolved) notes.push(`FUEL_UNRESOLVED:${fuelUnresolved}`);
+  if (depositRuleDiffers) notes.push(`DEPOSIT_RULE_DIFFERS:${depositRuleDiffers}`);
+  if (depositPlaceholderZero) notes.push(`DEPOSIT_PLACEHOLDER_ZERO:${depositPlaceholderZero}`);
   return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
     records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
 }

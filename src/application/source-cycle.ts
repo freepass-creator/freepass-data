@@ -3,6 +3,7 @@ import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdenti
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
+import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
 export * from '../ports/source-cycle.js';
@@ -138,8 +139,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         const prior = before.record.terms.find(p => termIdentity(p) === termIdentity(term)) ??
           // 기존 문서가 개월 키 하나(대표 항)만 가진 경우: 같은 개월의 유일한 항과만 짝짓는다
           (before.record.terms.filter(p => p.months === term.months).length === 1 ? before.record.terms.find(p => p.months === term.months) : undefined);
-        if (term.deposit.state === 'UNKNOWN' && prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
-          term.deposit = structuredClone(prior.deposit); depositPreserved++;
+        // 공급사 정책 정제(supplier-deposit-policy): 계산값이었으면 규칙 코드도 함께 보존하고, 자리채움 0 공급사(RP012)의 옛 ZERO 는 보존하지 않는다.
+        const kept = term.deposit.state === 'UNKNOWN' && prior ? preservedDepositOf(r.sourceId, prior) : null;
+        if (kept) {
+          term.deposit = kept.deposit; depositPreserved++;
+          const { deposit_rule: _dropped, ...rest } = term.raw ?? {};
+          term.raw = kept.depositRule ? { ...rest, deposit_rule: kept.depositRule } : rest;
         }
       }
     }
