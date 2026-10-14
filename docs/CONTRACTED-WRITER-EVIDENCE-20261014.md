@@ -12,6 +12,10 @@
 - 수정 전 쓰기(엔진 29bb2890)에는 표식이 없으므로 **계약중 1건은 잠금으로 남는다**(보수적). 노출 중이며 값은 정상, 엔진이 갱신만 하지 못한다.
 - 일회성 보정을 둔다면(승인 필요, 자동 아님): `provider_company_code=RP012`, `status=계약중`, `status_kind=선점`, `listable=true`, `locked_by_contract` 없음/false, `source_cycle_record.status.raw=계약중`, `source_cycle_record.raw.source='sonogong-partner-api'`, 갱신 시각이 첫 APPLY 구간(11:21~11:39Z) 안인 문서에 한해 표식을 추가. 계획서(번호 끝 4자리, 건수)를 DATA 가 만들고 B3Q 가 정식 경로로 적용·되읽기 한다. 대표/커맨드 센터 승인 전에는 만들지 않는다.
 
+## 결정(커맨드 센터 2026-10-14): 일회성 표식 보정은 하지 않는다
+- 사유: 대상이 1건이고 보수적 잠금이 안전하다(작성 주체를 증명하지 못한 계약중을 엔진 소유로 바꾸는 쓰기를 새로 만들지 않는다).
+- 해소 경로: 잠금 상태에서 엔진은 그 문서를 쓰지 않는다(CONTRACT_LOCKED). ERP 에서 해제되면 다음 APPLY 에서 엔진이 쓰면서 표식이 붙어 이후 엔진 소유로 관리된다. 해제 전까지 노출·값은 그대로다.
+
 ## 시험(tests/contracted-readback.test.ts)
 - LEDGER 문자열·알 수 없는 객체 잠금 보호(엔진이 쓴 계약중에도).
 - 표식 없는 계약중(수정 전 쓰기 포함) 보호, ERP 가 바꾼 status_kind 보호.
