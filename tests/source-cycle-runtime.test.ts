@@ -315,10 +315,33 @@ describe('native mappings and UID', () => {
   it('F05 takes first duplicate and separately holds unassigned rows', () => {
     const s = sheet([{}, {}, { 차량번호: '신차' }, { 차량번호: '신차', UID: 'NEW-A' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
-    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST1001', 'NEW-A']);
-    expect(c.heldReasons).toContain('UID_REQUIRED'); expect(c.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
+    // 번호도 UID 도 없는 «신차» 행은 이제 행 지문 키(FP-…)로 편입된다(대표 «번호 없는 것도 같이 만들어 놔라»)
+    const uids = c.rows.map(r => r.record.uid);
+    expect(uids).toHaveLength(3); expect(uids[0]).toBe('TEST1001'); expect(uids[1]).toMatch(/^FP-/); expect(uids[2]).toBe('NEW-A');
+    expect(c.heldReasons).not.toContain('UID_REQUIRED'); expect(c.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
     expect(c.rows[0]!.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(c.rows[0]!.record.raw.source_row).toBe(2);
+  });
+  it('F05 rows without plate or UID get a stable fingerprint key: a price-only change keeps the same document, identical twins get ordinals, a plate later fills the same document', () => {
+    const base = { 차량번호: '신차', 모델: '아반떼', 세부트림: '프리미엄', '차명 원문': '아반떼 프리미엄' };
+    const key = (rows: Array<Record<string, SheetCell>>) => { const s = sheet(rows); return f05NativeCapture(s.source, s.capture, s.visibility).rows.map(r => r.record.uid); };
+    const first = key([{ ...base, '12개월': 500000 }]);
+    expect(first).toHaveLength(1); expect(first[0]).toMatch(/^FP-/);
+    expect(key([{ ...base, '12개월': 520000 }])).toEqual(first);            // 요금만 바뀐 같은 행 = 같은 문서
+    expect(key([{ ...base, 차량상태: '출고불가' }])).toEqual(first);          // 상태만 바뀌어도 같은 문서
+    const twins = key([{ ...base }, { ...base }]);
+    expect(twins).toHaveLength(2); expect(new Set(twins).size).toBe(2);       // 같은 설명의 두 행은 순번으로 구분(둘 다 편입)
+    expect(key([{ ...base, 모델: '쏘나타' }])).not.toEqual(first);             // 차량 설명이 다르면 다른 문서
+    // 번호가 생기면: 같은 지문의 번호 없는 문서에 번호를 채운다(새 문서를 만들지 않음)
+    const s = sheet([{ ...base, 차량번호: 'TEST7777' }]);
+    const withPlate = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(withPlate.rows[0]!.record.uid).toBe('TEST7777');
+    const stored = f05NativeCapture(sheet([{ ...base }]).source, sheet([{ ...base }]).capture, sheet([{ ...base }]).visibility).rows[0]!.record;
+    const doc = { ...product(stored.uid), record: structuredClone(stored) }; doc.record.sourceId = s.source;
+    const plan = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
+      { records: withPlate.rows.map(r => r.record), complete: true, observedAt: withPlate.observedAt, heldCount: 0 }, { complete: true, products: [doc] }, now).plan;
+    expect(plan.entries.map(e => [e.kind, e.after.record.uid, e.after.record.plate])).toEqual([['UPDATE', stored.uid, 'TEST7777']]);
+    expect(plan.entries.some(e => e.kind === 'ENROLL')).toBe(false);          // 새 문서 없음
   });
   it('F05 rows sharing a plate with different content are all held, never decided by row order; identical copies keep the first', () => {
     const s = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
@@ -404,7 +427,7 @@ describe('native mappings and UID', () => {
     const c = f05NativeCapture(s.source, s.capture, metadata); expect(c.rows).toHaveLength(0); expect(c.complete).toBe(false);
   });
   it('unassigned UID HOLD prevents absent-product downgrade', () => {
-    const s = sheet([{ 차량번호: '신차' }]), c = f05NativeCapture(s.source, s.capture, s.visibility);
+    const s = sheet([{ 차량번호: '신차', '차명 원문': '' }]), c = f05NativeCapture(s.source, s.capture, s.visibility);
     const p = product(); p.record.sourceId = s.source;
     const built = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
       { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now);
@@ -519,7 +542,7 @@ describe('native mappings and UID', () => {
       ]))).plugin;
     } else {
       const s = sheet([{}, { 차량번호: 'TEST2002' }, { 차량번호: 'TEST2003' },
-        { 차량번호: 'TEST2004', 차량상태: '출고불가' }, { 차량번호: '신차' }]);
+        { 차량번호: 'TEST2004', 차량상태: '출고불가' }, { 차량번호: '신차', '차명 원문': '' }]);   // 차량을 특정할 이름도 없으면 지문 키를 만들지 않고 보류
       const capture = f05NativeCapture(s.source, s.capture, s.visibility);
       plugin = sourceCyclePlugin({ sourceId: s.source, kind, scopes: capture.completedScopes, maxDowngradeRatio: 1 }, async () => capture);
     }

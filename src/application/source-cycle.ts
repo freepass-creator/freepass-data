@@ -79,11 +79,22 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const k = plateIdentityKey(p.record.plate);
     (platePool.get(k) ?? platePool.set(k, []).get(k)!).push(p);
   }
+  // 번호 없이 지문 키(FP-…)로 만든 문서: 같은 행에 번호가 생기면 새 문서를 만들지 않고 같은 문서에 번호를 채운다(대표 10-14 «번호가 배정되면 그걸 업데이트»).
+  // 짝은 행 지문(raw.row_fingerprint)이고, 같은 지문의 번호 없는 문서가 정확히 하나일 때만 잇는다(둘 이상이면 어느 쪽인지 모르므로 보류).
+  const fingerprintPool = new Map<string, CycleProduct[]>();
+  for (const p of snapshot.products) {
+    const fp = p.record.raw?.row_fingerprint;
+    if (typeof fp === 'string' && fp && !isAssignedPlate(p.record.plate)) (fingerprintPool.get(fp) ?? fingerprintPool.set(fp, []).get(fp)!).push(p);
+  }
   for (const original of evidence.records) {
     let r = original;
     let key = sourceProductKey(r), before = mine.get(key) ?? null;
     if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
-      const candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      let candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      const fp = r.raw?.row_fingerprint;
+      if (!candidates.length && typeof fp === 'string' && fp) {
+        candidates = (fingerprintPool.get(fp) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      }
       if (candidates.length === 1) {
         before = candidates[0]!; r = { ...r, uid: before.record.uid }; key = sourceProductKey(r);
         seen.add(key); uidBridged++;
