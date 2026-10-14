@@ -36,6 +36,8 @@ export type SourceReconciliation = {
   registeredCount: number; exposedCount: number; infoIncompleteCount: number; pureNewCount: number; registeredMatched: boolean;
   /** 보고 4번째 칸(커맨드 센터 2026-10-14): 원천이 판매 불가로 읽었지만 «1차로 가져와» 비노출 문서로 편입된 수. 판매 가능 대수 기준에는 들어가지 않는다. */
   notSellableEnrolledCount: number;
+  /** 5칸 지표: 원천 출고가능(계약중 제외 판매 가능) / 출고가능 노출(잠금·계약중 제외 노출) / 계약중·잠금 표시 노출 / dispatchableGap = 앞 둘의 차(0 이면 «대수 = 원천 판매 가능»). */
+  sourceDispatchableCount: number; dispatchableExposedCount: number; contractMarkedExposedCount: number; dispatchableGap: number;
 };
 
 /** 계획 단계와 같은 규칙: 원천 보증금이 UNKNOWN 이면 문서의 KNOWN/ZERO 보증금을 보존한다 — 이 경우는 값 불일치가 아니다
@@ -88,5 +90,10 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     pureNewCount: newKeys.filter(k => !docs.has(k)).length,
     registeredMatched: newKeys.every(k => docs.has(k)),
     countEqual: source.size === erp.size,
+    // 5칸 지표(대표 기준 «대수 = 원천 판매 가능», 커맨드 센터 2026-10-14): 계약중·잠금 표시 노출은 별도 칸으로 빼고 «출고가능 노출»과 «원천 출고가능»을 비교한다.
+    sourceDispatchableCount: [...source.values()].filter(r => r.status.raw.trim() !== '계약중').length,
+    dispatchableExposedCount: [...erp.values()].filter(p => !isLocked(p)).length,
+    contractMarkedExposedCount: [...erp.values()].filter(p => isLocked(p)).length,
+    dispatchableGap: [...source.values()].filter(r => r.status.raw.trim() !== '계약중').length - [...erp.values()].filter(p => !isLocked(p)).length,
   };
 }

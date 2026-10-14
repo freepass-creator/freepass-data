@@ -66,6 +66,16 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     const r = reconcileSource([rec('12가1001', true), rec('12가1009', false)], [doc(rec('12가1001', true), true), soldDoc]);
     expect(r).toMatchObject({ sourceSellable: 1, registeredCount: 1, exposedCount: 1, notSellableEnrolledCount: 1, matched: true });
   });
+  it('five-figure report: contract-marked exposed documents are a separate figure and excluded from the dispatchable comparison', () => {
+    const locked = doc(rec('12가1003', true), true); locked.locked_by_contract = true;
+    const contractSource = rec('12가1003', true); contractSource.status = { raw: '계약중', saleAvailable: true };
+    const r = reconcileSource([rec('12가1001', true), rec('12가1002', true), contractSource],
+      [doc(rec('12가1001', true), true), doc(rec('12가1002', true), true), locked]);
+    expect(r).toMatchObject({ sourceSellable: 3, sourceDispatchableCount: 2, dispatchableExposedCount: 2, contractMarkedExposedCount: 1, dispatchableGap: 0 });
+    // 잠금이 풀리지 않은 채 원천에서 출고불가가 된 차: 출고가능 노출 쪽은 어긋나지 않고 잠금 칸에만 남는다
+    const only = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true), locked]);
+    expect(only).toMatchObject({ sourceDispatchableCount: 1, dispatchableExposedCount: 1, contractMarkedExposedCount: 1, dispatchableGap: 0 });
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);
