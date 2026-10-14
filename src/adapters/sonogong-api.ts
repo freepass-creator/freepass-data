@@ -108,6 +108,9 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // (2026-10-14 첫 DRY_RUN: SOURCE_INCOMPLETE,SOURCE_STALE). 상류 정지 여부는 generatedAt 으로 따로 판정한다(guards).
   const observedAt = clock();
   const failureCodes = new Map<string, number>();
+  // 상세 404 = «목록에는 있고 상세에는 없는» 차(목록·상세 사이 삭제/비공개). 그 한 대만 건너뛰고(목록 행만 보존, 보증금 미확인) 읽기는 계속한다.
+  // 건수가 허용 한도(max(5, 목록의 2%))를 넘을 때만 불완전로 둔다. 429/401/403·전송 오류·5xx·응답 형식 오류는 기존대로 즉시 정지/불완전.
+  const skipped404: string[] = [];
   const records: SourceProductRecord[] = [], held: SonogongApiRead['held'] = [], duplicates = new Set<string>();
   // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 앞선 탭 하나만 채택하고 경고로 센다(불완전 아님).
   // 같은 탭 안에서 같은 번호가 두 번이면 원천 오류라 읽기를 불완전으로 둔다.
@@ -140,9 +143,12 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
           // 인증·한도(401/403/429)는 회차 전체를 멈춘다. 그 밖의 상세 실패(404 등)는 이 차만 보증금 «미확인» 으로 두고 읽기를 불완전으로 표시한다.
           if (e instanceof SonogongApiError && [401, 403, 429].includes(e.status ?? 0)) throw e;
           // 진단(2026-10-14): 상태 코드·건수만 남긴다(키·URL·본문 없음) — 429/한도/권한/없는 id 를 가린다.
-          const code = (e instanceof SonogongApiError ? e.code : 'UNKNOWN').replace(/^SONOGONG_API_/, '');
-          failureCodes.set(code, (failureCodes.get(code) ?? 0) + 1);
-          incomplete ??= 'API_DETAIL_FAILED';
+          if (e instanceof SonogongApiError && e.status === 404) { skipped404.push(plate.replace(/\D/g, '').slice(-4)); }
+          else {
+            const code = (e instanceof SonogongApiError ? e.code : 'UNKNOWN').replace(/^SONOGONG_API_/, '');
+            failureCodes.set(code, (failureCodes.get(code) ?? 0) + 1);
+            incomplete ??= 'API_DETAIL_FAILED';
+          }
         }
       } else incomplete ??= 'API_DETAIL_LIMIT';
       if (detail && plateIdentityKey(String(detail.carNumber ?? '')) !== plate) {
@@ -182,6 +188,15 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
   if (!records.length) incomplete ??= 'API_EMPTY';
   const notes: string[] = [];
+  if (skipped404.length) {
+    const allowed = Math.max(5, Math.ceil(listed * 0.02));
+    if (skipped404.length > allowed) {
+      failureCodes.set('HTTP_404', skipped404.length);
+      incomplete ??= 'API_DETAIL_FAILED';
+    } else {
+      for (const tail of skipped404) notes.push(`DETAIL_404:${tail}`);   // 끝 4자리만(전체 번호 없음)
+    }
+  }
   // 상세 실패 사유가 하나라도 있으면 가장 많은 코드와 건수를 불완전 사유에 합친다(알림·요약에 그대로 남는다, 최대 63자).
   if (incomplete === 'API_DETAIL_FAILED' && failureCodes.size) {
     const [code, n] = [...failureCodes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]!;
