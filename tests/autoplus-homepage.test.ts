@@ -76,7 +76,8 @@ describe('오토플러스 홈피 어댑터(관측 전용)', () => {
     const urls = [1, 2].map(i => ({ productId: `C1234567890${i}`, url: `https://x/rent/ab12/C1234567890${i}` }));
     const client: AutoplusHomepageClient = { listProductUrls: async () => urls, detail: async p => p.productId.endsWith('1')
       ? { ok: true, productId: p.productId, data: detail() } : { ok: false, productId: p.productId, code: 'RESULT_1400' } };
-    const out = await collectAutoplusHomepage(client, () => '2026-10-14T00:00:00Z');
+    // 2개 중 1개 제외(50%)는 시험 구성이라 제외 비율 상한을 풀어 «제외는 실패가 아니다» 만 확인한다(상한 자체는 autoplus-completeness 시험).
+    const out = await collectAutoplusHomepage(client, () => '2026-10-14T00:00:00Z', { maxExcludedRatio: 1 });
     expect(out).toMatchObject({ complete: true, productCount: 2, failures: [], excluded: ['C12345678902'] });
     expect(out.records).toHaveLength(1);
   });

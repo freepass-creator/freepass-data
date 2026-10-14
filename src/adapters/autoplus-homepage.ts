@@ -48,7 +48,10 @@ export function createAutoplusHomepageClient(options: {
     async listProductUrls() {
       const res = await options.fetcher(`${host}/sitemap-ext.xml`, { headers: { 'User-Agent': ua } });
       if (!res.ok) throw new Error(`AUTOPLUS_SITEMAP_HTTP_${res.status}`);
-      return parseSitemapProductUrls(await res.text());
+      const xml = await res.text();
+      // 잘린 응답은 «사라진 상품»처럼 보이게 만든다: 닫는 태그가 없으면 읽기 실패로 본다(독립 검토 2026-10-14).
+      if (!/<\/urlset>\s*$/.test(xml)) throw new Error('AUTOPLUS_SITEMAP_TRUNCATED');
+      return parseSitemapProductUrls(xml);
     },
     async detail(product) {
       if (!first) await sleep(150);
@@ -114,13 +117,15 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
 }
 
 export type AutoplusHomepageCollection = {
-  observedAt: string; complete: boolean; productCount: number; records: SourceProductRecord[];
+  observedAt: string; complete: boolean; incompleteReason?: string; productCount: number; records: SourceProductRecord[];
   failures: Array<{ productId: string; code: string }>; held: Array<{ productId: string; reason: string }>; duplicatePlates: string[];
   /** 사이트맵에는 있으나 상세가 폐기 주소(resultCode 1400/HTTP 400)라 «제외»로 센 상품(실패가 아니다, ERP4 수집기와 같은 분류). */
   excluded: string[];
 };
 /** 사이트맵 전수를 직렬로 읽어 레코드를 만든다. 실패·보류·중복 번호가 하나라도 있으면 complete=false(부재 추론에 쓰지 않는다). */
-export async function collectAutoplusHomepage(client: AutoplusHomepageClient, now: () => string = () => new Date().toISOString()): Promise<AutoplusHomepageCollection> {
+export async function collectAutoplusHomepage(client: AutoplusHomepageClient, now: () => string = () => new Date().toISOString(),
+  /** 완전 읽기 판정용 기대 하한: 사이트맵 상품 수가 이보다 적으면(예: 기존 노출 문서의 80%) 부분 목록으로 보고 incomplete 로 둔다. */
+  options: { minExpectedProducts?: number; maxExcludedRatio?: number } = {}): Promise<AutoplusHomepageCollection> {
   const urls = await client.listProductUrls();
   const records: SourceProductRecord[] = [], failures: AutoplusHomepageCollection['failures'] = [], held: AutoplusHomepageCollection['held'] = [];
   const platesSeen = new Set<string>(), duplicatePlates = new Set<string>(), excluded: string[] = [];
@@ -134,7 +139,11 @@ export async function collectAutoplusHomepage(client: AutoplusHomepageClient, no
     platesSeen.add(mapped.record.uid); records.push(mapped.record);
   }
   const observedAt = now();
-  return { observedAt, complete: urls.length > 0 && failures.length === 0 && held.length === 0 && duplicatePlates.size === 0,
+  const shrunk = options.minExpectedProducts !== undefined && urls.length < options.minExpectedProducts;
+  const excludedTooMany = urls.length > 0 && excluded.length / urls.length > (options.maxExcludedRatio ?? 0.3);
+  const clean = urls.length > 0 && failures.length === 0 && held.length === 0 && duplicatePlates.size === 0;
+  const incompleteReason = !clean ? (urls.length === 0 ? 'SITEMAP_EMPTY' : 'DETAIL_FAILURES_OR_HOLDS') : shrunk ? 'SITEMAP_SHRUNK' : excludedTooMany ? 'EXCLUDED_RATIO_HIGH' : undefined;
+  return { observedAt, complete: clean && !shrunk && !excludedTooMany, ...(incompleteReason ? { incompleteReason } : {}),
     productCount: urls.length, records, failures, held, duplicatePlates: [...duplicatePlates], excluded };
 }
 

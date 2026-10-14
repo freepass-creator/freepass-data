@@ -27,6 +27,7 @@ export function autoplusHomepageWritePlugin(ratio: number, collect: () => Promis
   return sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
     const c = await collect();
     return { observedAt: c.observedAt, complete: c.complete, completedScopes: ['homepage'], visibilityComplete: true,
+      ...(c.incompleteReason ? { incompleteReason: c.incompleteReason } : {}),
       heldCount: c.held.length + c.failures.length + c.duplicatePlates.length,
       rows: c.records.map(record => ({ scope: 'homepage', record })) };
   });
@@ -233,8 +234,13 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 오토플러스 홈피 쓰기(대표 2026-10-14: 홈피 = 판매 가능 정본, 번호라도 먼저 편입): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE=1 일 때만 켜진다(기본 꺼짐).
       // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지) — 켜는 순서는 설계 문서 §2.
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1') {
-        plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => collectAutoplusHomepage(
-          createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never })))));
+        plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => {
+          // 사이트맵이 기존 노출 문서의 80% 미만이면 부분 목록으로 보고 쓰기·부재 하향을 막는다(독립 검토 2026-10-14).
+          const exposedDocs = (await commands.documents('RP023')).filter(d => (decodeFields(d.fields as never) as Record<string, unknown>).listable === true).length;
+          return collectAutoplusHomepage(
+            createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
+            undefined, { minExpectedProducts: Math.ceil(exposedDocs * 0.8) });
+        })));
       } else plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
