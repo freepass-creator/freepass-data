@@ -154,8 +154,44 @@ describe('손오공 공식 API 어댑터', () => {
       : json(detail(1, '100하1111'))).client);
     expect(mismatch.incompleteReason).toBe('API_COUNT_MISMATCH');
   });
-  it('금액: 소수는 반올림, 숫자 문자열(쉼표 허용)은 읽고, 읽을 수 없는 값은 UNKNOWN 이면서 AMOUNT_UNPARSEABLE 로 센다(보증금 0 은 그대로 ZERO)', async () => {
-    expect(parseSonogongAmount(512345.5)).toEqual({ amount: { state: 'KNOWN', value: 512346 }, unparseable: false });
+  it('Codex #643 ①: 소수 금액은 반올림하지 않고 읽을 수 없는 값(UNKNOWN)이다 — 0.4 를 ZERO 로, 1000.5 를 1001 로 확정하지 않는다', async () => {
+    for (const fractional of [0.4, 0.5, 1000.5, 512345.5, '0.4' as unknown, '1000.5' as unknown])
+      expect(parseSonogongAmount(fractional)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: true });
+    expect(parseSonogongAmount(0)).toEqual({ amount: { state: 'ZERO', value: 0 }, unparseable: false });
+    expect(parseSonogongAmount(1000)).toEqual({ amount: { state: 'KNOWN', value: 1000 }, unparseable: false });
+    const prices = { SUBSCRIBE_RETURN: { monthly: { 36: 700000 }, deposit: { 36: 0.4 } } };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices })] : [])
+      : json(detail(1, '100하1111', { prices }))).client);
+    expect(read.records[0]!.terms.map(t => [t.months, t.deposit.state, t.deposit.value])).toEqual([[36, 'UNKNOWN', null]]);
+    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:1');
+  });
+  it('Codex #643 ②: 앞선 탭은 출고가능인데 뒤 탭이 계약중이면 계약중이 이긴다(조용히 출고가능으로 두지 않는다), 반대는 계약중 유지', async () => {
+    const list = (tab: string | null) => {
+      if (tab === 'rent') return [row(1, '100하1111', { hasActiveContract: false }), row(2, '100하2222', { hasActiveContract: true })];
+      if (tab === 'sub') return [row(3, '100하1111', { hasActiveContract: true }), row(4, '100하2222', { hasActiveContract: false })];
+      return [];
+    };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(list(u.searchParams.get('tab')))
+      : json((() => { const id = Number(u.pathname.split('/').at(-1)); return detail(id, id % 2 ? '100하1111' : '100하2222'); })())).client);
+    const by =Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.status.raw]));
+    expect(by['1111']).toBe('계약중');
+    expect(by['2222']).toBe('계약중');
+    expect(read.notes).toContain('CROSS_TAB_CONTRACT_CONFLICT:1');
+  });
+  it('Codex #643 ③: 완료는 누적 행 수가 아니라 서로 다른 차 id 수로 판정한다 — 같은 차가 두 쪽에 겹치면 총수에 닿은 것처럼 보여도 불완전', async () => {
+    const pages: Record<number, unknown[]> = { 1: [row(1, '100하1111'), row(2, '100하2222')], 2: [row(2, '100하2222')], 3: [] };
+    const read = await readSonogongApi(world(u => {
+      if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
+      return json(u.searchParams.get('tab') === 'sub' ? pages[Number(u.searchParams.get('page'))] ?? [] : [],
+        { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 3 : 0 });
+    }, false).client);
+    expect(read.complete).toBe(false);
+    expect(read.incompleteReason).toBe('API_PAGE_OVERLAP');
+    expect(read.listed).toBe(2);   // 겹친 행은 한 번만 센다
+  });
+  it('금액: 숫자 문자열(쉼표 허용)은 읽고, 읽을 수 없는 값은 UNKNOWN 이면서 AMOUNT_UNPARSEABLE 로 센다(보증금 0 은 그대로 ZERO)', async () => {
     expect(parseSonogongAmount('480000')).toEqual({ amount: { state: 'KNOWN', value: 480000 }, unparseable: false });
     expect(parseSonogongAmount('1,250,000')).toEqual({ amount: { state: 'KNOWN', value: 1250000 }, unparseable: false });
     expect(parseSonogongAmount(0)).toEqual({ amount: { state: 'ZERO', value: 0 }, unparseable: false });
@@ -169,8 +205,8 @@ describe('손오공 공식 API 어댑터', () => {
       : json(detail(1, '100하1111', { prices }))).client);
     expect(read.complete).toBe(true);
     expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value])).toEqual([
-      [12, 512346, 'KNOWN', 1000000], [24, 480000, 'ZERO', 0], [48, 650000, 'UNKNOWN', null]]);
-    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:2');   // 36개월 월 대여료 '문의' + 48개월 보증금 -5
+      [24, 480000, 'ZERO', 0], [48, 650000, 'UNKNOWN', null]]);
+    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:3');   // 12개월 월 대여료 소수 + 36개월 월 대여료 '문의' + 48개월 보증금 -5
   });
   it('쪽 나눔: 총수가 없으면 요청 크기보다 작은 쪽에서 멈추지 않고 빈 쪽까지 읽는다, 상한 초과·총수 불일치·읽는 도중 스냅숏 변경은 불완전', async () => {
     const pages: Record<number, unknown[]> = { 1: [row(1, '100하1111'), row(2, '100하2222')], 2: [row(3, '100하3333')], 3: [] };

@@ -61,7 +61,7 @@ export function createSonogongApiClient(input: { base: string; key: string; fetc
 }
 export type SonogongApiClient = ReturnType<typeof createSonogongApiClient>;
 
-/** 금액 칸 해석(원 단위 정수). 유한한 0 이상 숫자(소수는 반올림)와 숫자 문자열(쉼표 허용)만 받는다.
+/** 금액 칸 해석(원 단위 정수). 유한한 0 이상 «정수» 숫자(소수는 읽을 수 없는 값)와 숫자 문자열(쉼표 허용)만 받는다.
  * 값이 «없음»(null·undefined·빈 문자열)이면 UNKNOWN, 값은 있는데 읽을 수 없으면(NaN·음수·글자 등) UNKNOWN 이면서 unparseable=true 로 센다. */
 export const parseSonogongAmount = (v: unknown): { amount: SourceAmount; unparseable: boolean } => {
   const unknown = (unparseable: boolean) => ({ amount: { state: 'UNKNOWN' as const, value: null }, unparseable });
@@ -71,8 +71,9 @@ export const parseSonogongAmount = (v: unknown): { amount: SourceAmount; unparse
   else if (typeof v === 'string' && /^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(v.trim())) n = Number(v.trim().replace(/,/g, ''));
   else return unknown(true);
   if (!Number.isFinite(n) || n < 0) return unknown(true);
-  const won = Math.round(n);
-  if (!Number.isSafeInteger(won)) return unknown(true);
+  // 소수는 반올림하지 않는다(Codex #643 ①): 0.4 를 0 원 확정(ZERO)으로, 1000.5 를 1001 로 바꾸지 않고 읽을 수 없는 값으로 둔다.
+  if (!Number.isSafeInteger(n)) return unknown(true);
+  const won = n;
   return { amount: won === 0 ? { state: 'ZERO', value: 0 } : { state: 'KNOWN', value: won }, unparseable: false };
 };
 /** 상세의 실제 최초등록일(YYYY-MM-DD, 없는 날짜는 거른다). 제조연월은 최초등록일이 아니다. */
@@ -113,6 +114,9 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   const generations = new Set<number>();
   for (const tab of SONOGONG_API_TABS) {
     const rows: Record<string, unknown>[] = [];
+    // 완료 판정은 «누적 행 수»가 아니라 서로 다른 차 식별자(id, 없으면 행 내용) 수로 한다(Codex #643 ③): 읽는 도중 페이지가 밀려 같은 차가 두 페이지에 오면
+    // 행 수만으로 총수에 닿아 뒤 차량을 놓친 채 완료로 보인다. 겹친 행은 한 번만 쓰고 불완전(API_PAGE_OVERLAP)으로 둔다.
+    const seenIds = new Set<string>();
     let total: number | null = null, done = false;
     for (let page = 1; page <= SONOGONG_API_POLICY.maxPages; page++) {
       const { data, attrs } = await client.get('/vehicles', { tab, page, pageSize: SONOGONG_API_POLICY.pageSize });
@@ -123,10 +127,14 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         generatedAt = !generatedAt || Date.parse(attrs.generatedAt) < Date.parse(generatedAt) ? attrs.generatedAt : generatedAt;
       }
       total = totalOf(data, attrs) ?? total;
-      rows.push(...batch);
+      for (const row of batch) {
+        const key = typeof row.id === 'number' || typeof row.id === 'string' ? `id:${row.id}` : `row:${JSON.stringify(row)}`;
+        if (seenIds.has(key)) { incomplete ??= 'API_PAGE_OVERLAP'; continue; }
+        seenIds.add(key); rows.push(row);
+      }
       // 끝 판정: 총수가 있으면 총수에 닿을 때까지, 없으면 빈 페이지가 올 때까지 읽는다(요청 크기보다 작은 페이지만으로 끝났다고 보지 않는다 —
       // 서버가 페이지 크기를 줄여 주면 뒤 페이지를 통째로 놓친다). 상한(maxPages)을 넘으면 불완전.
-      if (batch.length === 0 || (total !== null && rows.length >= total)) { done = true; break; }
+      if (batch.length === 0 || (total !== null && seenIds.size >= total)) { done = true; break; }
     }
     if (!done) incomplete ??= 'API_PAGE_LIMIT';
     if (total !== null && rows.length !== total) incomplete ??= 'API_COUNT_MISMATCH';
@@ -144,7 +152,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 «채택된» 앞선 탭 하나만 쓰고 경고로 센다(불완전 아님).
   // 보류된 행(상태 미상·ID 없음·신원 불일치 등)은 다른 탭의 정상 행을 가리지 않는다 — accepted 에는 레코드로 채택된 행만 들어간다.
   // 같은 탭 안에서 같은 번호가 두 번이면(정상·보류 무관) 원천 오류라 읽기를 불완전으로 둔다.
-  const accepted = new Map<string, { tab: SonogongApiTab; ym: string }>();
+  const accepted = new Map<string, { tab: SonogongApiTab; ym: string; index: number }>();
+  let crossTabContractConflicts = 0;
   let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
   for (const tab of SONOGONG_API_TABS) {
     const inTab = new Set<string>();
@@ -159,6 +168,12 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const earlier = accepted.get(plate);
       if (earlier) {
         crossTabDuplicates++; if (earlier.ym && ymRaw && earlier.ym !== ymRaw) generationDifferences++;
+        // 탭 사이 충돌(Codex #643 ②): 앞선 탭은 출고가능인데 뒤 탭이 계약중이면 출고가능으로 두지 않는다 — 계약중을 우선해 채택 레코드 상태를 바꾼다.
+        // 반대(앞 계약중·뒤 출고가능)는 앞선 값 그대로(계약중)다. 한 번이라도 계약중이면 판매 가능으로 내보내지 않는 쪽(fail-closed)이다.
+        const kept = records[earlier.index]!;
+        if (row.hasActiveContract === true && kept.status.raw !== '계약중') {
+          kept.status = { raw: '계약중', saleAvailable: true }; crossTabContractConflicts++;
+        }
         continue;
       }
       if (typeof row.hasActiveContract !== 'boolean') { held.push({ tab, reason: 'STATUS_UNKNOWN' }); continue; }
@@ -228,7 +243,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
           prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
-      accepted.set(plate, { tab, ym: ymRaw });
+      accepted.set(plate, { tab, ym: ymRaw, index: records.length - 1 });
     }
   }
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
@@ -250,6 +265,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   }
   for (const [code, n] of failureCodes) notes.push(`DETAIL_FAIL:${code}:${n}`.slice(0, 60));
   if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
+  if (crossTabContractConflicts) notes.push(`CROSS_TAB_CONTRACT_CONFLICT:${crossTabContractConflicts}`);
   if (generationDifferences) notes.push(`CROSS_TAB_GENERATION_DIFFERENCE:${generationDifferences}`);
   if (amountUnparseable) notes.push(`AMOUNT_UNPARSEABLE:${amountUnparseable}`);
   if (fuelUnresolved) notes.push(`FUEL_UNRESOLVED:${fuelUnresolved}`);
