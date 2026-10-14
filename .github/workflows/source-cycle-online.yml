@@ -2,8 +2,12 @@ name: Source cycle online APPLY (switch-gated)
 
 # 원천 엔진 무인 회차를 온라인(Actions)에서 «적용까지» 돌린다 — B3Q 작업 스케줄러를 대체(설계: docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md §3).
 # 기본 꺼짐: vars.FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES 에 원천 종류(쉼표, 예: AICA,IANCAR)를 넣은 것만 돈다. 비어 있으면 아무것도 하지 않는다.
-# 이중 실행 금지: 그 원천을 B3Q SOURCE_CYCLE_SOURCES 에서 «먼저» 빼거나, B3Q 도 SOURCE_CYCLE_CONTROL=firestore 로 같은 잠금을 쓴다.
-# 안전선은 엔진 그대로(완전 읽기에서만 하향·비율 가드·계약 잠금 보존·회차 상한·백업·되읽기·3회 실패 정지). 상태·잠금·백업은 Firestore(SOURCE_CYCLE_CONTROL=firestore).
+# 이중 쓰기 차단은 코드가 한다(#621, Codex P1-①②): 원천별 쓰기 소유권(B3Q|ACTIONS, 없으면 B3Q)을 두 실행기가 상품 쓰기 직전마다 확인하고,
+#   Actions 는 소유권이 ACTIONS 가 아니면 회차 자체를 돌리지 않는다. 소유권은 B3Q 에서 넘김 도구(npm run source-cycle:handover,
+#   이전 실행 완료 확인 + 정지·기준 건수·한 회차 표식 이관 + 정확한 digest 승인)로만 바뀐다. 변수에 원천을 넣는 것만으로는 쓰지 않는다.
+# 만료 잠금 인수는 하지 않는다(SOURCE_CYCLE_TAKEOVER 미전달 = 기본 꺼짐). 잠금 세대·토큰을 쓰기마다 확인(fencing).
+# 안전선은 엔진 그대로(완전 읽기에서만 하향·비율 가드·범위 급변 정지·계약 잠금 보존·회차 상한·백업·되읽기·3회 실패 정지). 상태·잠금·백업은 Firestore(SOURCE_CYCLE_CONTROL=firestore).
+# 손오공(RP012) APPLY 는 B3Q 예약 단독 경로다 — 이 워크플로 원천 목록에 SONOGONG 을 넣지 않는다.
 # 키·시트 ID 는 저장소 비밀값으로만 넘기고 출력하지 않는다.
 on:
   schedule:
@@ -33,7 +37,7 @@ jobs:
           SOURCES: ${{ vars.FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES }}
         run: |
           if [ -z "${SOURCES// /}" ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo 'online sources switch is empty — skipped'; exit 0; fi
-          if ! printf '%s' "$SOURCES" | grep -Eq '^(F05|AICA|IANCAR|IRON|AUTOPLUS|SONOGONG)(,(F05|AICA|IANCAR|IRON|AUTOPLUS|SONOGONG))*$'; then
+          if ! printf '%s' "$SOURCES" | grep -Eq '^(F05|AICA|IANCAR|IRON|AUTOPLUS)(,(F05|AICA|IANCAR|IRON|AUTOPLUS))*$'; then
             echo 'FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES invalid'; exit 1
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
@@ -73,14 +77,11 @@ jobs:
           SOURCE_CYCLE_IRON_HOMEPAGE: ${{ vars.SOURCE_CYCLE_IRON_HOMEPAGE }}
           SOURCE_CYCLE_IRON_LIST_URL: ${{ vars.SOURCE_CYCLE_IRON_LIST_URL }}
           SOURCE_CYCLE_AUTOPLUS_SHEET: ${{ vars.SOURCE_CYCLE_AUTOPLUS_SHEET }}
-          SOURCE_CYCLE_SONOGONG_API: ${{ vars.SOURCE_CYCLE_SONOGONG_API }}
           SOURCE_CYCLE_F05_SHEET_ID: ${{ secrets.SOURCE_CYCLE_F05_SHEET_ID }}
           SOURCE_CYCLE_AICA_SHEET_ID: ${{ secrets.SOURCE_CYCLE_AICA_SHEET_ID }}
           SOURCE_CYCLE_AUTOPLUS_SHEET_ID: ${{ secrets.SOURCE_CYCLE_AUTOPLUS_SHEET_ID }}
           EANCAR_ONE_API_BASE_URL: ${{ vars.EANCAR_ONE_API_BASE_URL }}
           EANCAR_ONE_API_KEY: ${{ secrets.EANCAR_ONE_API_KEY }}
-          SONOGONG_API_BASE: ${{ vars.SONOGONG_API_BASE }}
-          SONOGONG_API_KEY: ${{ secrets.SONOGONG_API_KEY }}
         run: |
           set +e
           node dist/src/runtime/source-cycle-runtime.js --unattended > "$RUNNER_TEMP/cycle-result.json"

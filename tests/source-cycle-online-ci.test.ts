@@ -14,6 +14,7 @@ test('online apply is off unless the sources switch names sources, and uses Fire
   assert.match(yml, /--unattended/);
   assert.doesNotMatch(yml, /--apply|SOURCE_CYCLE_APPROVED_DIGEST|SOURCE_CYCLE_TAKEOVER: '1'|ENROLL_CAP_ONCE|REPLACE_ONCE/);   // 한 회차 한정 상향·교체 철회는 B3Q 에서만
   assert.doesNotMatch(yml, /echo[^\n]*(secrets\.|_KEY)/);                    // 비밀값 출력 없음
+  assert.doesNotMatch(yml.replace(/^#.*$/gm, ''), /SOURCE_CYCLE_TAKEOVER|SONOGONG/);   // 만료 잠금 인수 없음, 손오공은 B3Q 단독 경로
 });
 
 test('summary renders per-source rows and survives unreadable output', () => {
