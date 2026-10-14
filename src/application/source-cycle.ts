@@ -38,7 +38,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 계획 단계 보류의 사유 코드별 건수(보고 전용, plan digest 에 넣지 않는다). RP021 보류 3건이 코드 없이 세어져 원인을 못 가리던 문제(B3Q 2026-10-14).
   const heldBy: Record<string, number> = {};
   const hold = (code: string) => { plan.held++; heldBy[code] = (heldBy[code] ?? 0) + 1; };
-  let infoIncomplete = 0;
+  let infoIncomplete = 0, notSellableEnrolled = 0;
   if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
@@ -79,11 +79,22 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const k = plateIdentityKey(p.record.plate);
     (platePool.get(k) ?? platePool.set(k, []).get(k)!).push(p);
   }
+  // 번호 없이 지문 키(FP-…)로 만든 문서: 같은 행에 번호가 생기면 새 문서를 만들지 않고 같은 문서에 번호를 채운다(대표 10-14 «번호가 배정되면 그걸 업데이트»).
+  // 짝은 행 지문(raw.row_fingerprint)이고, 같은 지문의 번호 없는 문서가 정확히 하나일 때만 잇는다(둘 이상이면 어느 쪽인지 모르므로 보류).
+  const fingerprintPool = new Map<string, CycleProduct[]>();
+  for (const p of snapshot.products) {
+    const fp = p.record.raw?.row_fingerprint;
+    if (typeof fp === 'string' && fp && !isAssignedPlate(p.record.plate)) (fingerprintPool.get(fp) ?? fingerprintPool.set(fp, []).get(fp)!).push(p);
+  }
   for (const original of evidence.records) {
     let r = original;
     let key = sourceProductKey(r), before = mine.get(key) ?? null;
     if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
-      const candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      let candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      const fp = r.raw?.row_fingerprint;
+      if (!candidates.length && typeof fp === 'string' && fp) {
+        candidates = (fingerprintPool.get(fp) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
+      }
       if (candidates.length === 1) {
         before = candidates[0]!; r = { ...r, uid: before.record.uid }; key = sourceProductKey(r);
         seen.add(key); uidBridged++;
@@ -108,7 +119,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
       continue;
     }
-    if (errors.includes('STATUS_UNKNOWN')) { hold('STATUS_UNKNOWN'); continue; }
+    // 1차는 무조건 가져온다(대표 2026-10-14): 새 차(문서 없음)는 상태를 몰라도 식별자만 있으면 편입한다(노출 제외). 이미 문서가 있는 차는 이전처럼 보류 —
+    // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
+    if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); continue; }
     if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       hold('OBSERVATION_ORDER'); continue;
@@ -134,11 +147,13 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (!before) {
         // 대표 2026-10-14 «사진·가격이 없어도 번호라도 가져와 숫자를 맞춘다»: 원천이 판매 가능으로 읽은 새 차가 «가격·기간(TERMS)만» 비어 있으면
         // 편입하되 노출하지 않는다(listable=false, 사유 INFO_INCOMPLETE). 가격이 채워지면 다음 회차에 REEXPOSE 로 노출된다. 식별자(번호/UID)·상태·신선도는 그대로 필요하다.
-        const infoOnly = r.status.saleAvailable === true && fresh && errors.length > 0 && errors.every(e => e === 'TERMS_HOLD');
-        if (!infoOnly) { if (!errors.includes('TERMS_HOLD')) hold('NOT_SELLABLE_NEW'); continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
+        // «1차 무조건 갖고 온다»(대표 2026-10-14): 식별자(번호/UID)가 있고 읽기가 신선하면 판매 불가·상태 불명·가격 없음이어도 새 차는 편입한다.
+        // 전부 노출 제외(listable=false)라 판매 화면에는 영향이 없고, 사유 코드로 구분한다: 판매 불가 SOURCE_NOT_SELLABLE, 그 밖(가격·기간·상태 정보 부족) INFO_INCOMPLETE.
+        // 신선하지 않은 읽기는 SOURCE_STALE 이 회차 전체를 막으므로 여기까지 오지 않는다.
+        const reason = r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'INFO_INCOMPLETE';
         after = withdraw({ record: next, listable: false, locked_by_contract: false, publication_withdrawal: null,
-          publication_withdrawal_prior: null } as CycleProduct, 'INFO_INCOMPLETE', next);
-        infoIncomplete++;
+          publication_withdrawal_prior: null } as CycleProduct, reason, next);
+        if (reason === 'INFO_INCOMPLETE') infoIncomplete++; else notSellableEnrolled++;
       } else after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
     }
     if (!before && Object.hasOwn(snapshot, 'enrollmentSupplier')) {
@@ -170,6 +185,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
   }
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
+  if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.

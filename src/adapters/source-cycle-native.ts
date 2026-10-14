@@ -11,6 +11,15 @@ export function sourceUid(plate: unknown, sheetUid?: unknown): string | null {
   if (isAssignedPlate(plate)) return plateIdentityKey(plate);
   return typeof sheetUid === 'string' && sheetUid.trim() ? sheetUid.trim() : null;
 }
+/** 번호도 시트 UID 도 없는 행의 안정 키(대표 10-04/10-14 «번호 없는 것도 같이 만들어 놔라»): «공급사·탭·차량을 설명하는 칸(요금·상태 제외)» 지문 + 같은 지문의 탭 안 출현 순번.
+ * 요금·상태는 지문에 넣지 않는다 — 요금만 바뀐 같은 행은 같은 문서여야 한다. 번호가 생기면 같은 지문의 문서에 번호를 채운다(계획의 지문 브리지). */
+const FINGERPRINT_HEADERS = ['상품구분', '제조사', '모델', '세부모델', '세부트림', '외부색상', '내부색상', '연식', '배기량', '연료', '차명 원문', '최초등록일', '입고일자'];
+export function rowFingerprint(source: string, tab: string, row: readonly unknown[], headers: readonly unknown[]): string | null {
+  const parts = FINGERPRINT_HEADERS.map(h => { const i = headers.indexOf(h); return i < 0 ? '' : String(row[i] ?? '').replace(/\s+/g, ' ').trim().toUpperCase(); });
+  // 차량을 특정할 최소 정보: 모델·세부모델·차명 원문 중 하나는 있어야 한다(전부 비면 지문을 만들지 않는다 → 기존대로 보류).
+  const hasName = ['모델', '세부모델', '차명 원문'].some(h => { const i = headers.indexOf(h); return i >= 0 && String(row[i] ?? '').trim() !== ''; });
+  return hasName ? stableDigest([source, tab, parts]).slice(0, 16) : null;
+}
 /** SPEC3 supersedes the phase-one identity policy only at the runtime boundary. */
 export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
   return { ...plugin, toRecords(read) {
@@ -51,7 +60,7 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility): CycleCapture {
-  const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[] }>();
+  const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
   let complete = scopes.every(scope => copy.tabs.some(tab => tab.title === scope && tab.complete && tab.values.length >= tab.rowCount));
@@ -64,6 +73,21 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     if (scopes.includes(tab.title) && (m?.properties?.hidden || !m || !grid || !Array.isArray(grid.rowMetadata) ||
       grid.rowMetadata.length < tab.rowCount || (m.properties?.gridProperties?.rowCount ?? 0) < tab.rowCount)) complete = false;
     const seen = new Set<string>();
+    // 행별 키: 번호 → 시트 UID → (없으면) 지문#순번. 순번은 같은 지문의 탭 안 출현 순서(원천 행 위치는 이 순번으로만 보조 키가 된다).
+    const rowKeys: Array<{ uid: string | null; fp: string | null }> = [];
+    const fpCount = new Map<string, number>();
+    for (let i = 0; i < tab.values.length; i++) {
+      const r = tab.values[i]!;
+      const sup = i === 0 ? undefined : sharedSheetChannelOf(tab.title, r[0]);
+      const hid = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      if (i === 0 || !sup || sup.code !== source || hid || tab.title === '종합' || r.every(c => c === '' || c === null)) { rowKeys.push({ uid: null, fp: null }); continue; }
+      const base = sourceUid(r[plateIndex], originalHeaders.includes('UID') ? r[uidIndex] : null);
+      const fp = rowFingerprint(source, tab.title, r, originalHeaders);
+      if (base) { rowKeys.push({ uid: base, fp }); continue; }
+      if (!fp) { rowKeys.push({ uid: null, fp: null }); continue; }
+      const n = (fpCount.get(fp) ?? 0) + 1; fpCount.set(fp, n);
+      rowKeys.push({ uid: `FP-${source}-${fp}-${n}`, fp });
+    }
     // 같은 UID 가 이 탭에 여러 번 나오는데 행 내용이 다르면(상반된 상태·가격) 행 순서가 노출을 정하지 않도록 그 UID 의 모든 행을 보류한다.
     // 내용이 같은 단순 중복은 아래에서 첫 행만 반영하고 나머지를 보류한다.
     const conflictingUids = new Set<string>(), signatures = new Map<string, string>();
@@ -74,7 +98,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       const supplier = sharedSheetChannelOf(tab.title, row[0]);
       const hiddenRow = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
       if (!supplier || supplier.code !== source || hiddenRow || tab.title === '종합' || row.every(c => c === '' || c === null)) continue;
-      const rowUid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
+      const rowUid = rowKeys[i]?.uid ?? null;
       if (!rowUid) continue;
       // 의미 있는 칸만 정규화해 비교한다: 회사명(0열)·UID 칸은 제외하고 값은 공백 정리 후 문자열로 본다. 동일 복사본에서 표기 공백만
       // 달라도 충돌 보류가 되는 오탐을 막는다(숫자 100 과 '100' 도 같게 본다).
@@ -98,14 +122,14 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       if (!supplier || supplier.code !== source || hidden || tab.title === '종합' || blank) {
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
-      const uid = sourceUid(row[plateIndex], originalHeaders.includes('UID') ? row[uidIndex] : null);
+      const uid = rowKeys[i]?.uid ?? null;
       const notChosen = !!uid && !conflictingUids.has(uid) && chosen.get(uid)?.index !== i;
       if (!uid || seen.has(uid) || conflictingUids.has(uid) || notChosen) {
         holds.push(!uid ? 'UID_REQUIRED' : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       seen.add(uid); row[uidIndex] = uid;
-      positions.set(uid, { scope: tab.title, row: i + 1, cells: original, headers: originalHeaders });
+      positions.set(uid, { scope: tab.title, row: i + 1, cells: original, headers: originalHeaders, fp: rowKeys[i]?.fp ?? null });
     }
   }
   copy.digest = sharedSheetCaptureDigest(copy);
@@ -115,7 +139,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     heldCount: holds.length + converted.held.length, heldReasons: [...holds, ...converted.held.map(h => h.reasons.join(','))],
     rows: converted.records.map(record => { const pos = positions.get(record.uid)!;
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
-        source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid } } }; }) };
+        source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
+        ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
 }
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */

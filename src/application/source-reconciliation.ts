@@ -34,6 +34,8 @@ export type SourceReconciliation = {
   duplicateDocCount: number;
   /** 등록 기준 지표(커맨드 센터 2026-10-14): 노출 제외로 편입된 차는 NEW 가 아니라 등록으로 센다. registeredMatched = 순수 NEW(문서 없음)가 0. */
   registeredCount: number; exposedCount: number; infoIncompleteCount: number; pureNewCount: number; registeredMatched: boolean;
+  /** 보고 4번째 칸(커맨드 센터 2026-10-14): 원천이 판매 불가로 읽었지만 «1차로 가져와» 비노출 문서로 편입된 수. 판매 가능 대수 기준에는 들어가지 않는다. */
+  notSellableEnrolledCount: number;
 };
 
 /** 계획 단계와 같은 규칙: 원천 보증금이 UNKNOWN 이면 문서의 KNOWN/ZERO 보증금을 보존한다 — 이 경우는 값 불일치가 아니다
@@ -82,6 +84,7 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     registeredCount: [...source.keys()].filter(k => docs.has(k)).length,
     exposedCount: sameKeys.length,
     infoIncompleteCount: [...source.keys()].filter(k => docs.get(k)?.publication_withdrawal?.reason === 'INFO_INCOMPLETE').length,
+    notSellableEnrolledCount: [...docs.values()].filter(p => !p.listable && p.publication_withdrawal?.reason === 'SOURCE_NOT_SELLABLE').length,
     pureNewCount: newKeys.filter(k => !docs.has(k)).length,
     registeredMatched: newKeys.every(k => docs.has(k)),
     countEqual: source.size === erp.size,

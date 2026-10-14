@@ -60,6 +60,12 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     source.uid = 'NEW'; stored.uid = 'iancar_OLD';
     expect(reconcileSource([source], [doc(stored, true)])).toMatchObject({ same: 1, mismatchCount: 0, matched: true });
   });
+  it('counts not-sellable cars brought in by the first pass as a separate fourth figure', () => {
+    const soldDoc = doc(rec('12가1009', false), false);
+    soldDoc.publication_withdrawal = { reason: 'SOURCE_NOT_SELLABLE', source: 'RP012', observedAt: '2026-10-14T00:00:00.000Z', deleteAuthorized: false };
+    const r = reconcileSource([rec('12가1001', true), rec('12가1009', false)], [doc(rec('12가1001', true), true), soldDoc]);
+    expect(r).toMatchObject({ sourceSellable: 1, registeredCount: 1, exposedCount: 1, notSellableEnrolledCount: 1, matched: true });
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);
