@@ -20,7 +20,9 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     // 적용 불확실(APPLY_UNCERTAIN)은 쓰기 결과를 사람이 확인해야 하므로 자동 복구하지 않는다. 복구 뒤 실패가 이어지면 다시 정지(실패 수를 2 로 되돌려 한 번만 더 시도).
     if (state.stopped) {
       const last = Date.parse(state.lastAttemptAt ?? '');
-      const cooled = Number.isFinite(last) && clock() - last >= SOURCE_STOP_COOLDOWN_MS && state.error !== 'APPLY_UNCERTAIN';
+      // 시각이 없거나 깨졌거나 미래(시계 이상)면 영구 정지가 되지 않게 «냉각 끝»으로 본다. 다음 회차는 어차피 새로 읽고 계획·CAS·되읽기를 거치므로 재시도는 멱등이다.
+      const now = clock();
+      const cooled = state.error !== 'APPLY_UNCERTAIN' && (!Number.isFinite(last) || last > now + 5 * 60_000 || now - last >= SOURCE_STOP_COOLDOWN_MS);
       if (!cooled) return { status: 'STOPPED', writes: 0, summary: '연속 실패 3회: 수동 원인 확인 필요' };
       state.stopped = false; state.failures = 2;
       await control.alert(plugin.sourceId, 'AUTO_RECOVER_AFTER_COOLDOWN');

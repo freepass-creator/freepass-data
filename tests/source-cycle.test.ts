@@ -332,6 +332,15 @@ describe('runner safety and heartbeat', () => {
     expect(after.status).toBe('STOPPED');
     expect(alerts).toContain('AUTO_RECOVER_AFTER_COOLDOWN');
   });
+  it('a stopped state with a missing, broken or future attempt time cannot stay stopped forever', async () => {
+    for (const bad of [null, 'not-a-date', new Date(now + 3 * 3600_000).toISOString()]) {
+      const { ctrl } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
+      for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+      const st = await ctrl.load(config.sourceId); st.lastAttemptAt = bad as never; await ctrl.save(config.sourceId, st);
+      await runSourceCycle(p, m.commands, ctrl, { now: () => now + 61 * 60_000 });
+      expect(read).toHaveBeenCalledTimes(4);
+    }
+  });
   it('ratio guard alerts before writes and success resets the failure streak', async () => {
     const { ctrl, alerts } = control(), m = memory([product('a')]);
     await runSourceCycle(plugin(async () => capture([])), m.commands, ctrl, { now: () => now });
