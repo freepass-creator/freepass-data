@@ -74,6 +74,9 @@ export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<Son
       ...(c.incompleteReason ? { incompleteReason: c.incompleteReason } : {}),
       ...(c.notes.length ? { notes: c.notes } : {}),
       heldCount: c.held.length + c.duplicatePlates.length,
+      // 행별 보류 사유를 보고에 그대로(PLATE_INVALID·STATUS_UNKNOWN·ID_MISSING…). 이 행들은 레코드가 없어 다른 차의 부재 판정을 가릴 수 있으므로
+      // «:UPSTREAM_ROW_HOLD» 를 붙여 값 계열 보류(benign)로 세지 않게 한다 — 부재 하향을 건너뛰는 보수 동작은 그대로다(보고 코드는 앞부분만 쓴다).
+      heldReasons: [...c.held.map(h => `${h.reason}:UPSTREAM_ROW_HOLD`), ...c.duplicatePlates.map(() => 'DUPLICATE_PLATE:UPSTREAM_ROW_HOLD')],
       rows: c.records.map(record => ({ scope: 'api', record })) };
   }) as ReturnType<typeof sourceCyclePlugin>;
 }
