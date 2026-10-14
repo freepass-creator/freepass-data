@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createDriveApprovedPhotoReader, approvedPhotoReaderFromEnv } from '../src/infra/drive-approved-photo-reader.js';
+import { hasVehiclePhotoVerification } from '../src/domain/consumer-output-contract.js';
 
 const jpeg = Buffer.concat([Buffer.from([255, 216, 255, 224]), Buffer.from('fake-image-bytes')]);
 const sha = createHash('sha256').update(jpeg).digest('hex');
@@ -8,6 +9,14 @@ const ref = (over: Record<string, unknown> = {}) => ({ driveFileId: 'FILE_ID_1',
   vehiclePhotoVerifiedAt: '2026-10-14T00:00:00.000Z', role: 'VEHICLE_PHOTO', zone: '차량사진', approvedAt: '2026-10-14T00:00:00.000Z', vehicleKey: 'k', ...over } as never);
 const respond = (bytes: Buffer, status = 200, headers: Record<string, string> = {}) => async () => ({ ok: status >= 200 && status < 300, status,
   headers: { get: (n: string) => headers[n.toLowerCase()] ?? null }, arrayBuffer: async () => Uint8Array.from(bytes).buffer as ArrayBuffer });
+
+describe('승인 사진 검증 방법 값', () => {
+  it('accepts the Iancar compressed-copy method as a verified approved photo (free non-empty string, no enum)', () => {
+    const base = { photo_original_refs: [{ vehiclePhotoVerifiedBy: 'b3q', vehiclePhotoVerificationMethod: 'IANCAR_COMPRESSED_COPY', vehiclePhotoVerifiedAt: '2026-10-14T00:00:00.000Z' }] };
+    expect(hasVehiclePhotoVerification(base)).toBe(true);
+    expect(hasVehiclePhotoVerification({ photo_original_refs: [{ ...base.photo_original_refs[0], vehiclePhotoVerificationMethod: ' ' }] })).toBe(false);
+  });
+});
 
 describe('승인 사진 드라이브 reader', () => {
   it('등록된 sha256 과 바이트가 같으면 서빙하고, 다르면(사진이 바뀜) 거절한다', async () => {

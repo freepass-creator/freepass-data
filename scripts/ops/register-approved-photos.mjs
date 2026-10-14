@@ -12,7 +12,9 @@ const csvPath = process.argv[2];
 const apply = process.argv.includes('--apply');
 const maxAt = process.argv.indexOf('--max'); const MAX = Math.max(1, Math.min(50, maxAt > 0 ? Number(process.argv[maxAt + 1]) : 10));
 const byAt = process.argv.indexOf('--by'); const BY = (byAt > 0 ? process.argv[byAt + 1] : 'b3q-auto-register').slice(0, 60);
-if (!csvPath) throw new Error('usage: register-approved-photos <csv> [--apply] [--max N] [--by 이름]');
+const methodAt = process.argv.indexOf('--method'); const METHOD = methodAt > 0 ? process.argv[methodAt + 1] : 'AUTO_KAKAO_COLLECT';
+if (!['AUTO_KAKAO_COLLECT', 'IANCAR_COMPRESSED_COPY'].includes(METHOD)) throw new Error('METHOD_NOT_ALLOWED');
+if (!csvPath) throw new Error('usage: register-approved-photos <csv> [--apply] [--max N] [--by 이름] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY]');
 const project = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR || '.';
 const gws = process.env.GWS_BIN || 'gws';
@@ -42,7 +44,7 @@ for (const r of rows) {
   if (!files.length) { out.push(`${r.plate.slice(-4)} 폴더 이미지 없음/체크섬 없음`); continue; }
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
   const refs = files.map(x => ({ driveFileId: x.id, sha256: x.sha256Checksum, mediaType: MEDIA[x.mimeType], role: 'VEHICLE_PHOTO', zone: '차량사진', vehicleKey: key, approvedAt: now,
-    vehiclePhotoVerifiedBy: BY, vehiclePhotoVerificationMethod: 'AUTO_KAKAO_COLLECT', vehiclePhotoVerifiedAt: now }));
+    vehiclePhotoVerifiedBy: BY, vehiclePhotoVerificationMethod: METHOD, vehiclePhotoVerifiedAt: now }));
   const prior = Array.isArray(f.photo_original_refs) ? f.photo_original_refs.length : 0;
   out.push(`${r.plate.slice(-4)} 계획 ${refs.length}장(기존 ${prior}장) ${apply ? '' : '(시험)'}`);
   if (!apply) continue;
