@@ -33,6 +33,8 @@ function fakeFirestore(initial: CycleProduct[] = []) {
   const fetcher = vi.fn(async (input: any, init: any) => {
     const url = new URL(String(input)), uid = decodeURIComponent(url.pathname.split('/').at(-1)!);
     const body = init.body ? JSON.parse(init.body) : null;
+    // 원천 원문 계층(source_raw) 저장은 상품 쓰기가 아니다: 조회·커밋을 호출 기록에 넣지 않고 빈 결과로 답한다.
+    if (init.method === 'POST' && /:(runQuery|commit)$/.test(url.pathname)) return new Response('[]', { status: 200 });
     calls.push({ method: init.method, url, body });
     if (init.method === 'GET') {
       let result = uid === 'products' ? { documents: [...docs.values()] } : docs.get(uid);

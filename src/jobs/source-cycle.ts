@@ -87,6 +87,14 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const unassigned = converted.held.filter(h => h.reasons.some(r => r.includes('UID_REQUIRED'))).length;
       state.unassignedPlateCount = unassigned;
       state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
+      // 원천 원문 계층: 게이트 0(관측 전용 원천은 문서에서 만든 레코드라 제외). 실패해도 회차를 막지 않는다.
+      if (!plugin.observationOnly && !options.approvedPlan && commands.storeRaw) {
+        try {
+          const stored = await commands.storeRaw({ sourceId: plugin.sourceId, records: converted.records, held: converted.held.map(h => ({ row: h.row, reasons: h.reasons })),
+            observedAt: read.observedAt ?? new Date(clock()).toISOString(), complete: read.complete && !read.error });
+          state.rawStored = stored.stored; state.rawAbsentMarked = stored.absentMarked;
+        } catch { await control.alert(plugin.sourceId, 'RAW_STORE_FAILED'); }
+      }
       if (plugin.observationOnly) {
         if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
         state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;

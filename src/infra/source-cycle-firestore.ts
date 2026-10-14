@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
+import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 
@@ -197,6 +198,43 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     return name?.trim() ? { provider_name: name, policy_code: mode('policy_code') ?? configured?.policy_code ?? null } : null;
   };
   const commands: CycleCommands = {
+    async storeRaw({ sourceId, records, held, observedAt, complete }) {
+      const entries = [...records.map(r => rawEntryOfRecord(sourceId, r)), ...held.map(h => rawEntryOfHeld(sourceId, h))];
+      const seen = new Set(entries.map(e => e.key));
+      const existing = new Map<string, { first: string | null; absent: string | null; digest: string | null }>();
+      const q = await request(':runQuery', 'POST', { structuredQuery: { from: [{ collectionId: 'source_raw' }],
+        where: { fieldFilter: { field: { fieldPath: 'source_id' }, op: 'EQUAL', value: { stringValue: sourceId } } },
+        select: { fields: ['key', 'first_seen_at', 'absent_since', 'raw_digest'].map(fieldPath => ({ fieldPath })) } } });
+      for (const row of (Array.isArray(q) ? q : []) as Array<{ document?: Doc }>) if (row.document) {
+        const f = decodeFields(row.document.fields);
+        if (typeof f.key === 'string') existing.set(f.key, { first: (f.first_seen_at as string) ?? null, absent: (f.absent_since as string) ?? null, digest: (f.raw_digest as string) ?? null });
+      }
+      const docName = (key: string) => `projects/${project}/databases/(default)/documents/source_raw/${encodeURIComponent(key)}`;
+      const writes: unknown[] = [];
+      for (const e of entries) {
+        const prior = existing.get(e.key);
+        const fields = { source_id: sourceId, key: e.key, kind: e.kind, plate: e.plate, uid: e.uid, vehicle_text: e.vehicleText, status_raw: e.statusRaw,
+          sale_available: e.saleAvailable, terms: e.terms, raw: e.raw, held_reasons: e.heldReasons, raw_digest: e.rawDigest, observed_at: observedAt,
+          first_seen_at: prior?.first ?? observedAt, last_seen_at: observedAt, absent_since: null, read_complete: complete };
+        writes.push({ update: { name: docName(e.key), fields: encodeFields(fields as never) }, updateMask: { fieldPaths: Object.keys(fields) } });
+      }
+      let absentMarked = 0;
+      // 식별 불가 보류 행이 있는 회차는 «이전 정상 레코드가 보류로 바뀐 것»과 «사라진 것»을 가를 수 없어 사라짐 표식을 유보한다.
+      if (complete && held.length === 0) for (const [key, prior] of existing) if (!seen.has(key) && !prior.absent) {
+        absentMarked++;
+        writes.push({ update: { name: docName(key), fields: encodeFields({ absent_since: observedAt, read_complete: true } as never) }, updateMask: { fieldPaths: ['absent_since', 'read_complete'] } });
+      }
+      // 요청 크기: 문서 수 200 이하 AND 직렬화 6MB 이하로 나눠 보낸다(Firestore 요청 한도 10MiB 보호).
+      let batch: unknown[] = [], bytes = 0;
+      const flush = async () => { if (batch.length) { await request(':commit', 'POST', { writes: batch }); batch = []; bytes = 0; } };
+      for (const w of writes) {
+        const size = Buffer.byteLength(JSON.stringify(w), 'utf8');
+        if (batch.length >= 200 || bytes + size > 6_000_000) await flush();
+        batch.push(w); bytes += size;
+      }
+      await flush();
+      return { stored: entries.length, absentMarked };
+    },
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
       const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = []; let page = ''; const pages = new Set<string>();

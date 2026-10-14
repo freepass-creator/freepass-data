@@ -26,6 +26,10 @@ export interface CycleCommands {
   compareAndApply(beforeDigest: string, after: CycleProduct, commandKey: string): Promise<void>;
   /** 쓰기 전 일괄 점검(백업·쓰기 시작 전). 저장소가 거절할 쓰기(문서 크기 한도 등)가 있으면 던져 «일부만 적용된 상태»를 막는다. */
   precheck?(afters: readonly CycleProduct[]): Promise<void>;
+  /** 원천 원문 계층(source_raw) 저장. 게이트 0 — 판정·마스터·가격·상태·잠금과 무관하게 읽은 레코드를 그대로 upsert 한다(개인정보 마스킹만).
+   * complete=true 일 때만 «이번에 안 보인 키» 에 absent_since 를 남긴다. 실패해도 회차를 막지 않는다. */
+  storeRaw?(input: { sourceId: string; records: readonly import('../domain/source-engine.js').SourceProductRecord[];
+    held: ReadonlyArray<{ row: number; reasons: string[] }>; observedAt: string; complete: boolean }): Promise<{ stored: number; absentMarked: number }>;
 }
 export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
   /** 회차당 신규 편입 상한(기본 100)과 하한 보장(기본 30, 원천 판매가능의 25% 가 이보다 작을 때). 초과분은 다음 회차로 이월한다. */
@@ -48,6 +52,8 @@ export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: str
   /** 원천 ↔ ERP5 판매 가능 차량 키 집합 비교(SAME/NEW/MISSING/값 불일치, 끝4만). 회차 기록·감독 점검이 읽는다. */
   reconciliation?: import('../application/source-reconciliation.js').SourceReconciliation;
   observedSellableCount?: number; unassignedPlateCount?: number;
+  /** 이번 회차 원문 계층 저장 건수·사라짐 표식 건수(보고 «원문 저장 N»). */
+  rawStored?: number; rawAbsentMarked?: number;
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,
   lastAttemptAt: null, lastCompleteAt: null, readCount: 0, heldCount: 0, error: null });
