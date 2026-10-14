@@ -255,15 +255,16 @@ describe('shared sheet local source to Canonical', () => {
       expect((await s.store.listOffers())[0]!.internalEconomicsTerms!.find(x => x.termMonths === 1)!.supplierBillingFee.amount!.amount).toBe(39);
     } finally { vi.useRealTimers(); }
   });
-  it('rejects an operational observation older than fifteen minutes without changing Canonical', async () => {
+  it('rejects an operational observation older than the operational observation limit (3600 s; the sealed master no longer expires in flight) without changing Canonical', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
       const s = await stores(); await apply(s);
       const before = stableDigest(await s.store.listOffers());
       const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
-      vi.setSystemTime(new Date('2026-10-04T00:30:01.000Z'));
-      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
-        plan: p.plan, expectedPlanDigest: p.report.planDigest })).rejects.toThrow('HOLD');
+      vi.setSystemTime(new Date('2026-10-04T01:15:01.000Z'));
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'HOLD' });
       expect(stableDigest(await s.store.listOffers())).toBe(before);
     } finally { vi.useRealTimers(); }
   });
@@ -771,6 +772,20 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
       expect(master.readAt).toBe(oldTime); expect(stableDigest(plan)).toBe(digest);
     } finally { vi.useRealTimers(); }
   });
+  it('keeps a sealed master usable in flight after the entry fence (long apply), but never when incomplete or digest-changed', async () => {
+    const s = await stores(), c = capture(), { plan, report } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const master = plan.capture.vehicleMasterSnapshot as VehicleMasterSnapshot;
+    const digest = stableDigest(plan);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(master.readAt) + 20 * 60_000);
+      expect(() => assertSharedSheetPlan(plan, digest, plan.target)).toThrow('Active Data vehicle master snapshot required');
+      expect(() => assertSharedSheetPlan(plan, digest, plan.target, true)).not.toThrow();
+      await expect(preflightSharedSheetApply(s.store, plan, report.planDigest, 'synthetic-target')).resolves.toBeInstanceOf(Set);
+    } finally { vi.useRealTimers(); }
+    const broken = structuredClone(plan); (broken.capture.vehicleMasterSnapshot as VehicleMasterSnapshot).complete = false as never;
+    expect(() => assertSharedSheetPlan(broken, stableDigest(broken), broken.target, true)).toThrow();
+  });
   it('rechecks stored head and all revisions in the read-only preflight before opening audited writes', async () => {
     const s = await stores(); await apply(s);
     const c = later(capture({ '1개월': 777 })), p = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
@@ -801,6 +816,8 @@ describe('safeErrorCode', () => {
     expect(safeErrorCode(new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED'))).toBe('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
     expect(safeErrorCode(new Error('provider said 12가3456 failed'))).toBe('UNCODED_Error');
     expect(safeErrorCode(new TypeError('x'))).toBe('UNCODED_TypeError');
+    expect(safeErrorCode(new Error('HOLD: Active Data vehicle master snapshot required'))).toBe('VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE');
+    expect(safeErrorCode(new Error('HOLD: some other free text 12가3456'))).toBe('UNCODED_Error');
     expect(safeErrorCode('boom')).toBe('UNCODED');
   });
 });

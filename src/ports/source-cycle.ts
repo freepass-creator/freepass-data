@@ -15,7 +15,10 @@ export type CycleProduct = {
 export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null;
   /** --accept-drift 로 허용된 보정 문서 uid(계획 digest 에 경고로 기록). */ acceptedDrift?: string[];
   /** 가격이 저장 digest 와 달라졌지만 허용되지 않은 문서 uid. 계획이 그 문서를 쓰게 될 때만 막고, 건드리지 않으면 회차를 막지 않는다. */
-  driftHeld?: string[] };
+  driftHeld?: string[];
+  /** 다른 공급사(provider_company_code 가 다른) 문서가 이미 쓰고 있는 문서 ID(= uid, 번호 키). 같은 번호가 두 공급사에 있으면 이 원천의 편입은
+   * 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN 로 회차 정지)이 되므로 계획 단계에서 그 행만 보류한다. */
+  foreignUids?: string[] };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

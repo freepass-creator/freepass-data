@@ -18,7 +18,7 @@ const time = '2026-10-13T00:00:00.000Z', now = Date.parse(time), source = 'SYNTH
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const directory = async () => { const dir = await mkdtemp(join(tmpdir(), 'source-cycle-runtime-')); dirs.push(dir); return dir; };
-const product = (uid = 'TEST1001'): CycleProduct => ({ record: { sourceId: source, uid, plate: uid,
+const product = (uid = '00가1001'): CycleProduct => ({ record: { sourceId: source, uid, plate: uid,
   vehicleText: '합성 원문', status: { raw: '게시', saleAvailable: true }, terms: [{ months: 12,
     monthlyRent: { state: 'KNOWN', value: 100 }, deposit: { state: 'ZERO', value: 0 }, mileage: '20000km', raw: {} }],
   raw: { source: 'synthetic', source_tab: 'test', source_row: 2 }, observedAt: time, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] },
@@ -82,7 +82,7 @@ describe('Firestore REST runtime offline', () => {
     const built = await prepare(commands);
     expect(built.plan.entries[0]!.after.supplierFields).toEqual({ provider_name: 'Mode name', policy_code: 'MODE_POLICY' });
     expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 1 });
-    expect(decodeFields(fake.docs.get('TEST1001').fields)).toMatchObject({ provider_name: 'Mode name', policy_code: 'MODE_POLICY' });
+    expect(decodeFields(fake.docs.get('00가1001').fields)).toMatchObject({ provider_name: 'Mode name', policy_code: 'MODE_POLICY' });
     expect((await prepare(commands)).plan.entries).toEqual([]);
     expect(fake.calls[0]!.url.searchParams.getAll('mask.fieldPaths')).toEqual(expect.arrayContaining(['provider_name', 'policy_code']));
   });
@@ -101,12 +101,12 @@ describe('Firestore REST runtime offline', () => {
   });
   it('SPEC3E UPDATE preserves both original supplier fields and omits them from the patch', async () => {
     const { commands, fake } = await setup([product()]);
-    Object.assign(fake.docs.get('TEST1001').fields, encodeFields({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' }));
+    Object.assign(fake.docs.get('00가1001').fields, encodeFields({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' }));
     const next = product(); next.record.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
     const built = await prepare(commands, [next.record]);
     expect(built.plan.entries[0]!.kind).toBe('UPDATE');
     expect(await apply(commands, built)).toMatchObject({ status: 'APPLIED', verified: 1 });
-    expect(decodeFields(fake.docs.get('TEST1001').fields)).toMatchObject({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' });
+    expect(decodeFields(fake.docs.get('00가1001').fields)).toMatchObject({ provider_name: 'Original name', policy_code: 'ORIGINAL_POLICY' });
     expect(fake.calls.find(c => c.method === 'PATCH')!.url.searchParams.getAll('updateMask.fieldPaths'))
       .not.toEqual(expect.arrayContaining(['provider_name']));
     expect(fake.calls.find(c => c.method === 'PATCH')!.body.fields).not.toHaveProperty('policy_code');
@@ -129,21 +129,21 @@ describe('Firestore REST runtime offline', () => {
     expect(result).toMatchObject({ status: 'APPLIED', writes: 1, verified: 1 });
     const patch = fake.calls.find(c => c.method === 'PATCH')!;
     expect(patch.url.searchParams.get('currentDocument.exists')).toBe('false');
-    const fields = decodeFields(fake.docs.get('TEST1001').fields);
-    expect(fields).toMatchObject({ car_number: 'TEST1001', provider_company_code: source, maker: '', model: '', vehicle_review_required: true,
+    const fields = decodeFields(fake.docs.get('00가1001').fields);
+    expect(fields).toMatchObject({ car_number: '00가1001', provider_company_code: source, maker: '', model: '', vehicle_review_required: true,
       price: { '12': { rent: 100, deposit: 0 } }, source_tab: 'test', source_row: 2 });
   });
   it('updates conditions, preserves unrelated raw, then is idempotent', async () => {
     const { commands, fake } = await setup([product()]); const next = product(); next.record.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
     expect((await apply(commands, await prepare(commands, [next.record]))).status).toBe('APPLIED');
-    expect(decodeFields(fake.docs.get('TEST1001').fields).unrelated).toEqual({ preserve: true });
+    expect(decodeFields(fake.docs.get('00가1001').fields).unrelated).toEqual({ preserve: true });
     expect((await prepare(commands, [next.record])).plan.entries).toHaveLength(0);
     expect(fake.calls.find(c => c.method === 'PATCH')!.url.searchParams.has('currentDocument.updateTime')).toBe(true);
   });
   it('withdraws with prior, then reexposes', async () => {
     const { commands, fake } = await setup([product()]);
     expect((await apply(commands, await prepare(commands, []))).status).toBe('APPLIED');
-    expect(decodeFields(fake.docs.get('TEST1001').fields)).toMatchObject({ listable: false, status: '출고불가', status_kind: '불가',
+    expect(decodeFields(fake.docs.get('00가1001').fields)).toMatchObject({ listable: false, status: '출고불가', status_kind: '불가',
       publication_withdrawal: { reason: 'SOURCE_ABSENT', deleteAuthorized: false }, publication_withdrawal_prior: { listable: true } });
     const built = await prepare(commands); expect(built.plan.entries[0]!.kind).toBe('REEXPOSE');
     expect((await apply(commands, built)).status).toBe('APPLIED');
@@ -152,7 +152,7 @@ describe('Firestore REST runtime offline', () => {
     const { commands, fake, dir } = await setup([product()]); const before = (await commands.list(source)).products[0]!;
     await commands.backup('key', before); expect(await commands.readBackup('key')).toEqual(before);
     const backup = JSON.parse(await readFile(join(dir, (await readdir(dir))[0]!), 'utf8'));
-    expect(backup.document).toEqual(fake.docs.get('TEST1001'));
+    expect(backup.document).toEqual(fake.docs.get('00가1001'));
     await expect(commands.backup('key', null)).rejects.toThrow('BACKUP_IMMUTABLE');
   });
   it('blocks backup tampering', async () => {
@@ -171,55 +171,60 @@ describe('Firestore REST runtime offline', () => {
     expect((await apply(commands, await prepare(commands))).status).toBe('APPLY_UNCERTAIN');
   });
   it('contract-locked products never enter a plan', async () => {
-    const { commands, fake } = await setup([product()]); fake.docs.get('TEST1001').fields.locked_by_contract = { booleanValue: true };
+    const { commands, fake } = await setup([product()]); fake.docs.get('00가1001').fields.locked_by_contract = { booleanValue: true };
     const built = await prepare(commands, []); expect(built.plan.entries).toHaveLength(0);
     expect((await apply(commands, built)).writes).toBe(0);
   });
   it('a lock arriving after backup blocks PATCH', async () => {
     const { commands, fake } = await setup([product()]); const before = (await commands.list(source)).products[0]!;
-    await commands.backup('key', before); fake.docs.get('TEST1001').fields.locked_by_contract = { booleanValue: true };
+    await commands.backup('key', before); fake.docs.get('00가1001').fields.locked_by_contract = { booleanValue: true };
     await expect(commands.compareAndApply(stableDigest(before), product(), 'key')).rejects.toThrow('CAS_CONFLICT');
     expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(0);
   });
-  it('same document ID owned by another supplier cannot enroll', async () => {
+  it('same document ID owned by another supplier is held in the plan (PLATE_OWNED_BY_OTHER_SUPPLIER), never a CAS conflict that halts the cycle', async () => {
     const other = product(); other.record.sourceId = 'OTHER'; const { commands, fake } = await setup([other]);
-    expect((await apply(commands, await prepare(commands))).status).toBe('APPLY_UNCERTAIN');
-    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(0);
+    const built = await prepare(commands, [product().record, product('00가1002').record]);
+    expect(built.plan.entries.map(e => [e.kind, e.after.record.uid])).toEqual([['ENROLL', '00가1002']]);   // 나머지 차는 진행
+    expect(built.heldReasons).toEqual({ PLATE_OWNED_BY_OTHER_SUPPLIER: 1 }); expect(built.plan.warnings).toContain('PLATE_OWNED_BY_OTHER_SUPPLIER');
+    expect((await apply(commands, built)).status).toBe('APPLIED');
+    expect(fake.calls.filter(c => c.method === 'PATCH').map(c => decodeURIComponent(c.url.pathname.split('/').at(-1)!))).toEqual(['00가1002']);
+    // REST 가드는 그대로: 계획을 우회해 쓰려 해도 남의 문서에는 쓰지 못한다.
+    expect(fake.docs.get('00가1001').fields.provider_company_code).toEqual({ stringValue: 'OTHER' });
   });
   it('REST guard rejects observation-only writes', async () => {
     const { commands } = await setup(); const p = product(); p.record.sourceId = 'OBSERVE';
     await expect(commands.compareAndApply(stableDigest(null), p, 'key')).rejects.toThrow('OBSERVATION_ONLY');
   });
   it('rollback restores exact pre-write fields with external approval', async () => {
-    const { commands, fake, dir } = await setup([product()]); const original = structuredClone(fake.docs.get('TEST1001').fields);
+    const { commands, fake, dir } = await setup([product()]); const original = structuredClone(fake.docs.get('00가1001').fields);
     await apply(commands, await prepare(commands, []));
     const b = JSON.parse(await readFile(join(dir, (await readdir(dir)).find(f => f.endsWith('.backup.json'))!), 'utf8'));
     await expect(commands.rollback(b.key, 'bad')).rejects.toThrow('ROLLBACK_APPROVAL_REQUIRED');
     expect(await commands.rollback(b.key, await commands.rollbackDigest(b.key))).toEqual({ status: 'ROLLED_BACK' });
-    expect(fake.docs.get('TEST1001').fields).toEqual(original);
+    expect(fake.docs.get('00가1001').fields).toEqual(original);
   });
   it('rollback enrollment withdraws instead of deleting', async () => {
     const { commands, fake, dir } = await setup(); await apply(commands, await prepare(commands));
     const b = JSON.parse(await readFile(join(dir, (await readdir(dir)).find(f => f.endsWith('.backup.json'))!), 'utf8'));
     await commands.rollback(b.key, await commands.rollbackDigest(b.key));
-    expect(fake.docs.size).toBe(1); expect(decodeFields(fake.docs.get('TEST1001').fields).listable).toBe(false);
+    expect(fake.docs.size).toBe(1); expect(decodeFields(fake.docs.get('00가1001').fields).listable).toBe(false);
     expect(fake.calls.some(c => c.method === 'DELETE')).toBe(false);
   });
   it('rollback refuses changes after the verified receipt', async () => {
     const { commands, fake, dir } = await setup(); await apply(commands, await prepare(commands));
     const b = JSON.parse(await readFile(join(dir, (await readdir(dir)).find(f => f.endsWith('.backup.json'))!), 'utf8'));
-    fake.docs.get('TEST1001').fields.locked_by_contract = { booleanValue: true };
+    fake.docs.get('00가1001').fields.locked_by_contract = { booleanValue: true };
     await expect(commands.rollback(b.key, await commands.rollbackDigest(b.key))).rejects.toThrow('CAS_CONFLICT');
   });
   it('source_cycle_record cannot mask an external price change', async () => {
-    const { commands, fake } = await setup([product()]); fake.docs.get('TEST1001').fields.price = encodeFields({ price: {} }).price;
+    const { commands, fake } = await setup([product()]); fake.docs.get('00가1001').fields.price = encodeFields({ price: {} }).price;
     // 목록은 가격 불일치 문서의 uid 만 표시하고, 계획이 그 문서를 쓰게 되면 막는다. 번호판 불일치·쓰기 단계(read)는 계속 DRIFT 로 던진다.
     const snap = await commands.list(source);
-    expect(snap.driftHeld).toEqual(['TEST1001']);
+    expect(snap.driftHeld).toEqual(['00가1001']);
     const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 },
       { records: [product().record], observedAt: time, heldCount: 0, complete: true }, snap, now);
     expect(built.plan.blockers).toContain('CATALOG_SOURCE_RECORD_DRIFT');
-    await expect(commands.read(source, 'TEST1001')).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+    await expect(commands.read(source, '00가1001')).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
   });
   it('a stored full-raw record is compared in compact form, so compaction itself never causes a mass update', async () => {
     const stored = product(); stored.record.raw = { ...stored.record.raw, rates: Array.from({ length: 5 }, () => ({ text: 'x'.repeat(5000) })) };
@@ -231,10 +236,10 @@ describe('Firestore REST runtime offline', () => {
     const { commands, fake } = await setup(); const fat = product().record;
     fat.raw = { ...fat.raw, rates: Array.from({ length: 30 }, () => ({ text: 'x'.repeat(20_000) })) };
     expect((await apply(commands, await prepare(commands, [fat]))).status).toBe('APPLIED');
-    const body = JSON.stringify(fake.docs.get('TEST1001'));
+    const body = JSON.stringify(fake.docs.get('00가1001'));
     expect(body.length).toBeLessThan(20_000);
-    expect(decodeFields(fake.docs.get('TEST1001').fields)).not.toHaveProperty('source_cycle_raw');
-    expect((decodeFields(fake.docs.get('TEST1001').fields).source_cycle_record as any).raw.rates).toHaveProperty('__digest');
+    expect(decodeFields(fake.docs.get('00가1001').fields)).not.toHaveProperty('source_cycle_raw');
+    expect((decodeFields(fake.docs.get('00가1001').fields).source_cycle_record as any).raw.rates).toHaveProperty('__digest');
   });
   it('an oversize write blocks the whole plan before any backup or write (DOC_TOO_LARGE)', async () => {
     const { commands, fake, dir } = await setup([product('A1'), product('A2')]);
@@ -251,18 +256,18 @@ describe('Firestore REST runtime offline', () => {
     const { fake, dir } = await setup([product()]);
     const mk = (acceptDrift: string[]) => firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' },
       token: async () => 'synthetic-token', fetcher: fake.fetcher, acceptDrift });
-    const price = decodeFields(fake.docs.get('TEST1001').fields).price as Record<string, any>;
+    const price = decodeFields(fake.docs.get('00가1001').fields).price as Record<string, any>;
     const corrected = Object.fromEntries(Object.entries(price).map(([m, v]) => [m, { ...v, deposit: 777000 }]));
-    fake.docs.get('TEST1001').fields.price = encodeFields({ price: corrected }).price;
-    expect((await mk([]).list(source)).driftHeld).toEqual(['TEST1001']);
-    expect((await mk(['OTHER_CODE']).list(source)).driftHeld).toEqual(['TEST1001']);
+    fake.docs.get('00가1001').fields.price = encodeFields({ price: corrected }).price;
+    expect((await mk([]).list(source)).driftHeld).toEqual(['00가1001']);
+    expect((await mk(['OTHER_CODE']).list(source)).driftHeld).toEqual(['00가1001']);
     const snap = await mk([source]).list(source);
-    expect(snap.acceptedDrift).toEqual(['TEST1001']);
+    expect(snap.acceptedDrift).toEqual(['00가1001']);
     expect(snap.products[0]!.record.terms.every(t => t.deposit.value === 777000)).toBe(true);
     const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 },
       { records: [product().record], observedAt: time, heldCount: 0, complete: true }, snap, now);
     expect(built.plan.warnings.some(w => w.startsWith('DRIFT_ACCEPTED:1:'))).toBe(true);
-    fake.docs.get('TEST1001').fields.car_number = encodeFields({ car_number: '다른번호' }).car_number;
+    fake.docs.get('00가1001').fields.car_number = encodeFields({ car_number: '다른번호' }).car_number;
     await expect(mk([source]).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
   });
   it('list uses only required fields, while backup reads full document', async () => {
@@ -273,7 +278,7 @@ describe('Firestore REST runtime offline', () => {
   });
   it('a changed version between list and backup aborts before write', async () => {
     const { commands, fake } = await setup([product()]); const before = (await commands.list(source)).products[0]!;
-    fake.docs.get('TEST1001').updateTime = 'changed';
+    fake.docs.get('00가1001').updateTime = 'changed';
     await expect(commands.backup('changed', before)).rejects.toThrow('BACKUP_SNAPSHOT_MISSING');
   });
   it.each([403, 429, 503])('HTTP %s is not an empty complete catalog', async status => {
@@ -289,11 +294,11 @@ describe('Firestore REST runtime offline', () => {
   });
   it('withdrawal preserves legacy price aliases and unknown conditions', async () => {
     const { commands, fake } = await setup();
-    const fields = { provider_company_code: source, car_number: 'TEST1001', status: '출고가능', listable: true,
+    const fields = { provider_company_code: source, car_number: '00가1001', status: '출고가능', listable: true,
       price: { '12': { rent: 100, deposit: null }, '12_extra': { rent: 200, deposit: 100 } } };
-    fake.docs.set('TEST1001', { name: 'projects/synthetic-test/databases/(default)/documents/products/TEST1001', updateTime: time, fields: encodeFields(fields) });
+    fake.docs.set('00가1001', { name: 'projects/synthetic-test/databases/(default)/documents/products/00가1001', updateTime: time, fields: encodeFields(fields) });
     expect((await apply(commands, await prepare(commands, []))).status).toBe('APPLIED');
-    expect(decodeFields(fake.docs.get('TEST1001').fields).price).toEqual(fields.price);
+    expect(decodeFields(fake.docs.get('00가1001').fields).price).toEqual(fields.price);
   });
 });
 
@@ -302,7 +307,7 @@ function sheet(rows: Array<Record<string, SheetCell>>) {
   const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only', layoutVersion: '2026-10-04-no-account',
     readTime: time, revision: 'synthetic', tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {
       const values = [headers, ...(title === channel.tab ? rows.map(row => headers.map(h => ({ 회사명: channel.companyName,
-        차량번호: 'TEST1001', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 100, 단기보증: '무보증', 장기보증: '무보증',
+        차량번호: '00가1001', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 500000, 단기보증: '무보증', 장기보증: '무보증',
         연주행: '20000km', '차명 원문': '합성', ...row } as Record<string, SheetCell>)[h] ?? '')) : [])];
       return { title, readTime: time, complete: true, rowCount: values.length, values };
     }) };
@@ -319,7 +324,7 @@ describe('native mappings and UID', () => {
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     // 번호도 UID 도 없는 «신차» 행은 이제 행 지문 키(FP-…)로 편입된다(대표 «번호 없는 것도 같이 만들어 놔라»)
     const uids = c.rows.map(r => r.record.uid);
-    expect(uids).toHaveLength(3); expect(uids[0]).toBe('TEST1001'); expect(uids[1]).toMatch(/^FP-/); expect(uids[2]).toBe('NEW-A');
+    expect(uids).toHaveLength(3); expect(uids[0]).toBe('00가1001'); expect(uids[1]).toMatch(/^FP-/); expect(uids[2]).toBe('NEW-A');
     expect(c.heldReasons).not.toContain('UID_REQUIRED'); expect(c.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
     expect(c.rows[0]!.record.terms[0]!.deposit).toEqual({ state: 'ZERO', value: 0 });
     expect(c.rows[0]!.record.raw.source_row).toBe(2);
@@ -335,54 +340,67 @@ describe('native mappings and UID', () => {
     expect(twins).toHaveLength(2); expect(new Set(twins).size).toBe(2);       // 같은 설명의 두 행은 순번으로 구분(둘 다 편입)
     expect(key([{ ...base, 모델: '쏘나타' }])).not.toEqual(first);             // 차량 설명이 다르면 다른 문서
     // 번호가 생기면: 같은 지문의 번호 없는 문서에 번호를 채운다(새 문서를 만들지 않음)
-    const s = sheet([{ ...base, 차량번호: 'TEST7777' }]);
+    const s = sheet([{ ...base, 차량번호: '00가7777' }]);
     const withPlate = f05NativeCapture(s.source, s.capture, s.visibility);
-    expect(withPlate.rows[0]!.record.uid).toBe('TEST7777');
+    expect(withPlate.rows[0]!.record.uid).toBe('00가7777');
     const stored = f05NativeCapture(sheet([{ ...base }]).source, sheet([{ ...base }]).capture, sheet([{ ...base }]).visibility).rows[0]!.record;
     const doc = { ...product(stored.uid), record: structuredClone(stored) }; doc.record.sourceId = s.source;
     const plan = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
       { records: withPlate.rows.map(r => r.record), complete: true, observedAt: withPlate.observedAt, heldCount: 0 }, { complete: true, products: [doc] }, now).plan;
-    expect(plan.entries.map(e => [e.kind, e.after.record.uid, e.after.record.plate])).toEqual([['UPDATE', stored.uid, 'TEST7777']]);
+    expect(plan.entries.map(e => [e.kind, e.after.record.uid, e.after.record.plate])).toEqual([['UPDATE', stored.uid, '00가7777']]);
     expect(plan.entries.some(e => e.kind === 'ENROLL')).toBe(false);          // 새 문서 없음
   });
   it('F05 rows sharing a plate with different content are all held, never decided by row order; identical copies keep the first', () => {
-    const s = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
+    const s = sheet([{ 차량번호: '00가1001', 차량상태: '출고가능' }, { 차량번호: '00가1001', 차량상태: '출고불가' }, { 차량번호: '00가1002' }, { 차량번호: '00가1002' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
-    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST1002']);                       // 1001 은 상반된 두 행이라 모두 보류, 1002 는 동일 복사본이라 첫 행
+    expect(c.rows.map(r => r.record.uid)).toEqual(['00가1002']);                       // 1001 은 상반된 두 행이라 모두 보류, 1002 는 동일 복사본이라 첫 행
     expect(c.heldReasons?.filter(r => r === 'DUPLICATE_UID_CONFLICT')).toHaveLength(2);
     expect(c.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
-    const swapped = sheet([{ 차량번호: 'TEST1001', 차량상태: '출고불가' }, { 차량번호: 'TEST1001', 차량상태: '출고가능' }, { 차량번호: 'TEST1002' }, { 차량번호: 'TEST1002' }]);
-    expect(f05NativeCapture(swapped.source, swapped.capture, swapped.visibility).rows.map(r => r.record.uid)).toEqual(['TEST1002']);
+    const swapped = sheet([{ 차량번호: '00가1001', 차량상태: '출고불가' }, { 차량번호: '00가1001', 차량상태: '출고가능' }, { 차량번호: '00가1002' }, { 차량번호: '00가1002' }]);
+    expect(f05NativeCapture(swapped.source, swapped.capture, swapped.visibility).rows.map(r => r.record.uid)).toEqual(['00가1002']);
   });
   it('F05 identical copies that differ only in spacing or number formatting are not a conflict', () => {
-    const s = sheet([{ 차량번호: 'TEST1001', '12개월': 100 }, { 차량번호: 'TEST1001', '12개월': '100 ', '차명 원문': ' 합성 ' }, { 차량번호: 'TEST1001', '12개월': ' 100', '차명 원문': '합성' }]);
+    const s = sheet([{ 차량번호: '00가1001', '12개월': 100 }, { 차량번호: '00가1001', '12개월': '100 ', '차명 원문': ' 합성 ' }, { 차량번호: '00가1001', '12개월': ' 100', '차명 원문': '합성' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     expect(c.heldReasons).not.toContain('DUPLICATE_UID_CONFLICT');
   });
   it('F05 identical duplicates differing only in inner spacing give the same output whatever the row order', () => {
-    const a = { 차량번호: 'TEST1001', 연주행: '20000 km' }, b = { 차량번호: 'TEST1001', 연주행: '20000  km' };
+    const a = { 차량번호: '00가1001', 연주행: '20000 km' }, b = { 차량번호: '00가1001', 연주행: '20000  km' };
     const first = f05NativeCapture(sheet([a, b]).source, sheet([a, b]).capture, sheet([a, b]).visibility);
     const second = f05NativeCapture(sheet([b, a]).source, sheet([b, a]).capture, sheet([b, a]).visibility);
     expect(first.rows.map(r => r.record.terms.map(t => t.mileage))).toEqual(second.rows.map(r => r.record.terms.map(t => t.mileage)));
     expect(first.heldReasons).toContain('DUPLICATE_UID_SUSPECT');
   });
   it('F05 duplicate comparison does not equate full-width digits with ASCII (the real amount parser rejects them)', () => {
-    const s = sheet([{ 차량번호: 'TEST1001', '12개월': '100' }, { 차량번호: 'TEST1001', '12개월': '１００' }]);
+    const s = sheet([{ 차량번호: '00가1001', '12개월': '100' }, { 차량번호: '00가1001', '12개월': '１００' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     expect(c.heldReasons?.filter(r => r === 'DUPLICATE_UID_CONFLICT')).toHaveLength(2);
     expect(c.rows).toEqual([]);
   });
-  it.each(['hiddenByUser', 'hiddenByFilter'] as const)('F05 excludes %s rows', key => {
-    const s = sheet([{}, { 차량번호: 'TEST1002' }]);
-    s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]![key] = true;
-    expect(f05NativeCapture(s.source, s.capture, s.visibility).rows.map(r => r.record.uid)).toEqual(['TEST1002']);
+  it('F05 holds (never drops as absent) hiddenByUser rows', () => {
+    const s = sheet([{}, { 차량번호: '00가1002' }]);
+    s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]!.hiddenByUser = true;
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['00가1002']);
+    expect(c.heldReasons).toEqual(['ROW_HIDDEN_BY_USER']);
+    const p = product('00가1001'); p.record.sourceId = s.source;
+    const plan = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
+      { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now).plan;
+    expect(plan.entries.filter(e => e.kind === 'DOWNGRADE')).toEqual([]);     // 숨긴 행의 문서를 «부재» 로 내리지 않는다
+  });
+  it('F05 reads hiddenByFilter rows as data: a basic filter is a shared view state, not absence', () => {
+    const s = sheet([{}, { 차량번호: '00가1002' }]);
+    s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[1]!.hiddenByFilter = true;
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['00가1001', '00가1002']);
+    expect(c.heldReasons).toEqual([]); expect(c.rows[0]!.record.status.raw).toBe('출고가능');
   });
   it('a visible row whose company name maps to no supplier is held, so the same vehicle is never read as absent (경진 → 경진렌트)', () => {
-    const s = sheet([{ 차량번호: 'TEST1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: 'TEST2002' }]);
+    const s = sheet([{ 차량번호: '00가1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: '00가2002' }]);
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
-    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST1001']);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['00가1001']);
     expect(c.heldReasons).toContain('COMPANY_UNMAPPED'); expect(c.heldCount).toBeGreaterThan(0);
-    const p = product('TEST2002'); p.record.sourceId = s.source;
+    const p = product('00가2002'); p.record.sourceId = s.source;
     const built = planSourceCycle({ sourceId: s.source, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
       { records: c.rows.map(r => r.record), complete: c.complete, observedAt: c.observedAt, heldCount: c.heldCount }, { complete: true, products: [p] }, now);
     expect(built.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(0);
@@ -401,7 +419,7 @@ describe('native mappings and UID', () => {
   it('an aliased row is read as the RP015 vehicle, so it is never held as unmapped nor read as absent', () => {
     const ch = sharedSheetChannels.find(c => c.code === 'RP015')!;
     const headers = [...sharedSheetHeaders, 'UID'];
-    const row = headers.map(h => ({ 회사명: '경진렌트', 차량번호: 'TEST3003', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 100,
+    const row = headers.map(h => ({ 회사명: '경진렌트', 차량번호: '00가3003', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 100,
       단기보증: '무보증', 장기보증: '무보증', 연주행: '20000km', '차명 원문': '합성' } as Record<string, SheetCell>)[h] ?? '');
     const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only', layoutVersion: '2026-10-04-no-account',
       readTime: time, revision: 'synthetic', tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {
@@ -411,12 +429,12 @@ describe('native mappings and UID', () => {
     const visibility = { sheets: capture.tabs.map(t => ({ properties: { title: t.title, gridProperties: { rowCount: t.rowCount } },
       data: [{ startRow: 0, rowMetadata: t.values.map(() => ({})) }] })) };
     const c = f05NativeCapture('RP015', capture, visibility);
-    expect(c.rows.map(r => r.record.uid)).toEqual(['TEST3003']);
+    expect(c.rows.map(r => r.record.uid)).toEqual(['00가3003']);
     expect(c.heldReasons ?? []).not.toContain('COMPANY_UNMAPPED');
     expect(f05NativeCapture('RP016', capture, visibility).rows).toHaveLength(0);   // 같은 탭의 경진카는 이 행을 가져가지 않는다
   });
   it('hidden rows of an unmapped company do not hold the source', () => {
-    const s = sheet([{ 차량번호: 'TEST1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: 'TEST2002' }]);
+    const s = sheet([{ 차량번호: '00가1001' }, { 회사명: '표기가 바뀐 회사', 차량번호: '00가2002' }]);
     s.visibility.sheets.find(t => t.properties.title === s.capture.tabs.find(t => t.rowCount > 1)!.title)!.data[0]!.rowMetadata[2]!.hiddenByUser = true;
     expect(f05NativeCapture(s.source, s.capture, s.visibility).heldReasons ?? []).not.toContain('COMPANY_UNMAPPED');
   });
@@ -438,12 +456,12 @@ describe('native mappings and UID', () => {
   const aicaHeaders = ['배차상태', '구분', '차량번호', '차급', '차종분류', '트림', '연료', '외장', '내장', 'Km', '월렌트', '장기보증',
     '36개월', '48개월', '60개월', '옵션', '최초등록', '소비자가격', '제조사', '배기량', '연주행', '대인', '대물', '자차', '자손'];
   const aicaRow = (overrides: Record<string, unknown> = {}) => aicaHeaders.map(h => ({
-    배차상태: '배차문의', 구분: '재렌트', 차량번호: 'TEST2001', 차급: '합성급', 차종분류: '합성모델', 트림: '합성트림 2WD A/T',
+    배차상태: '배차문의', 구분: '재렌트', 차량번호: '00가2001', 차급: '합성급', 차종분류: '합성모델', 트림: '합성트림 2WD A/T',
     연료: '합성연료', 외장: '원문 외장', 내장: '원문 내장', Km: '12,345', 월렌트: '999,999', 장기보증: '무보증',
     '36개월': '123,456', '48개월': '', '60개월': 234567, 옵션: '원문 옵션', 최초등록: '2025-01', 소비자가격: '31,234,567',
     제조사: '합성제조사', 배기량: '1,234', 연주행: '3만km', 대인: '원문 대인', 대물: '원문 대물', 자차: '원문 자차', 자손: '원문 자손',
     ...overrides } as Record<string, unknown>)[h]);
-  function aicaFixture(rows = [aicaRow(), aicaRow({ 차량번호: 'TEST2002', 장기보증: '1,234,000', 배차상태: '배차중' })]) {
+  function aicaFixture(rows = [aicaRow(), aicaRow({ 차량번호: '00가2002', 장기보증: '1,234,000', 배차상태: '배차중' })]) {
     const tables = AICA_SCOPES.map((title, i) => ({ title, values: title === '월렌트' ?
       [['차종', '1개월']] : [aicaHeaders, ...(i === 0 ? rows : [])] }));
     const meta = { sheets: tables.map(t => ({ properties: { title: t.title, hidden: false, gridProperties: { rowCount: t.values.length } },
@@ -539,12 +557,12 @@ describe('native mappings and UID', () => {
     let plugin;
     if (kind === 'AICA') {
       plugin = (await aicaRead(aicaFixture([
-        aicaRow(), aicaRow({ 차량번호: 'TEST2002' }), aicaRow({ 차량번호: 'TEST2003' }),
-        aicaRow({ 차량번호: 'TEST2004', 배차상태: '출고불가' }), aicaRow({ 차량번호: '' }),
+        aicaRow(), aicaRow({ 차량번호: '00가2002' }), aicaRow({ 차량번호: '00가2003' }),
+        aicaRow({ 차량번호: '00가2004', 배차상태: '출고불가' }), aicaRow({ 차량번호: '' }),
       ]))).plugin;
     } else {
-      const s = sheet([{}, { 차량번호: 'TEST2002' }, { 차량번호: 'TEST2003' },
-        { 차량번호: 'TEST2004', 차량상태: '출고불가' }, { 차량번호: '신차', '차명 원문': '' }]);   // 차량을 특정할 이름도 없으면 지문 키를 만들지 않고 보류
+      const s = sheet([{}, { 차량번호: '00가2002' }, { 차량번호: '00가2003' },
+        { 차량번호: '00가2004', 차량상태: '출고불가' }, { 차량번호: '신차', '차명 원문': '' }]);   // 차량을 특정할 이름도 없으면 지문 키를 만들지 않고 보류
       const capture = f05NativeCapture(s.source, s.capture, s.visibility);
       plugin = sourceCyclePlugin({ sourceId: s.source, kind, scopes: capture.completedScopes, maxDowngradeRatio: 1 }, async () => capture);
     }
@@ -555,7 +573,7 @@ describe('native mappings and UID', () => {
     old[0]!.record.vehicleText = 'previous facts';
     old[1]!.listable = false;
     old[2]!.record.status = { raw: '출고가능', saleAvailable: true };
-    const absent = structuredClone(old[0]!); absent.record.uid = 'TEST9999'; absent.record.plate = 'TEST9999';
+    const absent = structuredClone(old[0]!); absent.record.uid = '00가9999'; absent.record.plate = '00가9999';
     const snapshot = { complete: true, products: [...old, absent] };
     const noWrite = vi.fn(async (): Promise<never> => { throw Error('UNEXPECTED_WRITE'); });
     const commands = { list: async () => snapshot, read: noWrite, backup: noWrite, readBackup: noWrite, compareAndApply: noWrite };
@@ -576,7 +594,7 @@ describe('native mappings and UID', () => {
   it('Aica SPEC3B maps ZERO/KNOWN, populated periods and unchanged RAW', async () => {
     const f = aicaFixture(), before = structuredClone(f), out = await aicaRead(f);
     expect(out.read.complete).toBe(true); expect(out.held).toEqual([]); expect(out.records).toHaveLength(2);
-    expect(out.records[0]).toMatchObject({ uid: 'TEST2001', vehicleText: '합성모델 합성트림 2WD A/T',
+    expect(out.records[0]).toMatchObject({ uid: '00가2001', vehicleText: '합성모델 합성트림 2WD A/T',
       status: { raw: '배차문의', saleAvailable: true }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'],
       raw: { sourceCycleDisplayStatus: '출고협의', original: { 제조사: '합성제조사', 최초등록: '2025-01', 소비자가격: '31,234,567',
         배기량: '1,234', 연료: '합성연료', Km: '12,345', 외장: '원문 외장', 내장: '원문 내장' } } });
@@ -638,11 +656,18 @@ describe('native mappings and UID', () => {
     expect(out.records[0]!.terms.map(t => t.months)).toEqual([36, 60]);
     expect(out.records[0]!.terms.every(t => t.deposit.value === deposit && t.deposit.state === (deposit ? 'KNOWN' : 'ZERO'))).toBe(true);
   });
-  it('Aica excludes hidden rows and tabs; missing visibility/header is incomplete', async () => {
-    const f = aicaFixture([aicaRow(), aicaRow({ 차량번호: 'TEST2002' }), aicaRow({ 차량번호: 'TEST2003' })]);
+  it('Aica reads filter-hidden rows as data, holds (never drops) user-hidden rows, and hidden tabs/missing visibility/header are incomplete', async () => {
+    const f = aicaFixture([aicaRow(), aicaRow({ 차량번호: '00가2002' }), aicaRow({ 차량번호: '00가2003' })]);
     f.meta.sheets[0]!.data[0]!.rowMetadata[1]!.hiddenByUser = true;
     f.meta.sheets[0]!.data[0]!.rowMetadata[2]!.hiddenByFilter = true;
-    expect((await aicaRead(f)).records.map(r => r.uid)).toEqual(['TEST2003']);
+    const read = await aicaRead(f);
+    // 필터는 공유 «보기» 상태 — 가려진 00가2002 도 데이터다. 사용자가 숨긴 00가2001 은 읽지 않지만 보류로 세어 부재 하향을 막는다.
+    expect(read.records.map(r => r.uid)).toEqual(['00가2002', '00가2003']);
+    expect(read.capture.heldReasons).toEqual(['ROW_HIDDEN_BY_USER']);
+    const before = { ...product('00가2001'), record: { ...product('00가2001').record, sourceId: 'RP004' } };
+    const plan = planSourceCycle({ sourceId: 'RP004', family: 'AICA', maxDowngradeRatio: 1 },
+      { records: read.records, complete: read.read.complete, observedAt: time, heldCount: read.held.length }, { complete: true, products: [before] }, now).plan;
+    expect(plan.entries.filter(e => e.kind === 'DOWNGRADE')).toEqual([]); expect(plan.warnings).toContain('ABSENCE_DOWNGRADE_SKIPPED');
     f.meta.sheets[0]!.properties.hidden = true;
     expect((await aicaRead(f)).records).toEqual([]); expect((await aicaRead(f)).read.complete).toBe(false);
     expect(aicaNativeCapture(f.tables, time).complete).toBe(false);
@@ -657,20 +682,20 @@ describe('native mappings and UID', () => {
     const out = await aicaRead(f);
     expect(out.records).toHaveLength(1);
     expect(out.held.flatMap(h => h.reasons)).toEqual(['UID_REQUIRED', 'UNASSIGNED_PLATE']);       // 안내 행은 세지 않고 요금 행 1건만 보류
-    const old = product('TEST9999'); old.record.sourceId = 'RP004';
+    const old = product('00가9999'); old.record.sourceId = 'RP004';
     const onlyGuidance = await aicaRead(aicaFixture([aicaRow(), guidance]));
     expect(onlyGuidance.held).toEqual([]);
     const plan = planSourceCycle(onlyGuidance.plugin, { records: onlyGuidance.records, complete: true, observedAt: time, heldCount: 0 },
       { complete: true, products: [old] }, now).plan;
-    expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === 'TEST9999')).toBe(true);   // 사라진 차는 내려간다
+    expect(plan.entries.some(e => e.kind === 'DOWNGRADE' && e.before?.record.uid === '00가9999')).toBe(true);   // 사라진 차는 내려간다
   });
   it('Aica copies differing only in status/model/mileage spacing keep the first; a monthly model with any unparseable rent row is held as a whole group', async () => {
-    const a = aicaRow({ 차량번호: 'TEST3201', 배차상태: '배차문의', 차종분류: '합성모델', 연주행: '3만km' });
-    const spaced = aicaRow({ 차량번호: 'TEST3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만 km' });
+    const a = aicaRow({ 차량번호: '00가3201', 배차상태: '배차문의', 차종분류: '합성모델', 연주행: '3만km' });
+    const spaced = aicaRow({ 차량번호: '00가3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만 km' });
     const copies = await aicaRead(aicaFixture([a, spaced]));
     // 연주행 '3만km' vs '3만 km' 는 공백 정리 후 같은 값이 아니므로(내부 공백 표기 차이는 항 식별 문자열이 달라짐) 보수적으로 보류될 수 있다 — 상태·차명 공백만 다른 경우는 반영
-    const statusOnly = await aicaRead(aicaFixture([a, aicaRow({ 차량번호: 'TEST3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만km' })]));
-    expect(statusOnly.records.map(r => r.uid)).toEqual(['TEST3201']);
+    const statusOnly = await aicaRead(aicaFixture([a, aicaRow({ 차량번호: '00가3201', 배차상태: ' 배차문의 ', 차종분류: ' 합성모델 ', 연주행: '3만km' })]));
+    expect(statusOnly.records.map(r => r.uid)).toEqual(['00가3201']);
     expect(statusOnly.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_SUSPECT']);
     expect(copies.held.length).toBeGreaterThan(0);
     const f = aicaFixture();
@@ -682,29 +707,29 @@ describe('native mappings and UID', () => {
     expect(out.held.filter(h => h.reasons[0] === 'MONTHLY_RENT_UNPARSEABLE').length).toBe(2);
   });
   it('Aica rows sharing a plate that differ only in an option cell are also all held (raw content differs)', async () => {
-    const a = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프' }), b = aicaRow({ 차량번호: 'TEST3101', 옵션: '썬루프 없음' }), copy = aicaRow({ 차량번호: 'TEST3101', 옵션: ' 썬루프 ' });
+    const a = aicaRow({ 차량번호: '00가3101', 옵션: '썬루프' }), b = aicaRow({ 차량번호: '00가3101', 옵션: '썬루프 없음' }), copy = aicaRow({ 차량번호: '00가3101', 옵션: ' 썬루프 ' });
     const differing = await aicaRead(aicaFixture([a, b]));
     expect(differing.records).toEqual([]);
     expect(differing.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_CONFLICT', 'DUPLICATE_UID_CONFLICT']);
     const identical = await aicaRead(aicaFixture([a, copy]));                     // 공백만 다른 복사본
-    expect(identical.records.map(r => r.uid)).toEqual(['TEST3101']);
+    expect(identical.records.map(r => r.uid)).toEqual(['00가3101']);
     expect(identical.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_SUSPECT']);
   });
   it('Aica rows sharing a plate with different offers are all held, never decided by row order', async () => {
-    const a = aicaRow({ 차량번호: 'TEST3001', 배차상태: '배차문의' }), b = aicaRow({ 차량번호: 'TEST3001', 배차상태: '출고불가' });
-    const ok = aicaRow({ 차량번호: 'TEST3002' });
+    const a = aicaRow({ 차량번호: '00가3001', 배차상태: '배차문의' }), b = aicaRow({ 차량번호: '00가3001', 배차상태: '출고불가' });
+    const ok = aicaRow({ 차량번호: '00가3002' });
     const out = await aicaRead(aicaFixture([a, b, ok]));
-    expect(out.records.map(r => r.uid)).toEqual(['TEST3002']);
+    expect(out.records.map(r => r.uid)).toEqual(['00가3002']);
     expect(out.held.map(h => h.reasons[0])).toEqual(['DUPLICATE_UID_CONFLICT', 'DUPLICATE_UID_CONFLICT']);
     const swapped = await aicaRead(aicaFixture([b, a, ok]));                                       // 행 순서를 바꿔도 같은 결과
-    expect(swapped.records.map(r => r.uid)).toEqual(['TEST3002']);
+    expect(swapped.records.map(r => r.uid)).toEqual(['00가3002']);
   });
   it('Aica plate-only UID, duplicate and unassigned holds protect absence', async () => {
     const f = aicaFixture([aicaRow(), aicaRow(), aicaRow({ 차량번호: '' })]);
     f.tables[0]!.values[0]!.push('UID'); f.tables[0]!.values[3]!.push('DO_NOT_USE');
     const out = await aicaRead(f); expect(out.records).toHaveLength(1);
     expect(out.held.flatMap(h => h.reasons)).toEqual(['UID_REQUIRED', 'UNASSIGNED_PLATE', 'DUPLICATE_UID_SUSPECT']);
-    const old = product('TEST9999'); old.record.sourceId = 'RP004';
+    const old = product('00가9999'); old.record.sourceId = 'RP004';
     const plan = planSourceCycle(out.plugin, { records: out.records, complete: true, observedAt: time, heldCount: out.held.length },
       { complete: true, products: [old] }, now).plan;
     expect(plan.entries.some(e => e.kind === 'DOWNGRADE')).toBe(false);
@@ -715,9 +740,9 @@ describe('native mappings and UID', () => {
   });
   it('Iron maps complete published inventory and plate identity', async () => {
     const html = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { total: 1, hasNextPage: false,
-      vehicles: [{ car_number: 'TEST3001', car_name: '합성', published: true, price: { '12': { rent: 100, deposit: 0, mileage: '20000km' } } }] } } })}</script>`;
+      vehicles: [{ car_number: '00가3001', car_name: '합성', published: true, price: { '12': { rent: 100, deposit: 0, mileage: '20000km' } } }] } } })}</script>`;
     const p = plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: 0.2 }, async () => ironNativeCapture(html, time)));
-    expect(p.toRecords(await p.read()).records[0]).toMatchObject({ uid: 'TEST3001', status: { saleAvailable: true } });
+    expect(p.toRecords(await p.read()).records[0]).toMatchObject({ uid: '00가3001', status: { saleAvailable: true } });
   });
   it('observation plugin cannot call product commands even with apply=true', async () => {
     const base = sourceCyclePlugin({ sourceId: source, kind: 'SONOGONG', scopes: ['collector'], maxDowngradeRatio: 0.2 }, async () => ({
@@ -985,7 +1010,7 @@ describe('unattended hourly cycle (대표 2026-10-13: 1시간 간격 무인 적�
     expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
   });
   it('never writes when the plan is blocked', async () => {
-    const { commands, fake } = await setup([product('TEST1001'), product('TEST1002'), product('TEST1003')]);
+    const { commands, fake } = await setup([product('00가1001'), product('00가1002'), product('00가1003')]);
     const strict = sourceCyclePlugin({ sourceId: source, kind: 'IRON', scopes: ['inventory'], maxDowngradeRatio: 0.1 },
       async () => ({ observedAt: time, complete: true, completedScopes: ['inventory'], visibilityComplete: true, heldCount: 0, rows: [] }));
     const result = await runUnattendedSourceCycle(strict, commands, fileCycleControl(await directory(), async () => {}), { now: () => now + 1000 });
@@ -1016,5 +1041,9 @@ describe('status_kind 는 표시 상태가 정한다 (발행 단계 status_kind 
     expect(statusKindOf('출고가능', false)).toBe('불가');
     expect(statusKindOf('배차중', true)).toBe('가용');
     expect(statusKindOf('알 수 없음', true)).toBe('불가');
+  });
+  it('이안카 PREPARING 은 «출고가능»(IANCAR-ONE-API 결정 대표 10-12 «출고불가 아니면 판매 가능», 전에는 상품화중으로 써서 문서와 어긋남)', () => {
+    const p = product(); p.record = { ...p.record, status: { raw: 'PREPARING', saleAvailable: true }, raw: {} };
+    expect(nativeCycleFields({ ...p, listable: true })).toMatchObject({ status: '출고가능', vehicle_status: '출고가능', status_kind: '가용' });
   });
 });

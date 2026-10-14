@@ -1,7 +1,10 @@
 import { classifyReadError, type SourceEngine, type SourceFamily, type SourceProductRecord, type SourceRead } from '../domain/source-engine.js';
 import { sharedSheetEngine } from './shared-sheet-engine.js';
-import { ERP5_INVENTORY_STATUS_KINDS, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
+import { ERP5_INVENTORY_STATUS_KINDS, PROVIDER_AVAILABLE_STATUS_LABELS, isContractedStatus } from '../domain/erp5-inventory-status.js';
 const KNOWN_SALE_STATUS: ReadonlySet<string> = new Set([...Object.keys(ERP5_INVENTORY_STATUS_KINDS), ...PROVIDER_AVAILABLE_STATUS_LABELS, '배차문의', '수리중']);
+/** 공급사 시트(F05 차량상태·아이카 배차상태)의 «판매 끝» 표기: 판매 불가로 읽는다(인도완료 = 출고완료와 같은 인도 끝, 판매완료 = 팔림).
+ * 뜻이 갈리는 «취소»·«진행중» 은 넣지 않는다 — 모르는 값으로 남아 STATUS_UNKNOWN 보류·회차 경고(STATUS_UNKNOWN_EXPOSED)로 드러난다(결정 필요). */
+export const SHEET_NOT_SELLABLE_STATUS: ReadonlySet<string> = new Set(['출고불가', '출고완료', '인도완료', '판매완료']);
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
 
@@ -72,22 +75,30 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
       for (const [i, row] of read.raw.rows.entries()) {
         if (!def.scopes.includes(row.scope) || row.scope === '종합') continue;
         if (row.record.sourceId !== def.sourceId) { held.push({ row: i + 1, reasons: ['SOURCE_MISMATCH'] }); continue; }
-        if (def.kind === 'AICA' && (row.hiddenTab || row.hiddenByUser || row.hiddenByFilter)) continue;
-        const r = structuredClone(row.record), status = r.status.raw.trim();
+        // 필터로 가려진 행(hiddenByFilter)은 공유 «보기» 상태라 데이터로 읽는다(숨김 판정에 쓰지 않는다).
+        if (def.kind === 'AICA' && (row.hiddenTab || row.hiddenByUser)) { held.push({ row: i + 1, reasons: ['ROW_HIDDEN_BY_USER'] }); continue; }
+        const r = structuredClone(row.record), provided = r.status.raw.trim();
+        // «계약중» 계열(대표 2026-10-14): 모든 원천에서 원문을 «계약중» 으로 통일 — 판매 가능(선점 표시 노출), 공급사 표기는 raw.provider_status.
+        // 엔진 작성 계약중 판정(engineWroteContracted)이 원문 «계약중» 을 보므로 표시만이 아니라 원문을 바꾼다. 출고불가·판매완료만 내린다.
+        const contracted = def.kind !== 'AUTOPLUS' && def.kind !== 'SONOGONG' && isContractedStatus(provided);
+        if (contracted && provided !== '계약중') { r.status.raw = '계약중'; r.raw = { ...r.raw, provider_status: provided }; }
+        const status = contracted ? '계약중' : provided;
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
         switch (def.kind) {
           case 'F05':
             // 모르는 상태값은 판매 가능으로 추정하지 않는다(null → STATUS_UNKNOWN 보류). 알려진 값 = 검토된 어휘 + 공급사 표기(배차문의·수리중).
             r.status.saleAvailable = read.raw.visibilityComplete !== true ? null :
-              row.hiddenTab || row.hiddenByUser || row.hiddenByFilter || status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
+              row.hiddenTab || row.hiddenByUser || SHEET_NOT_SELLABLE_STATUS.has(status) ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             break;
           case 'AICA':
-            r.status.saleAvailable = status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
+            r.status.saleAvailable = SHEET_NOT_SELLABLE_STATUS.has(status) ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             // Preserve the provider spelling in status.raw; expose its common label as evidence.
             r.raw = { ...r.raw, sourceCycleDisplayStatus: status === '배차문의' ? '출고협의' : status === '수리중' ? '상품화중' : status };
             break;
-          case 'IANCAR': r.status.saleAvailable = ['AVAILABLE', 'PREPARING'].includes(status); break;
-          case 'IRON': r.status.saleAvailable = status === '게시'; break;
+          case 'IANCAR': r.status.saleAvailable = ['AVAILABLE', 'PREPARING', '계약중'].includes(status); break;
+          // 옛 사이트맵 캡처는 게시/비게시, 홈피 상세 어댑터(SOURCE_CYCLE_IRON_HOMEPAGE=1)는 즉시출고·출고가능·출고협의·출고불가 를 이미 판정해 넘긴다
+          // (전에는 «게시» 만 판매 가능이라 홈피 모드의 출고가능 차까지 전부 판매 불가로 내려갔다).
+          case 'IRON': r.status.saleAvailable = status === '게시' ? true : ['비게시', '출고불가', '판매완료', '출고완료'].includes(status) ? false : r.status.saleAvailable === true; break;
           // These collectors already provide normalized status, never infer it from old catalog values.
           case 'AUTOPLUS': case 'SONOGONG': break;
         }

@@ -145,7 +145,7 @@ export const sheetSpecFields = (spec: unknown): Fields => {
 };
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
   const r = p.record;
-  const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
+  const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
   // fail-closed(독립 검토 BLOCK): 검토된 어휘에 없는 상태는 «가용» 으로 추정해 노출하지 않는다. 플러그인이 먼저 보류하므로 여기 오는 일은 드물다.
   const listable = p.listable && (resolveErp5InventoryStatus(display).known || PROVIDER_AVAILABLE_STATUS_LABELS.has(display));
@@ -269,7 +269,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     },
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
-      const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = []; let page = ''; const pages = new Set<string>();
+      const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = [], foreign: string[] = []; let page = ''; const pages = new Set<string>();
       do {
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
@@ -280,7 +280,12 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {
           const f = decodeFields(d.fields);
-          if (f.provider_company_code !== source) continue;
+          if (f.provider_company_code !== source) {
+            // 다른 공급사 문서의 ID(= uid): 같은 번호의 편입을 계획 단계에서 보류하는 근거(PLATE_OWNED_BY_OTHER_SUPPLIER).
+            const id = typeof d.name === 'string' ? decodeURIComponent(d.name.split('/').at(-1) ?? '') : '';
+            if (id) foreign.push(id);
+            continue;
+          }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
           const p = envelope(d, accept, drifted, heldDrift, monthly); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
@@ -289,7 +294,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         pages.add(page);
       } while (page);
       return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
-        ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}) };
+        ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}), ...(foreign.length ? { foreignUids: foreign.sort() } : {}) };
     },
     async read(source, uid) {
       const d = await getDoc(uid);
