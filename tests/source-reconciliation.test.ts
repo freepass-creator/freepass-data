@@ -76,6 +76,13 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     const only = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true), locked]);
     expect(only).toMatchObject({ sourceDispatchableCount: 1, dispatchableExposedCount: 1, contractMarkedExposedCount: 1, dispatchableGap: 0 });
   });
+  it('a contract-locked document that differs from the source is a lock override, not a value mismatch', () => {
+    const lockedDoc = doc(rec('12가1005', true, 500000), true); lockedDoc.locked_by_contract = true;
+    const r = reconcileSource([rec('12가1005', true, 700000), rec('12가1006', true, 700000)],
+      [lockedDoc, doc(rec('12가1006', true, 500000), true)]);
+    expect(r).toMatchObject({ lockOverrideCount: 1, mismatchCount: 1 });
+    expect(r.mismatchLast4).toEqual(['1006']);
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);
