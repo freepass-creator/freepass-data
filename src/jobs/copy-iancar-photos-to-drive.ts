@@ -106,6 +106,19 @@ export function createIancarPhotoSource(env: NodeJS.ProcessEnv = process.env): P
   };
 }
 
+/** 드라이브 사본 압축: 기본 긴 변 800px·품질 72(mozjpeg) — 대표 2026-10-14 «이안카 사진 더 줄여서». 이전 960px·80 의 약 절반 크기.
+ * IANCAR_PHOTO_MAX_EDGE(480~1600)·IANCAR_PHOTO_QUALITY(50~90)로 바꿀 수 있다. 범위 밖 값은 시작 전에 거부. */
+export function iancarPhotoCompression(env: NodeJS.ProcessEnv): { maxEdge: number; quality: number } {
+  const num = (value: string | undefined, fallback: number, min: number, max: number, code: string) => {
+    if (value === undefined || value.trim() === '') return fallback;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(code);
+    return n;
+  };
+  return { maxEdge: num(env.IANCAR_PHOTO_MAX_EDGE, 800, 480, 1600, 'IANCAR_PHOTO_MAX_EDGE_INVALID'),
+    quality: num(env.IANCAR_PHOTO_QUALITY, 72, 50, 90, 'IANCAR_PHOTO_QUALITY_INVALID') };
+}
+
 export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv = process.env, log: (line: string) => void = console.log) {
   const flag = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
   const mode = (flag('--mode') ?? env.IANCAR_PHOTO_COPY_MODE ?? 'DRY_RUN') as PhotoCopyMode;
@@ -118,6 +131,7 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   const bin = resolveGwsBin(env);
   if (!bin) throw new Error('GWS_UNAVAILABLE');
   const limits = photoCopyLimitsFromEnv(env);
+  iancarPhotoCompression(env);   // 잘못된 압축 값은 쓰기 전에 거부
   // 업로드 임시 폴더 = gws 실행의 작업 폴더(gws --upload 는 작업 폴더 안 파일만 받는다). 실행 전에 만들어 둔다.
   const tempDir = join(env.SOURCE_CYCLE_PRIVATE_DIR || tmpdir(), 'iancar-photo-copy-tmp');
   mkdirSync(tempDir, { recursive: true });
@@ -127,7 +141,7 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   if (out) writeFileSync(resolve(out), photoCopyCsv({ completed: [] }), { mode: 0o600 });
   const result = await runIancarPhotoCopy({
     source: createIancarPhotoSource(env),
-    compress: input => renderVehiclePhotoRendition(input, 'detail'),
+    compress: input => renderVehiclePhotoRendition(input, 'detail', iancarPhotoCompression(env)),
     drive: createGwsPhotoDrive({ run: gwsRunner(bin, { cwd: tempDir }), rootFolderId, tempDir }),
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
