@@ -169,11 +169,13 @@ describe('vehicle-name reference repair gate', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimSubModelRepairs: many })).toThrow(/too large/);
   });
-  it('allows a blank fill only for products.sub_model, and repairs products.trim_name by name', () => {
+  it('allows a blank fill only for products.sub_model and products.trim_name (with evidence); other kinds still reject it', () => {
     const blank = { id: 'x', from: '', to: 'Y', evidence: '원문' };
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [blank], productRepairs: [] })).toThrow(/requires/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimRepairs: [blank] })).toThrow(/requires/);
-    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], productTrimRepairs: [blank] })).toThrow(/requires/);
+    // products.trim_name 빈칸은 원문 근거가 있을 때만 채운다(근거 없으면 거절)
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], productTrimRepairs: [{ id: 'x', from: '', to: '기본형' }] })).toThrow(/requires/);
+    expect(validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], productTrimRepairs: [blank] })).toEqual({ masterCount: 0, productCount: 0, productTrimCount: 1 });
     expect(validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
       productTrimRepairs: [{ id: 'p', from: '프리미엄', to: 'CVX 프리미엄' }] })).toEqual({ masterCount: 0, productCount: 0, productTrimCount: 1 });
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }],
