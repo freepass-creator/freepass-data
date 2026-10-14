@@ -14,7 +14,7 @@ export type ApiReadVerdict = {
 /** 고유 차량번호 수 = 어댑터가 채택한 레코드 수(탭 간 중복은 이미 하나로 합쳐졌고, 번호 형식 오류·같은 탭 중복은 레코드가 아니다). */
 export const uniquePlateCount = (read: Pick<SonogongApiRead, 'records'>): number => new Set(read.records.map(r => r.plate)).size;
 
-export function judgeSonogongApiRead(read: SonogongApiRead, input: { exposedUnlockedDocs: number; previousCount: number; stateError: string | null }): ApiReadVerdict {
+export function judgeSonogongApiRead(read: Pick<SonogongApiRead, 'complete' | 'records'> & { incompleteReason?: string | undefined }, input: { exposedUnlockedDocs: number; previousCount: number; stateError: string | null }): ApiReadVerdict {
   if (!read.complete) return { complete: false, ...(read.incompleteReason ? { incompleteReason: read.incompleteReason } : {}), saveCount: null };
   const unique = uniquePlateCount(read);
   const floor = sonogongApiRowFloor(input.exposedUnlockedDocs, input.previousCount);

@@ -19,6 +19,7 @@ import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from 
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
+import { readIronHomepage, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
@@ -193,6 +194,41 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
         undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+    } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
+      // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
+      // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.
+      const countFile = join(directory, 'iron-homepage-count.json');
+      plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
+        const fetchHtml = async (url: string) => {
+          const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
+          if (!response.ok) throw new Error(`IRON_HTTP_${response.status}`);
+          if (new URL(response.url || url).hostname !== IRON_HOMEPAGE_POLICY.host) throw new Error('IRON_HOST_REJECTED');
+          const html = await response.text();
+          if (!/<(?:!doctype|html)/i.test(html.slice(0, 300))) throw new Error('IRON_NOT_HTML');
+          return html;
+        };
+        const read = await readIronHomepage(fetchHtml);
+        const exposedDocs = (await commands.documents('RP006')).filter(d => {
+          const f = decodeFields(d.fields as never) as Record<string, unknown>;
+          const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+            || f.status === '계약중' || f.status_kind === '계약중';
+          return f.listable === true && !locked;
+        }).length;
+        let previous = 0, stateError: string | null = null;
+        try {
+          const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+          if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'IRON_COUNT_STATE_INVALID';
+        } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'IRON_COUNT_STATE_INVALID'; }
+        // 판정은 손오공 API 와 같은 순수 함수: 축소·불완전 읽기는 기준 파일에 저장하지 않고 하한은 고유 차량번호 수 기준.
+        const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
+        let complete = verdict.complete, reason = verdict.incompleteReason;
+        if (verdict.saveCount !== null && !(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
+          complete = false; reason = 'IRON_COUNT_STATE_WRITE_FAILED';
+        }
+        return { observedAt: read.observedAt, complete, completedScopes: complete ? ['homepage'] : [], visibilityComplete: true,
+          ...(reason ? { incompleteReason: reason } : {}), heldCount: read.held.length + read.duplicatePlates.length,
+          rows: read.records.map(record => ({ scope: 'homepage', record })) };
+      })));
     } else if (kind === 'IRON') {
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind, scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const url = new URL(required('SOURCE_CYCLE_IRON_LIST_URL'));

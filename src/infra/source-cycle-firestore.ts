@@ -112,6 +112,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
 export const MONTHLY_PRODUCT_TYPE = '월렌트';
 /** 손오공 공식 API 탭 → 상품 구분: rent=중고렌트, sub=오공구독, pick=픽업구독(소비처 구독 표시 규칙의 고정 어휘). */
 export const SONOGONG_PRODUCT_TYPES: ReadonlySet<string> = new Set(['중고렌트', '오공구독', '픽업구독']);
+export const IRON_PRODUCT_TYPES: ReadonlySet<string> = new Set(['신차렌트', '중고렌트']);
 export const statusKindOf = (display: string, listable: boolean) =>
   !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : PROVIDER_AVAILABLE_STATUS_LABELS.has(display) ? '가용' : '불가'; })();
 /** 공급사 시트가 주는 차 한 대 사실(색상·연료·최초등록·연식·주행거리)을 «새 문서»에만 싣는다. 허용 키·짧은 문자열만 통과한다(기존 문서는 건드리지 않는다). */
@@ -144,6 +145,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT' ? { product_type: MONTHLY_PRODUCT_TYPE } : {}),
     // 손오공 상품 구분(구독·픽업구독 화면 표시, 기존 구독 상품 규칙 재사용): 어댑터가 탭에서 정한 값이 고정 어휘일 때만 쓴다.
     ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함).
+    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
