@@ -85,7 +85,10 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
   const trimHits = master.trims.map(t => ({ t, len: Math.max(0, ...[t.name, ...t.aliases].map(norm).filter(n => n.length >= 2 && raw.includes(n)).map(n => n.length)) })).filter(x => x.len > 0);
   const bestLen = Math.max(0, ...trimHits.map(x => x.len));
-  const bestTrims = trimHits.filter(x => x.len === bestLen);
+  // 같은 «이름»의 트림 행이 여럿(파워트레인·연식별 행)이어도 쓰는 값은 이름 하나다 — 이름 기준으로 중복을 합쳐 센다(서로 다른 이름이 같은 길이로 걸릴 때만 모호).
+  const bestByName = new Map<string, (typeof trimHits)[number]>();
+  for (const x of trimHits) if (x.len === bestLen && !bestByName.has(x.t.name)) bestByName.set(x.t.name, x);
+  const bestTrims = [...bestByName.values()];
   return { state: 'MATCH', master, trim: bestTrims.length === 1 ? { state: 'UNIQUE', name: bestTrims[0]!.t.name }
     : bestTrims.length > 1 ? { state: 'AMBIGUOUS', candidates: bestTrims.map(x => x.t.name).sort() } : { state: 'NONE' } };
 }

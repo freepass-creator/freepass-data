@@ -85,4 +85,18 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(() => validateVehicleNameRepairPlan(r.plan as InfraRepairPlan)).not.toThrow();
     expect(() => validateVehicleNameRepairPlan(r.trimPlan as InfraRepairPlan)).not.toThrow();
   });
+
+  it('same-name trim rows (powertrain/year variants) are one name, not ambiguous; different names of the same length still hold', () => {
+    const dup = master({ id: 'm-dup', maker: '기아', model: '쏘렌토', sub_model: '쏘렌토 MQ4', sub_model_aliases: ['쏘렌토'],
+      trims: [{ name: '프레스티지', aliases: [] }, { name: '프레스티지', aliases: ['프레스티지 2WD'] }, { name: '노블레스', aliases: [] }] });
+    const same = buildIdentityPromotionPlan([product({ id: 'd1', maker: '기아', model: '쏘렌토', sub_model: '쏘렌토 MQ4', rawName: '쏘렌토 프레스티지', year: '2022' })], [dup]);
+    expect(same.held).toEqual([]);
+    expect(same.plan.productTrimRepairs?.map(i => [i.id, i.to])).toEqual([['d1', '프레스티지']]);
+    // 서로 다른 이름이 같은 길이로 걸리면 여전히 모호 → 보류(추측 금지)
+    const two = master({ id: 'm-two', maker: '기아', model: '쏘렌토', sub_model: '쏘렌토 MQ4', sub_model_aliases: ['쏘렌토'],
+      trims: [{ name: '프리미엄', aliases: [] }, { name: '노블레스', aliases: [] }] });
+    const amb = buildIdentityPromotionPlan([product({ id: 'd2', maker: '기아', model: '쏘렌토', sub_model: '쏘렌토 MQ4', rawName: '쏘렌토 프리미엄 노블레스', year: '2022' })], [two]);
+    expect(amb.held.map(h => h.reason)).toEqual(['AMBIGUOUS_TRIM']);
+    expect(amb.held[0]!.candidates).toEqual(['노블레스', '프리미엄']);
+  });
 });
