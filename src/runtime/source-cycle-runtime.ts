@@ -254,7 +254,9 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null;
       /** 공급사별 노출(listable=true) 수 전후: before=이번 회차 시작 전, after=이번 회차 적용 뒤(미적용이면 before 와 같다).
        *  prior=직전 회차 기록의 after. unexplained=before-prior(회차 밖에서 바뀐 수, 0 이면 설명됨). */
-      exposure?: { before: number; after: number; applied: boolean; prior: number | null; unexplained: number | null } }>;
+      exposure?: { before: number; after: number; applied: boolean; prior: number | null; unexplained: number | null;
+        /** 원천에서 판매 가능으로 읽은 대수와 적용 뒤 노출 대수의 차(대표 2026-10-14: 대수를 맞추고 그 대수의 데이터를 신선하게). 보류 행이 있으면 일부는 정당하다. */
+        sourceSellable: number | null; gap: number | null } }>;
     freshness?: ReturnType<typeof assessFreshness> } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
@@ -290,7 +292,9 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           const before = plan.exposedBefore;
           const after = applied ? before - count('DOWNGRADE') + count('ENROLL') + count('REEXPOSE') : before;
           const prior = priorAfter.get(plugin.sourceId) ?? null;
-          exposure = { before, after, applied, prior, unexplained: prior === null ? null : before - prior };
+          const sourceSellable = typeof plan.sourceCount === 'number' ? plan.sourceCount : null;
+          exposure = { before, after, applied, prior, unexplained: prior === null ? null : before - prior,
+            sourceSellable, gap: sourceSellable === null ? null : sourceSellable - after };
         }
         record.reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
           digest: 'planDigest' in result ? result.planDigest : null, ...(exposure ? { exposure } : {}) });
