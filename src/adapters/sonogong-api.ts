@@ -233,9 +233,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       if (typeof row.displacementCc === 'number') spec.engine_cc = String(row.displacementCc);
       const name = typeof detail?.carName === 'string' && detail.carName.trim() ? detail.carName.trim()
         : [row.brand, row.model, row.detailName].filter(x => typeof x === 'string' && x).join(' ');
-      // 사진: 상세(없으면 목록)의 images[].url 중 https 주소만. 없으면 사진 없음(빈 배열).
-      const imageSource = Array.isArray(detail?.images) ? detail!.images as unknown[] : Array.isArray(row.images) ? row.images as unknown[] : [];
-      const images = imageSource.map(i => object(i) ? i.url : i).filter((u): u is string => typeof u === 'string' && /^https:\/\//.test(u));
+      // 사진(대표 10-15 «손오공은 API 연동», 10-14 «URL 그대로 노출»): 상세(없으면 목록)의 images[].url → 없으면 목록 thumbnailUrl.
+      const images = sonogongPhotoUrls(detail, row);
       records.push({ sourceId: 'RP012', uid: plate, plate, vehicleText: name,
         // 계약중은 모든 원천에서 같게(커맨드 센터 2026-10-14): 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 raw 로 제외.
         status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
@@ -271,6 +270,30 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (fuelUnresolved) notes.push(`FUEL_UNRESOLVED:${fuelUnresolved}`);
   return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
     records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
+}
+
+/** 손오공 사진 주소 목록(원천 순서 그대로): 상세 images[].url(상세가 없거나 images 가 배열이 아니면 목록 images[].url), 그것이 비면 목록 thumbnailUrl.
+ * https·사용자정보 없음·길이 ≤ SONOGONG_PHOTO_POLICY.maxUrlLength 만, 중복 제거, 최대 maxPhotos 장. 없으면 빈 배열(사진 없음 — 기존 사진을 지우는 근거가 아니다). */
+export const SONOGONG_PHOTO_POLICY = Object.freeze({ maxPhotos: 20, maxUrlLength: 1000 });
+export function sonogongPhotoUrls(detail: Record<string, unknown> | null | undefined, row: Record<string, unknown>): string[] {
+  const clean = (v: unknown): string | null => {
+    if (typeof v !== 'string') return null;
+    const text = v.trim();
+    if (!text || text.length > SONOGONG_PHOTO_POLICY.maxUrlLength || /\s/.test(text)) return null;
+    try {
+      const url = new URL(text);
+      return url.protocol === 'https:' && !url.username && !url.password && url.hostname ? text : null;
+    } catch { return null; }
+  };
+  const source = Array.isArray(detail?.images) ? detail!.images as unknown[] : Array.isArray(row.images) ? row.images as unknown[] : [];
+  const out: string[] = [];
+  for (const item of source) {
+    const url = clean(object(item) ? item.url : item);
+    if (url && !out.includes(url)) out.push(url);
+    if (out.length >= SONOGONG_PHOTO_POLICY.maxPhotos) break;
+  }
+  if (!out.length) { const thumb = clean(row.thumbnailUrl); if (thumb) out.push(thumb); }
+  return out;
 }
 
 /** 행 수 하한(부분 읽기 방어): 직전 정상 회차 목록 수와 잠금 제외 노출 문서 수 중 큰 값의 80%. */

@@ -75,16 +75,26 @@ const smallSpec = (v: unknown): v is Record<string, string | number | boolean | 
   !!v && typeof v === 'object' && !Array.isArray(v) && !rawDigestMark(v) && Object.keys(v).length <= SPEC_MAX_KEYS &&
   Object.values(v).every(x => x === null || typeof x === 'number' || typeof x === 'boolean' || (typeof x === 'string' && x.length <= SMALL_STRING));
 const specDigest = (spec: unknown) => ({ __digest: stableDigest(spec).slice(0, 32) });
+/** 원천 API 사진 주소 목록(raw.images)을 문서까지 실제 값으로 싣는 원천(대표 2026-10-15 «손오공은 API 연동을 해야지»). 다른 원천은 예전처럼 digest.
+ * spec 과 같은 방식이다: 저장은 실제 주소(새 문서·사진 없는 문서의 image_urls 쓰기가 읽는다), 변경 판정은 comparableRecord 가 compactRaw 와 같은
+ * digest 로 바꿔 비교한다 — 옛 문서(digest 저장)와 목록이 같으면 «변경 없음»(일괄 UPDATE 없음). */
+export const PHOTO_URL_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
+const PHOTO_URL_LIST_MAX = 20, PHOTO_URL_MAX_LENGTH = 1000;
+export const isPhotoUrlList = (v: unknown): v is string[] => Array.isArray(v) && v.length <= PHOTO_URL_LIST_MAX &&
+  v.every(x => typeof x === 'string' && x.length <= PHOTO_URL_MAX_LENGTH && /^https:\/\/[^\s]+$/.test(x));
+const photoListKept = (record: SourceProductRecord, v: unknown): v is string[] => PHOTO_URL_LIST_SOURCES.has(record.sourceId) && isPhotoUrlList(v);
 export function compactRecord(record: SourceProductRecord): SourceProductRecord {
   const raw = compactRaw(record.raw ?? {});
   if (smallSpec(record.raw?.spec)) raw.spec = structuredClone(record.raw.spec);
+  if (photoListKept(record, record.raw?.images)) raw.images = [...record.raw.images];
   return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw,
     terms: (record.terms ?? []).map(t => ({ ...structuredClone({ ...t, raw: {} }), raw: compactRaw(t.raw ?? {}) })) };
 }
-/** 변경 판정용 형태: compactRecord 에 더해 raw.spec 을 compactRaw 와 같은 digest 로 바꾼다(옛 문서의 digest 형태 spec 과 같은 기준). */
+/** 변경 판정용 형태: compactRecord 에 더해 raw.spec(과 사진 주소 목록)을 compactRaw 와 같은 digest 로 바꾼다(옛 문서의 digest 형태 spec 과 같은 기준). */
 export function comparableRecord(record: SourceProductRecord): SourceProductRecord {
   const compact = compactRecord(record);
   if (smallSpec(compact.raw.spec)) compact.raw.spec = specDigest(compact.raw.spec);
+  if (photoListKept(compact, compact.raw.images)) compact.raw.images = specDigest(compact.raw.images);
   return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,
