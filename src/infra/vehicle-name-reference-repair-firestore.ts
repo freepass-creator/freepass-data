@@ -421,9 +421,33 @@ export async function readbackAuditEvents<R>(db: { getAll: (...refs: R[]) => Pro
   return readback;
 }
 
-export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
+/** 상품 문서에 이름을 쓰는 대상 종류(잠금·철회 표식·updateTime 보호 대상). */
+const PRODUCT_NAME_KINDS: ReadonlySet<string> = new Set(['product', 'productTrim']);
+/** 상품 문서 쓰기 거부 사유(정산 잠금·철회 표식, Codex 적용기 검토 (a)(b)): 정정은 잠금·철회된 문서를 건드리지 않는다. 보수적 허용표 — 비어 있지 않은 값은 전부 잠금/표식이다. */
+const isStoredFlagSet = (v: unknown) => v !== undefined && v !== null && v !== false && v !== '';
+export function productWriteBlock(data: Record<string, unknown> | undefined): 'LOCKED_BY_CONTRACT' | 'PUBLICATION_WITHDRAWN' | null {
+  if (!data) return null;
+  if (isStoredFlagSet(data.locked_by_contract)) return 'LOCKED_BY_CONTRACT';
+  if (isStoredFlagSet(data.publication_withdrawal)) return 'PUBLICATION_WITHDRAWN';
+  return null;
+}
+/** 정체성 정정이 덮어써도 되는 «from» 인가(Codex (c)): 엔진 임시 표식(vehicle_review_required·RAW_VEHICLE_TEXT)이 있거나, 세부모델 칸이 비어 있거나(확정값 없음),
+ * 세부모델이 원문 차명 덩어리 그대로이고 제조사·모델이 비어 있을 때만. 사람이 입력했거나 확정된 세부모델은 덮어쓰지 않는다. */
+export function identityFromOverwritable(data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }): boolean {
+  if (data?.vehicle_review_required === true || data?.vehicle_title_source === 'RAW_VEHICLE_TEXT') return true;
+  const sub = clean(from.sub_model);
+  if (!sub) return true;
+  const original = data?.원문 && typeof data.원문 === 'object' ? (data.원문 as Record<string, unknown>).차명 : undefined;
+  const rawText = clean(original) || clean(data?.car_name);
+  return rawText !== '' && sub === rawText && !clean(from.maker) && !clean(from.model);
+}
+
+export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
   const planDigest = stableDigest(plan);
+  // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
+  if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
+  if ((plan.productIdentityRepairs ?? []).length && options.approvedPlanDigest === undefined) throw new Error('approved plan digest required for productIdentity repairs');
   const db = getFirestore(getTargetFirebaseApp());
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -458,6 +482,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!targetFromMatches(targets[index]!.kind, snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
+    if (PRODUCT_NAME_KINDS.has(targets[index]!.kind)) {
+      const blocked = productWriteBlock(snapshot.data());
+      if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
+    }
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
     const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
     if (!aliasListOk(aliasValue)) throw new Error(`alias field is not a list of strings ${snapshot.ref.path}.${aliasField}`);
@@ -467,7 +495,18 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   if (identitySnapshots.some((snapshot) => !snapshot.exists)) throw new Error('productIdentity repair target missing');
   identitySnapshots.forEach((snapshot, index) => {
     if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
+    const blocked = productWriteBlock(snapshot.data());
+    if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
+    if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
+  // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
+  const lockedUpdateTime: Record<string, unknown> = {};
+  const lockedDigest: Record<string, string> = {};
+  for (const snapshot of [...identitySnapshots, ...snapshots.filter((_, i) => PRODUCT_NAME_KINDS.has(targets[i]!.kind))]) {
+    const updateTime = (snapshot as { updateTime?: unknown }).updateTime;
+    if (updateTime !== undefined && updateTime !== null) lockedUpdateTime[snapshot.ref.path] = updateTime;
+    lockedDigest[snapshot.ref.path] = stableDigest(snapshot.data() ?? null);
+  }
   const sourceCorrectionRefs = sourceCorrectionTargets.map((x) => x.ref);
   const sourceCorrectionSnapshots = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   if (sourceCorrectionSnapshots.some((snapshot) => !snapshot.exists)) throw new Error('productSourceCorrection repair target missing');
@@ -662,6 +701,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
         throw new Error(`transaction productIdentity precondition changed ${snapshot.ref.path}`);
       }
+      const blocked = productWriteBlock(snapshot.data());
+      if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
+      if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
       for (const field of PRODUCT_IDENTITY_FIELDS) {
         if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
@@ -829,6 +871,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!snapshot.exists || !targetFromMatches(targets[index]!.kind, snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
+      if (PRODUCT_NAME_KINDS.has(targets[index]!.kind)) {
+        const blocked = productWriteBlock(snapshot.data());
+        if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
+      }
       const { kind, item, field, ref } = targets[index]!;
       const aliasField = ALIAS_FIELD[kind];
       if (kind === 'masterTitle' && snapshot.data()?.[field] !== snapshots[index]!.data()?.[field]) {
@@ -858,7 +904,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         vehicle_name_reference_source_digest: plan.sourceDigest,
       };
       if (Object.keys(update).length <= 2) continue;
-      transaction.update(ref, update);
+      // 상품 문서는 백업 때의 updateTime 을 전제로만 쓴다(그 사이 엔진·사람이 고쳤으면 서버가 거절 — 세 칸이 같아 보여도 덮어쓰지 않는다).
+      if (ref.path in lockedDigest) {
+        const live = [...identityCurrent, ...current].find((s) => s.ref.path === ref.path);
+        if (live && stableDigest(live.data() ?? null) !== lockedDigest[ref.path]) throw new Error(`transaction product changed since backup ${ref.path}`);
+      }
+      const pinned = lockedUpdateTime[ref.path];
+      if (pinned !== undefined) transaction.update(ref, update, { lastUpdateTime: pinned as never });
+      else transaction.update(ref, update);
     }
     // create() fails the whole transaction if the document appeared meanwhile.
     for (const { c, ref } of creates) transaction.create(ref, { ...c.data, vehicle_name_reference_source_digest: plan.sourceDigest });
