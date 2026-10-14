@@ -145,7 +145,7 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     : null;
   // R3 부록: 세대 근거 보류 상품을 별칭 후보로 묶는다(어느 마스터로 이을지는 연식으로 좁힌 «후보»일 뿐이다).
   const byId = new Map(products.map(p => [p.id, p]));
-  const guardHeld = held.filter(h => h.reason === 'GENERATION_QUALIFIER_MISMATCH' || h.reason === 'GENERATION_EVIDENCE_MISSING').flatMap(h => {
+  const guardHeld = held.filter(h => h.reason === 'GENERATION_QUALIFIER_MISMATCH' || h.reason === 'GENERATION_EVIDENCE_MISSING' || h.reason === 'GENERATION_CODE_CONFLICT').flatMap(h => {
     const p = byId.get(h.id);
     const master = masters.find(m => m.sub_model === h.candidates[0]);
     return p && master ? [{ rawName: p.rawName || p.sub_model, year: p.year, reason: h.reason as GenerationGuardReason, master }] : [];

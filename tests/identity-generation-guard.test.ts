@@ -93,6 +93,35 @@ describe('엔진 정제·계획서·감사·부록', () => {
   });
 });
 
+describe('Codex #663 재검토 P1 2건 — 영문자 코드·상충 코드 토큰', () => {
+  const g = (id: string, sub: string, from: number | null, to: number | null, aliases: string[] = []) => master({ id, sub_model: sub, sub_model_aliases: aliases, yearFrom: from, yearTo: to });
+  const guard = (rawName: string, year: string, m: IdentityMaster, all: IdentityMaster[]) => generationGuard({ rawName, year, master: m, masters: all });
+
+  it('(A) 영문자만 코드(HG·IG)도 코드로 보고 형제 판정·토큰 경계를 적용한다 — «그랜저» 별칭 + 연식 없음은 보류', () => {
+    const hg = g('hg', '그랜저 HG', 2009, 2016, ['그랜저']), ig = g('ig', '그랜저 IG', 2016, 2019), gn7 = g('gn7', '그랜저 GN7', 2022, null);
+    const all = [hg, ig, gn7];
+    expect(generationCode('그랜저 HG')).toBe('HG');
+    expect(guard('현대 그랜저', '', hg, all)).toBe('GENERATION_EVIDENCE_MISSING');
+    expect(guard('현대 그랜저', '2012', hg, all)).toBeNull();
+    expect(guard('현대 그랜저 HG 300', '', hg, all)).toBeNull();
+    expect(guard('현대 그랜저 HGS', '', hg, all)).toBe('GENERATION_CODE_CONFLICT');
+  });
+
+  it('파워트레인·등급 약어(EV·HEV·LPI·GDI)는 코드가 아니다', () => {
+    for (const name of ['아이오닉 EV', '쏘나타 HEV', 'K5 LPI', '그랜저 GDI']) expect(generationCode(name), name).toBe('');
+    expect(generationCode('쏘나타 DN8')).toBe('DN8');
+  });
+
+  it('(B) 원문에 형제 세대 코드나 코드와 유사한 토큰이 있으면 연식으로 구제하지 않고 보류한다', () => {
+    const gn7 = g('gn7', '그랜저 GN7', 2022, null), ig = g('ig', '그랜저 IG', 2016, 2022);
+    const all = [gn7, ig];
+    expect(guard('현대 그랜저 GN70', '2024', gn7, all)).toBe('GENERATION_CODE_CONFLICT');   // 연식은 GN7 범위지만 코드가 상충
+    expect(guard('현대 그랜저 IG GN7', '2024', gn7, all)).toBe('GENERATION_CODE_CONFLICT');   // 형제 코드(IG)가 원문에 있음
+    expect(guard('현대 그랜저 GN7', '2024', gn7, all)).toBeNull();
+    expect(guard('현대 그랜저 3.5', '2024', gn7, all)).toBeNull();                              // 코드 없음 + 연식 근거는 통과
+  });
+});
+
 describe('Codex #663 결함 3건 — 세대 근거 우회 차단', () => {
   const g = (id: string, sub: string, from: number | null, to: number | null, model = '그랜저') => master({ id, model, sub_model: sub, yearFrom: from, yearTo: to });
   const guard = (rawName: string, year: string, m: IdentityMaster, all: IdentityMaster[]) => generationGuard({ rawName, year, master: m, masters: all });
@@ -110,7 +139,7 @@ describe('Codex #663 결함 3건 — 세대 근거 우회 차단', () => {
   it('(2) 개발코드는 토큰 경계로만 인정한다 — GN70·XGN7 은 GN7 근거가 아니다', () => {
     const gn7 = g('gn7', '그랜저 GN7', 2022, null), ig = g('ig', '그랜저 IG', 2016, 2019);
     const all = [gn7, ig];
-    expect(guard('현대 그랜저 GN70 캘리그래피', '', gn7, all)).toBe('GENERATION_EVIDENCE_MISSING');
+    expect(guard('현대 그랜저 GN70 캘리그래피', '', gn7, all)).toBe('GENERATION_CODE_CONFLICT');   // 코드와 접두 관계인 다른 토큰 = 상충
     expect(guard('현대 그랜저 XGN7', '', gn7, all)).toBe('GENERATION_EVIDENCE_MISSING');
     expect(guard('현대 그랜저 GN7 캘리그래피', '', gn7, all)).toBeNull();
     expect(guard('현대 그랜저(GN7) 캘리그래피', '', gn7, all)).toBeNull();
