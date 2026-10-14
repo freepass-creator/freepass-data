@@ -371,7 +371,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
     if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
     // A blank gen_code may be filled too (the code is already in the sub-model name), with evidence.
-    const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'masterGenCode') && evidenceOk;
+    // products.trim_name 의 빈칸도 공급사 원문 근거(evidence)가 있으면 채운다 — 원문에 등급명이 없어 «기본형»이거나 원문의 등급을 마스터 세부트림 이름에 맞출 때(2026-10-14 아이언 7대).
+    const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'productTrim' || item.kind === 'masterGenCode') && evidenceOk;
     if (typeof item.id !== 'string' || typeof item.from !== 'string' || typeof item.to !== 'string') throw new Error('repair item id/from/to must be strings');
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (!isDocId(item.id)) throw new Error(`repair item ${item.kind} id must be a single document id`);
