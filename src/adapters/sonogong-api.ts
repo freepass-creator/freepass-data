@@ -8,6 +8,8 @@ import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/so
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { fuelName } from './normalize-sonogong.js';
 import { computeSupplierRuleDeposit, supplierDepositPolicy } from '../domain/supplier-deposit-policy.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache } from './sonogong-detail-cache.js';
 
 export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
@@ -103,6 +105,8 @@ export type SonogongApiRead = {
   observedAt: string; generatedAt?: string | null; complete: boolean; incompleteReason?: string; tabsRead: SonogongApiTab[];
   records: SourceProductRecord[]; held: Array<{ tab: SonogongApiTab; reason: string }>; duplicatePlates: string[];
   listed: number; detailsRead: number;
+  /** 상세 캐시(직전 회차 목록 행 digest 가 같은 차의 상세 재사용): 재사용 건수와 다음 회차에 쓸 갱신된 캐시. 캐시를 주지 않으면 undefined. */
+  detailsCached?: number; detailCacheOut?: DetailCache;
   /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이),
    * AMOUNT_UNPARSEABLE:n(값은 있으나 읽을 수 없어 UNKNOWN 으로 둔 월 대여료·보증금 칸 수), FUEL_UNRESOLVED:n(허용 목록·별칭에 없는 연료 — 칸을 비우고 원문만 보존),
    * DEPOSIT_RULE_DIFFERS:n(구독 항의 API 양수 보증금이 정책 계산값과 다름 — 원문 금액을 쓰고 계산값은 raw.rule_deposit 에 검토용으로 남김),
@@ -110,7 +114,7 @@ export type SonogongApiRead = {
   notes: string[];
 };
 
-export async function readSonogongApi(client: SonogongApiClient, opts: { now?: () => string } = {}): Promise<SonogongApiRead> {
+export async function readSonogongApi(client: SonogongApiClient, opts: { now?: () => string; detailCache?: DetailCache | null } = {}): Promise<SonogongApiRead> {
   const clock = opts.now ?? (() => new Date().toISOString());
   const rowsByTab = new Map<SonogongApiTab, Record<string, unknown>[]>();
   let generatedAt: string | null = null, incomplete: string | undefined;
@@ -178,6 +182,11 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   const accepted = new Map<string, { tab: SonogongApiTab; ym: string; index: number }>();
   let crossTabContractConflicts = 0;
   let identityMismatches = 0;
+  // 상세 캐시: 전수 갱신 차례가 아니고 목록 행 digest 가 같고 유효 상한 안인 차만 직전 상세를 재사용한다. 이번 회차에 쓴 상세(새로 읽음·재사용)만 다음 캐시에 남긴다.
+  const cacheOn = opts.detailCache !== undefined;
+  const useCache = cacheOn && !fullRefreshDue(opts.detailCache ?? null, Date.parse(observedAt));
+  const cacheNext: DetailCache['entries'] = {};
+  let detailsCached = 0, uncachedFailures = 0;
   let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
   let depositRuleDiffers = 0, depositPlaceholderZero = 0;
   for (const tab of SONOGONG_API_TABS) {
@@ -205,11 +214,17 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const id = typeof row.id === 'number' || typeof row.id === 'string' ? String(row.id) : '';
       if (!id) { held.push({ tab, reason: 'ID_MISSING' }); continue; }
       let detail: Record<string, unknown> | null = null;
-      if (detailsRead < SONOGONG_API_POLICY.maxDetails) {
+      const rowDigest = cacheOn ? stableDigest(row) : '';
+      const cachedDetail = useCache ? cachedDetailFor(opts.detailCache ?? null, id, rowDigest, Date.parse(observedAt)) : null;
+      if (cachedDetail) {
+        detail = cachedDetail; detailsCached++;
+        const entry = opts.detailCache!.entries[id]!;
+        cacheNext[id] = { rowDigest, detail: entry.detail, cachedAt: entry.cachedAt };
+      } else if (detailsRead < SONOGONG_API_POLICY.maxDetails) {
         try {
           const got = await client.get(`/vehicles/${encodeURIComponent(id)}`);
           detailsRead++;
-          if (object(got.data)) detail = got.data;
+          if (object(got.data)) { detail = got.data; if (cacheOn) cacheNext[id] = { rowDigest, detail: structuredClone(got.data), cachedAt: observedAt }; }
         } catch (e) {
           // 인증·한도(401/403/429)는 회차 전체를 멈춘다. 그 밖의 상세 실패(404 등)는 이 차만 보증금 «미확인» 으로 두고 읽기를 불완전으로 표시한다.
           if (e instanceof SonogongApiError && [401, 403, 429].includes(e.status ?? 0)) throw e;
@@ -218,6 +233,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
           else {
             const code = (e instanceof SonogongApiError ? e.code : 'UNKNOWN').replace(/^SONOGONG_API_/, '');
             failureCodes.set(code, (failureCodes.get(code) ?? 0) + 1);
+            uncachedFailures++;
             incomplete ??= 'API_DETAIL_FAILED';
           }
         }
@@ -312,6 +328,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   }
   if (identityMismatches) notes.push(`IDENTITY_MISMATCH_HELD:${identityMismatches}`);
   for (const note of tabNotes) notes.push(note);
+  if (detailsCached) notes.push(`DETAIL_CACHE_HIT:${detailsCached}`);
   for (const [code, n] of failureCodes) notes.push(`DETAIL_FAIL:${code}:${n}`.slice(0, 60));
   if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
   if (crossTabContractConflicts) notes.push(`CROSS_TAB_CONTRACT_CONFLICT:${crossTabContractConflicts}`);
@@ -321,7 +338,12 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (depositRuleDiffers) notes.push(`DEPOSIT_RULE_DIFFERS:${depositRuleDiffers}`);
   if (depositPlaceholderZero) notes.push(`DEPOSIT_PLACEHOLDER_ZERO:${depositPlaceholderZero}`);
   return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
-    records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
+    records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes,
+    ...(cacheOn ? { detailsCached, detailCacheOut: {
+      version: DETAIL_CACHE_VERSION, writtenAt: observedAt,
+      // 전수 읽기(캐시를 쓰지 않은 회차)가 상세 실패 없이 끝났을 때만 전수 시각을 갱신한다.
+      lastFullAt: (!useCache && !uncachedFailures && !incomplete) ? observedAt : (opts.detailCache?.lastFullAt ?? null),
+      lastGeneratedAt: generatedAt ?? opts.detailCache?.lastGeneratedAt ?? null, entries: cacheNext } } : {}) };
 }
 
 /** 손오공 사진 주소 목록(원천 순서 그대로): 상세 images[].url(상세가 없거나 images 가 배열이 아니면 목록 images[].url), 그것이 비면 목록 thumbnailUrl.
