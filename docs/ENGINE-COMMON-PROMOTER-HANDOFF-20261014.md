@@ -13,7 +13,7 @@
 | 2-2 | 확정 규칙 한정 자동 적용(repair:vehicle-name-parity 경로) | 다음 | — |
 | 2-3 | 보증금 계산값(deposit_source=CALCULATED) | 대기 | — |
 | 2-4 | 사진 연결 승격(photo_original_refs 등록) | 대기 | — |
-| 3 | 엔진 온라인 실행 설계(Actions) + DRY_RUN 워크플로 | DESIGNED · CODED · TESTED(설계 `docs/SOURCE-CYCLE-ONLINE-RUN-DESIGN-20261014.md`) — 실행은 읽기 SA·변수 등록 후 | #608 |
+| 3 | 엔진 온라인 실행 설계(Actions) + DRY_RUN 워크플로 | DESIGNED · CODED · TESTED(설계 `docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md`(#605) §5) — 실행은 읽기 SA·변수 등록 후 | #608 |
 | 3-1 | 시트 읽기 ADC 전송(SHEETS_TRANSPORT=adc, gws 없이 F05·아이카·오토플러스 시트) | CODED · TESTED | #618 |
 | 4 | 5칸 지표·dispatchGap heartbeat + gap 사유 코드 | 대기 | — |
 

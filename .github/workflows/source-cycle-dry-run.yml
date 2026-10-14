@@ -1,6 +1,6 @@
 name: Source cycle online DRY_RUN (read-only)
 
-# 원천 엔진을 운영 PC(B3Q 작업 스케줄러) 밖, 온라인에서 «계획만» 세우는 회차(2026-10-14, 설계: docs/SOURCE-CYCLE-ONLINE-RUN-DESIGN-20261014.md).
+# 원천 엔진을 운영 PC(B3Q 작업 스케줄러) 밖, 온라인에서 «계획만» 세우는 회차(2026-10-14, 설계: docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md §5).
 # - 쓰기 0: --apply·--unattended 를 절대 넘기지 않는다(엔진 applySourceCycle 은 apply 없으면 DRY_RUN, writes 0).
 # - 읽기 신원·원천별 비밀은 저장소 변수/비밀로만. 없으면 그 원천은 건너뛰고(SKIPPED) 실패로 숨기지 않는다.
 # - 정기 실행 스위치(vars.FREEPASS_SOURCE_CYCLE_DRY_RUN_SCHEDULE == 'on')는 커맨드 센터가 켠다. 기본 꺼짐.
