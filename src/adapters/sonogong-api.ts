@@ -5,6 +5,7 @@
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { fuelName } from './normalize-sonogong.js';
 
 export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
@@ -60,8 +61,29 @@ export function createSonogongApiClient(input: { base: string; key: string; fetc
 }
 export type SonogongApiClient = ReturnType<typeof createSonogongApiClient>;
 
-const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 }
-  : typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
+/** 금액 칸 해석(원 단위 정수). 유한한 0 이상 «정수» 숫자(소수는 읽을 수 없는 값)와 숫자 문자열(쉼표 허용)만 받는다.
+ * 값이 «없음»(null·undefined·빈 문자열)이면 UNKNOWN, 값은 있는데 읽을 수 없으면(NaN·음수·글자 등) UNKNOWN 이면서 unparseable=true 로 센다. */
+export const parseSonogongAmount = (v: unknown): { amount: SourceAmount; unparseable: boolean } => {
+  const unknown = (unparseable: boolean) => ({ amount: { state: 'UNKNOWN' as const, value: null }, unparseable });
+  if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) return unknown(false);
+  let n: number;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && /^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(v.trim())) n = Number(v.trim().replace(/,/g, ''));
+  else return unknown(true);
+  if (!Number.isFinite(n) || n < 0) return unknown(true);
+  // 소수는 반올림하지 않는다(Codex #643 ①): 0.4 를 0 원 확정(ZERO)으로, 1000.5 를 1001 로 바꾸지 않고 읽을 수 없는 값으로 둔다.
+  if (!Number.isSafeInteger(n)) return unknown(true);
+  const won = n;
+  return { amount: won === 0 ? { state: 'ZERO', value: 0 } : { state: 'KNOWN', value: won }, unparseable: false };
+};
+/** 상세의 실제 최초등록일(YYYY-MM-DD, 없는 날짜는 거른다). 제조연월은 최초등록일이 아니다. */
+const registrationDate = (v: unknown): string | null => {
+  const m = typeof v === 'string' ? /^(\d{4})[-./]?(\d{2})[-./]?(\d{2})/.exec(v.trim()) : null;
+  if (!m) return null;
+  const iso = `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === iso ? iso : null;
+};
 const listRows = (data: unknown): Record<string, unknown>[] | null => {
   const rows = Array.isArray(data) ? data : object(data)
     ? (['items', 'vehicles', 'list', 'rows', 'content'] as const).map(k => (data as Record<string, unknown>)[k]).find(Array.isArray) : null;
@@ -79,7 +101,8 @@ export type SonogongApiRead = {
   observedAt: string; generatedAt?: string | null; complete: boolean; incompleteReason?: string; tabsRead: SonogongApiTab[];
   records: SourceProductRecord[]; held: Array<{ tab: SonogongApiTab; reason: string }>; duplicatePlates: string[];
   listed: number; detailsRead: number;
-  /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이). */
+  /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이),
+   * AMOUNT_UNPARSEABLE:n(값은 있으나 읽을 수 없어 UNKNOWN 으로 둔 월 대여료·보증금 칸 수), FUEL_UNRESOLVED:n(허용 목록·별칭에 없는 연료 — 칸을 비우고 원문만 보존). */
   notes: string[];
 };
 
@@ -87,23 +110,37 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   const clock = opts.now ?? (() => new Date().toISOString());
   const rowsByTab = new Map<SonogongApiTab, Record<string, unknown>[]>();
   let generatedAt: string | null = null, incomplete: string | undefined;
+  // 페이지마다 온 상류 생성 시각(ms). 둘 이상이면 읽는 도중 스냅숏이 바뀐 것이다(페이지가 서로 다른 판에서 왔다).
+  const generations = new Set<number>();
   for (const tab of SONOGONG_API_TABS) {
     const rows: Record<string, unknown>[] = [];
+    // 완료 판정은 «누적 행 수»가 아니라 서로 다른 차 식별자(id, 없으면 행 내용) 수로 한다(Codex #643 ③): 읽는 도중 페이지가 밀려 같은 차가 두 페이지에 오면
+    // 행 수만으로 총수에 닿아 뒤 차량을 놓친 채 완료로 보인다. 겹친 행은 한 번만 쓰고 불완전(API_PAGE_OVERLAP)으로 둔다.
+    const seenIds = new Set<string>();
     let total: number | null = null, done = false;
     for (let page = 1; page <= SONOGONG_API_POLICY.maxPages; page++) {
       const { data, attrs } = await client.get('/vehicles', { tab, page, pageSize: SONOGONG_API_POLICY.pageSize });
       const batch = listRows(data);
       if (!batch) throw new SonogongApiError('SONOGONG_API_INVALID_RESPONSE');
-      if (typeof attrs.generatedAt === 'string' && Number.isFinite(Date.parse(attrs.generatedAt)))
+      if (typeof attrs.generatedAt === 'string' && Number.isFinite(Date.parse(attrs.generatedAt))) {
+        generations.add(Date.parse(attrs.generatedAt));
         generatedAt = !generatedAt || Date.parse(attrs.generatedAt) < Date.parse(generatedAt) ? attrs.generatedAt : generatedAt;
+      }
       total = totalOf(data, attrs) ?? total;
-      rows.push(...batch);
-      if (batch.length < SONOGONG_API_POLICY.pageSize || (total !== null && rows.length >= total)) { done = true; break; }
+      for (const row of batch) {
+        const key = typeof row.id === 'number' || typeof row.id === 'string' ? `id:${row.id}` : `row:${JSON.stringify(row)}`;
+        if (seenIds.has(key)) { incomplete ??= 'API_PAGE_OVERLAP'; continue; }
+        seenIds.add(key); rows.push(row);
+      }
+      // 끝 판정: 총수가 있으면 총수에 닿을 때까지, 없으면 빈 페이지가 올 때까지 읽는다(요청 크기보다 작은 페이지만으로 끝났다고 보지 않는다 —
+      // 서버가 페이지 크기를 줄여 주면 뒤 페이지를 통째로 놓친다). 상한(maxPages)을 넘으면 불완전.
+      if (batch.length === 0 || (total !== null && seenIds.size >= total)) { done = true; break; }
     }
     if (!done) incomplete ??= 'API_PAGE_LIMIT';
     if (total !== null && rows.length !== total) incomplete ??= 'API_COUNT_MISMATCH';
     rowsByTab.set(tab, rows);
   }
+  if (generations.size > 1) incomplete ??= 'SNAPSHOT_CHANGED_DURING_READ';
   // 신선도 창(엔진 OTHER 30분)의 기준은 «읽은 시각»이다. 상류 generatedAt 은 최대 1시간 묵을 수 있어 그대로 observedAt 으로 쓰면 항상 SOURCE_STALE 이 된다
   // (2026-10-14 첫 DRY_RUN: SOURCE_INCOMPLETE,SOURCE_STALE). 상류 정지 여부는 generatedAt 으로 따로 판정한다(guards).
   const observedAt = clock();
@@ -112,24 +149,33 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // 건수가 허용 한도(max(5, 목록의 2%))를 넘을 때만 불완전로 둔다. 429/401/403·전송 오류·5xx·응답 형식 오류는 기존대로 즉시 정지/불완전.
   const skipped404: string[] = [];
   const records: SourceProductRecord[] = [], held: SonogongApiRead['held'] = [], duplicates = new Set<string>();
-  // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 앞선 탭 하나만 채택하고 경고로 센다(불완전 아님).
-  // 같은 탭 안에서 같은 번호가 두 번이면 원천 오류라 읽기를 불완전으로 둔다.
-  const seen = new Map<string, { tab: SonogongApiTab; ym: string }>();
-  let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0;
+  // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 «채택된» 앞선 탭 하나만 쓰고 경고로 센다(불완전 아님).
+  // 보류된 행(상태 미상·ID 없음·신원 불일치 등)은 다른 탭의 정상 행을 가리지 않는다 — accepted 에는 레코드로 채택된 행만 들어간다.
+  // 같은 탭 안에서 같은 번호가 두 번이면(정상·보류 무관) 원천 오류라 읽기를 불완전으로 둔다.
+  const accepted = new Map<string, { tab: SonogongApiTab; ym: string; index: number }>();
+  let crossTabContractConflicts = 0;
+  let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
   for (const tab of SONOGONG_API_TABS) {
+    const inTab = new Set<string>();
     for (const row of rowsByTab.get(tab) ?? []) {
       listed++;
       const plateRaw = String(row.carNumber ?? '').replace(/\s+/g, '');
       if (!/^\d{2,3}[가-힣]\d{4}$/.test(plateRaw) || !isAssignedPlate(plateRaw)) { held.push({ tab, reason: 'PLATE_INVALID' }); continue; }
       const plate = plateIdentityKey(plateRaw);
       const ymRaw = String(row.manufactureYearMonth ?? '').slice(0, 7);
-      const earlier = seen.get(plate);
+      if (inTab.has(plate)) { duplicates.add(plate); continue; }
+      inTab.add(plate);
+      const earlier = accepted.get(plate);
       if (earlier) {
-        if (earlier.tab === tab) duplicates.add(plate);
-        else { crossTabDuplicates++; if (earlier.ym && ymRaw && earlier.ym !== ymRaw) generationDifferences++; }
+        crossTabDuplicates++; if (earlier.ym && ymRaw && earlier.ym !== ymRaw) generationDifferences++;
+        // 탭 사이 충돌(Codex #643 ②): 앞선 탭은 출고가능인데 뒤 탭이 계약중이면 출고가능으로 두지 않는다 — 계약중을 우선해 채택 레코드 상태를 바꾼다.
+        // 반대(앞 계약중·뒤 출고가능)는 앞선 값 그대로(계약중)다. 한 번이라도 계약중이면 판매 가능으로 내보내지 않는 쪽(fail-closed)이다.
+        const kept = records[earlier.index]!;
+        if (row.hasActiveContract === true && kept.status.raw !== '계약중') {
+          kept.status = { raw: '계약중', saleAvailable: true }; crossTabContractConflicts++;
+        }
         continue;
       }
-      seen.set(plate, { tab, ym: ymRaw });
       if (typeof row.hasActiveContract !== 'boolean') { held.push({ tab, reason: 'STATUS_UNKNOWN' }); continue; }
       const id = typeof row.id === 'number' || typeof row.id === 'string' ? String(row.id) : '';
       if (!id) { held.push({ tab, reason: 'ID_MISSING' }); continue; }
@@ -160,15 +206,29 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const deposit = detail && object(priced?.deposit) ? priced.deposit as Record<string, unknown> : {};
       const terms: SourceTerm[] = [];
       for (const months of MONTHS) {
-        const rent = amount(monthly[String(months)]);
-        if (rent.state === 'KNOWN') terms.push({ months, monthlyRent: rent,
-          deposit: detail ? amount(deposit[String(months)]) : { state: 'UNKNOWN', value: null }, mileage: null, raw: { priceType: RETURN_TYPE[tab] } });
+        const rent = parseSonogongAmount(monthly[String(months)]);
+        if (rent.unparseable) amountUnparseable++;
+        if (rent.amount.state !== 'KNOWN') continue;
+        let depositAmount: SourceAmount = { state: 'UNKNOWN', value: null };
+        if (detail) {
+          const parsed = parseSonogongAmount(deposit[String(months)]);
+          if (parsed.unparseable) amountUnparseable++;
+          depositAmount = parsed.amount;
+        }
+        terms.push({ months, monthlyRent: rent.amount, deposit: depositAmount, mileage: null, raw: { priceType: RETURN_TYPE[tab] } });
       }
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
       const spec: Record<string, string> = {};
       if (typeof row.exteriorColor === 'string' && row.exteriorColor.trim()) spec.ext_color = row.exteriorColor.trim();
-      if (typeof row.fuel === 'string' && row.fuel.trim()) spec.fuel_type = row.fuel.trim();
-      if (ym) { spec.year = ym[1]!; spec.first_registration_date = `${ym[1]}-${ym[2]}`; }
+      // 연료: 공통 허용 목록·별칭(normalize-sonogong 의 표)으로만 바꾼다. 모르면 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
+      if (typeof row.fuel === 'string' && row.fuel.trim()) {
+        const fuel = fuelName(row.fuel);
+        if (fuel) spec.fuel_type = fuel; else fuelUnresolved++;
+      }
+      // 제조연월은 최초등록일이 아니다: manufacture_year_month 로 따로 두고, 최초등록일은 상세에 실제 칸이 있을 때만 쓴다.
+      if (ym) { spec.year = ym[1]!; spec.manufacture_year_month = `${ym[1]}-${ym[2]}`; }
+      const registered = registrationDate(detail?.firstRegistrationDate);
+      if (registered) spec.first_registration_date = registered;
       if (typeof row.mileageKm === 'number') spec.mileage = String(row.mileageKm);
       if (typeof row.displacementCc === 'number') spec.engine_cc = String(row.displacementCc);
       const name = typeof detail?.carName === 'string' && detail.carName.trim() ? detail.carName.trim()
@@ -183,6 +243,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
           prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
+      accepted.set(plate, { tab, ym: ymRaw, index: records.length - 1 });
     }
   }
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
@@ -204,7 +265,10 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   }
   for (const [code, n] of failureCodes) notes.push(`DETAIL_FAIL:${code}:${n}`.slice(0, 60));
   if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
+  if (crossTabContractConflicts) notes.push(`CROSS_TAB_CONTRACT_CONFLICT:${crossTabContractConflicts}`);
   if (generationDifferences) notes.push(`CROSS_TAB_GENERATION_DIFFERENCE:${generationDifferences}`);
+  if (amountUnparseable) notes.push(`AMOUNT_UNPARSEABLE:${amountUnparseable}`);
+  if (fuelUnresolved) notes.push(`FUEL_UNRESOLVED:${fuelUnresolved}`);
   return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
     records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
 }
