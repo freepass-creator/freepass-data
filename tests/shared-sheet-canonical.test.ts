@@ -801,6 +801,8 @@ describe('safeErrorCode', () => {
     expect(safeErrorCode(new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED'))).toBe('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
     expect(safeErrorCode(new Error('provider said 12가3456 failed'))).toBe('UNCODED_Error');
     expect(safeErrorCode(new TypeError('x'))).toBe('UNCODED_TypeError');
+    expect(safeErrorCode(new Error('HOLD: Active Data vehicle master snapshot required'))).toBe('VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE');
+    expect(safeErrorCode(new Error('HOLD: some other free text 12가3456'))).toBe('UNCODED_Error');
     expect(safeErrorCode('boom')).toBe('UNCODED');
   });
 });
