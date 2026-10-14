@@ -5,6 +5,7 @@ import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/
 import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
+import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
 import { assessFreshness, parseFreshnessExempt } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
@@ -119,6 +120,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     return evidenceCache.value;
   } : undefined;
   // 시트 읽기는 이미 인증된 gws(회사 계정 위임)로 한다 — gcloud 사용자 토큰에는 Sheets 권한이 없다. 비밀은 건드리지 않는다.
+  // 온라인 실행기(Actions)는 gws 가 없으므로 SHEETS_TRANSPORT=adc 일 때만 ADC 읽기 전용 토큰(WIF 서비스 계정, 시트 «보기» 공유)으로 읽는다.
+  const sheetsAdc = env.SHEETS_TRANSPORT === 'adc';
   const gwsBin = () => {
     const bin = resolveGwsBin(env);
     if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
@@ -136,7 +139,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     return new Response(out.slice(out.indexOf('{')), { status: 200 });
   };
   const get = async (url: URL, authenticated: boolean) => {
-    if (authenticated && url.hostname === 'sheets.googleapis.com') return sheetsViaGws(url);
+    if (authenticated && url.hostname === 'sheets.googleapis.com') return sheetsAdc ? new Response(JSON.stringify(await readSheetsUrl(url)), { status: 200 }) : sheetsViaGws(url);
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
@@ -368,16 +371,24 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         if (!/^[A-Za-z0-9_-]{20,80}$/.test(sheetId)) throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
         plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['sheet'], maxDowngradeRatio: ratio }, async () => {
           const observedAt = new Date().toISOString();
-          const gws = (args: string[], params: Record<string, unknown>) => JSON.parse(execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)],
-            { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/^[^{]*/, '')) as Record<string, unknown>;
+          const gws = async (args: string[], params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+            if (sheetsAdc) {
+              const batch = args.includes('batchGet');
+              const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(String(params.spreadsheetId))}${batch ? '/values:batchGet' : ''}`);
+              for (const [k, v] of Object.entries(params)) if (k !== 'spreadsheetId') for (const one of Array.isArray(v) ? v : [v]) url.searchParams.append(k, String(one));
+              return await readSheetsUrl(url) as Record<string, unknown>;
+            }
+            return JSON.parse(execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)],
+              { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/^[^{]*/, '')) as Record<string, unknown>;
+          };
           const incomplete = (reason: string) => ({ observedAt, complete: false, completedScopes: [] as string[], visibilityComplete: false, incompleteReason: reason, heldCount: 0, rows: [] });
           let tabs: AutoplusSheetTab[];
           try {
-            const meta = gws(['sheets', 'spreadsheets', 'get'], { spreadsheetId: sheetId, fields: 'sheets(properties(title,hidden))' }) as
+            const meta = await gws(['sheets', 'spreadsheets', 'get'], { spreadsheetId: sheetId, fields: 'sheets(properties(title,hidden))' }) as
               { sheets?: Array<{ properties?: { title?: string; hidden?: boolean } }> };
             const titles = (meta.sheets ?? []).filter(x => x.properties?.title && !x.properties.hidden).map(x => x.properties!.title!);
             if (!titles.length) return incomplete('SHEET_TABS_NOT_FOUND');
-            const got = gws(['sheets', 'spreadsheets', 'values', 'batchGet'], { spreadsheetId: sheetId,
+            const got = await gws(['sheets', 'spreadsheets', 'values', 'batchGet'], { spreadsheetId: sheetId,
               ranges: titles.map(t => `'${t.replace(/'/g, "''")}'!A1:AB1500`), valueRenderOption: 'FORMATTED_VALUE' }) as { valueRanges?: Array<{ values?: unknown[][] }> };
             tabs = titles.map((title, i) => ({ title, values: got.valueRanges?.[i]?.values ?? [] }));
           } catch { return incomplete('SHEET_READ_FAILED'); }
@@ -477,8 +488,9 @@ const defaultProbes: UnattendedProbes = { gwsBin: resolveGwsBin, gcloudToken: gc
 export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonly string[], probes: UnattendedProbes = defaultProbes) {
   const missing: string[] = [];
   const sheets = kinds.includes('F05') || kinds.includes('AICA');
-  if (sheets && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
-  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
+  // SHEETS_TRANSPORT=adc(온라인 실행기)는 gws 가 필요 없다. 그 외에는 기존대로 gws 필수.
+  if (sheets && env.SHEETS_TRANSPORT !== 'adc' && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
+  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   return missing;
