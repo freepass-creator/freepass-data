@@ -56,10 +56,17 @@ const tokensOf = (text: string): string[] => text.toUpperCase().replace(/[-.·_]
 /** 한국어 차명 앞머리(더 뉴·디 올 뉴·올뉴 등)를 떼어 낸 변형도 본다: «더뉴아반떼» → «아반떼». */
 const stripLead = (t: string) => t.replace(/^(?:THE|ALL|NEW|더|디|올|뉴)+/, '');
 const isAscii = (s: string) => /^[A-Z0-9]+$/.test(s);
-/** 낱말이 목록 항목으로 시작하는가. 영문·숫자 항목은 바로 뒤가 숫자이면 다른 차다(X3 ≠ X35, IX ≠ IX35, K3 ≠ K30). */
+/** 항목 뒤에 붙어도 같은 차로 보는 한글 꼬리(파워트레인·차체). 그 밖의 한글 꼬리는 다른 이름이다(미니밴 ≠ 미니, 레이스 ≠ 레이). */
+const KOREAN_TAILS = ['하이브리드', '일렉트릭', '전기', '가솔린', '디젤', '터보', '리무진', '왜건', '쿠페', '스포츠', '프리미엄', '플러그인', '플레이그라운드'];
+/** 낱말이 항목과 같거나 «항목 + 허용 꼬리»인가(Codex #642 ③: 앞부분만 같다고 같은 차가 아니다).
+ * 꼬리는 영문·숫자 세대·형식 기호(CN7·DN8·HEV)이거나 허용 한글 꼬리여야 하고, 영문·숫자 항목 바로 뒤의 숫자는 다른 차다(X3 ≠ X35, K3 ≠ K30). */
 const startsWithEntry = (token: string, entry: string): boolean => {
+  if (token === entry) return true;
   if (!token.startsWith(entry)) return false;
-  return !isAscii(entry) || !/[0-9]/.test(token.charAt(entry.length));
+  const tail = token.slice(entry.length);
+  if (isAscii(entry) && /^[0-9]/.test(tail)) return false;
+  if (/^[A-Z0-9]+$/.test(tail)) return !isAscii(entry) || /^[A-Z]/.test(tail);   // 아반떼CN7, 쏘나타DN8, 그랜저GN7 / K5DL3
+  return KOREAN_TAILS.includes(tail);
 };
 const matches = (list: readonly string[], tokens: readonly string[]): string[] => {
   const entries = list.map(e => e.toUpperCase());

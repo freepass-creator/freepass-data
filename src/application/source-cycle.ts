@@ -42,7 +42,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 계획 단계 보류의 사유 코드별 건수(보고 전용, plan digest 에 넣지 않는다). RP021 보류 3건이 코드 없이 세어져 원인을 못 가리던 문제(B3Q 2026-10-14).
   const heldBy: Record<string, number> = {};
   const hold = (code: string) => { plan.held++; heldBy[code] = (heldBy[code] ?? 0) + 1; };
-  let infoIncomplete = 0, notSellableEnrolled = 0;
+  let infoIncomplete = 0, notSellableEnrolled = 0, statusUnknownExposed = 0;
   if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
@@ -60,6 +60,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const mine = new Map(snapshot.products.map(p => [sourceProductKey(p.record), p]));
   const driftHeld = new Set(snapshot.driftHeld ?? []);
+  const foreignUids = new Set(snapshot.foreignUids ?? []);
   if (driftHeld.size) plan.warnings.push(`DRIFT_HELD:${driftHeld.size}:${stableDigest([...driftHeld].sort()).slice(0, 12)}`);
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
@@ -117,6 +118,13 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
+    // 같은 번호(문서 ID)를 다른 공급사 문서가 이미 쓰고 있다: 편입하면 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN)로 공급사 회차 전체가 멈춘다.
+    // 그 행만 보류하고 나머지는 진행한다(어느 공급사 차인지는 사람이 판단 — 남의 문서를 덮어쓰지 않는다).
+    if (!before && foreignUids.has(r.uid)) {
+      hold('PLATE_OWNED_BY_OTHER_SUPPLIER');
+      if (!plan.warnings.includes('PLATE_OWNED_BY_OTHER_SUPPLIER')) plan.warnings.push('PLATE_OWNED_BY_OTHER_SUPPLIER');
+      continue;
+    }
     if (before && locked(before)) { hold('CONTRACT_LOCKED'); continue; }
     if (before && driftHeld.has(before.record.uid)) {
       // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
@@ -125,7 +133,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
     // 1차는 무조건 가져온다(대표 2026-10-14): 새 차(문서 없음)는 상태를 몰라도 식별자만 있으면 편입한다(노출 제외). 이미 문서가 있는 차는 이전처럼 보류 —
     // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
-    if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); continue; }
+    // 노출 중인 문서가 모르는 상태값(예: 취소·진행중)으로 보류되면 노출이 그대로 남는다 — 조용히 두지 않고 회차 경고로 센다.
+    if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); if (before.listable) statusUnknownExposed++; continue; }
     if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       hold('OBSERVATION_ORDER'); continue;
@@ -198,6 +207,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
+  if (statusUnknownExposed > 0) plan.warnings.push(`STATUS_UNKNOWN_EXPOSED:${statusUnknownExposed}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
   // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.

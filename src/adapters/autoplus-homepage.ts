@@ -4,6 +4,7 @@
  *  - 상세: 상품 자기 상세 URL GET → Set-Cookie·RB_TOKEN(JWT)·_csrf → POST /api/v1/car/getRentCarDetail.rb (본문 productId).
  *  - 호출 규칙: 완전 직렬, 차 사이 150ms, resultCode 1020 이면 응답 msg 의 새 토큰으로 60ms 후 최대 4회.
  * 상태 신호는 «사이트맵에 있음 = 게시 중» 뿐이고(상세 응답에 상태 필드 없음), 보증금은 응답에 없다(UNKNOWN). 대표 2026-10-14 «시트를 메인으로 하되 홈페이지를 참고»: RP023 쓰기·보증금 계산은 시트(autoplus-sheet)만, 홈피는 비교 보고만. */
+import { MONTHLY_RENT_MIN, MONTHLY_RENT_MAX } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 
@@ -93,7 +94,7 @@ export function createAutoplusHomepageClient(options: {
 
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
 /** 월 대여료만 KNOWN: 숫자 또는 숫자 문자열, 정수, 10만~5천만 원. true/객체/범위 밖 값은 UNKNOWN(독립 검토 2026-10-14: Number(true)=1 이 가격이 되어 REEXPOSE 됨). */
-const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
+const RENT_MIN = MONTHLY_RENT_MIN, RENT_MAX = MONTHLY_RENT_MAX;   // 공용 월 대여료 타당 범위(공통 시트·아이카와 같은 값)
 const amountOf = (v: unknown): SourceAmount => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : NaN;
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
