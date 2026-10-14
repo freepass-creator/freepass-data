@@ -40,7 +40,20 @@ export type SourceReconciliation = {
   notSellableEnrolledCount: number;
   /** 5칸 지표: 원천 출고가능(계약중 제외 판매 가능) / 출고가능 노출(잠금·계약중 제외 노출) / 계약중·잠금 표시 노출 / dispatchableGap = 앞 둘의 차(0 이면 «대수 = 원천 판매 가능»). */
   sourceDispatchableCount: number; dispatchableExposedCount: number; contractMarkedExposedCount: number; dispatchableGap: number;
+  /** dispatchableGap 의 사유 분해(커맨드 센터 2026-10-14 «gap≠0 사유 코드»). 양수 = 원천 출고가능인데 출고가능 노출이 아닌 차, 음수 = 그 반대.
+   * 합(양수 사유 − 음수 사유) = dispatchableGap 이 항상 성립한다(dispatchGapExplained). 0 인 사유는 싣지 않는다. */
+  dispatchGapReasons: Partial<Record<DispatchGapReason, number>>; dispatchGapExplained: boolean;
 };
+/** SOURCE_ONLY_* 는 gap 을 늘리고(+) ERP_ONLY_* 는 줄인다(−). WITHDRAWN 은 비노출 사유(publication_withdrawal.reason)별로 나눈다. */
+export type DispatchGapReason =
+  | 'SOURCE_ONLY_NO_DOC'                 // 원천 출고가능, 문서 없음(다음 편입 대상·회차 상한)
+  | 'SOURCE_ONLY_INFO_INCOMPLETE'        // 문서는 있으나 정보 부족 비노출(승격 대기)
+  | 'SOURCE_ONLY_NOT_SELLABLE_STALE'     // 문서가 «원천 판매 불가» 비노출로 남음(이번 원천은 판매 가능 — 다음 회차 재노출 대상)
+  | 'SOURCE_ONLY_WITHDRAWN_OTHER'        // 그 밖의 철회 표식으로 비노출
+  | 'SOURCE_ONLY_NOT_LISTABLE'           // 철회 표식 없이 비노출
+  | 'SOURCE_ONLY_LOCKED_EXPOSED'         // 노출이지만 계약 잠금 문서(계약중 표시 칸으로 감)
+  | 'ERP_ONLY_NOT_IN_SOURCE'             // 출고가능 노출인데 원천 판매 가능 목록에 없음(하향 대상 — 완전 읽기에서만 하향)
+  | 'ERP_ONLY_SOURCE_CONTRACT';          // 출고가능 노출인데 원천은 계약중(계약중 표시로 바뀌어야 함)
 
 /** 계획 단계와 같은 규칙: 원천 보증금이 UNKNOWN 이면 문서의 KNOWN/ZERO 보증금을 보존한다 — 이 경우는 값 불일치가 아니다
  * (B3Q 실측 2026-10-14: RP018 9·RP013 2 가 DEPOSIT_PRESERVED 건수와 같았다). */
@@ -58,6 +71,32 @@ const isLocked = (p: CycleProduct) => p.locked_by_contract === true || p.record.
 
 /** 차량 키: 번호가 있으면 번호(같은 차가 다른 UID 로 읽혀도 한 대), 없으면(번호 없는 월렌트) UID. 독립 검토: UID 키만 쓰면 UID 연결 대상이 NEW+MISSING 으로 나온다. */
 const keyOf = (r: SourceProductRecord) => r.plate && isAssignedPlate(r.plate) ? `P:${plateIdentityKey(r.plate)}` : `U:${sourceProductKey(r)}`;
+
+function dispatchGapReasons(source: Map<string, SourceProductRecord>, docs: Map<string, CycleProduct>) {
+  const reasons: Partial<Record<DispatchGapReason, number>> = {};
+  const add = (reason: DispatchGapReason) => { reasons[reason] = (reasons[reason] ?? 0) + 1; };
+  const contract = (r: SourceProductRecord) => r.status.raw.trim() === '계약중';
+  for (const [key, r] of source) {
+    if (contract(r)) continue;
+    const doc = docs.get(key);
+    if (!doc) add('SOURCE_ONLY_NO_DOC');
+    else if (doc.listable) { if (isLocked(doc)) add('SOURCE_ONLY_LOCKED_EXPOSED'); }
+    else {
+      const reason = doc.publication_withdrawal?.reason;
+      add(reason === 'INFO_INCOMPLETE' ? 'SOURCE_ONLY_INFO_INCOMPLETE' : reason === 'SOURCE_NOT_SELLABLE' ? 'SOURCE_ONLY_NOT_SELLABLE_STALE'
+        : reason ? 'SOURCE_ONLY_WITHDRAWN_OTHER' : 'SOURCE_ONLY_NOT_LISTABLE');
+    }
+  }
+  for (const [key, doc] of docs) {
+    if (!doc.listable || isLocked(doc)) continue;
+    const r = source.get(key);
+    if (!r) add('ERP_ONLY_NOT_IN_SOURCE');
+    else if (contract(r)) add('ERP_ONLY_SOURCE_CONTRACT');
+  }
+  return reasons;
+}
+const gapFromReasons = (reasons: Partial<Record<DispatchGapReason, number>>) =>
+  Object.entries(reasons).reduce((sum, [k, n]) => sum + (k.startsWith('ERP_ONLY_') ? -n! : n!), 0);
 
 export function reconcileSource(records: readonly SourceProductRecord[], products: readonly CycleProduct[]): SourceReconciliation {
   const source = new Map<string, SourceProductRecord>();
@@ -101,5 +140,10 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     dispatchableExposedCount: [...erp.values()].filter(p => !isLocked(p)).length,
     contractMarkedExposedCount: [...erp.values()].filter(p => isLocked(p)).length,
     dispatchableGap: [...source.values()].filter(r => r.status.raw.trim() !== '계약중').length - [...erp.values()].filter(p => !isLocked(p)).length,
+    ...(() => {
+      const reasons = dispatchGapReasons(source, docs);
+      const gap = [...source.values()].filter(r => r.status.raw.trim() !== '계약중').length - [...erp.values()].filter(p => !isLocked(p)).length;
+      return { dispatchGapReasons: reasons, dispatchGapExplained: gapFromReasons(reasons) === gap };
+    })(),
   };
 }
