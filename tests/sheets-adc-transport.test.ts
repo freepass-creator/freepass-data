@@ -4,7 +4,7 @@ import { readSheetsUrl } from '../src/infra/shared-sheet-capture-reader.js';
 describe('source-engine sheets read over ADC (online runner, no gws)', () => {
   const id = 'A'.repeat(40);
   it('reads spreadsheets.get / values:batchGet with a bearer token, GET only', async () => {
-    const seen: Array<{ url: string; method?: string; auth?: string }> = [];
+    const seen: Array<{ url: string; method: string | undefined; auth: string | undefined }> = [];
     const fetcher = (async (url: URL, init: RequestInit) => {
       seen.push({ url: String(url), method: init.method, auth: (init.headers as Record<string, string>).authorization });
       return new Response(JSON.stringify({ valueRanges: [] }), { status: 200 });
