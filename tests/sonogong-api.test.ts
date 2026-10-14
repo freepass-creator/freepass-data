@@ -67,8 +67,13 @@ describe('손오공 공식 API 어댑터', () => {
     // 계약중은 모든 원천에서 같게: 판매 가능(문서 유지·«계약중» 선점 표시 노출), 출고가능 비교에서는 raw 로 제외
     expect(by['2222']!.status).toEqual({ raw: '계약중', saleAvailable: true });
     expect(by['1111']!.raw.images).toEqual(['https://example.invalid/a.jpg']);   // 사진: images[].url 중 https 만
-    expect(by['1111']!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value])).toEqual([
-      [12, 900000, 'KNOWN', 1000000], [24, 800000, 'ZERO', 0], [36, 700000, 'KNOWN', 2000000], [48, 650000, 'UNKNOWN', null], [60, 600000, 'KNOWN', 3000000]]);
+    // 숫자가 먼저: 구독(sub)이어도 API 양수 보증금은 원문 금액 그대로(KNOWN, 계산 표식 없음 — 규칙 값은 raw.rule_deposit 검토용).
+    // API 0(24개월)·빈칸(48개월)은 자리채움 → 손오공 정책 «월 대여료×약정연수(최대 3개월)» 계산값(ZERO·UNKNOWN 아님).
+    expect(by['1111']!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule, t.raw.rule_deposit])).toEqual([
+      [12, 900000, 'KNOWN', 1000000, undefined, 900000], [24, 800000, 'KNOWN', 1600000, 'RENT_X_CONTRACT_YEARS_MAX3', undefined],
+      [36, 700000, 'KNOWN', 2000000, undefined, 2100000], [48, 650000, 'KNOWN', 1950000, 'RENT_X_CONTRACT_YEARS_MAX3', undefined],
+      [60, 600000, 'KNOWN', 3000000, undefined, 1800000]]);
+    expect(read.notes).toContain('DEPOSIT_RULE_DIFFERS:6');   // 두 대 × (12·36·60개월)
     expect((by['1111']!.raw.prices as Record<string, unknown>).SUBSCRIBE_BUYOUT).toBeDefined();
     expect(by['1111']!.raw.detail).toBeDefined();
     expect(by['1111']!.raw.spec).toMatchObject({ year: '2023', manufacture_year_month: '2023-05', mileage: '12345', fuel_type: '가솔린' });
@@ -89,7 +94,8 @@ describe('손오공 공식 API 어댑터', () => {
     const read = await readSonogongApi(w.client);
     expect(read.complete).toBe(true);
     expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['1111', 'rent'], ['2222', 'sub']]);
-    expect(read.notes).toEqual(['CROSS_TAB_DUPLICATE:1', 'CROSS_TAB_GENERATION_DIFFERENCE:1']);
+    // 구독 항의 API 양수 보증금(원문 금액 채택)이 정책 계산값과 다른 건수를 검토 경고로 센다(12·36·60개월 — 2222 의 상세)
+    expect(read.notes).toEqual(['CROSS_TAB_DUPLICATE:1', 'CROSS_TAB_GENERATION_DIFFERENCE:1', 'DEPOSIT_RULE_DIFFERS:3']);
     const within = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111'), row(3, '100하1111')] : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 2 : 0 })
       : json(detail(1, '100하1111'))).client);
@@ -116,7 +122,8 @@ describe('손오공 공식 API 어댑터', () => {
     expect(read.complete).toBe(true);                                   // 허용 한도 max(5, 목록의 2%) 이내의 404
     expect(read.notes).toContain('DETAIL_404:2222');                    // 끝 4자리만
     const r2 = read.records.find(r => r.plate!.endsWith('2222'))!;
-    expect(r2.terms.every(t => t.deposit.state === 'UNKNOWN')).toBe(true);
+    // 구독(sub) 보증금은 상세 원문이 아니라 손오공 정책 산출식이라 목록 대여료로 계산된다(상세 원문 대조값만 없다)
+    expect(r2.terms.every(t => t.deposit.state === 'KNOWN' && t.raw.deposit_rule === 'RENT_X_CONTRACT_YEARS_MAX3' && !('api_deposit' in t.raw))).toBe(true);
     expect(read.records).toHaveLength(2);                               // 목록 행은 보존
   });
   it('상세 404 가 허용 한도(5건·2%)를 넘으면 불완전, 404 가 아닌 상세 실패(500)는 한 건이어도 불완전', async () => {
@@ -163,7 +170,8 @@ describe('손오공 공식 API 어댑터', () => {
     const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices })] : [])
       : json(detail(1, '100하1111', { prices }))).client);
-    expect(read.records[0]!.terms.map(t => [t.months, t.deposit.state, t.deposit.value])).toEqual([[36, 'UNKNOWN', null]]);
+    // 구독 보증금 칸이 읽을 수 없는 값이면 원문 금액이 없는 것과 같다 → 손오공 정책 산출식(월 대여료×약정연수, 최대 3개월) 계산값
+    expect(read.records[0]!.terms.map(t => [t.months, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([[36, 'KNOWN', 2100000, 'RENT_X_CONTRACT_YEARS_MAX3']]);
     expect(read.notes).toContain('AMOUNT_UNPARSEABLE:1');
   });
   it('Codex #643 ②: 앞선 탭은 출고가능인데 뒤 탭이 계약중이면 계약중이 이긴다(조용히 출고가능으로 두지 않는다), 반대는 계약중 유지', async () => {
@@ -191,22 +199,42 @@ describe('손오공 공식 API 어댑터', () => {
     expect(read.incompleteReason).toBe('API_PAGE_OVERLAP');
     expect(read.listed).toBe(2);   // 겹친 행은 한 번만 센다
   });
-  it('금액: 숫자 문자열(쉼표 허용)은 읽고, 읽을 수 없는 값은 UNKNOWN 이면서 AMOUNT_UNPARSEABLE 로 센다(보증금 0 은 그대로 ZERO)', async () => {
+  it('금액: 숫자 문자열(쉼표 허용)은 읽고, 읽을 수 없는 값(소수 포함)은 UNKNOWN 이면서 AMOUNT_UNPARSEABLE 로 센다(중고렌트 보증금 0 은 자리채움 → UNKNOWN)', async () => {
     expect(parseSonogongAmount('480000')).toEqual({ amount: { state: 'KNOWN', value: 480000 }, unparseable: false });
     expect(parseSonogongAmount('1,250,000')).toEqual({ amount: { state: 'KNOWN', value: 1250000 }, unparseable: false });
     expect(parseSonogongAmount(0)).toEqual({ amount: { state: 'ZERO', value: 0 }, unparseable: false });
     expect(parseSonogongAmount(null)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: false });
     for (const bad of [Number.NaN, -1, '문의', '12,34', '1.5만', Infinity, {}])
       expect(parseSonogongAmount(bad)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: true });
-    const prices = { SUBSCRIBE_RETURN: { monthly: { 12: 512345.5, 24: '480000', 36: '문의', 48: 650000, 60: null },
+    // 중고렌트(rent): 보증금 = 상세 원문 양수 금액. 0 은 자리채움(무보증 표시 칸이 API 에 없다) → UNKNOWN, 정책 규칙을 걸지 않는다.
+    const prices = { RENT_RETURN: { monthly: { 12: 512345, 24: '480000', 36: '문의', 48: 650000, 60: null },
       deposit: { 12: '1,000,000', 24: 0, 48: -5, 60: 1 } } };
     const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
-      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices })] : [])
+      ? json(u.searchParams.get('tab') === 'rent' ? [row(1, '100하1111', { prices, tab: 'rent' })] : [])
       : json(detail(1, '100하1111', { prices }))).client);
     expect(read.complete).toBe(true);
-    expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value])).toEqual([
-      [24, 480000, 'ZERO', 0], [48, 650000, 'UNKNOWN', null]]);
-    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:3');   // 12개월 월 대여료 소수 + 36개월 월 대여료 '문의' + 48개월 보증금 -5
+    expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([
+      [12, 512345, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
+    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:2');   // 36개월 월 대여료 '문의' + 48개월 보증금 -5 (소수 금액은 Codex #643 ① 테스트가 본다)
+    expect(read.notes).toContain('DEPOSIT_PLACEHOLDER_ZERO:1');
+  });
+  it('구독·픽업구독: API 보증금이 0·빈칸(자리채움)이면 월 대여료×약정연수(최대 3개월) 계산값(KNOWN), ZERO 가 되지 않는다', async () => {
+    const sub = { SUBSCRIBE_RETURN: { monthly: { 12: 500000, 24: 500000, 36: 500000, 48: 500000 }, deposit: { 12: 0, 24: 0, 36: null } } };
+    const read = await readSonogongApi(world(u => {
+      if (u.pathname.endsWith('/vehicles')) {
+        const tab = u.searchParams.get('tab');
+        return json(tab === 'sub' ? [row(1, '100하1111', { prices: sub })] : tab === 'pick' ? [row(2, '100하2222', { prices: sub, tab: 'pick' })] : []);
+      }
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, id === 1 ? '100하1111' : '100하2222', { prices: sub }));
+    }).client);
+    for (const r of read.records) {
+      expect(r.terms.map(t => [t.months, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([
+        [12, 'KNOWN', 500000, 'RENT_X_CONTRACT_YEARS_MAX3'], [24, 'KNOWN', 1000000, 'RENT_X_CONTRACT_YEARS_MAX3'],
+        [36, 'KNOWN', 1500000, 'RENT_X_CONTRACT_YEARS_MAX3'], [48, 'KNOWN', 1500000, 'RENT_X_CONTRACT_YEARS_MAX3']]);
+      expect(r.terms.some(t => t.deposit.state === 'ZERO')).toBe(false);
+    }
+    expect(read.records.map(r => r.raw.product_type).sort()).toEqual(['오공구독', '픽업구독']);
   });
   it('쪽 나눔: 총수가 없으면 요청 크기보다 작은 쪽에서 멈추지 않고 빈 쪽까지 읽는다, 상한 초과·총수 불일치·읽는 도중 스냅숏 변경은 불완전', async () => {
     const pages: Record<number, unknown[]> = { 1: [row(1, '100하1111'), row(2, '100하2222')], 2: [row(3, '100하3333')], 3: [] };

@@ -84,14 +84,15 @@ describe('엔진 쓰기: 계산 보증금 표식', () => {
     status: { raw: '출고가능', saleAvailable: true }, observedAt: '2026-10-14T00:00:00Z', raw: { source: 'autoplus-sheet' }, vehicleHold: [],
     terms: [{ months: 12, monthlyRent: { state: 'KNOWN', value: 770000 }, mileage: '20000km/year',
       deposit: deposit === null ? { state: 'UNKNOWN', value: null } : { state: 'KNOWN', value: deposit }, raw: rule ? { deposit_rule: rule } : {} }] });
-  it('모든 항이 같은 규칙으로 계산됐을 때만 deposit_source=CALCULATED·deposit_rule 을 쓴다', () => {
-    expect(calculatedDepositFields(record('AUTOPLUS_RENT_X2_DOMESTIC', 1540000))).toEqual({ deposit_source: 'CALCULATED', deposit_rule: 'AUTOPLUS_RENT_X2_DOMESTIC' });
-    // 판정 불가 회차(UNKNOWN — 엔진이 기존 KNOWN 을 보존)는 표식을 쓰지 않아 기존 표식이 그대로 남는다
-    expect(calculatedDepositFields(record(null, null))).toEqual({});
+  it('계산 항마다 deposit_rules[개월] 을 쓰고(deposit_source=CALCULATED), 계산 항이 없으면 표식을 지운다', () => {
+    expect(calculatedDepositFields(record('AUTOPLUS_RENT_X2_DOMESTIC', 1540000))).toEqual({ deposit_source: 'CALCULATED',
+      deposit_rules: { '12': 'AUTOPLUS_RENT_X2_DOMESTIC' }, deposit_rule: null });
+    // 판정 불가(UNKNOWN) 항에는 규칙이 없다. 엔진 보존은 계획 단계에서 이전 KNOWN 과 그 규칙 코드를 함께 되살린다(source-cycle).
+    expect(calculatedDepositFields(record(null, null))).toEqual({ deposit_source: null, deposit_rules: null, deposit_rule: null });
     expect(calculatedDepositFields({ ...record('AUTOPLUS_RENT_X2_DOMESTIC', 1540000), sourceId: 'RP005' })).toEqual({});
     const fields = nativeCycleFields({ record: record('AUTOPLUS_RENT_X3_IMPORT', 2310000), listable: true, locked_by_contract: false,
       publication_withdrawal: null, publication_withdrawal_prior: null } as never);
-    expect(fields).toMatchObject({ deposit_source: 'CALCULATED', deposit_rule: 'AUTOPLUS_RENT_X3_IMPORT', price: { '12': { rent: 770000, deposit: 2310000 } } });
+    expect(fields).toMatchObject({ deposit_source: 'CALCULATED', deposit_rules: { '12': 'AUTOPLUS_RENT_X3_IMPORT' }, price: { '12': { rent: 770000, deposit: 2310000 } } });
     // 엔진이 쓴 문서를 소비처가 읽으면 계산값이 KNOWN 으로 보인다(쓰기→표시 왕복)
     const doc = { ...fields, provider_company_code: 'RP023' };
     expect(resolve(doc as Record<string, unknown>)).toMatchObject({ state: 'KNOWN', amount: 2310000, reason: 'CALCULATED_RULE:AUTOPLUS_RENT_X3_IMPORT' });

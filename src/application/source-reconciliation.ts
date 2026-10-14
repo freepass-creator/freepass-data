@@ -4,6 +4,7 @@
  * 번호는 끝 4자리만 내보낸다. 읽기 전용 — 쓰기 0. */
 import { sourceProductKey, termIdentity, type SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { CycleProduct } from '../ports/source-cycle.js';
 
@@ -62,7 +63,8 @@ const withPreservedDeposit = (source: SourceProductRecord, doc: SourceProductRec
     if (term.deposit.state !== 'UNKNOWN') return term;
     const same = doc.terms.filter(p => termIdentity(p) === termIdentity(term));
     const prior = same[0] ?? (doc.terms.filter(p => p.months === term.months).length === 1 ? doc.terms.find(p => p.months === term.months) : undefined);
-    return prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO') ? { ...term, deposit: structuredClone(prior.deposit) } : term;
+    const kept = prior ? preservedDepositOf(source.sourceId, prior) : null;   // 계획 단계와 같은 함수(자리채움 0 공급사의 옛 ZERO 는 보존 안 함)
+    return kept ? { ...term, deposit: kept.deposit } : term;
   });
   return { ...source, terms };
 };

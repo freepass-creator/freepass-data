@@ -7,10 +7,10 @@ import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields, VehicleIdentityRefiner, VehicleIdentityRefinement } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
-import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
-import { isAutoplusDepositRuleCode } from '../domain/autoplus-deposit-rule.js';
+import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -217,13 +217,19 @@ export const sheetSpecFields = (spec: unknown): Fields => {
   }
   return out;
 };
-/** 오토플러스(RP023) 계산 보증금 표식(대표 2026-10-14 «보증금 칸이 아니라 곱하기 계산 규칙»): 모든 항이 같은 규칙으로 계산된 KNOWN 보증금일 때만
- * deposit_source=CALCULATED·deposit_rule 을 쓴다. 규칙을 못 정한 회차(UNKNOWN → 기존 값 보존)에는 아무것도 쓰지 않아 기존 표식이 보존된 값과 함께 남는다. */
+/** 공급사 정책 계산 보증금 표식(정제 표 domain/supplier-deposit-policy — RP023·RP012, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»).
+ * 항(개월)마다 규칙 코드를 deposit_rules[개월] 에 쓴다 — 판매 가격 칸(price[개월])과 같은 대표 항에서 만들어 가격과 항상 짝이 맞는다(문서 단위 표식이면
+ * 원문 금액 항과 계산 항이 섞이거나 탭이 바뀐 뒤 낡은 표식이 남는다). 계산 항이 없으면 null 로 지운다. 옛 문서 단위 deposit_rule(#642)도 null 로 지운다.
+ * 정제 대상이 아닌 공급사는 아무것도 쓰지 않는다. 가격을 새로 쓸 때만 함께 쓴다(nativeCycleFields). */
 export const calculatedDepositFields = (r: SourceProductRecord): Fields => {
-  if (r.sourceId !== 'RP023' || !r.terms.length) return {};
-  const rules = new Set(r.terms.map(t => t.deposit.state === 'KNOWN' ? t.raw?.deposit_rule : null));
-  const [rule] = [...rules];
-  return rules.size === 1 && isAutoplusDepositRuleCode(rule) ? { deposit_source: 'CALCULATED', deposit_rule: rule } : {};
+  if (!hasSupplierDepositPolicy(r.sourceId)) return {};
+  const rules: Record<string, string> = {};
+  for (const t of representativeTerms(r.terms)) {
+    const code = t.deposit.state === 'KNOWN' ? supplierDepositRuleFor(r.sourceId, t.raw?.deposit_rule) : null;
+    if (code) rules[String(t.months)] = code;
+  }
+  const any = Object.keys(rules).length > 0;
+  return { deposit_source: any ? 'CALCULATED' : null, deposit_rules: any ? rules : null, deposit_rule: null };
 };
 /** 이안카(RP031) 공급사 차량 ID 칸. 사진 경로(isPublicIancarPhotoProduct)·정책 연결이 이 칸으로 원천 차량을 찾는다.
  * 원천 기록의 vehicle_id 를 쓴다: 문서에 없으면 채우고, 같으면 그대로. 같은 번호 문서에 «다른» ID 가 이미 있으면 덮어쓰지 않는다(공급사 신원 충돌 —
