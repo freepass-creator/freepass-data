@@ -66,13 +66,14 @@ export function createAutoplusHomepageClient(options: {
           const res = await options.fetcher(`${host}/api/v1/car/getRentCarDetail.rb`, { method: 'POST', body: `productId=${encodeURIComponent(product.productId)}`,
             headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Ajax-call': 'true', Authorization: token,
               'X-CSRF-TOKEN': boot.csrf, Cookie: boot.cookie, 'User-Agent': ua, Referer: product.url } });
+          // HTTP 상태를 먼저 판정한다: 200 만 성공 경로(독립 검토 2026-10-14). 500 + resultCode 1400 이 «폐기 제외»로 둔갑하면 안 된다.
+          if (res.status !== 200) return { ok: false, productId: product.productId, code: `DETAIL_HTTP_${res.status}` };
           let body: { header?: { resultCode?: unknown; msg?: unknown }; data?: Record<string, unknown> };
           try { body = JSON.parse(await res.text()); } catch { return { ok: false, productId: product.productId, code: 'RESPONSE_INVALID' }; }
           const code = String(body.header?.resultCode ?? '');
           if (code === '1020' && typeof body.header?.msg === 'string' && attempt < 4) { token = body.header.msg; await sleep(60); continue; }
           // 성공 판정(독립 검토 2026-10-14): HTTP 200 + 정상 resultCode(0 계열) + 요청한 상품 id 와 응답 productId 일치. 오류 코드에 data 가 실려 와도 성공이 아니다.
           if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
-            if (!res.ok) return { ok: false, productId: product.productId, code: `DETAIL_HTTP_${res.status}` };
             if (!/^0+$/.test(code)) return { ok: false, productId: product.productId, code: code ? `RESULT_${code}` : 'RESULT_MISSING' };
             if (String((body.data as Record<string, unknown>).productId ?? '').trim() !== product.productId) return { ok: false, productId: product.productId, code: 'PRODUCT_ID_MISMATCH' };
             return { ok: true, productId: product.productId, data: body.data };
@@ -126,6 +127,10 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
     raw: { source: 'website', source_external_id: productId, reborncar_product_id: productId, ap_car_id: text(data.apCarId) || null,
       product_group: 'LONG_TERM' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } };
 }
+
+/** 사이트맵 상품 수 하한: 기존 노출 문서가 0 이면 0(편입은 허용, 하향할 대상이 없다), 아니면 노출 95% 와 직전 정상 회차 80% 중 큰 값. */
+export const autoplusSitemapFloor = (exposedDocs: number, previousCount: number): number =>
+  exposedDocs === 0 ? 0 : Math.max(Math.ceil(exposedDocs * 0.95), Math.ceil(previousCount * 0.8));
 
 export type AutoplusHomepageCollection = {
   observedAt: string; complete: boolean; incompleteReason?: string; productCount: number; records: SourceProductRecord[];

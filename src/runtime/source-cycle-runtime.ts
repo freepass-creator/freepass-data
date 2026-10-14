@@ -14,7 +14,7 @@ import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' wit
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
-import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
+import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, autoplusSitemapFloor, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
@@ -241,12 +241,25 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // incomplete 로 두어 쓰기·부재 하향을 막는다. 노출 문서가 0 이면 하한 0 이지만 하향할 대상도 없다.
           const exposedDocs = (await commands.documents('RP023')).filter(d => (decodeFields(d.fields as never) as Record<string, unknown>).listable === true).length;
           const countFile = join(directory, 'autoplus-sitemap-count.json');
-          const previous = await readFile(countFile, 'utf8').then(t => Number((JSON.parse(t) as { count?: unknown }).count), () => 0);
-          const floor = Math.max(Math.ceil(exposedDocs * 0.95), Number.isFinite(previous) ? Math.ceil(previous * 0.8) : 0);
+          // 직전 사이트맵 수 기준 파일: 없음(ENOENT, 최초)만 허용하고, 읽기 실패·손상·형식 오류는 완전 읽기로 인정하지 않는다(독립 검토 2026-10-14).
+          let previous = 0, stateError: string | null = null;
+          try {
+            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count;
+            else stateError = 'SITEMAP_COUNT_STATE_INVALID';
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SITEMAP_COUNT_STATE_INVALID';
+          }
+          // 기존 노출 문서가 0 이면 하한 0(편입은 허용, 하향할 대상이 없다). 아니면 노출 95% 와 직전 정상 회차 80% 중 큰 값.
+          const floor = autoplusSitemapFloor(exposedDocs, previous);
           const collected = await collectAutoplusHomepage(
             createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
             undefined, { minExpectedProducts: floor });
-          if (collected.complete) await writeFile(countFile, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 }).catch(() => undefined);
+          if (stateError && collected.complete) return { ...collected, complete: false, incompleteReason: stateError };
+          if (collected.complete) {
+            try { await writeFile(countFile, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 }); }
+            catch { return { ...collected, complete: false, incompleteReason: 'SITEMAP_COUNT_STATE_WRITE_FAILED' }; }
+          }
           return collected;
         })));
       } else plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));

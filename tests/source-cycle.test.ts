@@ -118,6 +118,10 @@ describe('source cycle planning/application', () => {
     const capped = planSourceCycle({ ...config, maxEnrollPerCycle: 3 }, evidence(rows), { products: [], complete: true }, now).plan;
     expect(capped.entries).toHaveLength(3);
     expect(capped.warnings.some(w => w.startsWith('ENROLL_CAP_DEFERRED:2'))).toBe(true);
+    // 설정은 상한을 줄이기만 한다: minEnrollPerCycle 이 아무리 커도 확정 상한(여기서는 100) 위로 올리지 못한다
+    const many130 = Array.from({ length: 130 }, (_, i) => record(`z${i}`));
+    expect(planSourceCycle({ ...config, minEnrollPerCycle: 1000 }, evidence(many130), { products: [], complete: true }, now).plan.entries).toHaveLength(100);
+    expect(planSourceCycle({ ...config, maxEnrollPerCycle: 1000 }, evidence(many130), { products: [], complete: true }, now).plan.entries).toHaveLength(100);
     expect(planSourceCycle(config, evidence(rows), { products: [], complete: true }, now).plan.entries).toHaveLength(5);   // 기본 상한 100
     const many = Array.from({ length: 130 }, (_, i) => record(`m${i}`));
     const base = planSourceCycle(config, evidence(many), { products: [], complete: true }, now).plan;

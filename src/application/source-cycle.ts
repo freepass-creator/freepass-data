@@ -192,7 +192,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 키 순서가 고정이라 같은 입력이면 같은 대수가 들어가고, 적용 재계획(replay)도 같은 결과다. 이월분은 보류가 아니라 대기라 held 에 세지 않는다.
   // 대표 2026-10-14: 상한은 원천 판매 가능 대수의 100%(오매핑 폭주 방지용), 초과분은 다음 회차로 이월한다. 승인 단계는 두지 않는다.
   // 커맨드 센터 확정 2026-10-14: 회차당 max(100, 기존 노출 문서 수의 50%) — «원천 100% = 사실상 무제한» 안은 반려(오매핑 폭주 방어가 안 된다). 초과분은 이월.
-  const enrollCap = config.maxEnrollPerCycle ?? Math.max(config.minEnrollPerCycle ?? 100, Math.ceil(plan.exposedBefore * 0.5));
+  // 설정은 상한을 «줄이기만» 할 수 있다(독립 검토 2026-10-14): 확정 상한과 설정값 중 작은 쪽. minEnrollPerCycle 은 더 이상 상한을 올리지 못한다.
+  const enrollCap = Math.min(Math.max(100, Math.ceil(plan.exposedBefore * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
   const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');
   if (enrolls.length > enrollCap) {
     const deferred = new Set(enrolls.slice(enrollCap).map(e => sourceProductKey(e.after.record)));

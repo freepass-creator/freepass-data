@@ -20,6 +20,19 @@ describe('오토플러스 상세 성공 판정(독립 검토 2026-10-14)', () =>
     expect(await make({ body: { header: { resultCode: '0' }, data: { ...data, productId: 'C99999999999' } } }).detail(product)).toMatchObject({ ok: false, code: 'PRODUCT_ID_MISMATCH' });
   });
 
+  it('judges the HTTP status first: 500/201 with a 1400 resultCode or data is a failure, never an exclusion or a success', async () => {
+    expect(await make({ ok: false, status: 500, body: { header: { resultCode: '1400' } } }).detail(product)).toMatchObject({ ok: false, code: 'DETAIL_HTTP_500' });
+    expect(await make({ status: 201, body: { header: { resultCode: '0' }, data } }).detail(product)).toMatchObject({ ok: false, code: 'DETAIL_HTTP_201' });
+    expect(await make({ body: { header: { resultCode: '1400' } } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1400' });   // 200 + 1400 만 제외 후보
+  });
+
+  it('sitemap floor: 0 when nothing is exposed (even with a large previous count), else the larger of 95% exposed and 80% previous', async () => {
+    const { autoplusSitemapFloor } = await import('../src/adapters/autoplus-homepage.js');
+    expect(autoplusSitemapFloor(0, 1000)).toBe(0);
+    expect(autoplusSitemapFloor(100, 0)).toBe(95);
+    expect(autoplusSitemapFloor(100, 1000)).toBe(800);
+  });
+
   it('only an explicit resultCode 1400 is excluded; a plain HTTP 400 page is a failure', async () => {
     const client: AutoplusHomepageClient = {
       listProductUrls: async () => [1, 2].map(i => ({ productId: `C1234567890${i}`, url: `https://x/C1234567890${i}` })),
