@@ -209,6 +209,11 @@ const report: Record<string, unknown> = {
   sourceDigest: capture.sourceDigest,
   coverage: batch.coverage,
   issues: capture.issues,
+  // 차 한 대만 보류된 건수(사유 코드별). 번호·원문은 싣지 않는다.
+  vehicleHolds: capture.records.reduce<Record<string, number>>((counts, record) => {
+    if (record.hold) counts[record.hold.code] = (counts[record.hold.code] ?? 0) + 1;
+    return counts;
+  }, {}),
   canonicalPublication: 'NOT_AUTHORIZED_BY_RAW_COLLECTION',
   consumerReadback: 'NOT_VERIFIED'
 };

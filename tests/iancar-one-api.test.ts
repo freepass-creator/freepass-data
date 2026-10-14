@@ -553,13 +553,16 @@ describe('EANCAR ONE official partner API', () => {
   it.each([
     { monthly_rate: 0 }, { monthly_rate: 20000001 }, { rental_period: 0 },
     { contracted_mileage: 0 }, { currency: 'USD' }, { vat_included: false }, { mileage_period: 'week' }
-  ])('rejects malformed rates at ingestion with a consistent response digest: %j', async fault => {
+  ])('holds only that vehicle on malformed rates (no cycle-wide failure, rates never projected): %j', async fault => {
     const fetcher = (async (input: string | URL | Request) => {
       const response = await fullFetcher()(input); const body = await response.json();
       if (new URL(String(input)).pathname.endsWith('/rates')) Object.assign(body.data[0], fault);
       return new Response(JSON.stringify(body));
     }) as typeof fetch;
-    await expect(collectIancarOneFullFacts(config, fetcher)).rejects.toThrow('RATE_FACT_REQUIRES_REVIEW');
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.records[0]!.hold).toEqual({ code: 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW', identity: false });
+    expect(() => projectIancarOnePhaseOne(capture)).toThrow('PHASE_ONE');
   });
 
   it('requires plate-set and source-state parity, not just equal totals', () => {
@@ -668,11 +671,17 @@ describe('EANCAR ONE official partner API', () => {
   it.each([
     ['wrong-id', 'IANCAR_ONE_DETAIL_IDENTITY_MISMATCH'],
     ['wrong-plate', 'IANCAR_ONE_PLATE_MISMATCH'],
-    ['wrong-rate-id', 'INVALID_IANCAR_ONE_RATES_RESPONSE'],
-    ['duplicate', 'IANCAR_ONE_DUPLICATE_RATE'],
-    ['null-deposit', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW']
+    ['wrong-rate-id', 'INVALID_IANCAR_ONE_RATES_RESPONSE']
   ])('fails closed on full-fact %s', async (fault, code) => {
     await expect(collectIancarOneFullFacts(config, fullFetcher(fault))).rejects.toThrow(code);
+  });
+  it.each([
+    ['duplicate', 'IANCAR_ONE_DUPLICATE_RATE'],
+    ['null-deposit', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW']
+  ])('holds only the vehicle on full-fact %s', async (fault, code) => {
+    const capture = await collectIancarOneFullFacts(config, fullFetcher(fault));
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.records[0]!.hold).toEqual({ code, identity: false });
   });
   it('does not churn provider fingerprints just because request observation time changes', async () => {
     const first = await collectIancarOneFullFacts(config, fullFetcher());
