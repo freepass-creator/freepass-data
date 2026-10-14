@@ -101,11 +101,17 @@ describe('iancarPhotoPendingPatch — 죽은 ERP4 별칭만 «사진 확인 중�
   });
 });
 
-describe('iancarFactsRefreshPatch — 주행거리는 ONE 값, 연식은 모델연식 출처로 따로', () => {
+describe('iancarFactsRefreshPatch — 주행거리·연식은 ONE 값(옛 값 보존, 최초등록은 별도 칸)', () => {
   it('문자열 주행거리 형식을 유지하고 옛 값을 보존한다', () => {
     const patch = iancarFactsRefreshPatch({ mileage: '10', year: '2026' }, { mileage: 1380, year: '2027' }, 'T') as any;
-    expect(patch).toMatchObject({ mileage: '1,380', mileage_source_original: '10', model_year_source: '2027', iancar_mileage_observed_at: 'T' });
-    expect('year' in patch).toBe(false);
+    expect(patch).toMatchObject({ mileage: '1,380', mileage_source_original: '10', model_year_source: '2027', iancar_mileage_observed_at: 'T', year: '2027', year_source_original: '2026' });
+    expect('first_registration_date' in patch).toBe(false);   // 최초등록은 별도 칸 — 건드리지 않는다
+  });
+  it('연식이 원천과 같으면 year 를 바꾸지 않고, 옛 보존 칸이 이미 있으면 다시 쓰지 않는다', () => {
+    expect('year' in (iancarFactsRefreshPatch({ year: '2026' }, { year: '2026' }, 'T') as any)).toBe(false);
+    const again = iancarFactsRefreshPatch({ year: '2025', year_source_original: '2024' }, { year: '2026' }, 'T') as any;
+    expect(again.year).toBe('2026');
+    expect('year_source_original' in again).toBe(false);
   });
   it('숫자 형식·같은 값·옛 보존 칸은 건드리지 않는다', () => {
     expect((iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toMatchObject({ mileage: 7 });

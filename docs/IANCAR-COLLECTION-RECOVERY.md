@@ -59,12 +59,12 @@
 | rates[] | price{기간_월/연거리km: rent, deposit} | 이미 ONE 따라감(2,040조건 일치) |
 | mileage | mileage | 매 동기화 ONE 값으로 갱신(ONE 이 현재 값, 숫자). 문자열 쉼표 표기는 소비처 표시용으로 유지 |
 | color | ext_color | ONE 표기(흰색·검정)를 정제 규칙으로 우리 표기(화이트·블랙)로 변환해 갱신. 매핑표 확정 필요 |
-| year | year | **우리 연식 = 최초등록 연도**(최초등록일 있는 64대 전부 일치), **ONE year = 모델연식**(41대 +1, 2대 -1). 규칙: year 칸은 최초등록 연도 유지, ONE year 는 `model_year_source` 로 따로 보존(덮어쓰기 금지). 최초등록일이 없는 18대는 ONE year 를 임시 연식으로 쓰고 확인 동선 등록 |
+| year | year | **우리 연식 = 최초등록 연도**(최초등록일 있는 64대 전부 일치), **ONE year = 모델연식**(41대 +1, 2대 -1). **결정(DEV 커맨드 10-13): 연식 칸(year) = 공급사 원천 연식(ONE year) 그대로, 최초등록은 별도 칸(first_registration_date)이 맡고 덮어쓰지 않는다**(차종 기준 한 장: 연식·최초등록은 따로, 공급사 값은 덮지 않고 보존). 옛 year 값은 `year_source_original` 에 보존. (이전 규칙: year 를 최초등록 연도로 유지 — 폐기) |
 | fuel | fuel_type | 정제 규칙 변환(전기차→전기). 값 충돌 시 ONE 우선 |
 | manufacturer·model·name·trim | maker·model·sub_model·trim_name | 차종 마스터(F03)를 거쳐서만 — ONE 원문은 보존, 우리 4단 값은 기존 보존(차종-기준-한장). ONE 값과 마스터가 충돌하면 확인 필요 표시 |
 | photos | image_urls·photo_cache·iancar_one_photo_ids | §3-2: ONE 사진은 열쇠 필요 → Data 사진 길로만. 별칭 주소 금지 |
 
-**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 ONE 연식은 `model_year_source` 로만 보존한다. `year` 는 덮어쓰지 않는다. 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
+**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 연식(`year`)은 ONE 연식으로 맞추고 옛 값은 `year_source_original` 에, 사본은 `model_year_source` 에 둔다(최초등록 칸은 그대로). 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
 - 백업 버킷 재사용 판정: 새로 만들지 않는다. `freepasserp5-data-audit-evidence`(asia-northeast3)가 이미 있고 코드가 이 버킷만 허용(`IANCAR_BACKUP_WRONG_BUCKET`). 단발 적용 때 `EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET` 으로 지정.
 - 복원: `--restore-sync=<백업> --expected-digest=<원천 digest>`(계획) / `--apply` + `IANCAR_SYNC_RESTORE_APPROVED=true`.
 
@@ -105,3 +105,15 @@
 
 ## 5. 모델 기록
 구현·실측 Claude Sonnet 5.5, 설계 상의 Codex gpt-6-astra(읽기 전용, 수집/발행 분리·재개 전 검증 지적 반영). 독립 검토(다른 모델)는 PR 단계에서 Gemini 로 받는다.
+
+## 4-3. 이안카 정책 연결 — 원천(ONE)에서 당겨 반영 (2026-10-12, 대표 «이안카 65세»·«연령 같은 것도 다 당겨와서 반영»)
+- 원인: 노출 이안카 94대 전부 `policy_code=null`(1차 발행이 정책을 DEFERRED 로 비움) → ERP5 «보험 조건 미등록». 공통 정책 `FP-RP031-RENT` 는 있었지만 연령 상한 70세·면허 제한없음·연 30,000km 는 «자동 생성 정책 팩»(codex:freepass-common-policy) 값이라 이안카 공식 원문 출처가 없다.
+- 원칙: **공급사 원천(ONE 요금 원문의 보험·추가요금) 우선**. 모든 차량이 같은 값이면 공통 정책 칸에 반영, 차량마다 다르면 공통 정책 하나로 뭉개지 않고 차량별로 상품 문서 `iancar_policy_terms`(출처·관측 시각 포함)에 보존한다.
+- 실측(노출 94대 중 원천에서 요금을 읽은 75대, 관측 2026-10-07T09:37Z 요금 갱신):
+  - 전 차량 동일 → 공통 정책 반영: 최소 연령 만 26세(이미 같음) · 연령 상한 **만 65세 이하**(기존 70) · 면허 **1년 이상**(기존 제한없음) · 자차 포함 · 대인·대물 면책 50만원(이미 같음) · 연 20,000km(대표 정책, 기존 30,000).
+  - 차량마다 다름 → 차량별 보존: 자차 면책금 50만(55대)/100만(20대) · 수리 한도 300만(3)/500만(52)/600만(8)/800만(12) · 24세 이하 추가요금 6만원(55)/불가(20) · 판넬당 수리비 30만/50만 · 초과 주행 요금 100원(40)/200(19)/300(13)/500(3) · 휴차료(기간·주행별로도 다름 — 기간별 맵으로 보존). 공통 정책에는 자차 면책 «범위»(50~100만원)만 둔다.
+  - 한 차량 안에서도 휴차료만 행(기간·주행)마다 다르고 나머지는 같아 행 단위 불일치 시에는 추정하지 않고 오류(`ROWS_INCONSISTENT`).
+- 작업: `src/jobs/iancar-policy-link.ts`(순수 계획 `src/domain/iancar-policy-link.ts`). 기본은 읽기 전용 계획(쓰기 0). 적용 `--apply --expected-digest=<digest> --expect-policy-document-changes=<0|1>`(계획의 `counts.policyDocumentChanges` 와 다르면 쓰기 전 중단) + `IANCAR_POLICY_LINK_APPROVED=true`(+ `EANCAR_ONE_API_KEY` 로 원천 재조회), 복원 `--restore=<백업> --expected-digest=<digest> [--apply]` + `IANCAR_POLICY_LINK_RESTORE_APPROVED=true`. 백업은 로컬 비공개 폴더+`freepasserp5-data-audit-evidence`(읽기 확인), 문서 updateTime 일치 조건부 트랜잭션, 되읽기(계획 칸 일치·계획 밖 칸 불변), 삭제 0. fail-closed: 원천 요금 조회가 404(원천에 없음) 아닌 사유(401·429·시간 초과·형식 불일치·행 불일치)로 실패한 노출 차량이 하나라도 있거나 읽은 조건이 0건이면 계획이 막히고(`SOURCE_LOOKUP_FAILED`·`NO_SOURCE_TERMS_READ`; 차량 ID 누락·조회하지 않은 차량도 `ID_MISSING`/`NOT_LOOKED_UP` 으로 같은 차단 — 실제 404 응답만 예외), 공통 필수 조건(연령 상한·최소 연령·면허 기간·대인/대물 면책·자차 포함)이 차량마다 다르면 `COMMON_CONDITION_VARIES` 로 막히고, 공통 정책의 허용 목록 밖 칸 변경도 막는다. 공통 정책 문서에는 근거 칸 `iancar_source_terms`(출처·관측 시각·차량 수·반영값·차량별로 다른 값의 분포)를 남긴다.
+- 연결: 노출 이안카 상품 `policy_code=FP-RP031-RENT`·`policy_reference_state=LINKED`(연결 전 값은 `policy_code_source_original` 에 보존, S01~S04 는 수정·삭제 없음). 원천에서 사라진 차(요금 404)도 연결하되 차량별 조건은 붙이지 않고 사유를 계획에 표시.
+- 동기화 보호: `publishIancarPhaseOne` 이 `LINKED` 상품의 policy_code 를 다시 비우지 않는다(`iancarPolicyFields`).
+- 남은 일(소비처): 차량별 면책금·수리 한도·초과 주행 요금을 ERP5 상세에 보이려면 호환 응답의 단일 상품 필드 허용 목록(`SINGLE_PRODUCT_FACT_FIELDS`)에 `iancar_policy_terms` 를 넣고 ERP5 표시를 붙여야 한다(별도 PR·소비처 확인).

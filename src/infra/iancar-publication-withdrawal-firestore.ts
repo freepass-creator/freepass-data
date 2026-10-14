@@ -1,3 +1,4 @@
+import { iancarPolicyFields } from '../domain/iancar-policy-link.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -166,7 +167,8 @@ export function iancarPhotoPendingPatch(old: Record<string, any>): Record<string
 
 /** 기존 문서에 ONE 의 «현재 값» 중 안전한 것만 반영한다(대표 10-12 규칙):
  * - 주행거리: 매 동기화 ONE 값. 기존 형식(문자열 «7,405» 또는 숫자)을 유지하고, 처음 바꿀 때 옛 값을 mileage_source_original 에 보존.
- * - 연식: year 는 최초등록 연도 정의라 덮어쓰지 않는다. ONE 연식(모델연식)은 model_year_source 로 따로 보존.
+ * - 연식: 연식(year) 칸 = 공급사 원천 연식(ONE year, 모델연식) 그대로(DEV 커맨드 결정 10-13). 옛 값(최초등록 연도로 써 왔던 값)은 year_source_original 에 보존하고,
+ *   최초등록은 별도 칸(first_registration_date)이 그대로 맡는다(덮어쓰지 않음). ONE 연식 사본은 model_year_source 에도 둔다.
  * 색상·연료는 정제 매핑표 확정 전이라 건드리지 않는다. */
 export function iancarFactsRefreshPatch(old: Record<string, any>, facts: Record<string, unknown>, observedAt: string): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
@@ -180,7 +182,13 @@ export function iancarFactsRefreshPatch(old: Record<string, any>, facts: Record<
     }
     patch.iancar_mileage_observed_at = observedAt;
   }
-  if (typeof facts.year === 'string' && facts.year) patch.model_year_source = facts.year;
+  if (typeof facts.year === 'string' && facts.year) {
+    patch.model_year_source = facts.year;
+    if (String(old.year ?? '') !== facts.year) {
+      patch.year = facts.year;
+      if (old.year != null && !Object.hasOwn(old, 'year_source_original')) patch.year_source_original = old.year;
+    }
+  }
   return patch;
 }
 
@@ -306,9 +314,9 @@ export async function publishIancarPhaseOne(input: {
       provider_company_code: 'RP031', partner_code: 'RP031', provider_name: '이안카',
       car_number: plate, product_code: old.product_code ?? id,
       vehicle_status: product.vehicle_status, status: product.status, status_kind: product.status_kind,
-      listable: product.listable, price: product.price, policy_code: null,
-      policy_code_source_original: old.policy_code ?? old.policy_code_source_original ?? null,
-      policy_reference_state: 'DEFERRED', iancar_one_vehicle_id: product.sourceVehicleId,
+      listable: product.listable, price: product.price,
+      // 정책 연결(공통 정책 LINKED)된 상품은 동기화가 다시 비우지 않는다. 연결 전 상품은 기존대로 DEFERRED(원래 값 보존).
+      ...iancarPolicyFields(old), iancar_one_vehicle_id: product.sourceVehicleId,
       iancar_phase_one: product.evidence, publication_withdrawal: null,
       publication_withdrawal_source_original: Object.hasOwn(old, 'publication_withdrawal_source_original')
         ? old.publication_withdrawal_source_original : old.publication_withdrawal ?? null,

@@ -246,7 +246,7 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       expect(p.plan.operationalRefresh).toBe(true);
       expect(p.plan.entries[0]!.action).toBe('CHANGE');
-      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 900 });
+      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 3600 });
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
       expect(result.report).toMatchObject({ status: 'APPLIED' });
@@ -792,5 +792,15 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
     await expect(preflightSharedSheetApply(s.store, p.plan, p.report.planDigest, 'synthetic-target'))
       .rejects.toThrow('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('safeErrorCode', () => {
+  it('공개 로그에는 고정 대문자 코드나 오류 클래스 이름만 낸다', async () => {
+    const { safeErrorCode } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(safeErrorCode(new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED'))).toBe('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+    expect(safeErrorCode(new Error('provider said 12가3456 failed'))).toBe('UNCODED_Error');
+    expect(safeErrorCode(new TypeError('x'))).toBe('UNCODED_TypeError');
+    expect(safeErrorCode('boom')).toBe('UNCODED');
   });
 });

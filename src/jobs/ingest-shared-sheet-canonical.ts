@@ -223,7 +223,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
               x.sourceFingerprint === binding.sourceFingerprint && x.status === 'VALID') : [];
           if (operationalRefresh && previous.length !== 1) throw new Error('OPERATIONAL_PREVIOUS_CANDIDATE_NOT_UNIQUE');
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
-            maxObservationAgeSeconds: 900 } : undefined;
+            maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
           else {
@@ -299,6 +299,17 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
   }
   return replay;
 }
+/** Public-log-safe failure label: a fixed UPPER_SNAKE code thrown by our own code, else the error class name. Never free text. */
+export function safeErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
+  return error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? `UNCODED_${error.name}` : 'UNCODED';
+}
+/** 예약 적용 울타리: 명령 시각 − 원천 관측 시각(계획 캡처 readTime)의 상한.
+ * 900초였을 때 예약 적용이 10-11 22:15Z 부터 전부 거절됐다 — 적용 단계 자체(사전 재계획·RAW 적재·listOffers)가 15~20분 걸려
+ * 첫 명령 시점에 이미 상한을 넘겼기 때문. 신선도는 적용 직전 라이브 재캡처 대조(assertLiveSharedSheetMatches, 2분)가 보장하므로
+ * 이 울타리는 «터무니없이 오래된 계획» 만 막는 2차 안전선으로 두고 적용 단계 소요를 넉넉히 덮는 값으로 둔다. */
+export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
@@ -335,10 +346,11 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       else if (entry.change) businessNoChange = (await applyReviewedSourceChange(store, entry.change)).status === 'NO_CHANGE';
       else throw new Error('INVALID_SHARED_SHEET_ACTION');
       if (replay.has(entry.recordId) || businessNoChange) noChange++; else committed++;
-    } catch {
-      // No thrown provider text or raw identifiers in stdout/public CI.
+    } catch (error) {
+      // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
       return { report: { mode: 'APPLY', status: 'HOLD', committed, noChange, held,
-        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED' } };
+        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED',
+        reasonCode: safeErrorCode(error) } };
     }
   }
   let suppliedTerms = 0, storedTerms = 0, heldTerms = 0, readbackMismatches = 0;
@@ -456,12 +468,13 @@ export async function main(args = process.argv.slice(2)) {
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
 export async function runSharedSheetCli(args = process.argv.slice(2)) {
-  await main(args).catch(() => {
+  await main(args).catch(error => {
     // CI redirects stdout to apply.json and reads it even after a nonzero exit.
     // A business/system HOLD must never produce an empty JSON artifact.
     console.log(JSON.stringify({ mode: args.includes('--apply') ? 'APPLY' : 'DRY_RUN',
       status: 'HOLD', reason: 'SHARED_SHEET_JOB_HOLD' }));
-    console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1;
+    // main 의 안전 오류 코드(safeErrorCode)를 그대로 남긴다 — 원문 메시지·비밀은 싣지 않는다.
+    console.error(`SHARED_SHEET_JOB_HOLD ${safeErrorCode(error)}`); process.exitCode = 1;
   });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

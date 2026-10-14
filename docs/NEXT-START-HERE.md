@@ -283,6 +283,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: BLOCKED_NETWORK — 실제 F05/Firestore 103건 대조; UID live 열·binding 이행·실제 CatalogStore command adapter 및 소비처 연결 미완료. Claude UNAVAILABLE. 운영 쓰기/push0.
 - 커밋 BLOCKED_FILESYSTEM: Git metadata가 허용 범위 밖 `C:/dev/freepass-data/.git/worktrees/fd-engine`이라 index.lock 권한 거부. 새 커밋 없음, 작업 트리 보존. next_start_here: 결과 문서의 9파일 diff를 검토하고 Git metadata 쓰기가 허용된 환경에서 커밋 후 명시된 연결·실측 순서로 진행.
 
+### 2026-10-13 공통 시트 15분 예약 적용 연속 실패 원인·완화 (shared-sheet-refresh-fence)
+- 원인(비공개 증거 apply.json 으로 확정): 10-11 22:03Z `ec840d36` 가 넣은 operationalRefresh 울타리 `maxObservationAgeSeconds=900` 을 적용 단계 자체 소요(사전 재계획+RAW 적재+listOffers, 실측 17분)가 넘겨 첫 CHANGE 명령부터 `CANONICAL_COMMAND_REJECTED`(held 1·remaining 174). 10-11 22:15Z 이후 예약 적용 전부 실패, 마지막 성공은 10-11 16:42Z 수동.
+- 완화: 울타리 상수 `OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS=3600`. Codex(gpt-6-astra) 검토: 원인 동의, 단 «임시 완화» — 라이브 재캡처 대조가 긴 전처리 «전»이라 첫 명령 시점 신선도 보장이 아님. 정식 해결 = 전처리 후 재캡처·검증시각 결합 또는 적용 단계 지연 축소(중복 preflight·반복 listOffers·직렬 저장 계측). 01:32Z~23:47Z 회차의 출력 없는 `SHARED_SHEET_JOB_HOLD` 는 별도 예외(원인 미확정) — PR #571 의 사유 코드 노출로 확정.
+- next_start_here: 반영 후 다음 예약 회차 apply.json 이 APPLIED/PARTIAL_HOLD 인지 확인 → 적용 단계 구간별 계측 → 정식 해결 설계.
+
+### 2026-10-12 수수료 미확정 분류·아이언/우리캐피탈 신차 선출고 기준
+
+- 상세 표: [FEE-UNCONFIRMED-TRIAGE-20261012.md](FEE-UNCONFIRMED-TRIAGE-20261012.md). 계획 재실행(쓰기 0) 확정 4,880→4,976, 미확정 8,942→8,846.
+- 코드: ① 원문 「구분」 «신차(선출고|견적출고)» 명시분 읽기 ② 아이언(RP006)·우리캐피탈(RP020) 신차렌트는 선출고 규칙(F04 139·50행)으로, 차량가액은 원문 전체.차량가격(신차렌트만). 손오공 차량가액 판정은 변경 없음.
+- 남은 HOLD: 이안카·아이카 «대표 협의/확인 대기»(자동 질문 금지), 아이언·우리캐피탈 차량가격 없는 상품 76행, 아이언 중고렌트 비표준 기간 13행. apply 는 하지 않았다.
+
 <a id="limited-open-readiness-20261012"></a>
 
 ### 2026-10-12 비UI 한정 오픈 readiness / 권위 설명 정착 / 최종 QA HOLD
@@ -335,6 +346,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 진단 source 승인 단1배포(20 제공,01 GitHub run/job 대조): [run38180808448](https://github.com/freepass-creator/freepass-data/actions/runs/38180808448), deployjob114592769799 SUCCESS, 완료07:34:00 KST. trustedworkflow `d6696a2df0d0f7a23be1f148d914abbf764fe927`, 선택runtime `2ebdb18822416847b2019f6506b7b0d65daf0ee2`, 현재 revision `freepass-data-read-00034-6r7`, image `sha256:6becfc2456536d17f5b44c236e5e5d37b8dae1873e9fc120825649bbe18b7d62`. source/ancestor/selectedcheckout/build OCI/private deploy/baseline33·7a·b46/resourceguard/readiness와 BASELINE_VERIFIED=true/ENV_PRESERVED=true/READY=True는 실제PASS이다. post 기존SA·URI/privateIAM/traffic100/pins5+ONE1/timeout300/concurrency8 assertion PASS;max10/512Mi/8080/emptyvolumes·mount/F04/비관리env는baseline+deploy보존assertion으로구분하고새post실측으로확대하지않는다. verifyjob114592770601 SKIP/steps0/publicinvoker·publicsmoke SKIP이다.
 - revision34 실검증과 한계(20 안전 영수증): IAM무인증403/fullcompat200/schema/migrationheaders PASS. 같은IDtoken·consumerJSON1회·고정상품1의 fact200→소비자무인증401→photos-only403 총3GET을검사해helper OK=true/PHASE=SUCCESS/REQUEST_COUNT=3/LAST_STATUS=403/REASON=NONE이다. products1/SINGLE_PRODUCT/exactID/nano시각·versions/order/linkedFacts/count/shape/deposit state/1MiB/private-no-store/nosniff/directmigration 실검증 PASS. [활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6114645755),07:33:56 KST. 이 fact검증은새사진실패event/stage/reason의실관측을증명하지않으며 manifest503원인/적용timeout/사진복구/전체cutover·성능은HOLD이다. 승인dispatch외재dispatch/retry/rollback/사진bytesGET/새원천metadata probe/워밍/newauth·IAM·secret/사업DB쓰기0,민감원문출력0이다.
 - next_start_here: 현재34/source2eb/image6bec를고정하고ERP5root가별도후속GO로유한재진입·안전진단읽기를관리한다. 원래요청binding과실upstream사유는실관측근거전UNKNOWN이며관측enum을확정원인으로확대하지않는다. ERP5/각소비처owner는기존cataloggate·조건·공급사·정책판정을보존하고실UI/서버readback을결속하며 fact를사진binary의필수의존으로추가하지않는다. 견적HOLD·preview한도FAIL·사진503원인UNKNOWN 및전체cutover/모든상품동등성/성능/전체Data완료HOLD와이전32두FAIL/33성공이력을보존한다. 01은이번문서결속에서운영조회·사진GET·원천probe·워밍·DB·권한·배포0,QA pin해제는새배포승인이아니며원본checkout dirty185줄은계속보존한다.
+
+### 2026-10-12 손오공 RAW→후보 정규화 1차 연결
+
+- 목적/대상: RP012 손오공 원본 API RAW를 기존 SourceIngestionStore 후보 단계에 연결한다. 변경은 `normalize-sonogong` 신규 adapter, `ingestRawSourceBatch`의 normalize-null skip, `collect-sonogong --apply-raw` normalizer 주입과 문서/가짜 payload 테스트에 한정한다. 공급사 원문·RTDB·운영 배포·commit/push 없음. next_start_here: 실제 계정/실호출/15분 예약/수수료 기준은 HOLD로 남기고, 운영 적용 전 Vehicle Master snapshot과 RAW readback을 다시 고정한다.
 
 ### 2026-10-12 수집 마스터 충돌 보강 — 배기량 명목값·연식±1 (보류 153→101행, 식별 보류 144→75행)
 
@@ -894,7 +909,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 목적/결정: 사용자 최신 지시는 질문을 반복하지 말고 ONE 전체 재고·상태·대여료·사진을15분마다 계속 맞추는 것이다. 최소 권한 범위 설명 뒤 작업 진행 직접 지시를 받아 기존 계정에만 적용했다. 정책2차/RTDB/새 writer/수동 입력 시트는 제외한다.
 - 정본/revision: Data 실행기는 main `4917f2a79c0ab41d83dee745c8645bf810934f98` 고정, ERP workflow와 지도는 main `6a72da4c`까지 반영. 본 인계는 audit-only main `ee08bb35ac00a61ebf5a8b4edb393e5f146d3a72` 위 문서 확장이다. 기존 dirty 작업선은 보존했다.
 - 변경: 기존 github-inventory-writer에 단일 supplier SecretAccessor 및 private audit bucket `iancar-one/` prefix 조건부 objectCreator/objectViewer를 적용·재조회했다. 삭제/덮어쓰기/공개 공유 권한 없음. `IANCAR_ONE_15M_ENABLED=true` 설정·재조회로 기존02/17/32/47분 수집이 활성이다. 백업은 ifGenerationMatch=0, byte readback 후 atomic apply다.
-- 실제 검증: 운영 계정 DRY_RUN `37098391402` SUCCESS. 두 적용 시도는 공급사 stale=true에서 writes0/HOLD로 차단됐다. 새 source `2026-10-03T05:13:44.411Z`의112대/공개105/사진59대2681장에 ALL apply `37099324378` SUCCESS. 신규5/미관측13 비공개 보류/삭제0. Data run `a54b1f94-f461-469e-8f52-05b4b5813267`, sourceDigest `880a8181c80e2a97c738b957a6b8a0fff6bbc5676cc30d87800e6e9a2ca3fa2a`; private backup `iancar-one/a54b1f94-f461-469e-8f52-05b4b5813267/backup.json`(fixed private evidence bucket). PHASE_ONE_ATOM_READBACK_VERIFIED.
+- 실제 검증: 운영 계정 DRY_RUN `37098391402` SUCCESS. 두 적용 시도는 공급사 stale=true에서 writes0/HOLD로 차단됐다. 새 source `2026-10-03T05:13:44.411Z`의112대/공개105/사진***2681장에 ALL apply `37099324378` SUCCESS. 신규5/미관측13 비공개 보류/삭제0. Data run `a54b1f94-f461-469e-8f52-05b4b5813267`, sourceDigest `880a8181c80e2a97c738b957a6b8a0fff6bbc5676cc30d87800e6e9a2ca3fa2a`; private backup `iancar-one/a54b1f94-f461-469e-8f52-05b4b5813267/backup.json`(fixed private evidence bucket). PHASE_ONE_ATOM_READBACK_VERIFIED.
 - 소비처: 동일회차 F01/F86 발행, RP031 상태/요금 검증, 공개catalog mismatch0, F86 freshness, Atom↔F01↔F86 칸 및 전체 사진 링크 감사 SUCCESS. live eancar feed105/실사진53/연출50 직접 확인, 실사진3건 HTTP200 JPEG. source 전체 사진59대와 공개사진53대는 같은 모수가 아니다. generic raw terms coverage UNKNOWN은 여전히 HOLD이며 phase-one observed facts 적용을 Catalog ACTIVE 전체전환으로 확대하지 않는다.
 - 독립 검토: 기존 코드/collector/workflow ANSWERED에 추가 IAM read-only ANSWERED/exit0. 첫 objectCreator overwrite 반례는 Google 공식 역할 정의와 ifGenerationMatch=0로 반박하고 검토자가 후속 ANSWERED에서 철회했다. 412를 무조건 성공 처리하라는 제안은 미채택(기존 원문 대조 필요).
 - 남음/next_start_here: ERP `docs/예약작업-지도.md`와 활성 native 회차에서 다음 source 전진·실제 실행 지연/같은 발행본 대사를 확인한다. 첫 성공은 workflow_dispatch이며 native 자동회차 성공으로 세지 않는다. 긴 기존 writer 실행 시 추가 회차는 양보하므로 정확히15분 벽시계 SLA는 보장하지 않는다. supplier stale는 last-known-good 보존과 실패 receipt로 처리한다. Admin 개별UI/정책2차/전체 Catalog cutover는 별도다.
@@ -951,7 +966,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 사용자 직접 지시: 사진을 전량 연결하고 배포한다. Data/ERP/기존 F01·F86 publisher 순으로 진행한다. IAM 변경은 기존 runtime SA가 기존 이안카 단일 Secret을 읽는 범위로 한정한다. RTDB는 사용하지 않는다.
 - 코드: Data 인증 transport + ERP 공개 상품/채널 gate + raster decode/EXIF·GPS 제거. Data의 private byte cache는 exact vehicle/photo ID, 30초·32MiB·최대8 fetch이며 Cloud Run concurrency8과 일치한다. Secret name/version을 GitHub vars로 pin하고 readiness에서 재검증한다. 사진만 수정하는 publication은15분 capture/CAS/private typed backup/재조회/감사 gateway를 사용한다. 절대 ERP proxy URL을 발행해 다른 origin의 Admin/AI도 참조할 수 있다.
 - 검증: Data build/architecture/access PASS, 전체1143 PASS/14 SKIP, Sheets25 PASS; photo rollback을 mocked 원본·계약 보존/추가필드 삭제로 연습했다. ERP typecheck/공개catalog102+회귀/data authority PASS, CI 방식 public Firebase placeholder production build PASS. 실제 production 환경/화면 확인 전에는 배포 완료가 아니다.
-- 원천 read-only 관측: 공개109 중104 응답,52대2348장,5개ID404. 404는0장이나 삭제가 아니며 해당 원본을 그대로 보존한다. 최신 full API list116대/coverage issues0에서 기존404 차번3개는 미관측; 차량ID를 추정 재매핑하지 않는다. 운영 재고/가격 변경은0이다.
+- 원천 read-only 관측: 공개109 중104 응답,***2348장,5개ID404. 404는0장이나 삭제가 아니며 해당 원본을 그대로 보존한다. 최신 full API list116대/coverage issues0에서 기존404 차번3개는 미관측; 차량ID를 추정 재매핑하지 않는다. 운영 재고/가격 변경은0이다.
 - 독립 검토: 이전 전체 검토의 secret pin/concurrency/cache/rollback 지적을 반영했다. 정확한 gate 호출 첫 검토는 REVIEW_TIMEOUT이며 PASS가 아니다. 좁힌 검토 진행 중. 배포/IAM/원자 사진 write/시트 write는 아직 미실행.
 - rollback: Cloud Run 이전 ready revision `freepass-data-read-00014-8db`; ERP 이전 main `a00547ce4c794343f5520b03f48df00cac2a4a2d`; publisher 이전 pin `ce811592daef6c0283c3637ec94f1b7cf09a3838`. 사진 원자 backup은 `iancar-photo-typed-backup/1`. 복구는 `source:iancar:one -- --restore-photos=<private-backup> --expected-digest=<sourceDigest>` dry-run 후 승인 시 `IANCAR_PHOTO_RESTORE_APPROVED=true`와 `--apply`; 원본 이외 변경이 있으면 HOLD한다.
 - next_start_here: 독립 검토 blocker 해소 → Data main 통합/private runtime 배포 exact revision → ERP main 통합/production SHA와 실제 사진 확인 → fresh capture/동일plan photo-only write → 새 publisher pin·검증 snapshot으로 F01/F86 canonical workflow apply → 두 시트/모든 대상 소비처 새 readback. 해당 증거 전에는 전체 완료/15분 자동화 완료로 보고하지 않는다.
@@ -1308,7 +1323,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 대상 revision: main `d91124304bd082d0654e0d3bd3f743864d84f6ee` 및 기존 PR395. 원래 checkout 문서2개, fd-guard 미커밋 수정, 옛 data-first dirty5개는 보존했다. 재사용 작업공간 fd-356에서 academy READY 후 수행.
 - 변경: F03/v1 identity 입력과 기본형/생산기간 허용 추정 폐기. master/trim read-only transaction 동일 readTime 캡처 → RAW capture digest → 기존 identity/normalizer → cascade 동일 snapshot. 별칭은 검색만, 출력은 현재 master 이름/불변 ID. 모호/불일치/마스터 없음은 null·REVIEW_REQUIRED이며 원문은 보존한다. APPLY 직전 fresh master가 계획 내용과 다르면 재계획한다. source 최신 주소/12개 실제 탭·UNKNOWN 보증금·F01 단독/F86 중단·정산 사람 입력·기간정책 확장을 최신 main 그대로 유지했다.
 - 검증: 최신 main d911243 합친 전체 npm run check PASS(Vitest1701 PASS/14SKIP), sheet105 PASS/build/dist smoke8 PASS/architecture/data-access/diff check PASS. 원격 exact-head CI를 확인한다. Claude 조직 구독 비활성 FAILED(exit1), 독립 검토 PASS로 세지 않는다.
-- 직접 운영 조회(14:31 KST): 기존 Firebase target/read-only transaction으로 master1871/trim2097 동일 readTime 캡처와 validator eligible1825를 확인했다. digest `f8ab2c0b1266d77c5fd5da96766a044827eb805a08c5ba8310d4ceb9ffd5ce2d`; 사업 데이터 쓰기0. REST 보조 대조 products1776중1673일치/103미일치, catalog160중4미일치, trim부모이름불일치272. 실제 자료를 읽은 것이며 운영 소비처 적용 완료는 아니다.
+- 직접 운영 조회(14:31 KST): 기존 Firebase target/read-only transaction으로 master1871/trim2097 동일 readTime 캡처와 validator eligible1825를 확인했다. digest `f8ab2c0b1266d77c5fd5da96766a044827eb805a08c5ba8310d4ceb9ffd5ce2d`; 사업 데이터 쓰기0. REST 보조 대조 products1***1673일치/103미일치, catalog160중4미일치, trim부모이름불일치272. 실제 자료를 읽은 것이며 운영 소비처 적용 완료는 아니다.
 - 남음: 운영 master/product 일괄 정정·시트 쓰기·배포·소비처 cutover는 별도이며 실행하지 않는다. 103/272/4와 제조사 표기 drift96은 근거 없이 보정하지 않는다. dropdown disabled 사용자 결정 유지. Docker daemon/실제 Sheets 왕복·Admin/화이트라벨/Sales 전 소비처 배포 readback 미검증.
 - next_start_here: PR395 exact-head CI/최종 diff → 기존 main 통합 경로 → 실제 소비처 배포 revision과 master snapshot digest 재조회. 규칙은 ai-ops 기준 한 장 하나이며 수집/금액 담당의 최신 main을 되돌리지 않는다.
 
