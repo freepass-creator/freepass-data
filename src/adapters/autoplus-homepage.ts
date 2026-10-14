@@ -79,6 +79,8 @@ export function createAutoplusHomepageClient(options: {
             if (String((body.data as Record<string, unknown>).productId ?? '').trim() !== product.productId) return { ok: false, productId: product.productId, code: 'PRODUCT_ID_MISMATCH' };
             return { ok: true, productId: product.productId, data: body.data };
           }
+          // data 가 «있으면»(배열·문자열·빈 배열 포함) 1400 이어도 폐기 응답 형태가 아니다 → 제외가 아니라 실패(독립 검토 4차).
+          if (body.data !== undefined && body.data !== null) return { ok: false, productId: product.productId, code: code ? `RESULT_${code}_WITH_DATA` : 'DATA_INVALID' };
           return { ok: false, productId: product.productId, code: code ? `RESULT_${code}` : 'NO_DATA' };
         }
         return { ok: false, productId: product.productId, code: 'TOKEN_REFRESH_EXHAUSTED' };
@@ -118,7 +120,7 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
     if (!Number.isSafeInteger(months) || months <= 0) continue;
     // 약정거리는 rentPrice2 = 2만km, rentPrice3 = 3만km 로 암묵 코딩된다(연 기준).
     for (const [field, km] of [['rentPrice2', 20000], ['rentPrice3', 30000]] as const) {
-      const rent = amountOf(Number(o[field]));
+      const rent = amountOf(o[field]);   // 원값을 넘긴다: 배열·객체·불리언은 타입 검증에서 UNKNOWN(독립 검토 4차: [500000] 이 KNOWN 으로 통과)
       if (rent.state === 'KNOWN') terms.push({ months, monthlyRent: rent, deposit: unknownAmount, mileage: `${km}km/year`,
         raw: { origin: Number(o[field === 'rentPrice2' ? 'originPrice2' : 'originPrice3']) || null } } as SourceTerm);
     }

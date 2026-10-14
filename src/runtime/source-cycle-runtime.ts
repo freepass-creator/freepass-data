@@ -352,7 +352,11 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           const before = plan.exposedBefore;
           // APPLY_UNCERTAIN 은 일부만 쓰였을 수 있어 노출 대수를 알 수 없다 — 추정값 대신 «미확인»(null)으로 기록한다(독립 검토 2026-10-14).
           // 쓰기 결과를 확정할 수 없는 모든 경우(불확실·연속 실패 정지·적용 단계의 비정상 종료)는 «미확인»이다(독립 검토 2026-10-14).
+          // 판정은 상태 이름이 아니라 «적용 단계에 도달했는지(쓰기 시도·성공 수)» 로 한다: 상품 적용 뒤 heartbeat 실패는 HOLD/PLAN 으로 분류돼도
+          // 실제로는 일부·전부 반영됐다(독립 검토 4차).
+          const writes = 'writes' in result ? (result as { writes?: number | null }).writes : 0;
           const uncertain = result.status === 'APPLY_UNCERTAIN' || result.status === 'STOPPED' ||
+            (result.status !== 'APPLIED' && (writes === null || (typeof writes === 'number' && writes > 0))) ||
             (result.stage === 'APPLY' && result.status !== 'APPLIED' && plan.entries.length > 0);
           const after = uncertain ? null : applied ? before - count('DOWNGRADE') + exposedEnroll + count('REEXPOSE') : before;
           const prior = priorAfter.get(plugin.sourceId) ?? null;

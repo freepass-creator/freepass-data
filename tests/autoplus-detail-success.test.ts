@@ -31,6 +31,19 @@ describe('오토플러스 상세 성공 판정(독립 검토 2026-10-14)', () =>
     expect(out.failures).toEqual([{ productId: product.productId, code: 'RESULT_1400_WITH_DATA' }]);
   });
 
+  it('a 1400 response that carries any data (array, string, empty array) is a failure, and typed-away prices stay UNKNOWN', async () => {
+    for (const odd of [[{ a: 1 }], [], 'x']) {
+      expect(await make({ body: { header: { resultCode: '1400' }, data: odd } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1400_WITH_DATA' });
+    }
+    const { mapAutoplusDetail } = await import('../src/adapters/autoplus-homepage.js');
+    const priced = (price: unknown) => ('record' in mapAutoplusDetail({ productId: 'C12345678901', carNumber: '12가3456', rentPriceObjs:
+      JSON.stringify([{ rentMonth: 36, rentPrice2: price }]) }, 't') ? (mapAutoplusDetail({ productId: 'C12345678901', carNumber: '12가3456',
+      rentPriceObjs: JSON.stringify([{ rentMonth: 36, rentPrice2: price }]) }, 't') as { record: { terms: unknown[] } }).record.terms.length : -1);
+    expect(priced([500000])).toBe(0);
+    expect(priced({ v: 500000 })).toBe(0);
+    expect(priced(500000)).toBe(1);
+  });
+
   it('sitemap floor: 0 when nothing is exposed (even with a large previous count), else the larger of 95% exposed and 80% previous', async () => {
     const { autoplusSitemapFloor } = await import('../src/adapters/autoplus-homepage.js');
     expect(autoplusSitemapFloor(0, 1000)).toBe(0);
