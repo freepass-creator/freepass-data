@@ -821,3 +821,14 @@ describe('safeErrorCode', () => {
     expect(safeErrorCode('boom')).toBe('UNCODED');
   });
 });
+
+describe('commandFailureDetail', () => {
+  it('exposes only a closed vocabulary, never message text or identifiers', async () => {
+    const { commandFailureDetail } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    const d = commandFailureDetail(Object.assign(new Error('Document projects/x/documents/offers/secret-id already exists'), { code: 6 }), 'CREATE');
+    expect(d).toEqual({ commandKind: 'CREATE', errorClass: 'Error', errorCode: '6', category: 'ALREADY_EXISTS' });
+    expect(JSON.stringify(d)).not.toContain('secret-id');
+    expect(commandFailureDetail(new Error('something odd 12345'), 'CHANGE').category).toBe('UNCLASSIFIED');
+    expect(commandFailureDetail('not an error', 'UNKNOWN')).toMatchObject({ errorClass: 'NonError' });
+  });
+});

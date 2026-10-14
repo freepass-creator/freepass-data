@@ -315,6 +315,29 @@ const MASTER_HOLD_CODES: ReadonlyArray<readonly [string, string]> = [
   ['HOLD: Vehicle master snapshot digest mismatch', 'VEHICLE_MASTER_SNAPSHOT_DIGEST_MISMATCH'],
   ['HOLD: Unique immutable master IDs required', 'VEHICLE_MASTER_IDS_NOT_UNIQUE'],
   ['HOLD: Unique immutable trim IDs required', 'VEHICLE_TRIM_IDS_NOT_UNIQUE']];
+/**
+ * 명령 거절의 «종류»만 닫힌 어휘로 노출한다 — 메시지 본문·식별자·값은 절대 싣지 않는다.
+ * 우리 코드의 UPPER_SNAKE 코드가 아닌 일반 Error(저장소·트랜잭션 계층)가 던져질 때 원인 범주를 판정하기 위한 것.
+ */
+const COMMAND_FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/already exists|already_exists|duplicate/i, 'ALREADY_EXISTS'],
+  [/not found|not_found|missing|does not exist/i, 'NOT_FOUND'],
+  [/revision|version|stale|changed|conflict|precondition|expected/i, 'REVISION_OR_PRECONDITION'],
+  [/abort|contention|transaction|too much|retry/i, 'TRANSACTION_ABORTED'],
+  [/lock|ownership|writer|exclusive|permission|denied|unauthenticated/i, 'OWNERSHIP_OR_PERMISSION'],
+  [/size|limit|exceed|too large|bytes/i, 'SIZE_OR_LIMIT'],
+  [/invalid|illegal|malformed|schema|unsupported|must|required/i, 'INVALID_INPUT'],
+  [/deadline|timeout|unavailable|econn|network/i, 'TRANSPORT'],
+];
+export function commandFailureDetail(error: unknown, kind: 'CREATE' | 'CHANGE' | 'UNKNOWN') {
+  const message = error instanceof Error ? error.message : '';
+  const cls = error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? error.name : 'NonError';
+  const rawCode = (error as { code?: unknown } | null)?.code;
+  const code = typeof rawCode === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(rawCode) ? rawCode
+    : typeof rawCode === 'number' && Number.isInteger(rawCode) ? String(rawCode) : null;
+  const category = COMMAND_FAILURE_PATTERNS.find(([rx]) => rx.test(message))?.[1] ?? 'UNCLASSIFIED';
+  return { commandKind: kind, errorClass: cls, errorCode: code, category };
+}
 export function safeErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
@@ -354,11 +377,13 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize);
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
+  let commandKind: 'CREATE' | 'CHANGE' | 'UNKNOWN' = 'UNKNOWN';
   for (const entry of plan.entries) {
     if (entry.action === 'HOLD') { held++; continue; }
     if (entry.action === 'NO_CHANGE') { noChange++; continue; }
     try {
       let businessNoChange = false;
+      commandKind = entry.create ? 'CREATE' : entry.change ? 'CHANGE' : 'UNKNOWN';
       if (entry.create) await canonicalizeCatalogCandidate(store, entry.create);
       else if (entry.change) businessNoChange = (await applyReviewedSourceChange(store, entry.change)).status === 'NO_CHANGE';
       else throw new Error('INVALID_SHARED_SHEET_ACTION');
@@ -367,7 +392,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
       return { report: { mode: 'APPLY', status: 'HOLD', committed, noChange, held,
         remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED',
-        reasonCode: safeErrorCode(error) } };
+        reasonCode: safeErrorCode(error), failure: commandFailureDetail(error, commandKind) } };
     }
   }
   let suppliedTerms = 0, storedTerms = 0, heldTerms = 0, readbackMismatches = 0;
