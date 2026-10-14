@@ -195,8 +195,10 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT' ? { product_type: MONTHLY_PRODUCT_TYPE } : {}),
     // 손오공 상품 구분(구독·픽업구독 화면 표시, 기존 구독 상품 규칙 재사용): 어댑터가 탭에서 정한 값이 고정 어휘일 때만 쓴다.
     ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
-    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함).
-    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함). 다른 원천처럼 기존 문서에 구분이 «비어 있을 때만» 채운다 — 목록 분류로
+    // 사람이 정한 구분(재렌트 등)을 매 회차 덮어쓰지 않는다(2026-10-14).
+    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type)
+      && !(typeof original.product_type === 'string' && original.product_type.trim()) ? { product_type: r.raw.product_type } : {}),
     ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),

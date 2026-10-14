@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { dryRunEnv, parseSources, summarizeEngineOutput, WRITE_SWITCHES } from '../scripts/ci/source-cycle-dry-run.mjs';
+import { dryRunEnv, parseSources, requiredVars, summarizeEngineOutput, WRITE_SWITCHES } from '../scripts/ci/source-cycle-dry-run.mjs';
 
 test('child env never carries write, approval or takeover switches', () => {
   const base = Object.fromEntries(WRITE_SWITCHES.map(k => [k, '1']));
@@ -33,4 +33,15 @@ test('workflow never passes apply or unattended flags', () => {
     assert.doesNotMatch(text, /'--apply'|"--apply"|'--unattended'|"--unattended"/);
   }
   assert.match(yml, /FREEPASS_SOURCE_CYCLE_DRY_RUN_SCHEDULE/);
+});
+
+test('IRON homepage read-mode selector is passed through (not a write switch) and needs no list URL', () => {
+  assert.equal(WRITE_SWITCHES.includes('SOURCE_CYCLE_IRON_HOMEPAGE'), false);
+  const env = dryRunEnv({ SOURCE_CYCLE_IRON_HOMEPAGE: '1', SOURCE_CYCLE_UNATTENDED: '1' }, 'IRON', '/tmp/x');
+  assert.equal(env.SOURCE_CYCLE_IRON_HOMEPAGE, '1');
+  assert.equal(env.SOURCE_CYCLE_UNATTENDED, undefined);
+  assert.deepEqual(requiredVars('IRON', { SOURCE_CYCLE_IRON_HOMEPAGE: '1' }), []);
+  assert.deepEqual(requiredVars('IRON', {}), ['SOURCE_CYCLE_IRON_LIST_URL']);
+  const yml = readFileSync(new URL('../.github/workflows/source-cycle-dry-run.yml', import.meta.url), 'utf8');
+  assert.match(yml, /SOURCE_CYCLE_IRON_HOMEPAGE: \$\{\{ vars\.SOURCE_CYCLE_IRON_HOMEPAGE \|\| '1' \}\}/);
 });
