@@ -239,7 +239,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => {
           // 부분 목록 방어(독립 검토 2026-10-14): 사이트맵 상품 수가 ① 기존 노출 문서 수의 95% 미만이거나 ② 직전 정상 회차 사이트맵 수의 80% 미만이면
           // incomplete 로 두어 쓰기·부재 하향을 막는다. 노출 문서가 0 이면 하한 0 이지만 하향할 대상도 없다.
-          const exposedDocs = (await commands.documents('RP023')).filter(d => (decodeFields(d.fields as never) as Record<string, unknown>).listable === true).length;
+          // 계약 잠금·계약중 차는 홈피에서 내려가도 정산이 끝날 때까지 노출을 유지하므로 사이트맵 하한 계산에서 뺀다(2026-10-14 실측: 잠금 6 때문에 50 의 95%=48 > 사이트맵 45 로 SITEMAP_SHRUNK 보류).
+          const exposedDocs = (await commands.documents('RP023')).filter(d => {
+            const f = decodeFields(d.fields as never) as Record<string, unknown>;
+            return f.listable === true && f.locked_by_contract !== true && f.status !== '계약중';
+          }).length;
           const countFile = join(directory, 'autoplus-sitemap-count.json');
           // 직전 사이트맵 수 기준 파일: 없음(ENOENT, 최초)만 허용하고, 읽기 실패·손상·형식 오류는 완전 읽기로 인정하지 않는다(독립 검토 2026-10-14).
           let previous = 0, stateError: string | null = null;
