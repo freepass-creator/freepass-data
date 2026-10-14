@@ -118,7 +118,8 @@ export function validateSourceRecord(input: unknown): string[] {
   if (typeof r.observedAt !== 'string' || !Number.isFinite(Date.parse(r.observedAt))) reasons.push('OBSERVATION_INVALID');
   if (!r.status || typeof r.status.raw !== 'string' || !r.status.raw.trim() || ![true, false, null].includes(r.status.saleAvailable) || r.status.saleAvailable === null) reasons.push('STATUS_UNKNOWN');
   if (!Array.isArray(r.terms) || !r.terms.length || r.terms.some(t => !t || !Number.isSafeInteger(t.months) || t.months <= 0 ||
-    !validSourceAmount(t.monthlyRent) || !validSourceAmount(t.deposit) || t.monthlyRent.state === 'UNKNOWN' ||
+    // 월 대여료는 KNOWN(양수)만 판매 가격이다: UNKNOWN 은 물론 ZERO(0원)도 가격이 아니다(대표 2026-10-14 «데이터만큼은 정확하게»).
+    !validSourceAmount(t.monthlyRent) || !validSourceAmount(t.deposit) || t.monthlyRent.state !== 'KNOWN' ||
     (t.mileage !== null && typeof t.mileage !== 'string') || !t.raw || typeof t.raw !== 'object' || Array.isArray(t.raw)) ||
     new Set(r.terms.map(termIdentity)).size !== r.terms.length) reasons.push('TERMS_HOLD');
   return reasons;

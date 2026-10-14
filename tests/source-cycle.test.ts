@@ -273,7 +273,7 @@ describe('source plugins', () => {
   it('F05 reuses actual phase-one UID/term conversion and visibility metadata', async () => {
     const channel = sharedSheetChannels[0]!, headers = [...sharedSheetHeaders, 'UID'];
     const values: Record<string, SheetCell> = { 회사명: channel.companyName, 차량번호: '신차', 차량상태: '출고가능',
-      상품구분: '중고렌트', '12개월': 100, 단기보증: '무보증', 장기보증: '무보증', 연주행: '20000km', '차명 원문': '합성', UID: 'synthetic-new' };
+      상품구분: '중고렌트', '12개월': 500000, 단기보증: '무보증', 장기보증: '무보증', 연주행: '20000km', '차명 원문': '합성', UID: 'synthetic-new' };
     const captured: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only',
       layoutVersion: '2026-10-04-no-account', readTime: time, revision: 'synthetic',
       tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {

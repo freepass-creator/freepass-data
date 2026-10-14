@@ -19,3 +19,10 @@ export const isStrictKoreanPlate = (value: unknown): boolean =>
  */
 export const firestoreSafePlateKey = (value: unknown): string =>
   String(value ?? '').trim().replace(/[\s.$#[\]/-]/g, '');
+
+/**
+ * 원천 엔진 시트 원천(공통 시트 F05·아이카)의 문서 ID 로 쓸 수 있는 번호: 공백을 뺀 값이 번호 모양(선택적 지역 두 글자 + 12가3456)이어야 한다.
+ * `isAssignedPlate` 는 숫자만 있으면 참이라 «신차(11/5)» 같은 안내 글도 번호로 통과했다 — 공용 판정은 그대로 두고 이 원천들만 이 엄격 판정을 쓴다.
+ */
+export const isValidSheetPlate = (value: unknown): boolean =>
+  isAssignedPlate(value) && isStrictKoreanPlate(plateIdentityKey(value));

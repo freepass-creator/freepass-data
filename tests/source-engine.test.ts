@@ -36,7 +36,7 @@ function capture(rows: Array<Record<string, SheetCell>>, uid = true): SharedShee
   return { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-only', layoutVersion: '2026-10-04-no-account', readTime: time,
     revision: 'synthetic', tabs: [...new Set(sharedSheetChannels.map(c => c.tab))].map(title => {
       const values = [headers, ...(title === channel.tab ? rows.map(r => headers.map(h => ({ 회사명: channel.companyName,
-        차량번호: '신차', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 100, 단기보증: '무보증', 장기보증: '무보증',
+        차량번호: '신차', 차량상태: '출고가능', 상품구분: '중고렌트', '12개월': 500000, 단기보증: '무보증', 장기보증: '무보증',
         연주행: '20000km', '차명 원문': '합성 G90', ...r } as Record<string, SheetCell>)[h] ?? '')) : [])];
       return { title, readTime: time, complete: true, rowCount: values.length, values };
     }) };
@@ -95,8 +95,12 @@ describe('F05 adapter using existing capture/normalizer', () => {
   it('retains blank deposit as UNKNOWN; bad price period cannot silently disappear', () => {
     const a = sharedSheetRecords(read(capture([{ UID: 'a', 단기보증: '', 장기보증: '' }])));
     expect(a.records[0]!.terms[0]!.deposit).toEqual({ state: 'UNKNOWN', value: null });
+    // «협의» 는 아이카와 같은 «그 기간 가격 없음» 낱말이다(대표 10-14): 그 기간만 빠지고 차는 판매 가능하다.
     const b = sharedSheetRecords(read(capture([{ UID: 'a', '24개월': '협의' }])));
-    expect(validateSourceRecord(b.records[0]!)).toContain('TERMS_HOLD');
+    expect(b.records[0]!.terms.map(t => t.months)).toEqual([12]); expect(validateSourceRecord(b.records[0]!)).toEqual([]);
+    // 읽을 수 없는 대여료는 조용히 사라지지 않는다: TERMS_HOLD + RENT_REVIEW_REQUIRED.
+    const c = sharedSheetRecords(read(capture([{ UID: 'a', '24개월': '오십만' }])));
+    expect(validateSourceRecord(c.records[0]!)).toContain('TERMS_HOLD'); expect(c.held[0]!.reasons).toEqual(['TERMS_HOLD', 'RENT_REVIEW_REQUIRED']);
   });
   it.each([['HTTP_429', 'RATE_LIMITED'], ['HTTP_403', 'AUTH_FAILED'], ['timeout', 'READ_FAILED']])('marks %s incomplete', async (message, error) => {
     const r = await sharedSheetEngine(async () => { throw Error(message); }, () => time).read();
