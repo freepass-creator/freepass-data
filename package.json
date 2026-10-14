@@ -54,6 +54,7 @@
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts",
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
+    "plan:identity-promotion": "tsx src/jobs/plan-identity-promotion.ts",
     "repair:policy-correction": "tsx src/jobs/apply-policy-correction.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
