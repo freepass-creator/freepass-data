@@ -1,0 +1,27 @@
+{
+  "schema": "sonogong-official-api-mapping/1",
+  "status": "SPEC_STRUCTURE_ONLY",
+  "note": "명세서 partner-vehicle-api.json(2026-10-13 v1)의 구조만 옮김. 한글 설명문은 전달 파일에서 글자가 깨져 읽지 못했다 — 의미를 추정해 채우지 않는다. 키 값은 여기 없다.",
+  "source": { "document": "partner-vehicle-api.json", "version": "v1", "updated": "2026-10-13", "driveFileName": "partner-vehicle-api.json" },
+  "auth": { "type": "header", "header": "x-partner-key", "envKey": "SONOGONG_API_KEY", "envBase": "SONOGONG_API_BASE", "unauthorizedStatus": 401 },
+  "baseUrl": "https://sokrc.com/api/partner/v1",
+  "refresh": { "intervalMinutes": 60, "generatedAtField": "attrs.generatedAt", "cacheControl": "public, max-age=3600" },
+  "endpoints": {
+    "list": { "method": "GET", "path": "/vehicles",
+      "query": { "tab": { "required": true, "values": ["rent", "sub", "pick"] }, "q": "검색어(선택)", "period": { "values": [12, 24, 36, 48, 60], "default": "rent=36, sub·pick=60" },
+        "minFee": "선택", "maxFee": "선택", "sort": { "values": ["new", "low", "high", "km"], "default": "new" }, "page": { "default": 1 }, "pageSize": { "default": 20, "max": 50 } },
+      "responseFields": ["id", "brand", "model", "detailName", "carNumber", "fuel", "displacementCc", "exteriorColor", "manufactureYearMonth", "mileageKm", "hasActiveContract", "prices", "tab", "thumbnailUrl"] },
+    "detail": { "method": "GET", "path": "/vehicles/{id}", "notFound": 404,
+      "extraFields": ["carName", "description", "images[{url,sortOrder}]", "inspection{zoneCodes,summary}", "insurance{company,bodilyInjuryLiability,bodilyInjuryDeductible,propertyCompensationLimit,propertyCompensationDeductible,selfBodilyInjury,ownDamageDeductible,uninsuredCarInjury,roadsideAssistPerYear,insuranceAge}", "insuranceHistory{myCarDamageCount,myCarDamageAmount}", "interiorColor", "newCarOptionNote", "options[{category,name,amount}]", "prices{<유형>:{label,monthly{기간},deposit{기간}}}"] }
+  },
+  "priceTypes": ["RENT_RETURN", "RENT_BUYOUT", "SUBSCRIBE_RETURN", "SUBSCRIBE_BUYOUT"],
+  "tabPriceTypes": { "rent": ["RENT_RETURN"], "sub": ["SUBSCRIBE_RETURN", "SUBSCRIBE_BUYOUT"], "pick": ["SUBSCRIBE_RETURN", "SUBSCRIBE_BUYOUT"] },
+  "envelope": { "success": "boolean", "data": "object|array", "attrs": "{generatedAt 등}", "error": { "message": "string", "statusCode": "number", "success": false } },
+  "findings": [
+    "보증금(deposit)은 목록이 아니라 «상세»의 prices.<유형>.deposit.<기간> 에 있다(기간별 값 또는 null).",
+    "상세 insurance 필드가 있어 보험 가입 방식·자기부담금·연령 조건을 원천 값으로 읽을 수 있다(없으면 null).",
+    "목록 pageSize 최대 50 — 331대 전수는 7쪽(탭별 합), 상세는 변경 차만(생성 시각 attrs.generatedAt 로 1시간 갱신).",
+    "RENT 탭은 RENT_RETURN 만, 구독·픽업은 인수형 12·24개월 월 대여료 null(명세 예시)."
+  ],
+  "unreadFields": ["auth.description", "priceRules", "scope", "notes", "refresh.description", "responseFields 한글 설명"]
+}
