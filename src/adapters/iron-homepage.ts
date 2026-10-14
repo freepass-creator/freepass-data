@@ -91,6 +91,7 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
     status: { raw: display, saleAvailable: !sold }, terms, observedAt,
     raw: { source: 'ironrentcar-web', source_external_id: listing.id, condition: listing.condition, sold,
       product_type: listing.condition === 'new' ? '신차렌트' : '중고렌트', product_group: 'LONG_TERM', variant: subtitle.split('·')[0]?.trim() ?? '',
+      maker_hint: title.split(' ')[0] ?? '',
       images, ...(Object.keys(spec).length ? { spec } : {}) },
     vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
 }

@@ -138,6 +138,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw }, ...sheetSpecFields(r.raw.spec) } : {}),
     price, source_cycle_price_digest: priceDigest(price),
+    // 보증금 출처: 계산값이 한 항이라도 있으면 CALCULATED(화면 표기는 기존 규칙), 원천 값만이면 null — 원천 값이 오면 다음 회차에 교체된다.
+    deposit_source: r.terms.some(t => t.raw?.deposit_calculated === true) ? 'CALCULATED' : null,
     listable, status: listable ? display : '출고불가', status_kind: statusKindOf(display, listable),
     vehicle_status: listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,

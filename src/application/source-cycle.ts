@@ -1,3 +1,4 @@
+import { calculatedDeposit } from '../domain/calculated-deposit.js';
 import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
@@ -71,7 +72,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     after.record = compactRecord(after.record);
     return after;
   };
-  let identityHolds = false, depositPreserved = 0, uidBridged = 0;
+  let identityHolds = false, depositPreserved = 0, uidBridged = 0, calculatedDeposits = 0;
   // 문서 ID 가 다른 같은 차량(옛 ID 체계로 만든 문서): 같은 공급사 안에서 차량번호가 같은 문서가 정확히 하나이고 어떤 원천 행과도 직접
   // 대응하지 않으면 그 문서를 갱신 대상으로 잇는다. 새 문서를 만들고 옛 문서를 내리면 문서에 붙은 사진·정책 등이 새 문서에 없어
   // 화면이 퇴보한다(2026-10-13 이안카: 옛 iancar_* ID 문서 21건 하향 + 번호판 ID 23건 편입 계획). 문서 ID 는 옮기지 않는다.
@@ -136,10 +137,19 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         const prior = before.record.terms.find(p => termIdentity(p) === termIdentity(term)) ??
           // 기존 문서가 개월 키 하나(대표 항)만 가진 경우: 같은 개월의 유일한 항과만 짝짓는다
           (before.record.terms.filter(p => p.months === term.months).length === 1 ? before.record.terms.find(p => p.months === term.months) : undefined);
-        if (term.deposit.state === 'UNKNOWN' && prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
+        // 이전에 «계산값»으로 채운 보증금은 원천 값이 아니므로 보존하지 않는다: 아래에서 현재 월 대여료로 다시 계산한다(대여료가 바뀌면 같이 바뀐다).
+        const priorCalculated = prior?.raw?.deposit_calculated === true;
+        if (term.deposit.state === 'UNKNOWN' && prior && !priorCalculated && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
           term.deposit = structuredClone(prior.deposit); depositPreserved++;
         }
       }
+    }
+    // 보증금 계산값(국산 ×2·수입 ×3, deposit_source=CALCULATED): 원천이 보증금을 주지 않은 항(UNKNOWN)에 한해, 어댑터가 준 제조사 힌트로만 계산한다.
+    // 원천 값(KNOWN·ZERO)이 오면 그대로 이긴다. 제조사를 모르면 계산하지 않는다.
+    for (const term of next.terms) {
+      if (term.deposit.state !== 'UNKNOWN' || term.monthlyRent.state !== 'KNOWN') continue;
+      const calc = calculatedDeposit(term.monthlyRent.value, r.raw.maker_hint);
+      if (calc !== null) { term.deposit = { state: 'KNOWN', value: calc }; term.raw = { ...(term.raw ?? {}), deposit_calculated: true }; calculatedDeposits++; }
     }
     next.status.saleAvailable = sale;
     let after: CycleProduct = { ...(before ? structuredClone(before) : {}), record: next, listable: sale, locked_by_contract: false,
@@ -188,6 +198,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
+  if (calculatedDeposits > 0) plan.warnings.push(`DEPOSIT_CALCULATED:${calculatedDeposits}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
   // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.
