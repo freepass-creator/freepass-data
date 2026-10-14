@@ -437,7 +437,9 @@ export class FirestoreCatalogCompatibilityReader {
       },
     }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
     // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
-    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS));
+    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS),
+    // 사본 없는 이안카 상품의 ONE 라이브 서빙. 기본 켜짐(종전), IANCAR_LIVE_PHOTO_FALLBACK=off 면 화면 요청이 ONE 을 부르지 않는다(대표 2026-10-15).
+    (process.env.IANCAR_LIVE_PHOTO_FALLBACK ?? '').trim().toLowerCase() !== 'off');
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
