@@ -14,12 +14,23 @@ import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' wit
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
-import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
+import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
+
+/** 오토플러스(RP023) 홈피 쓰기 플러그인: 사이트맵 전수 읽기 결과(번호·가격)를 엔진 레코드로 넘긴다. 읽기가 불완전(실패·보류·중복 번호)이면
+ * complete=false 라 부재 추론·적용이 막힌다. 상태는 «목록에 있음 = 출고가능(게시)», 사라짐은 엔진의 부재 하향이 출고불가로 내린다. */
+export function autoplusHomepageWritePlugin(ratio: number, collect: () => Promise<AutoplusHomepageCollection>) {
+  return sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
+    const c = await collect();
+    return { observedAt: c.observedAt, complete: c.complete, completedScopes: ['homepage'], visibilityComplete: true,
+      heldCount: c.held.length + c.failures.length + c.duplicatePlates.length,
+      rows: c.records.map(record => ({ scope: 'homepage', record })) };
+  });
+}
 
 /** ERP4 단독 수집 원천(손오공 RP012·오토플러스 RP023)의 관측 전용 플러그인. 엔진은 쓰지 않고, 공급사 문서 전체(source 값과 무관)를 세며
  * 관측 시각은 «지금»이 아니라 노출 문서의 마지막 수정 시각이다 — 수집기가 멈추면 시각이 늙어 신선도 감시가 STALE 로 잡는다
@@ -60,7 +71,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
-    observationSources: ['RP012', 'RP023'], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
+    // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
+    observationSources: env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1' ? ['RP012'] : ['RP012', 'RP023'], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -218,7 +230,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         if (!home || !erp4) return null;
         return Date.parse(home) < Date.parse(erp4) ? home : erp4;
       } : collectionEvidence;
-      plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
+      // 오토플러스 홈피 쓰기(대표 2026-10-14: 홈피 = 판매 가능 정본, 번호라도 먼저 편입): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE=1 일 때만 켜진다(기본 꺼짐).
+      // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지) — 켜는 순서는 설계 문서 §2.
+      if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1') {
+        plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => collectAutoplusHomepage(
+          createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never })))));
+      } else plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
   }
   // 대표 지시로 내린 공급사(계약서 목록)는 매 회차 노출 문서를 내린다. 같은 공급사가 일반 원천으로도 읽히면 중복 쓰기 충돌로 멈춘다.
