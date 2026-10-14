@@ -28,6 +28,19 @@ const rentOf = (v: unknown): SourceAmount | null => {
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
 };
 
+/** 시트 보증금 칸(있으면 규칙 계산보다 먼저, Codex #642 ②): 1원~1억 정수 = KNOWN, **명시 문구(«무보증»·«보증금없음»)만 ZERO**.
+ * 숫자 0·문자열 «0»·빈칸·형식 밖 = «값 없음»(UNKNOWN) — 산출 근거 없는 0 은 확정 0원이 아니다(대표 정산 규칙 «0원 확정 금지»). */
+const DEPOSIT_MAX = 100_000_000;
+const EXPLICIT_NO_DEPOSIT = new Set(['무보증', '보증금없음']);
+const sourceDepositOf = (v: unknown): SourceAmount => {
+  const t = clean(v).replace(/[,\s원]/g, '');
+  if (t === '') return unknownAmount;
+  if (EXPLICIT_NO_DEPOSIT.has(t)) return { state: 'ZERO', value: 0 };
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > DEPOSIT_MAX) return unknownAmount;
+  return { state: 'KNOWN', value: n };
+};
+
 /** 머리글 행을 찾는다: «차량번호»와 «판매상태» 가 같은 행에 있어야 한다(앞 30행 안). */
 const headerRow = (values: unknown[][]) => values.slice(0, 30).findIndex(r => {
   const cells = r.map(clean);
@@ -46,6 +59,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
     const iKind = headers.indexOf('차종'), iModel = headers.indexOf('모델명'), iColor = headers.indexOf('색상'), iFuel = headers.indexOf('연료');
     // 제조사 열(있으면): 국산/수입 판정 근거로만 쓴다.
     const iMaker = headers.findIndex(h => ['제조사', '브랜드', '메이커'].includes(h.replace(/\s+/g, '')));
+    const iDeposit = headers.findIndex(h => h.replace(/\s+/g, '') === '보증금');
     const iFirst = headers.indexOf('최초등록일'), iMileage = headers.findIndex(h => h.replace(/\s+/g, '') === '예상주행거리');
     // 요금 열: «<개월>개월 <1|2|3>만km» (줄바꿈·공백 차이는 무시)
     const rateColumns = headers.map((h, index) => {
@@ -76,10 +90,18 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       for (const col of rateColumns) {
         const rent = rentOf(row[col.index]);
         if (!rent || rent.state !== 'KNOWN') continue;
+        // 1순위 = 시트 보증금 칸(공급사가 적은 금액): 양수 KNOWN, «무보증»·«보증금없음» 만 ZERO. 칸이 없거나 값이 없을 때만 규칙으로 계산한다(Codex #642 ②).
+        const sourceDeposit = iDeposit >= 0 ? sourceDepositOf(row[iDeposit]) : unknownAmount;
+        if (sourceDeposit.state !== 'UNKNOWN') {
+          terms.push({ months: col.months, monthlyRent: rent, deposit: sourceDeposit, mileage: `${col.km}km/year`, raw: { deposit_source: 'SHEET_DEPOSIT_COLUMN' } });
+          continue;
+        }
         const amount = rule ? autoplusRuleDeposit(rule, rent.value) : null;
-        // 계산값(공급사가 적은 금액 아님): raw.deposit_rule 이 근거. 규칙을 못 정하면 UNKNOWN(엔진이 기존 KNOWN 을 보존한다). ZERO 는 규칙에서 나오지 않는다.
+        // 계산값(공급사가 적은 금액 아님, Codex #642 ①): raw.deposit_rule 만 남긴다 — 엔진 기록은 이를 deposit_source=CALCULATED 로 쓰고(calculatedDepositFields),
+        // 소비처는 CALCULATED_RULE 로 구분한다. 시트 원문에 보증금 문구가 없으므로 «확정 문구»(deposit_confirmation)는 두지 않는다(공급사 확인 금액으로 보이면 안 된다). 규칙을 못 정하면 UNKNOWN(엔진이 기존 KNOWN 을 보존한다). ZERO 는 규칙에서 나오지 않는다.
         terms.push(amount !== null && rule
-          ? { months: col.months, monthlyRent: rent, deposit: { state: 'KNOWN', value: amount }, mileage: `${col.km}km/year`, raw: { deposit_rule: rule } }
+          ? { months: col.months, monthlyRent: rent, deposit: { state: 'KNOWN', value: amount }, mileage: `${col.km}km/year`,
+            raw: { deposit_rule: rule } }
           : { months: col.months, monthlyRent: rent, deposit: unknownAmount, mileage: `${col.km}km/year`, raw: {} });
       }
       const vehicleText = model && kind && !model.includes(kind) ? `${kind} ${model}` : (model || kind);

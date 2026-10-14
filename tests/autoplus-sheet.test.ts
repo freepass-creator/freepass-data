@@ -51,11 +51,17 @@ describe('오토플러스 시트 어댑터', () => {
       expect(by[k]!.terms.every(t => t.deposit.state === 'UNKNOWN' && !('deposit_rule' in t.raw))).toBe(true);
       expect(by[k]!.raw.vehicle_origin).toBe('UNKNOWN');
     }
-    // 보증금 열은 읽지 않는다(시트에 그런 칸은 없다): 열이 있어도 규칙 값이 이긴다
+    // Codex #642 ②: 시트 보증금 칸이 있으면 규칙 계산보다 먼저 읽는다. 양수 = KNOWN, «무보증»·«보증금없음» 만 ZERO, 0·빈칸·형식 밖은 값 없음 → 규칙 계산.
     const h = [...header.slice(0, 9), '보증금', ...header.slice(9)];
     const c = car(1, '05수4216', '판매중');
-    const withColumn = readAutoplusSheet([{ title: 't', values: [h, [...c.slice(0, 9), '0', ...c.slice(9)]] }], NOW);
-    expect(withColumn.records[0]!.terms[0]!.deposit).toEqual({ state: 'KNOWN', value: 1540000 });
+    const withDeposit = (cell: string) => readAutoplusSheet([{ title: 't', values: [h, [...c.slice(0, 9), cell, ...c.slice(9)]] }], NOW).records[0]!.terms[0]!;
+    expect(withDeposit('0').deposit).toEqual({ state: 'KNOWN', value: 1540000 });          // 0 은 확정 0원이 아니다 → 규칙
+    expect(withDeposit('').deposit).toEqual({ state: 'KNOWN', value: 1540000 });
+    expect(withDeposit('문의').deposit).toEqual({ state: 'KNOWN', value: 1540000 });
+    expect(withDeposit('1,000,000')).toMatchObject({ deposit: { state: 'KNOWN', value: 1000000 }, raw: { deposit_source: 'SHEET_DEPOSIT_COLUMN' } });
+    expect('deposit_rule' in withDeposit('1,000,000').raw).toBe(false);                    // 시트 금액은 계산값 표식이 없다
+    expect(withDeposit('무보증').deposit).toEqual({ state: 'ZERO', value: 0 });
+    expect(withDeposit('보증금없음').deposit).toEqual({ state: 'ZERO', value: 0 });
     // 제조사 열이 있으면 판정 근거로 쓴다
     const mh = [...header.slice(0, 2), '제조사', ...header.slice(2)];
     const m = car(1, '05수4216', '판매중'); m.splice(2, 0, '볼보'); m[3] = '아무차'; m[4] = 'XC60 B5';

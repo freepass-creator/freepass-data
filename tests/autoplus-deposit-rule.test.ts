@@ -23,6 +23,20 @@ describe('오토플러스 국산/수입 판정', () => {
     expect(classifyAutoplusVehicleOrigin('', 'i40')).toMatchObject({ origin: 'UNKNOWN' });    // I4(BMW) ≠ i40
     expect(classifyAutoplusVehicleOrigin(null, undefined, '')).toMatchObject({ origin: 'UNKNOWN', reason: 'NO_MATCH' });
   });
+  it('Codex #642 ③: 낱말 경계 — 앞부분만 같다고 같은 차가 아니다(레인지로버·미니밴·레이스), 세대·형식 꼬리는 같은 차', () => {
+    expect(classifyAutoplusVehicleOrigin('', '레인지로버 이보크').origin).toBe('IMPORT');    // 레이(기아) 로 읽히지 않는다
+    expect(classifyAutoplusVehicleOrigin('', '레인지로버스포츠').origin).toBe('IMPORT');   // 허용 꼬리(스포츠)는 같은 차
+    expect(classifyAutoplusVehicleOrigin('', '레인지로버벨라수입').origin).toBe('UNKNOWN');   // 모르는 한글 꼬리는 다른 이름
+    expect(classifyAutoplusVehicleOrigin('', '미니밴')).toMatchObject({ origin: 'UNKNOWN', reason: 'NO_MATCH' });   // 미니(수입) 로 읽히지 않는다
+    expect(classifyAutoplusVehicleOrigin('', '레이스')).toMatchObject({ origin: 'UNKNOWN' });                       // 레이(기아) 아님
+    expect(classifyAutoplusVehicleOrigin('', '레이')).toMatchObject({ origin: 'DOMESTIC' });
+    expect(classifyAutoplusVehicleOrigin('', '더뉴레이')).toMatchObject({ origin: 'DOMESTIC' });
+    expect(classifyAutoplusVehicleOrigin('', '미니 쿠퍼').origin).toBe('IMPORT');
+    expect(classifyAutoplusVehicleOrigin('', '아반떼CN7').origin).toBe('DOMESTIC');
+    expect(classifyAutoplusVehicleOrigin('', '쏘나타 하이브리드').origin).toBe('DOMESTIC');
+    expect(classifyAutoplusVehicleOrigin('', '쏘나타하이브리드').origin).toBe('DOMESTIC');
+    expect(classifyAutoplusVehicleOrigin('', '모닝어반').origin).toBe('UNKNOWN');
+  });
   it('계산: 국산 ×2, 수입 ×3, 대여료가 양의 정수가 아니면 null(ZERO 없음)', () => {
     expect(autoplusRuleDeposit('AUTOPLUS_RENT_X2_DOMESTIC', 770000)).toBe(1540000);
     expect(autoplusRuleDeposit('AUTOPLUS_RENT_X3_IMPORT', 770000)).toBe(2310000);
