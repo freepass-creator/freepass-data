@@ -32,6 +32,8 @@ export type SourceReconciliation = {
   matched: boolean; countEqual: boolean;
   /** 같은 번호로 문서가 둘 이상인 차량 수(충돌). 있으면 matched 는 false 다. */
   duplicateDocCount: number;
+  /** 계약 잠금 문서라 원천 값과 달라도 정책상 잠금이 이기는 차량 수(값 불일치에서 제외). */
+  lockOverrideCount: number;
   /** 등록 기준 지표(커맨드 센터 2026-10-14): 노출 제외로 편입된 차는 NEW 가 아니라 등록으로 센다. registeredMatched = 순수 NEW(문서 없음)가 0. */
   registeredCount: number; exposedCount: number; infoIncompleteCount: number; pureNewCount: number; registeredMatched: boolean;
   /** 보고 4번째 칸(커맨드 센터 2026-10-14): 원천이 판매 불가로 읽었지만 «1차로 가져와» 비노출 문서로 편입된 수. 판매 가능 대수 기준에는 들어가지 않는다. */
@@ -70,7 +72,10 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
   const sameKeys = [...source.keys()].filter(k => erp.has(k));
   const newKeys = [...source.keys()].filter(k => !erp.has(k)).sort();
   const missingKeys = [...erp.keys()].filter(k => !source.has(k)).sort();
-  const mismatchKeys = sameKeys.filter(k => facts(withPreservedDeposit(source.get(k)!, erp.get(k)!.record)) !== facts(erp.get(k)!.record)).sort();
+  const differing = sameKeys.filter(k => facts(withPreservedDeposit(source.get(k)!, erp.get(k)!.record)) !== facts(erp.get(k)!.record)).sort();
+  // 계약 잠금(장부)이 원천 «게시»보다 우선하는 정책(B3Q RP023 5087 실측): 잠금 문서의 차이는 값 불일치가 아니라 «잠금 우선»으로 따로 센다.
+  const mismatchKeys = differing.filter(k => !isLocked(erp.get(k)!));
+  const lockOverrideKeys = differing.filter(k => isLocked(erp.get(k)!));
   const cut = (keys: string[], pick: (k: string) => SourceProductRecord) => keys.slice(0, LIST_LIMIT).map(k => last4(pick(k)));
   return {
     definition: { source: 'saleAvailable===true', erp: 'listable', key: 'plate|uid' },
@@ -81,6 +86,7 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     matchedExceptLocked: newKeys.length === 0 && mismatchKeys.length === 0 && missingKeys.every(k => isLocked(erp.get(k)!)),
     mismatchCount: mismatchKeys.length, mismatchLast4: cut(mismatchKeys, k => erp.get(k)!.record),
     duplicateDocCount: duplicateKeys.length,
+    lockOverrideCount: lockOverrideKeys.length,
     matched: newKeys.length === 0 && missingKeys.length === 0 && mismatchKeys.length === 0 && duplicateKeys.length === 0,
     // 대표 보고 형식 «등록 N·노출 N·정보 부족 N»: 등록 = 원천 판매 가능 중 문서가 있는 차, 노출 = 그중 노출 중, 정보 부족 = 번호만 편입한 비노출.
     registeredCount: [...source.keys()].filter(k => docs.has(k)).length,
