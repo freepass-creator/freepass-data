@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGwsPhotoDrive, isDriveRateLimitSignal, type GwsRunner } from '../src/infra/gws-photo-drive.js';
-import { fullApprovalToken, iancarPhotoCopyCli, photoCopyLimitsFromEnv, photoSourceReadiness } from '../src/jobs/copy-iancar-photos-to-drive.js';
+import { createGwsPhotoDrive, isDriveRateLimitSignal, isUploadOutsideCwdSignal, type GwsRunner } from '../src/infra/gws-photo-drive.js';
+import { fullApprovalToken, iancarPhotoCopyCli, photoCopyLimitsFromEnv, photoSourceReadiness, PHOTO_READY_CODES } from '../src/jobs/copy-iancar-photos-to-drive.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -42,7 +42,13 @@ describe('gws 드라이브 포트(공유 드라이브, 삭제 없음)', () => {
     const dir = tmp();
     const run: GwsRunner = args => {
       calls.push(args);
-      if (args.includes('--upload')) { uploadedFile = args[args.indexOf('--upload') + 1]!; expect(readFileSync(uploadedFile).equals(bytes)).toBe(true); return { id: 'FILE1', sha256Checksum: sha }; }
+      if (args.includes('--upload')) {
+        const rel = args[args.indexOf('--upload') + 1]!;
+        // gws --upload 는 작업 폴더(cwd = tempDir) 안의 «상대 파일명»만 받는다 — 절대 경로·하위 경로가 아니어야 한다.
+        expect(rel).toMatch(/^[0-9a-f-]+\.jpg$/);
+        uploadedFile = join(dir, rel);
+        expect(readFileSync(uploadedFile).equals(bytes)).toBe(true); return { id: 'FILE1', sha256Checksum: sha };
+      }
       if (args.includes('create')) return { id: 'FOLDER1', name: json(args).name };
       return {};
     };
@@ -64,6 +70,12 @@ describe('gws 드라이브 포트(공유 드라이브, 삭제 없음)', () => {
     const drive = createGwsPhotoDrive({ run, rootFolderId: ROOT, tempDir: dir });
     await expect(drive.upload('F', '01.jpg', Buffer.from('x'), 'k')).rejects.toThrow('DRIVE_UPLOAD_CHECKSUM_MISMATCH');
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('B3Q 파일럿: the gws upload-outside-working-directory validation error gets its own code instead of a generic failure', () => {
+    expect(isUploadOutsideCwdSignal('validationError: path is outside the current directory')).toBe(true);
+    expect(isUploadOutsideCwdSignal('{"error":{"kind":"validationError"}}')).toBe(true);
+    expect(isUploadOutsideCwdSignal('{"error":{"code":404}}')).toBe(false);
   });
 
   it('Codex ②/③: drive rate-limit signals become a dedicated code; the upload carries the local checksum as the completion mark', () => {
@@ -125,6 +137,10 @@ describe('복사 잡 설정·승인', () => {
     expect(photoSourceReadiness({ issues: ['IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_SOURCE_STALE'], stale: true, syncedAt: synced(5) }, now, 3 * h))
       .toEqual({ ready: false, codes: ['IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_SOURCE_STALE'] });
     expect(photoSourceReadiness({ issues: [], stale: false, syncedAt: 'nope' }, now, 3 * h).codes).toEqual(['IANCAR_ONE_SYNCED_AT_INVALID']);
+    // 허용 목록: 모르는 이슈 문자열은 그대로 내보내지 않고 일반 코드로만 알린다
+    const unknown = photoSourceReadiness({ issues: ['SOMETHING_WITH_SECRET_TOKEN_abc123', 'IANCAR_ONE_SYNC_TIME_DRIFT'], stale: false, syncedAt: synced(5) }, now, 3 * h);
+    expect(unknown.codes).toEqual(['IANCAR_ONE_OTHER_ISSUE', 'IANCAR_ONE_SYNC_TIME_DRIFT']);
+    expect(unknown.codes.every(c => PHOTO_READY_CODES.has(c))).toBe(true);
   });
 
   it('refuses to write without explicit approval, and requires the drive root id', async () => {

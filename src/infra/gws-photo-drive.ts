@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { DriveFileInfo, DriveVehicleFolder, PhotoCopyDrive } from '../ports/iancar-photo-copy.js';
 
 export type GwsRunner = (args: string[]) => unknown;
@@ -22,21 +22,27 @@ export const isDriveRateLimitSignal = (text: string): boolean =>
 
 /** gws 실행기: 실행 파일 경로를 받아 stdout 의 JSON 만 읽는다(stderr 의 keyring 안내는 무시). 오류 본문은 던지지 않는다.
  * 한도 초과(429·쿼터)는 전용 코드 DRIVE_RATE_LIMITED 로 올려 잡이 회차를 즉시 종료하게 한다. */
-export function gwsRunner(bin: string, options: { timeoutMs?: number } = {}): GwsRunner {
+/** gws 의 --upload 는 «현재 작업 폴더 안» 파일만 허용한다(validationError: outside the current directory). 이 신호는 일반 실패로 뭉개지 않고 전용 코드로 올린다. */
+export const isUploadOutsideCwdSignal = (text: string): boolean => /outside the current directory|validationError/i.test(text);
+
+export function gwsRunner(bin: string, options: { timeoutMs?: number; cwd?: string } = {}): GwsRunner {
   return args => {
     let out: string;
-    try { out = execFileSync(bin, args, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: options.timeoutMs ?? 120_000 }); }
+    // cwd = 업로드 임시 폴더: --upload 에는 이 폴더 안의 «상대 파일명»만 넘긴다(작업 폴더 밖 파일은 gws 가 거부).
+    try { out = execFileSync(bin, args, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: options.timeoutMs ?? 120_000,
+      ...(options.cwd ? { cwd: options.cwd } : {}) }); }
     catch (error) {
       const e = error as { stdout?: unknown; stderr?: unknown };
       const text = `${typeof e.stdout === 'string' ? e.stdout : Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf8') : ''}\n${typeof e.stderr === 'string' ? e.stderr : Buffer.isBuffer(e.stderr) ? e.stderr.toString('utf8') : ''}`;
-      throw new Error(isDriveRateLimitSignal(text) ? 'DRIVE_RATE_LIMITED' : 'GWS_DRIVE_CALL_FAILED');
+      throw new Error(isDriveRateLimitSignal(text) ? 'DRIVE_RATE_LIMITED' : isUploadOutsideCwdSignal(text) ? 'GWS_UPLOAD_PATH_OUTSIDE_CWD' : 'GWS_DRIVE_CALL_FAILED');
     }
     const at = out.indexOf('{');
     if (at < 0) throw new Error('GWS_DRIVE_RESPONSE_INVALID');
     let json: unknown;
     try { json = JSON.parse(out.slice(at)); } catch { throw new Error('GWS_DRIVE_RESPONSE_INVALID'); }
     if (json && typeof json === 'object' && 'error' in json) {
-      throw new Error(isDriveRateLimitSignal(JSON.stringify((json as { error?: unknown }).error ?? '')) ? 'DRIVE_RATE_LIMITED' : 'GWS_DRIVE_API_ERROR');
+      const errorText = JSON.stringify((json as { error?: unknown }).error ?? '');
+      throw new Error(isDriveRateLimitSignal(errorText) ? 'DRIVE_RATE_LIMITED' : isUploadOutsideCwdSignal(errorText) ? 'GWS_UPLOAD_PATH_OUTSIDE_CWD' : 'GWS_DRIVE_API_ERROR');
     }
     return json;
   };
@@ -104,7 +110,8 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
         // copySha256 = 완료 표식: 드라이브가 계산한 체크섬과 같을 때만 다음 회차가 «완료» 로 인정한다(불일치·부분 파일은 인정하지 않음).
         const res = run(['drive', 'files', 'create', '--params', JSON.stringify({ supportsAllDrives: true, fields: 'id,name,sha256Checksum' }),
           '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copySha256: local256, copiedBy: 'iancar-photo-copy/1' } }),
-          '--upload', local]) as Item;
+          // 상대 파일명: 실행기의 cwd(= tempDir) 안의 파일만 gws 가 받는다.
+          '--upload', basename(local)]) as Item;
         if (!res.id) throw new Error('DRIVE_UPLOAD_FAILED');
         // 체크섬은 업로드 응답에 없을 수 있다 — 없으면 한 번 조회한다. 원격 체크섬을 «확인하지 못하면» 성공으로 치지 않는다(Codex 재검토):
         // 로컬 해시로 대체하면 검증 안 된 업로드가 COPIED·등록 CSV 에 들어간다. 불일치·미확인 모두 실패(되돌리지 않음: 지문이 없어 다음 회차에 재검증,
