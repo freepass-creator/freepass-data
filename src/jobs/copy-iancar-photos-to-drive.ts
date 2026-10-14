@@ -94,6 +94,10 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   const bin = resolveGwsBin(env);
   if (!bin) throw new Error('GWS_UNAVAILABLE');
   const limits = photoCopyLimitsFromEnv(env);
+  // 등록 목록(--out)은 항상 «이번 회차 결과»만 담는다(Codex 재검토 ②): 시작 때 헤더만 있는 CSV 로 덮어써 두어, 회차가 예외로 끝나거나 완료 차량이 0대여도
+  // 이전 회차 목록이 남아 등록되는 일이 없다.
+  const out = flag('--out');
+  if (out) writeFileSync(resolve(out), photoCopyCsv({ completed: [] }), { mode: 0o600 });
   const result = await runIancarPhotoCopy({
     source: createIancarPhotoSource(env),
     compress: input => renderVehiclePhotoRendition(input, 'detail'),
@@ -101,8 +105,7 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
   }, mode, limits);
-  const out = flag('--out');
-  if (out && result.completed.length) writeFileSync(resolve(out), photoCopyCsv(result), { mode: 0o600 });
+  if (out) writeFileSync(resolve(out), photoCopyCsv(result), { mode: 0o600 });
   // 보고: 번호는 끝 4자리, 코드·건수만. completed(전체 번호)는 출력하지 않는다.
   log(JSON.stringify({ mode, stop: result.stop, vehicles: result.vehicles, counts: result.counts, photosWritten: result.photosWritten,
     // 확인 값은 명시 요청(--print-full-token)이 있을 때만 DRY_RUN 결과에 싣는다(파일럿 합격 뒤 사람이 의도적으로 꺼내 환경에 넣는 값).

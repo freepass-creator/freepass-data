@@ -84,6 +84,18 @@ describe('gws 드라이브 포트(공유 드라이브, 삭제 없음)', () => {
     expect(json(calls.find(c => c.includes('--upload'))!).appProperties).toMatchObject({ srcKey: 'k', copySha256: sha });
   });
 
+  it('Codex 재검토 ①: an upload whose remote checksum cannot be confirmed (even after a re-read) is a failure, never a success with the local hash', async () => {
+    const dir = tmp();
+    const run: GwsRunner = args => (args.includes('--upload') ? { id: 'FILE1' } : args.includes('get') ? {} : { files: [] });
+    const drive = createGwsPhotoDrive({ run, rootFolderId: ROOT, tempDir: dir });
+    await expect(drive.upload('F', '01.jpg', Buffer.from('x'), 'k')).rejects.toThrow('DRIVE_UPLOAD_CHECKSUM_UNVERIFIED');
+    expect(readdirSync(dir)).toEqual([]);
+    // 응답에 없어도 재조회로 확인되면 성공(대소문자 무관)
+    const sha = createHash('sha256').update(Buffer.from('x')).digest('hex');
+    const ok = createGwsPhotoDrive({ run: a => (a.includes('--upload') ? { id: 'F' } : a.includes('get') ? { sha256Checksum: sha.toUpperCase() } : {}), rootFolderId: ROOT, tempDir: dir });
+    expect((await ok.upload('F', '01.jpg', Buffer.from('x'), 'k')).sha256).toBe(sha);
+  });
+
   it('writes the album fingerprint to the folder properties and rejects an invalid root id', async () => {
     const calls: string[][] = [];
     const drive = createGwsPhotoDrive({ run: a => { calls.push(a); return {}; }, rootFolderId: ROOT, tempDir: tmp() });
@@ -104,6 +116,15 @@ describe('복사 잡 설정·승인', () => {
     await expect(iancarPhotoCopyCli(['--mode', 'PILOT'], { IANCAR_PHOTO_DRIVE_ROOT_ID: ROOT })).rejects.toThrow('IANCAR_PHOTO_COPY_APPROVAL_REQUIRED');
     await expect(iancarPhotoCopyCli(['--mode', 'FULL'], { IANCAR_PHOTO_COPY_APPROVED: 'true' })).rejects.toThrow('IANCAR_PHOTO_DRIVE_ROOT_ID_REQUIRED');
     await expect(iancarPhotoCopyCli(['--mode', 'NOPE'], {})).rejects.toThrow('PHOTO_COPY_MODE_INVALID');
+  });
+
+  it('Codex 재검토 ②: the registration list is reset to a header-only CSV at the start, so a failed or empty run never leaves the previous list behind', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const out = join(tmp(), 'register.csv');
+    writeFileSync(out, '번호,폴더\n12가1001,OLDFOLDER\n');
+    await expect(iancarPhotoCopyCli(['--mode', 'DRY_RUN', '--out', out], { IANCAR_PHOTO_DRIVE_ROOT_ID: ROOT, GWS_BIN: 'gws-test' }))
+      .rejects.toThrow('IANCAR_ONE_API_KEY_REQUIRED');                       // 원천 키가 없어 회차가 시작도 못 한다
+    expect(readFileSync(out, 'utf8')).toBe('번호,폴더\n');                    // 이전 목록은 남지 않는다
   });
 
   it('Codex ⑤: FULL cannot bypass the pilot limit — it needs the confirmation value bound to the target folder', async () => {

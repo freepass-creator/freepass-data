@@ -106,11 +106,14 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
           '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copySha256: local256, copiedBy: 'iancar-photo-copy/1' } }),
           '--upload', local]) as Item;
         if (!res.id) throw new Error('DRIVE_UPLOAD_FAILED');
-        // 체크섬은 업로드 응답에 없을 수 있다 — 없으면 한 번 조회한다. 있고 다르면 실패(되돌리지 않음: 지문이 없어 이 차량은 다음 회차에 재검증).
+        // 체크섬은 업로드 응답에 없을 수 있다 — 없으면 한 번 조회한다. 원격 체크섬을 «확인하지 못하면» 성공으로 치지 않는다(Codex 재검토):
+        // 로컬 해시로 대체하면 검증 안 된 업로드가 COPIED·등록 CSV 에 들어간다. 불일치·미확인 모두 실패(되돌리지 않음: 지문이 없어 다음 회차에 재검증,
+        // 이미 올라간 파일은 드라이브가 체크섬을 계산해 표식과 같아지면 그때 «완료»로 인정된다).
         let remote = res.sha256Checksum ?? null;
         if (!remote) remote = ((run(['drive', 'files', 'get', '--params', JSON.stringify({ fileId: res.id, supportsAllDrives: true, fields: 'sha256Checksum' })]) as Item).sha256Checksum) ?? null;
-        if (remote && remote.toLowerCase() !== local256) throw new Error('DRIVE_UPLOAD_CHECKSUM_MISMATCH');
-        return { fileId: res.id, name, sha256: remote ?? local256, srcKey, image: true, copySha256: local256 };
+        if (!remote) throw new Error('DRIVE_UPLOAD_CHECKSUM_UNVERIFIED');
+        if (remote.toLowerCase() !== local256) throw new Error('DRIVE_UPLOAD_CHECKSUM_MISMATCH');
+        return { fileId: res.id, name, sha256: remote.toLowerCase(), srcKey, image: true, copySha256: local256 };
       } finally { rmSync(local, { force: true }); }
     },
     async setFingerprint(folderId, fingerprint, copiedAtIso) {
