@@ -92,3 +92,42 @@ describe('엔진 정제·계획서·감사·부록', () => {
     expect(generationFamilies(fam)).toHaveLength(1);
   });
 });
+
+describe('Codex #663 결함 3건 — 세대 근거 우회 차단', () => {
+  const g = (id: string, sub: string, from: number | null, to: number | null, model = '그랜저') => master({ id, model, sub_model: sub, yearFrom: from, yearTo: to });
+  const guard = (rawName: string, year: string, m: IdentityMaster, all: IdentityMaster[]) => generationGuard({ rawName, year, master: m, masters: all });
+
+  it('(1) 코드 없는 마스터 이름이 원문에 «포함»된다는 것만으로는 근거가 아니다 — 형제 세대가 있으면 연식 근거가 필요', () => {
+    const plain = g('p', '그랜저', 2011, 2016), facelift = g('f', '더 뉴 그랜저', 2016, 2019);
+    const all = [plain, facelift];
+    expect(guard('현대 그랜저 3.0', '', plain, all)).toBe('GENERATION_EVIDENCE_MISSING');      // 연식 미상
+    expect(guard('현대 그랜저 3.0', '2016', plain, all)).toBe('GENERATION_EVIDENCE_MISSING');  // 경계(겹침)
+    expect(guard('현대 그랜저 3.0', '2012', plain, all)).toBeNull();                             // 겹치지 않는 연식
+    // 이 세대만의 앞 수식어가 이름째로 원문에 있으면 근거(더 뉴 …)
+    expect(guard('현대 더 뉴 그랜저 3.0', '', facelift, all)).toBeNull();
+  });
+
+  it('(2) 개발코드는 토큰 경계로만 인정한다 — GN70·XGN7 은 GN7 근거가 아니다', () => {
+    const gn7 = g('gn7', '그랜저 GN7', 2022, null), ig = g('ig', '그랜저 IG', 2016, 2019);
+    const all = [gn7, ig];
+    expect(guard('현대 그랜저 GN70 캘리그래피', '', gn7, all)).toBe('GENERATION_EVIDENCE_MISSING');
+    expect(guard('현대 그랜저 XGN7', '', gn7, all)).toBe('GENERATION_EVIDENCE_MISSING');
+    expect(guard('현대 그랜저 GN7 캘리그래피', '', gn7, all)).toBeNull();
+    expect(guard('현대 그랜저(GN7) 캘리그래피', '', gn7, all)).toBeNull();
+    expect(guard('현대 그랜저 GN7-하이브리드', '', gn7, all)).toBeNull();
+  });
+
+  it('(3) 같은 개발코드를 나눈 부분변경 형제는 코드만으로 구분되지 않는다 — 연식 근거(또는 고유 수식어)가 필요', () => {
+    const lx2 = g('lx2', '팰리세이드 LX2', 2018, 2022, '팰리세이드'), fl = g('fl', '더 뉴 팰리세이드 LX2', 2022, null, '팰리세이드');
+    const all = [lx2, fl];
+    expect(guard('현대 팰리세이드 LX2', '', lx2, all)).toBe('GENERATION_EVIDENCE_MISSING');     // 코드는 있으나 연식 미상
+    expect(guard('현대 팰리세이드 LX2', '2022', lx2, all)).toBe('GENERATION_EVIDENCE_MISSING'); // 중첩
+    expect(guard('현대 팰리세이드 LX2', '2020', lx2, all)).toBeNull();
+    // 고유 수식어가 이름째로 있으면 연식 없이도 근거
+    expect(guard('현대 더 뉴 팰리세이드 LX2', '', fl, all)).toBeNull();
+    // 코드가 형제와 겹치지 않으면 코드(토큰 경계)만으로 충분(다른 세대)
+    const lx3 = g('lx3', '팰리세이드 LX3', 2025, null, '팰리세이드');
+    expect(guard('현대 팰리세이드 LX3', '', lx3, [lx2, fl, lx3])).toBeNull();
+    expect(guard('현대 팰리세이드 가솔린', '', lx3, [lx2, fl, lx3])).toBe('GENERATION_EVIDENCE_MISSING');   // 코드·수식어·연식 근거 없음
+  });
+});

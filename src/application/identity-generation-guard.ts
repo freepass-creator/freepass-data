@@ -19,7 +19,17 @@ const nameList = (m: GuardMaster) => [...new Set([m.sub_model, ...m.sub_model_al
 /** 마스터 세부모델 이름 끝의 개발코드(예: «그랜저 GN7» → GN7). 없으면 ''. */
 export const generationCode = (subModel: string): string => CODE_TAIL.exec(norm(subModel))?.[0] ?? '';
 
-export type GenerationGuardReason = 'GENERATION_QUALIFIER_MISMATCH' | 'GENERATION_EVIDENCE_MISSING';
+/** 원문(구분자 유지)에서 영숫자 토큰 경계로 코드가 있는가: 앞뒤가 영문·숫자가 아니어야 한다(GN7 은 «GN70»·«XGN7» 이 아니다). */
+function containsToken(rawName: string, token: string): boolean {
+  const text = rawName.normalize('NFKC').toUpperCase();
+  for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + 1)) {
+    const before = at > 0 ? text[at - 1]! : '', after = text[at + token.length] ?? '';
+    if (!/[A-Z0-9]/.test(before) && !/[A-Z0-9]/.test(after)) return true;
+  }
+  return false;
+}
+
+export type GenerationGuardReason ='GENERATION_QUALIFIER_MISMATCH' | 'GENERATION_EVIDENCE_MISSING';
 const inRange = (m: GuardMaster, year: number) => (m.yearFrom === null || year >= m.yearFrom) && (m.yearTo === null || year <= m.yearTo);
 
 /** 마스터 하나가 원문 차명의 근거로 충분한가. null = 통과, 아니면 보류 사유. rawPath = 원문 부분 일치로 고른 경우(이름을 정확히 대조한 경우는 점검 대상이 아니다). */
@@ -44,8 +54,14 @@ export function generationGuard(input: { rawName: string; year: string; master: 
   const siblings = input.masters.filter(m => m.id !== master.id && norm(m.maker) === norm(master.maker) && norm(m.model) === norm(master.model)
     && (generationCode(m.sub_model) !== code || (baseOf(m.sub_model) === baseName && norm(m.sub_model) !== norm(master.sub_model))));
   if (!siblings.length) return null;
-  const full = norm(master.sub_model);
-  if (raw.includes(full) || (code && raw.includes(code))) return null;   // 전체 이름·개발코드가 원문에 있다 = 세대 근거
+  // 세대 근거는 «하나»면 된다(Codex #663): ① 형제와 겹치지 않는 개발코드가 원문에 «토큰 경계로» 있다(그랜저 GN7 근거가 «그랜저 GN70» 이면 안 됨)
+  // ② 이 세대만의 앞 수식어가 이름째로 원문에 있다(«더 뉴 …», 형제 이름에는 없음) ③ 연식이 이 세대 범위 안에만 있고 형제 범위와 겹치지 않는다.
+  // 마스터 이름이 원문에 «포함»된다는 것만으로는 근거가 아니다(코드 없는 이름 «그랜저»는 형제 세대에도 들어맞는다). 코드를 형제와 공유하면 코드만으로는 구분되지 않는다.
+  const codeShared = code !== '' && siblings.some(s => generationCode(s.sub_model) === code);
+  if (code !== '' && !codeShared && containsToken(input.rawName, code)) return null;
+  const leading = LEADING_QUALIFIER.exec(norm(master.sub_model))?.[0] ?? '';
+  const siblingLeadings = siblings.map(s => LEADING_QUALIFIER.exec(norm(s.sub_model))?.[0] ?? '');
+  if (leading !== '' && siblingLeadings.every(l => l !== leading) && raw.includes(norm(master.sub_model).replace(CODE_TAIL, ''))) return null;
   const year = /^\d{4}$/.test(input.year) ? Number(input.year) : null;
   if (year !== null && inRange(master, year) && siblings.every(s => !inRange(s, year))) return null;
   return 'GENERATION_EVIDENCE_MISSING';
