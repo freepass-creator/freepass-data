@@ -8,7 +8,7 @@
 
 export type GuardMaster = { id: string; maker: string; model: string; sub_model: string; sub_model_aliases: string[]; model_aliases?: string[]; yearFrom: number | null; yearTo: number | null };
 
-const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()]/g, '').toUpperCase();
+const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()[\]/]/g, '').toUpperCase();
 const QUALIFIER_TAIL = /(?:신형|THE|ALL|NEW|디|올|더|뉴)+$/;
 /** 개발코드: 이름 «마지막 낱말»이 영문 1~3자+숫자…(GN7·LX2·MQ4) 또는 영문 2~3자(HG·IG·TG·DG)일 때. 파워트레인·등급 약어(EV·HEV·LPI·GDI·GT …)는 코드가 아니다.
  * 원래 표기(공백 유지)의 낱말 경계로 판정한다 — 공백을 지운 문자열에서는 «K5 LPI» 가 «K5LPI» 라는 하나의 코드처럼 보인다. */
@@ -17,7 +17,8 @@ const LETTER_CODE = /^[A-Z]{2,3}$/;
 const NON_CODE_WORDS: ReadonlySet<string> = new Set(['EV', 'HEV', 'PHEV', 'MHEV', 'FHEV', 'LPG', 'LPI', 'GDI', 'TDI', 'TSI', 'TFSI', 'TGDI', 'GT', 'AMG', 'RS', 'SE', 'XL', 'LE', 'ST']);
 const splitCode = (original: string): { base: string; code: string } => {
   const whole = norm(original);
-  const tokens = original.normalize('NFKC').trim().toUpperCase().split(/\s+/).filter(Boolean);
+  // 괄호·대괄호·슬래시·쉼표·하이픈도 낱말 구분으로 본다(«그랜저(HG)»·«그랜저 [IG]» — 기준 한 장은 괄호 없음이 원칙이나 마스터·별칭·원문에는 있다, Codex #663 3차).
+  const tokens = original.normalize('NFKC').trim().toUpperCase().split(/[\s()[\]/,\-]+/).filter(Boolean);
   const last = (tokens[tokens.length - 1] ?? '').replace(/^[([-]+|[)\]\-.,]+$/g, '');
   let code = '';
   if (DIGIT_CODE.test(last)) code = last;
