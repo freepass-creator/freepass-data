@@ -14,6 +14,17 @@ describe('V1/size 사진 압축 출력', () => {
     expect(result.bytes.length).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(metadata.exif).toBeUndefined(); expect(bytes).toEqual(original);
   });
+  it('보관용 사본은 긴 변·품질을 더 줄일 수 있고(800px·72), 범위 밖 값은 거부한다', async () => {
+    // 사진처럼 무늬가 있는 입력(단색은 압축 차이가 안 난다)
+    const raw = Buffer.alloc(1600 * 1000 * 3); for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+    const bytes = await sharp(raw, { raw: { width: 1600, height: 1000, channels: 3 } }).png().toBuffer();
+    const base = await renderVehiclePhotoRendition({ bytes, contentType: 'image/png' }, 'detail');
+    const small = await renderVehiclePhotoRendition({ bytes, contentType: 'image/png' }, 'detail', { maxEdge: 800, quality: 72 });
+    expect((await sharp(small.bytes).metadata()).width).toBe(800);
+    expect(small.bytes.length).toBeLessThan(base.bytes.length);
+    await expect(renderVehiclePhotoRendition({ bytes, contentType: 'image/png' }, 'detail', { maxEdge: 100 })).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    await expect(renderVehiclePhotoRendition({ bytes, contentType: 'image/png' }, 'detail', { quality: 99 })).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+  });
   it('세로 사진도 inside 범위를 넘지 않고 작은 사진을 확대하지 않는다', async () => {
     for (const [width, height, expectedWidth, expectedHeight] of [[1000, 1600, 300, 480], [100, 80, 100, 80]]) {
       const result = await renderVehiclePhotoRendition({ bytes: await image(width!, height!), contentType: 'image/png' }, 'list');
