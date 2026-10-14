@@ -8,6 +8,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 
 type Fields = Record<string, unknown>;
@@ -77,7 +78,7 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
  * 비잠금은 없음(undefined/null)·false·빈 문자열뿐. (runtime 의 노출 대수 판정과 같은 규칙) */
 export const isContractLockValue = (v: unknown): boolean => v !== undefined && v !== null && v !== false && v !== '';
 /** 엔진 작성 표식: 엔진이 문서를 쓸 때마다 «누가·어떤 표시 상태로·어느 관측 시각에» 썼는지 한 칸에 남긴다. 계약중 문서를 엔진 소유로 취급하는 유일한 증거다. */
-export const SOURCE_CYCLE_WRITER = 'source-engine';
+export const SOURCE_CYCLE_WRITER = SOURCE_ENGINE_WRITER;
 /** 엔진이 «원천이 직접 계약중으로 읽은 값»을 쓴 문서만 계약 잠금이 아니다. 증거 = 엔진 작성 표식(by·status 계약중) + 엔진이 쓴 모양(표시 상태 계약중·선점·노출,
  * 원천 기록 상태 원문 계약중) + 어떤 계약 잠금 필드 값도 없음. 표식이 없거나 다른 주체이거나, ERP 가 status_kind 를 계약중으로 바꿨거나 잠금 필드를 걸었으면 잠금이다
  * (원천이 출고가능으로 바뀌어도 장부 잠금 차량은 덮어쓰지 않는다 — Codex 독립 검토 2026-10-14 P1 2건). */

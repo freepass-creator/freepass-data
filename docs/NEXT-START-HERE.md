@@ -231,6 +231,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
+
+- 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.
+- 변경: 새 판정 `readIancarEngineDeposit`(엔진 표식 + `source_cycle_record.terms` 항과 price 금액 대사, 짧은 신선도 창 없음, ONE 0원=ZERO) 로 호환 응답·0원 감사·카톡 참고 3곳 전환, `readIancarPublishedDeposit` 삭제. 옛 writer(`publishIancarPhaseOne`·`restoreIancarPhaseOne`·`withdrawIancarPublication`·`iancarAbsencePatch`·`iancarFactsRefreshPatch`), runtime 래퍼, CLI `--sync` 계열, 감시 실행기, 직접 ERP 수집 삭제. 사진 경로는 `src/infra/iancar-photo-firestore.ts`(사진 전용 복원 포함), 백업 인코딩은 `src/infra/iancar-backup-value.ts`. 엔진 문서의 개월 별칭 키는 엔진 대표 항 기준으로 조건 목록에서 뺀다. 카톡 참고 스키마: depositRule.code `IANCAR_ENGINE_SOURCE_EVIDENCE`, 무보증 근거 field `source_cycle_record.terms` 추가, 옛 `publicationEvidenceReason`/`publicationDecision`(STALE HOLD) 삭제. Firestore 데이터 삭제 없음(코드만).
+- 남음/next_start_here: ERP4 이안카 단계(옛 pin)를 ERP4 쪽에서 먼저 끈다. 엔진 미작성 옛 이안카 문서는 보증금이 UNKNOWN 으로 보인다(엔진 회차가 덮어쓰면 해소). 사진은 `--photos` 경로로만.
+
 ### 2026-10-13 원천 엔진 무인 회차 — ERP5 1시간 간격 자동 반영 (PLN)
 
 - 목적/정본: 대표 10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔 해」(ai-ops 결정 장부 10-13 «원천 엔진 실행 기반»). 가지 `work/freepass-data/plate-mask-20261013`(PR #567 head `9ca4308` 기반), 설계·절차 [SOURCE-ENGINE-UNATTENDED-20261013](SOURCE-ENGINE-UNATTENDED-20261013.md).

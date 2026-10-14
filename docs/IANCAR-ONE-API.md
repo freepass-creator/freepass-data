@@ -1,5 +1,7 @@
 # RP031 이안카 ONE API — FreePass Data 연동 계약
 
+> **2026-10-14 폐기(대표 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해»)**: 이안카(RP031) 상품 문서(가격·재고·상태)의 유일한 작성 주체는 원천 엔진(source-engine)이다. 옛 1차 발행(`publishIancarPhaseOne`)·복원(`restoreIancarPhaseOne`)·철회(`withdrawIancarPublication`), 수집기 `--sync`·`--apply-sync`·`--refresh-facts`·`--photos-pending`·`--keep-withdrawn`·`--restore-sync`, 감시 실행기(`scripts/iancar-sync-watch.mjs`), 옛 ERP 직접 수집(`source:iancar:direct`)은 코드에서 지웠다. 남은 이안카 쓰기는 사진 전용(`--photos`/`--apply-photos`/`--restore-photos=`/`--reviewed-plan=`)과 RAW 적재(`--apply-raw`)뿐이다. 보증금 판정은 엔진 근거(`readIancarEngineDeposit`, `source_cycle_record.terms`)만 쓴다. 아래 본문의 해당 명령은 기록이며 실행 경로가 아니다.
+
 Status (2026-10-01): **1차 Data 상품/ERP/F01/F86 실제 발행 및 readback 완료 · 정책/15분 자동 writer/Catalog cutover는 미완료**
 
 최신 적용 회차: source `2026-10-01T08:13:03.756Z`, 117대/2,808개 요금에서 공개109대(출고가능108·계약중1). Data apply `b6a8ac1e-a86a-49c8-a53a-9037a760303a`, 운영 시트 apply `36837674105` SUCCESS. F01/F86 새 원문 조회로109대 차량번호·상태·기준금액·24개 기간/월연거리/보증금·정책 확인중 표시 mismatch0. 별도 공급사 원천표 없이 Data 소유 RP031 compatibility bridge를 기존 소비처에 적용했다. Catalog V1 ACTIVE release/cutover나 현재 API 실시간 신선도를 주장하지 않는다. 아래 미실행/111대 문구는 이전 관측 이력이며 최신 적용 증거는 [handoff](NEXT-START-HERE.md)에 있다.
@@ -174,9 +176,9 @@ EANCAR_ONE_RAW_INGEST_APPROVED=true npm run source:iancar:one -- --apply-raw
 
 RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 
-### 동기화 잠금 상품 격리 — 2026-10-10
+### 동기화 잠금 상품 격리 — 2026-10-10 (폐기 2026-10-14: `--sync`/`--apply-sync`·`IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO` 삭제, 아래는 기록)
 
-`--sync --apply-sync`는 계약 잠금 또는 삭제 표시가 있는 관측 상품만 반영 대상에서 제외한다. 제외 상품에는 쓰기를 하지 않으며 기존 상태·가격·사진·증거·잠금을 그대로 보존한다. 신원 불일치, 번호판/소스 식별자 충돌, 중복, 신선도 오류는 여전히 전체 실패다. 동시 변경 감지와 백업·되읽기 검증도 유지한다.
+옛 `--sync --apply-sync`는 계약 잠금 또는 삭제 표시가 있는 관측 상품만 반영 대상에서 제외한다. 제외 상품에는 쓰기를 하지 않으며 기존 상태·가격·사진·증거·잠금을 그대로 보존한다. 신원 불일치, 번호판/소스 식별자 충돌, 중복, 신선도 오류는 여전히 전체 실패다. 동시 변경 감지와 백업·되읽기 검증도 유지한다.
 
 - 영수증/collector `publication`: `skippedCount`, `skippedByReason`, `skippedRatio`, `maxSkippedRatio`, `warnings`. 사유는 `CONTRACT_LOCK`, `DELETION_LOCK`, `CONTRACT_AND_DELETION_LOCK` 중 하나이며 중복 집계하지 않는다. 새 공개 필드는 건수·코드만 포함한다.
 - 분모는 이번 원천의 전체 관측 상품 수다. `IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO` 한 상수에서 0.20을 정의한다. 정확히 20%까지 경고와 성공 종료(0), 초과하면 `IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED`로 백업·쓰기 전에 전체 실패한다.
