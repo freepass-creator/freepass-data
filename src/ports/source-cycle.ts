@@ -9,8 +9,9 @@ export type CycleProduct = {
   /** 노출 문서가 원천 값은 같아도 한 번 다시 써야 하는 사유(읽기 경로가 계산, 쓰기 결과에는 남지 않는다):
    * PRICE_LAYOUT 옵션 가격 키 누락 · STATUS_KIND 저장된 vehicle_status 의 계약 값과 다름 · PRODUCT_TYPE 월렌트 상품 구분 누락 ·
    * PHOTO_URLS 사진 없는 문서에 원천 API 사진 주소가 있음(손오공).
-   * IANCAR_VEHICLE_ID 이안카 노출 문서의 공급사 차량 ID(iancar_one_vehicle_id) 누락. */
-  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID'>;
+   * IANCAR_VEHICLE_ID 이안카 노출 문서의 공급사 차량 ID(iancar_one_vehicle_id) 누락.
+   * VEHICLE_IDENTITY 엔진 편입 후 정체성 보류(제조사·모델 빈칸·검토 필요) 문서가 이번 회차 차종 마스터로 «하나로» 특정됨(쓰면 보류가 풀려 되풀이되지 않는다). */
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY'>;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
@@ -20,7 +21,13 @@ export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrol
   driftHeld?: string[];
   /** 다른 공급사(provider_company_code 가 다른) 문서가 이미 쓰고 있는 문서 ID(= uid, 번호 키). 같은 번호가 두 공급사에 있으면 이 원천의 편입은
    * 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN 로 회차 정지)이 되므로 계획 단계에서 그 행만 보류한다. */
-  foreignUids?: string[] };
+  foreignUids?: string[];
+  /** 이번 회차 정체성 정제에 쓴 차종 마스터 내용 digest(마스터를 못 읽었으면 없음). 계획 경고에 남아 승인 계획이 같은 마스터로만 재생되게 묶는다. */
+  identityMasterDigest?: string };
+/** 엔진 회차 정체성 정제 결과: 차종 마스터 하나로 특정된 이름(세부트림은 하나로 특정될 때만, 아니면 null). */
+export type VehicleIdentityRefinement = { maker: string; model: string; sub_model: string; trim_name: string | null; master_id: string };
+/** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
+export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

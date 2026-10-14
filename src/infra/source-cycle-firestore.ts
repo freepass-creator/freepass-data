@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
+import type { CycleCommands, CycleProduct, SupplierFields, VehicleIdentityRefiner, VehicleIdentityRefinement } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
@@ -125,7 +125,32 @@ export function legacyObservedAt(f: Fields, updateTime: string): string {
   if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
   return LEGACY_NO_OBSERVATION;
 }
-function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
+/** 엔진 회차 정체성 정제(대표 2026-10-15)의 대상: 엔진이 편입한 문서(source_cycle_record 있음) 중 아직 «검토 필요» 이고 제조사·모델이 빈 문서뿐이다.
+ * 사람·ERP4 가 정한 정체성(제조사·모델이 하나라도 있음)이나 검토가 끝난 문서는 절대 건드리지 않는다. */
+const textOf = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+export const engineIdentityHold = (f: Fields): boolean =>
+  f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true && !textOf(f.maker) && !textOf(f.model);
+const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
+const specOf = (r: SourceProductRecord | undefined): Fields => {
+  const spec = r?.raw?.spec;
+  return spec && typeof spec === 'object' && !Array.isArray(spec) ? spec as Fields : {};
+};
+/** 대조에 쓰는 연식: 문서 연식 → 원천 연식 → 문서 최초등록 연도 → 원천 최초등록 연도(계획서 생성기 입력과 같은 뜻: 연식 또는 최초등록 연도). */
+export const identityYear = (f: Fields, r?: SourceProductRecord): string =>
+  yearOf(f.year) || yearOf(specOf(r).year) || yearOf(f.first_registration_date) || yearOf(specOf(r).first_registration_date);
+/** 대조에 쓰는 원천 차명: 이번에 쓸 차명(car_name) → 없으면 편입 때 남긴 원문 차명. 목록(envelope)과 쓰기(nativeCycleFields)가 같은 값을 보게 한다. */
+const identityRawName = (carName: unknown, f: Fields): string => textOf(carName) || textOf((f.원문 as Fields | undefined)?.차명);
+/** 마스터로 하나로 특정된 정체성 칸. 원문(원문.차명)은 건드리지 않는다. 세부트림은 하나로 특정됐고 문서 세부트림이 비어 있을 때만,
+ * 연식은 기존 문서에 없고 원천이 연식을 줄 때만(새 문서는 원천 사실 칸이 이미 싣는다). */
+function identityFields(id: VehicleIdentityRefinement, original: Fields, r: SourceProductRecord, isNew: boolean): Fields {
+  const sourceYear = yearOf(specOf(r).year);
+  return { maker: id.maker, model: id.model, sub_model: id.sub_model,
+    ...(id.trim_name && !textOf(original.trim_name) ? { trim_name: id.trim_name } : {}),
+    vehicle_review_required: false, vehicle_title_source: 'MASTER_MATCH', vehicle_master_id: id.master_id,
+    ...(!isNew && !yearOf(original.year) && sourceYear ? { year: sourceYear } : {}) };
+}
+function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
+  identity: VehicleIdentityRefiner | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -160,6 +185,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
     && typeof record.raw?.vehicle_id === 'string' && record.raw.vehicle_id.trim()) rewriteReasons.push('IANCAR_VEHICLE_ID');
+  // 정체성 보류 문서(엔진 편입, 제조사·모델 빈칸, 검토 필요)가 이번 회차 차종 마스터로 «하나로» 특정되면 한 번 다시 써서 이름을 채운다.
+  // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
+  if (engineOwned && identity && engineIdentityHold(f) &&
+    identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -214,8 +243,12 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
-export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
+export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null } = {}): Fields {
   const r = p.record;
+  const isNew = !Object.keys(original).length;
+  // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
+  const identity = opts.identity && (isNew || engineIdentityHold(original))
+    ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
   // fail-closed(독립 검토 BLOCK): 검토된 어휘에 없는 상태는 «가용» 으로 추정해 노출하지 않는다. 플러그인이 먼저 보류하므로 여기 오는 일은 드물다.
@@ -223,8 +256,9 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const price = !p.listable && original.price ? original.price :
     salePriceMap(r.terms);
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
-    ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
+    ...(isNew ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       원문: { 차명: r.vehicleText, source: r.raw }, ...sheetSpecFields(r.raw.spec) } : {}),
+    ...(identity ? identityFields(identity, original, r, isNew) : {}),
     price, source_cycle_price_digest: priceDigest(price),
     ...(price === original.price ? {} : calculatedDepositFields(r)),
     listable, status: listable ? display : '출고불가', status_kind: statusKindOf(display, listable),
@@ -256,10 +290,16 @@ export const rawTitleBackfillFields = (f: Fields): Fields | null =>
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean }) {
+  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean;
+  /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
+  identity?: () => Promise<VehicleIdentityRefiner | null> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
   const monthly = options.writeMonthlyProductType === true;
+  let refiner: VehicleIdentityRefiner | null = null;
+  const ready = async () => { refiner = options.identity ? await options.identity().catch(() => null) : null; };
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refiner);
+  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refiner });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
@@ -340,6 +380,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       return { stored: entries.length, absentMarked };
     },
     async list(source) {
+      await ready();
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
       const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = [], foreign: string[] = []; let page = ''; const pages = new Set<string>();
       do {
@@ -348,7 +389,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
           'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type',
-          'image_urls', 'image_url', 'photo_cache', 'photo_original_refs', 'iancar_one_vehicle_id', '_direct_ingest_at']) query.append('mask.fieldPaths', fieldPath(field));
+          'image_urls', 'image_url', 'photo_cache', 'photo_original_refs', 'iancar_one_vehicle_id', '_direct_ingest_at',
+          // 정체성 정제 판정(engineIdentityHold·identityYear)이 읽는 칸 — 목록과 전체 문서의 envelope 가 같아야 백업 대조가 맞는다.
+          'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
@@ -362,55 +405,61 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refiner); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
-      return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
+      return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(refiner ? { identityMasterDigest: refiner.digest } : {}),
+        ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
         ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}), ...(foreign.length ? { foreignUids: foreign.sort() } : {}) };
     },
     async read(source, uid) {
+      await ready();
       const d = await getDoc(uid);
       if (!d) return null;
-      const p = envelope(d, accept, undefined, undefined, monthly);
+      const p = env(d);
       if (p.record.sourceId !== source) throw new Error('UID_OTHER_SUPPLIER');
       cache.set(`${source}:${uid}`, d); return p;
     },
     async backup(key, before) {
+      await ready();
       const cached = before ? cache.get(`${before.record.sourceId}:${before.record.uid}`) : null;
       const document = before ? await getDoc(before.record.uid) : null;
       if (before && (!document || !cached || cached.updateTime !== document.updateTime ||
-        stableDigest(envelope(document, accept, undefined, undefined, monthly)) !== stableDigest(before))) throw new Error('BACKUP_SNAPSHOT_MISSING');
+        stableDigest(env(document)) !== stableDigest(before))) throw new Error('BACKUP_SNAPSHOT_MISSING');
       await immutable(path(key), { project, key, before, document: document ?? null });
     },
     async readBackup(key) {
+      await ready();
       const b = await load(key);
-      if (stableDigest(b.document ? envelope(b.document, accept, undefined, undefined, monthly) : null) !== stableDigest(b.before)) throw new Error('BACKUP_MISMATCH');
+      if (stableDigest(b.document ? env(b.document) : null) !== stableDigest(b.before)) throw new Error('BACKUP_MISMATCH');
       return b.before;
     },
     async precheck(afters) {
+      await ready();
       // Firestore 문서 한도 1MiB. 쓰기 뒤 문서 크기 = 기존 문서에서 덮일 필드를 뺀 나머지 + 새 필드. 900,000B 를 넘는 쓰기가 하나라도 있으면
       // 어떤 백업·쓰기도 시작하기 전에 계획 전체를 막는다(일부만 적용되고 멈추는 상태 방지).
       const size = (v: unknown) => Buffer.byteLength(JSON.stringify(v));
       for (const after of afters) {
         const current = await getDoc(after.record.uid);   // 목록은 필드 마스크라 전체 문서가 아니다 — 크기는 전체 문서로 잰다
-        const incoming = encodeFields(nativeCycleFields(after, current ? decodeFields(current.fields) : {}, { writeMonthlyProductType: monthly }));
+        const incoming = encodeFields(native(after, current ? decodeFields(current.fields) : {}));
         const kept = Object.entries(current?.fields ?? {}).filter(([k]) => !(k in incoming));
         if (size(Object.fromEntries(kept)) + size(incoming) > 900_000) throw new Error('DOC_TOO_LARGE');
       }
     },
     async compareAndApply(beforeDigest, after, key) {
+      await ready();
       if (options.observationSources?.includes(after.record.sourceId)) throw new Error('OBSERVATION_ONLY');
       const b = await load(key), current = await getDoc(after.record.uid);
       if (stableDigest(b.before) !== beforeDigest || stableDigest(current) !== stableDigest(b.document) ||
-        (current && envelope(current, accept, undefined, undefined, monthly).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
-      if (current && envelope(current, accept, undefined, undefined, monthly).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
+        (current && env(current).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
+      if (current && env(current).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
       if (!current && (!after.supplierFields?.provider_name.trim() ||
         stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
         throw new Error('SUPPLIER_NAME_REQUIRED');
-      const fields = nativeCycleFields(after, current ? decodeFields(current.fields) : {}, { writeMonthlyProductType: monthly });
+      const fields = native(after, current ? decodeFields(current.fields) : {});
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
       const result = await request(docPath(after.record.uid) + '?' + query, 'PATCH', { fields: encodeFields(fields) });
@@ -423,12 +472,13 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   return { ...commands,
     async documents(source: string) { await commands.list(source); return [...cache.values()].filter(d => decodeFields(d.fields).provider_company_code === source); },
     async rollback(key: string, approval: string) {
+      await ready();
       const b = await load(key), receipt = JSON.parse(await readFile(join(options.directory, `${stableDigest(key)}.receipt.json`), 'utf8'));
       if (receipt.project !== project || receipt.key !== key || approval !== stableDigest({ backup: b, receipt })) throw new Error('ROLLBACK_APPROVAL_REQUIRED');
       const uid = decodeURIComponent(receipt.after.name.split('/').at(-1));
       const current = await getDoc(uid);
-      if (!current || stableDigest(current) !== stableDigest(receipt.after) || envelope(current, accept, undefined, undefined, monthly).locked_by_contract) throw new Error('CAS_CONFLICT');
-      if (options.observationSources?.includes(envelope(current, accept, undefined, undefined, monthly).record.sourceId)) throw new Error('OBSERVATION_ONLY');
+      if (!current || stableDigest(current) !== stableDigest(receipt.after) || env(current).locked_by_contract) throw new Error('CAS_CONFLICT');
+      if (options.observationSources?.includes(env(current).record.sourceId)) throw new Error('OBSERVATION_ONLY');
       // Newly enrolled documents are withdrawn, never deleted.
       const fields = b.document?.fields ?? { ...current.fields, ...encodeFields({ listable: false, status: '출고불가', status_kind: '불가',
         vehicle_status: '출고불가', publication_withdrawal: { reason: 'ROLLBACK_ENROLL', deleteAuthorized: false } }) };

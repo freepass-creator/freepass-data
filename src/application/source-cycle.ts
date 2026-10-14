@@ -256,6 +256,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     plan.entries = plan.entries.filter(e => e.kind !== 'ENROLL' || !deferred.has(sourceProductKey(e.after.record)));
     plan.warnings.push(`ENROLL_CAP_DEFERRED:${deferred.size}:cap${enrollCap}`);
   }
+  // 엔진 정체성 정제(대표 2026-10-15): 보류 문서 중 이번 마스터로 하나로 특정돼 다시 쓰는 수, 그리고 쓰기가 있는 계획에는 대조에 쓴 마스터 digest 를 남긴다 —
+  // 승인 계획을 나중에 적용할 때 마스터가 바뀌었으면 재계획(replay)이 달라져 CYCLE_REPLAN_REQUIRED 로 멈춘다(계획에 없던 이름을 쓰지 않는다).
+  const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
+  if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
+  if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
   return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }
