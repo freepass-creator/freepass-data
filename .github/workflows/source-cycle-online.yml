@@ -1,0 +1,89 @@
+name: Source cycle online APPLY (switch-gated)
+
+# 원천 엔진 무인 회차를 온라인(Actions)에서 «적용까지» 돌린다 — B3Q 작업 스케줄러를 대체(설계: docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md §3).
+# 기본 꺼짐: vars.FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES 에 원천 종류(쉼표, 예: AICA,IANCAR)를 넣은 것만 돈다. 비어 있으면 아무것도 하지 않는다.
+# 이중 실행 금지: 그 원천을 B3Q SOURCE_CYCLE_SOURCES 에서 «먼저» 빼거나, B3Q 도 SOURCE_CYCLE_CONTROL=firestore 로 같은 잠금을 쓴다.
+# 안전선은 엔진 그대로(완전 읽기에서만 하향·비율 가드·계약 잠금 보존·회차 상한·백업·되읽기·3회 실패 정지). 상태·잠금·백업은 Firestore(SOURCE_CYCLE_CONTROL=firestore).
+# 키·시트 ID 는 저장소 비밀값으로만 넘기고 출력하지 않는다.
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: source-cycle-online-apply
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+    steps:
+      - name: Source switch (empty = off)
+        id: gate
+        shell: bash
+        env:
+          SOURCES: ${{ vars.FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES }}
+        run: |
+          if [ -z "${SOURCES// /}" ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo 'online sources switch is empty — skipped'; exit 0; fi
+          if ! printf '%s' "$SOURCES" | grep -Eq '^(F05|AICA|IANCAR|IRON|AUTOPLUS|SONOGONG)(,(F05|AICA|IANCAR|IRON|AUTOPLUS|SONOGONG))*$'; then
+            echo 'FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES invalid'; exit 1
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        name: Fail closed until the writer identity is configured
+        shell: bash
+        run: |
+          test -n '${{ vars.SOURCE_CYCLE_WIF_PROVIDER }}' || { echo 'SOURCE_CYCLE_WIF_PROVIDER unset'; exit 1; }
+          test -n '${{ vars.SOURCE_CYCLE_WRITE_SERVICE_ACCOUNT }}' || { echo 'SOURCE_CYCLE_WRITE_SERVICE_ACCOUNT unset'; exit 1; }
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.gate.outputs.run == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.SOURCE_CYCLE_WIF_PROVIDER }}
+          service_account: ${{ vars.SOURCE_CYCLE_WRITE_SERVICE_ACCOUNT }}
+      - if: steps.gate.outputs.run == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci && npm run build
+      - if: steps.gate.outputs.run == 'true'
+        name: Unattended cycle (plan → apply per source, engine guards unchanged)
+        shell: bash
+        env:
+          SOURCE_CYCLE_SOURCES: ${{ vars.FREEPASS_SOURCE_CYCLE_ONLINE_SOURCES }}
+          SOURCE_CYCLE_UNATTENDED: '1'
+          SOURCE_CYCLE_CONTROL: firestore
+          SHEETS_TRANSPORT: adc
+          SOURCE_CYCLE_PRIVATE_DIR: ${{ runner.temp }}/source-cycle
+          SOURCE_CYCLE_FRESHNESS_EXEMPT: ${{ vars.SOURCE_CYCLE_FRESHNESS_EXEMPT }}
+          SOURCE_CYCLE_STALE_FALSE_POSITIVE: ${{ vars.SOURCE_CYCLE_STALE_FALSE_POSITIVE }}
+          SOURCE_CYCLE_IRON_HOMEPAGE: ${{ vars.SOURCE_CYCLE_IRON_HOMEPAGE }}
+          SOURCE_CYCLE_IRON_LIST_URL: ${{ vars.SOURCE_CYCLE_IRON_LIST_URL }}
+          SOURCE_CYCLE_AUTOPLUS_SHEET: ${{ vars.SOURCE_CYCLE_AUTOPLUS_SHEET }}
+          SOURCE_CYCLE_SONOGONG_API: ${{ vars.SOURCE_CYCLE_SONOGONG_API }}
+          SOURCE_CYCLE_F05_SHEET_ID: ${{ secrets.SOURCE_CYCLE_F05_SHEET_ID }}
+          SOURCE_CYCLE_AICA_SHEET_ID: ${{ secrets.SOURCE_CYCLE_AICA_SHEET_ID }}
+          SOURCE_CYCLE_AUTOPLUS_SHEET_ID: ${{ secrets.SOURCE_CYCLE_AUTOPLUS_SHEET_ID }}
+          EANCAR_ONE_API_BASE_URL: ${{ vars.EANCAR_ONE_API_BASE_URL }}
+          EANCAR_ONE_API_KEY: ${{ secrets.EANCAR_ONE_API_KEY }}
+          SONOGONG_API_BASE: ${{ vars.SONOGONG_API_BASE }}
+          SONOGONG_API_KEY: ${{ secrets.SONOGONG_API_KEY }}
+        run: |
+          set +e
+          node dist/src/runtime/source-cycle-runtime.js --unattended > "$RUNNER_TEMP/cycle-result.json"
+          code=$?
+          node scripts/ci/source-cycle-summary.mjs "$RUNNER_TEMP/cycle-result.json" "$SOURCE_CYCLE_PRIVATE_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+          exit $code
