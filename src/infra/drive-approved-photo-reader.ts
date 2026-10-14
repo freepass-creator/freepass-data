@@ -32,7 +32,39 @@ export function createDriveApprovedPhotoReader(options: { fetchImpl?: Fetcher; t
   };
 }
 
-/** FREEPASS_DATA_APPROVED_PHOTO_READER: 비어 있거나 «off» = 꺼짐(주입 없음), «drive-public» = 공개 링크 다운로드. 모르는 값은 꺼짐(실패 폐쇄). */
+type TokenFetcher = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{
+  ok: boolean; status: number; text(): Promise<string>; json(): Promise<unknown> }>;
+
+/** Cloud Run 서비스 계정이 «자기 자신»을 가장해 drive.readonly 토큰을 받는다(IAM Credentials generateAccessToken).
+ * 필요: 서비스 계정에 자기 자신에 대한 roles/iam.serviceAccountTokenCreator, 드라이브 폴더 «보기» 공유. 토큰은 만료 1분 전까지 캐시한다. */
+export function createCloudRunDriveTokenProvider(fetchImpl: TokenFetcher = fetch as unknown as TokenFetcher, now: () => number = Date.now): () => Promise<string> {
+  let cached: { token: string; expiresAt: number } | null = null;
+  const meta = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/';
+  const metaHeaders = { 'Metadata-Flavor': 'Google' };
+  return async () => {
+    if (cached && now() < cached.expiresAt - 60_000) return cached.token;
+    const emailRes = await fetchImpl(meta + 'email', { headers: metaHeaders, signal: AbortSignal.timeout(5000) });
+    const email = (await emailRes.text()).trim();
+    if (!emailRes.ok || !/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.iam\.gserviceaccount\.com$/.test(email)) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+    const baseRes = await fetchImpl(meta + 'token', { headers: metaHeaders, signal: AbortSignal.timeout(5000) });
+    const base = (await baseRes.json()) as { access_token?: string };
+    if (!baseRes.ok || !base.access_token) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+    const res = await fetchImpl(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email)}:generateAccessToken`, {
+      method: 'POST', headers: { authorization: `Bearer ${base.access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: ['https://www.googleapis.com/auth/drive.readonly'], lifetime: '900s' }), signal: AbortSignal.timeout(10_000) });
+    const body = (await res.json()) as { accessToken?: string; expireTime?: string };
+    if (!res.ok || !body.accessToken) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+    const exp = Date.parse(body.expireTime ?? '');
+    cached = { token: body.accessToken, expiresAt: Number.isFinite(exp) ? exp : now() + 10 * 60_000 };
+    return cached.token;
+  };
+}
+
+/** FREEPASS_DATA_APPROVED_PHOTO_READER: 비어 있거나 «off» = 꺼짐(주입 없음), «drive-public» = 공개 링크 다운로드, «drive-api» = 서비스 계정 Drive API.
+ * 모르는 값은 꺼짐(실패 폐쇄). */
 export function approvedPhotoReaderFromEnv(env: NodeJS.ProcessEnv = process.env): ApprovedPhotoReader | undefined {
-  return (env.FREEPASS_DATA_APPROVED_PHOTO_READER ?? '').trim() === 'drive-public' ? createDriveApprovedPhotoReader() : undefined;
+  const mode = (env.FREEPASS_DATA_APPROVED_PHOTO_READER ?? '').trim();
+  if (mode === 'drive-public') return createDriveApprovedPhotoReader();
+  if (mode === 'drive-api') return createDriveApprovedPhotoReader({ tokenProvider: createCloudRunDriveTokenProvider() });
+  return undefined;
 }
