@@ -127,7 +127,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     let after: CycleProduct = { ...(before ? structuredClone(before) : {}), record: next, listable: sale, locked_by_contract: false,
       publication_withdrawal: null, publication_withdrawal_prior: before?.publication_withdrawal_prior ?? null };
     if (!sale) {
-      if (!before) { plan.held++; continue; }
+      if (!before) { if (!errors.includes('TERMS_HOLD')) plan.held++; continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
       after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
     }
     if (!before && Object.hasOwn(snapshot, 'enrollmentSupplier')) {
