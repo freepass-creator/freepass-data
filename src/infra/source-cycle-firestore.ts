@@ -7,7 +7,7 @@ import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
-import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 
 type Fields = Record<string, unknown>;
@@ -87,6 +87,26 @@ const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean 
     f.status === '계약중' && f.status_kind === '선점' && f.vehicle_status === '계약중' && f.listable === true &&
     record.status.raw === '계약중' && f.source_cycle_record !== undefined && !isContractLockValue(f.locked_by_contract);
 };
+/** 문서에 사진이 하나라도 있나: 원천 사진(image_urls·image_url), 드라이브 캐시(photo_cache), 승인 사진(photo_original_refs). */
+const nonEmptyList = (v: unknown) => Array.isArray(v) && v.some(x => x !== null && x !== undefined && x !== '');
+const hasHumanPhotos = (f: Fields) => nonEmptyList(f.photo_original_refs) || (f.photo_cache !== undefined && f.photo_cache !== null);
+const hasAnyPhoto = (f: Fields) => hasHumanPhotos(f) || nonEmptyList(f.image_urls) || (typeof f.image_url === 'string' && !!f.image_url.trim());
+/** 저장 기록에 API 사진 주소가 있나: 실제 목록이면 비어 있지 않은지, 옛 digest 형태면 «빈 목록의 digest» 가 아닌지. */
+const EMPTY_LIST_DIGEST = stableDigest([]).slice(0, 32);
+const recordHasPhotoUrls = (record: SourceProductRecord): boolean => {
+  const images = record.raw?.images as unknown;
+  if (Array.isArray(images)) return images.length > 0;
+  const digest = images && typeof images === 'object' ? (images as { __digest?: unknown }).__digest : undefined;
+  return typeof digest === 'string' && digest !== EMPTY_LIST_DIGEST;
+};
+/** 원천 API 사진 → image_urls(소비처 catalog 가 읽는 칸, 첫 장 = image_url). 사람·승인 사진(photo_original_refs·photo_cache)이 있는 문서는 건드리지 않고,
+ * API 가 사진을 주지 않으면(빈 목록·digest) 쓰지 않는다 — 모르는 값으로 기존 사진을 지우지 않는다. 목록이 바뀌면 원천 사실이므로 갱신한다. */
+export function apiPhotoFields(r: SourceProductRecord, original: Fields): Fields {
+  if (!PHOTO_URL_LIST_SOURCES.has(r.sourceId) || hasHumanPhotos(original)) return {};
+  const urls = r.raw?.images;
+  if (!isPhotoUrlList(urls) || !urls.length) return {};
+  return { image_urls: [...urls], image_url: urls[0]! };
+}
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
@@ -116,6 +136,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (engineOwned && writeMonthlyProductType && f.product_group === 'MONTHLY_RENT' && f.product_type !== MONTHLY_PRODUCT_TYPE) rewriteReasons.push('PRODUCT_TYPE');
   // 오토플러스(RP023)는 상품 구분이 정책으로 «오플구독» 하나다. 구분이 빈 노출 문서는 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP023' && !(typeof f.product_type === 'string' && f.product_type.trim())) rewriteReasons.push('PRODUCT_TYPE');
+  // 손오공 API 사진(대표 10-15): 사진이 하나도 없는 노출 문서인데 저장 기록에 API 사진 주소가 있으면 한 번 다시 써서 image_urls 를 채운다.
+  // 쓰면 image_urls 가 생겨 되풀이되지 않는다. 사진 목록이 같은 문서는 이 사유 없이는 다시 쓰지 않는다(일괄 UPDATE 없음).
+  if (engineOwned && PHOTO_URL_LIST_SOURCES.has(String(f.provider_company_code)) && !hasAnyPhoto(f) && recordHasPhotoUrls(record)) rewriteReasons.push('PHOTO_URLS');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -171,6 +194,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
+    ...apiPhotoFields(r, original),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -274,7 +298,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
-          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type']) query.append('mask.fieldPaths', fieldPath(field));
+          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type',
+          'image_urls', 'image_url', 'photo_cache', 'photo_original_refs']) query.append('mask.fieldPaths', fieldPath(field));
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {

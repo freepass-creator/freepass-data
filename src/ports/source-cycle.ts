@@ -7,8 +7,9 @@ export type CycleProduct = {
   locked_by_contract: boolean;
   listable: boolean;
   /** 노출 문서가 원천 값은 같아도 한 번 다시 써야 하는 사유(읽기 경로가 계산, 쓰기 결과에는 남지 않는다):
-   * PRICE_LAYOUT 옵션 가격 키 누락 · STATUS_KIND 저장된 vehicle_status 의 계약 값과 다름 · PRODUCT_TYPE 월렌트 상품 구분 누락. */
-  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE'>;
+   * PRICE_LAYOUT 옵션 가격 키 누락 · STATUS_KIND 저장된 vehicle_status 의 계약 값과 다름 · PRODUCT_TYPE 월렌트 상품 구분 누락 ·
+   * PHOTO_URLS 사진 없는 문서에 원천 API 사진 주소가 있음(손오공). */
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS'>;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
