@@ -140,7 +140,15 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     rows: converted.records.map(record => { const pos = positions.get(record.uid)!;
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
+        ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
+}
+/** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
+const PRODUCT_TYPE_VOCABULARY = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);
+export function productTypeFromCell(headers: readonly unknown[], cells: readonly unknown[], header: string): { product_type?: string } {
+  const at = headers.findIndex(h => String(h ?? '').trim() === header);
+  const value = at >= 0 && typeof cells[at] === 'string' ? (cells[at] as string).trim() : '';
+  return PRODUCT_TYPE_VOCABULARY.has(value) ? { product_type: value } : {};
 }
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
@@ -229,7 +237,7 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
-          source_row: index + 2, product_group: 'LONG_TERM',
+          source_row: index + 2, product_group: 'LONG_TERM', ...productTypeFromCell(headers, cells, '구분'),
           original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }

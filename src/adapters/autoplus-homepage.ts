@@ -128,7 +128,7 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
   const vehicleText = [data.bmname, data.boname, data.gradename].map(text).filter(Boolean).join(' ');
   return { record: { sourceId: 'RP023', uid: plate, plate, vehicleText, status: { raw: '게시', saleAvailable: true }, terms, observedAt,
     raw: { source: 'website', source_external_id: productId, reborncar_product_id: productId, ap_car_id: text(data.apCarId) || null,
-      product_group: 'LONG_TERM' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } };
+      product_group: 'LONG_TERM', product_type: '오플구독' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } };
 }
 
 /** 사이트맵 상품 수 하한: 기존 노출 문서가 0 이면 0(편입은 허용, 하향할 대상이 없다), 아니면 노출 95% 와 직전 정상 회차 80% 중 큰 값. */

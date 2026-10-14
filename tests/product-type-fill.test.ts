@@ -1,0 +1,19 @@
+import { describe, expect, it } from 'vitest';
+import { productTypeFromCell } from '../src/adapters/source-cycle-native.js';
+import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
+
+const record = (sourceId: string, raw: Record<string, unknown>) => ({ record: { sourceId, uid: 'U1', plate: '12가1234', vehicleText: '테스트', status: { raw: '출고가능', saleAvailable: true },
+  terms: [], observedAt: '2026-10-14T00:00:00.000Z', raw, vehicleHold: [] }, listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null }) as never;
+
+describe('상품 구분(product_type) 채움 — 원천 자기 칸·고정 정책만, 추정 없음', () => {
+  it('reads the supplier column only when it exactly matches the central vocabulary', () => {
+    expect(productTypeFromCell(['차량번호', '상품구분'], ['12가1234', ' 중고렌트 '], '상품구분')).toEqual({ product_type: '중고렌트' });
+    expect(productTypeFromCell(['차량번호', '구분'], ['12가1234', '신차'], '구분')).toEqual({});   // 어휘 밖(추정·변환 안 함)
+    expect(productTypeFromCell(['차량번호'], ['12가1234'], '상품구분')).toEqual({});
+  });
+  it('fills only an empty product_type and never overwrites an existing classification', () => {
+    expect(nativeCycleFields(record('RP023', { product_type: '오플구독' }), {}).product_type).toBe('오플구독');
+    expect(nativeCycleFields(record('RP023', { product_type: '오플구독' }), { product_type: '신차렌트' }).product_type).toBeUndefined();
+    expect(nativeCycleFields(record('RP004', { product_type: '임의값' }), {}).product_type).toBeUndefined();
+  });
+});
