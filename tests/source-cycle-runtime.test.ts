@@ -705,7 +705,18 @@ describe('ERP4 단독 수집 원천의 관측 전용 신선도 (손오공·오�
     name: `projects/synthetic-test/databases/(default)/documents/products/${uid}`, updateTime, fields: encodeFields(fields) as Record<string, unknown> });
   const row = (listable: boolean, source: string, status = '출고가능') => ({ provider_company_code: 'RP023', car_number: 'T1', car_name: 'x', source,
     listable, status, status_kind: listable ? '가용' : '불가', vehicle_status: status, price: { '12': { rent: 100, deposit: 0 } } });
-  it('ERP4 collection-step success time replaces a stale document time but never a newer one, and unreadable evidence falls back to documents', async () => {
+  it('freshness evidence is the collection-step success time only: a recently edited document never makes a stalled collector look fresh (독립 검토 2026-10-14)', async () => {
+    const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T14:39:00Z')];
+    const nowAt = Date.parse('2026-10-13T20:00:00Z');
+    const observed = async (evidence: (() => Promise<string | null>) | undefined) =>
+      (await collectorObservationPlugin('SONOGONG', 1, async () => docs, () => nowAt, evidence).read()).observedAt;
+    expect(await observed(async () => '2026-10-13T19:30:00Z')).toBe('2026-10-13T19:30:00.000Z');
+    expect(await observed(async () => '2026-10-13T10:00:00Z')).toBe('2026-10-13T10:00:00.000Z');   // 문서가 더 최근이어도 증거 시각
+    expect(await observed(async () => { throw new Error('GH_UNAVAILABLE'); })).toBe('1970-01-01T00:00:00.000Z');   // 증거 못 읽음 → 신선 아님
+    expect(await observed(async () => '2026-10-14T20:00:00Z')).toBe('1970-01-01T00:00:00.000Z');   // 미래 시각은 버린다
+    expect(await observed(undefined)).toBe('2026-10-13T14:39:00.000Z');                               // 증거 함수가 없을 때만 문서 시각
+  });
+  it.skip('ERP4 collection-step success time replaces a stale document time but never a newer one, and unreadable evidence falls back to documents (이전 동작, 대체됨)', async () => {
     const docs = [doc('A1', row(true, 'sheet'), '2026-10-13T14:39:00Z')];
     const nowAt = Date.parse('2026-10-13T20:00:00Z');
     const observed = async (evidence: (() => Promise<string | null>) | undefined) =>

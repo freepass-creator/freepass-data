@@ -50,8 +50,10 @@ export function collectorObservationPlugin(kind: 'SONOGONG' | 'AUTOPLUS', ratio:
     // 증거를 못 읽으면(gh 오류·한도) 문서 시각으로 되돌아간다: 신선하게 «보이게» 만드는 방향으로는 절대 폴백하지 않는다.
     const evidence = await collectionSuccessAt?.().then(v => v ? Date.parse(v) : NaN, () => NaN) ?? NaN;
     const evidenceStamp = Number.isFinite(evidence) && evidence <= now() + 60_000 ? evidence : 0;
-    const stamp = Math.max(docStamp, evidenceStamp);
-    const observedAt = new Date(stamp > 0 ? stamp : now()).toISOString();
+    // 신선도 근거는 «수집 완료 시각»뿐이다(독립 검토 2026-10-14): 문서 하나만 수정돼도 신선해지면 수집이 멈춰도 못 잡는다.
+    // 수집 증거 함수가 연결돼 있으면 문서 수정 시각을 쓰지 않고, 증거를 못 읽으면 epoch(= STALE)로 둔다. 증거 함수가 아예 없을 때만 옛 동작(문서 시각).
+    const stamp = collectionSuccessAt ? evidenceStamp : docStamp;
+    const observedAt = new Date(stamp > 0 ? stamp : collectionSuccessAt ? 0 : now()).toISOString();
     return { observedAt, complete: true, completedScopes: ['collector'], visibilityComplete: true, heldCount: 0,
       rows: decoded.map(({ d, f }) => ({ scope: 'collector',
         record: productRecord(decodeURIComponent(d.name.split('/').at(-1)!), f as never, observedAt) })) };
@@ -320,7 +322,9 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           const applied = result.stage === 'APPLY' && result.status === 'APPLIED';
           const before = plan.exposedBefore;
           // APPLY_UNCERTAIN 은 일부만 쓰였을 수 있어 노출 대수를 알 수 없다 — 추정값 대신 «미확인»(null)으로 기록한다(독립 검토 2026-10-14).
-          const uncertain = result.status === 'APPLY_UNCERTAIN';
+          // 쓰기 결과를 확정할 수 없는 모든 경우(불확실·연속 실패 정지·적용 단계의 비정상 종료)는 «미확인»이다(독립 검토 2026-10-14).
+          const uncertain = result.status === 'APPLY_UNCERTAIN' || result.status === 'STOPPED' ||
+            (result.stage === 'APPLY' && result.status !== 'APPLIED' && plan.entries.length > 0);
           const after = uncertain ? null : applied ? before - count('DOWNGRADE') + exposedEnroll + count('REEXPOSE') : before;
           const prior = priorAfter.get(plugin.sourceId) ?? null;
           const sourceSellable = typeof plan.sourceCount === 'number' ? plan.sourceCount : null;

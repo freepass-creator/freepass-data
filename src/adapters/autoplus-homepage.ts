@@ -82,7 +82,12 @@ export function createAutoplusHomepageClient(options: {
 }
 
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
-const amountOf = (v: unknown): SourceAmount => typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? { state: 'KNOWN', value: v } : unknownAmount;
+/** 월 대여료만 KNOWN: 숫자 또는 숫자 문자열, 정수, 10만~5천만 원. true/객체/범위 밖 값은 UNKNOWN(독립 검토 2026-10-14: Number(true)=1 이 가격이 되어 REEXPOSE 됨). */
+const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
+const amountOf = (v: unknown): SourceAmount => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : NaN;
+  return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
+};
 const text = (v: unknown) => typeof v === 'string' ? v.trim() : '';
 
 /** 상세 응답 → 표준 레코드. 차량번호가 형식에 맞지 않으면 레코드를 만들지 않는다(보류 사유 반환). 가격 없는 행은 항 0개로 두고 listable 은 소비 쪽 정책(대여료 필수)이 정한다. */

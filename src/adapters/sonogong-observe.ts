@@ -12,11 +12,15 @@ const last4 = (plate: string) => plate.replace(/\D/g, '').slice(-4);
 const STATUS_KEY = /status|state|stage|상태/i;
 const SAFE_KEY = /^[A-Za-z_]{1,30}$/;
 /** 보고 파일에 남는 상태 값은 열거형으로 보이는 짧은 값만이다: 숫자가 섞인 문자열(차량번호·연락처)·긴 메모는 «기타» 로 바꾼다(독립 검토: 40자 절단은 비식별이 아니다). */
+const ALLOWED_STATUS_VALUES: ReadonlySet<string> = new Set([
+  '즉시출고', '출고가능', '출고협의', '상품화중', '차량검수', '계약중', '출고불가', '배차문의', '수리중', '배차중', '배차가능', '게시', '미게시',
+  'AVAILABLE', 'PREPARING', 'RESERVED', 'CONTRACT', 'CONTRACTED', 'SOLD', 'UNAVAILABLE', 'HOLD', 'ACTIVE', 'INACTIVE', 'PENDING', 'READY', 'CLOSED', 'DELIVERED']);
+/** 명시적 열거만 값을 남긴다(독립 검토 2026-10-14: 패턴 검사는 «홍길동» 같은 이름을 통과시켰다). 그 밖의 문자열·큰 수는 «기타». */
 const safeStatusValue = (value: string | number | boolean): string => {
   if (typeof value === 'boolean') return String(value);
   if (typeof value === 'number') return Number.isInteger(value) && Math.abs(value) < 1000 ? String(value) : '기타';
   const v = value.trim();
-  return /^[A-Za-z가-힣_]{1,20}( [A-Za-z가-힣_]{1,20})?$/.test(v) ? v : '기타';
+  return ALLOWED_STATUS_VALUES.has(v) ? v : '기타';
 };
 
 const hasPrice = (detail: Json | null) => Array.isArray(detail?.estimates) && (detail!.estimates as unknown[]).some(e => object(e)

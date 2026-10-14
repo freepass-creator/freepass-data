@@ -30,6 +30,8 @@ export type SourceReconciliation = {
   mismatchCount: number; mismatchLast4: string[];
   /** 일치 = 집합 비교가 0·0 이고 값 불일치도 0 일 때만 true(대수 일치만으로는 일치가 아니다). */
   matched: boolean; countEqual: boolean;
+  /** 같은 번호로 문서가 둘 이상인 차량 수(충돌). 있으면 matched 는 false 다. */
+  duplicateDocCount: number;
   /** 등록 기준 지표(커맨드 센터 2026-10-14): 노출 제외로 편입된 차는 NEW 가 아니라 등록으로 센다. registeredMatched = 순수 NEW(문서 없음)가 0. */
   registeredCount: number; exposedCount: number; infoIncompleteCount: number; pureNewCount: number; registeredMatched: boolean;
 };
@@ -54,7 +56,12 @@ const keyOf = (r: SourceProductRecord) => r.plate && isAssignedPlate(r.plate) ? 
 export function reconcileSource(records: readonly SourceProductRecord[], products: readonly CycleProduct[]): SourceReconciliation {
   const source = new Map<string, SourceProductRecord>();
   for (const r of records) if (r.status.saleAvailable === true) source.set(keyOf(r), r);
-  const docs = new Map(products.map(p => [keyOf(p.record), p]));
+  // 같은 번호의 문서가 둘 이상이면 배열 순서와 무관하게 고른다: 노출 문서 우선, 그다음 UID 사전순. 중복은 충돌로 따로 센다(독립 검토 2026-10-14).
+  const groups = new Map<string, CycleProduct[]>();
+  for (const p of products) (groups.get(keyOf(p.record)) ?? groups.set(keyOf(p.record), []).get(keyOf(p.record))!).push(p);
+  const duplicateKeys = [...groups].filter(([, g]) => g.length > 1).map(([k]) => k).sort();
+  const docs = new Map([...groups].map(([k, g]) => [k, [...g].sort((a, b) => Number(b.listable) - Number(a.listable) ||
+    (a.record.uid < b.record.uid ? -1 : a.record.uid > b.record.uid ? 1 : 0))[0]!]));
   const erp = new Map([...docs].filter(([, p]) => p.listable));
   const sameKeys = [...source.keys()].filter(k => erp.has(k));
   const newKeys = [...source.keys()].filter(k => !erp.has(k)).sort();
@@ -69,7 +76,8 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     missingLockedCount: missingKeys.filter(k => isLocked(erp.get(k)!)).length,
     matchedExceptLocked: newKeys.length === 0 && mismatchKeys.length === 0 && missingKeys.every(k => isLocked(erp.get(k)!)),
     mismatchCount: mismatchKeys.length, mismatchLast4: cut(mismatchKeys, k => erp.get(k)!.record),
-    matched: newKeys.length === 0 && missingKeys.length === 0 && mismatchKeys.length === 0,
+    duplicateDocCount: duplicateKeys.length,
+    matched: newKeys.length === 0 && missingKeys.length === 0 && mismatchKeys.length === 0 && duplicateKeys.length === 0,
     // 대표 보고 형식 «등록 N·노출 N·정보 부족 N»: 등록 = 원천 판매 가능 중 문서가 있는 차, 노출 = 그중 노출 중, 정보 부족 = 번호만 편입한 비노출.
     registeredCount: [...source.keys()].filter(k => docs.has(k)).length,
     exposedCount: sameKeys.length,
