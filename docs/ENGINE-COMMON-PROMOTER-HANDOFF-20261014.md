@@ -1,7 +1,7 @@
 # 엔진 공통 승격기 — 클라우드 구현 인계 (2026-10-14~)
 
 설계: `docs/ENGINE-COMMON-PROMOTER-DESIGN-20261014.md`(가지 `work/freepass-data/engine-promoter-design-20261014`).
-이 문서는 클라우드 구현 담당이 PR 마다 갱신하는 한 장이다. 합침·배포·실행 스위치는 커맨드 센터 몫이다.
+이 문서는 클라우드 구현 담당이 PR 마다 갱신하는 한 장이다. 역할: 커맨드 센터 = 기획 PC(GHD, PR 합침·지시·온라인 확인), B3Q = 운영 PC(엔진 실행·스위치), 클라우드 = 코드·시험·PR.
 상태 표기는 AGENTS.md §3(DESIGNED / CODED / TESTED / … / DEPLOYMENT VERIFIED)를 따른다. 로컬 실행은 «완료» 근거가 아니다.
 
 ## 1. 진행 표
