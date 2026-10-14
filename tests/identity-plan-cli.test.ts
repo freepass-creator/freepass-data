@@ -12,7 +12,7 @@ const snapshot = {
 };
 
 describe('정체성 승격 계획서 CLI', () => {
-  it('reads a snapshot file and writes the plan and held report (no network, no writes beyond the two output files)', async () => {
+  it('reads a snapshot file and writes the plan and held report (no network, no writes beyond the output files)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'idplan-'));
     try {
       await writeFile(join(dir, 'in.json'), JSON.stringify(snapshot));
@@ -20,7 +20,9 @@ describe('정체성 승격 계획서 CLI', () => {
       expect(result.stats).toMatchObject({ products: 1, identityRepairs: 1, trimRepairs: 1, held: 0 });
       const plan = JSON.parse(await readFile(join(dir, 'plan.json'), 'utf8'));
       expect(plan.productIdentityRepairs[0].to).toEqual({ maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE' });
-      expect(plan.productTrimRepairs[0]).toMatchObject({ id: 'p1', to: '프레스티지' });
+      expect(plan.productTrimRepairs).toBeUndefined();
+      const trimPlan = JSON.parse(await readFile(join(dir, 'plan.trim.json'), 'utf8'));   // 정체성 적용 뒤에 쓰는 두 번째 계획
+      expect(trimPlan.productTrimRepairs[0]).toMatchObject({ id: 'p1', to: '프레스티지' });
       expect(JSON.parse(await readFile(join(dir, 'held.json'), 'utf8')).held).toEqual([]);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });

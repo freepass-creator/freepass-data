@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildIdentityPromotionPlan, type IdentityMaster, type IdentityProduct } from '../src/application/identity-promotion-plan.js';
-import type { VehicleNameRepairPlan as InfraRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { validateVehicleNameRepairPlan, type VehicleNameRepairPlan as InfraRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 const master = (over: Partial<IdentityMaster> & Pick<IdentityMaster, 'id' | 'sub_model'>): IdentityMaster => ({ maker: '현대', model: '아반떼', model_aliases: [], sub_model_aliases: [],
   yearFrom: null, yearTo: null, trims: [], ...over });
@@ -24,7 +24,9 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(r.plan.productIdentityRepairs).toEqual([
       { id: 'p1', from: { maker: '현대', model: '아이오닉5', sub_model: '아이오닉5' }, to: { maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE' }, evidence: '원문 차명: 아이오닉5 프레스티지 2WD 롱레인지' },
       { id: 'p2', from: { maker: '르노코리아', model: '아르카나', sub_model: '아르카나' }, to: { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL' }, evidence: '원문 차명: 아르카나 1.6가솔린 아이코닉' }]);
-    expect(r.plan.productTrimRepairs).toEqual([
+    // 같은 상품의 정체성과 세부트림은 한 계획에 겹치지 않는다(정정 경로 one product per plan) → 세부트림은 두 번째 계획
+    expect(r.plan.productTrimRepairs).toBeUndefined();
+    expect(r.trimPlan?.productTrimRepairs).toEqual([
       { id: 'p1', from: '', to: '프레스티지', evidence: '원문 차명: 아이오닉5 프레스티지 2WD 롱레인지' },
       { id: 'p2', from: '', to: '아이코닉', evidence: '원문 차명: 아르카나 1.6가솔린 아이코닉' }]);
     expect(r.held).toEqual([]);
@@ -45,7 +47,7 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(unknownYear.held[0]!.reason).toBe('AMBIGUOUS_MASTER');
     const y2026 = buildIdentityPromotionPlan([product({ id: 'a', maker: '현대', model: '아반떼', sub_model: '아반떼', rawName: '아반떼 프리미엄 신형', year: '2026' })], masters);
     expect(y2026.plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('아반떼 CN8');
-    expect(y2026.plan.productTrimRepairs).toEqual([{ id: 'a', from: '', to: '프리미엄', evidence: '원문 차명: 아반떼 프리미엄 신형' }]);
+    expect(y2026.trimPlan?.productTrimRepairs).toEqual([{ id: 'a', from: '', to: '프리미엄', evidence: '원문 차명: 아반떼 프리미엄 신형' }]);
   });
 
   it('holds with no master match, with an unmatched trim, and never writes anything for already-matched products', () => {
@@ -70,5 +72,17 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     const forward = buildIdentityPromotionPlan(items, masters), backward = buildIdentityPromotionPlan([...items].reverse(), masters);
     expect(forward.plan).toEqual(backward.plan);
     expect(JSON.stringify(forward)).not.toMatch(/\d{2,3}[가-힣]\d{4}/);
+  });
+  it('reads engine-ingested documents (maker·model blank, raw name parked in sub_model) and every plan passes the repair-path validator', () => {
+    const engineDoc = product({ id: 'e1', sub_model: '아이오닉5 프레스티지 롱레인지', rawName: '' });
+    const r = buildIdentityPromotionPlan([engineDoc,
+      product({ id: 'e2', sub_model: '아르카나 아이코닉', rawName: '아르카나 아이코닉' }),
+      product({ id: 'k', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', rawName: '아르카나 아이코닉' })], masters);
+    expect(r.plan.productIdentityRepairs?.map(i => [i.id, i.from.sub_model, i.to.sub_model])).toEqual([
+      ['e1', '아이오닉5 프레스티지 롱레인지', '아이오닉 5 NE'], ['e2', '아르카나 아이코닉', '아르카나 LJL']]);
+    expect(r.plan.productTrimRepairs?.map(i => i.id)).toEqual(['k']);              // 정체성이 이미 맞는 상품의 세부트림은 첫 계획에
+    expect(r.trimPlan?.productTrimRepairs?.map(i => [i.id, i.to])).toEqual([['e1', '프레스티지'], ['e2', '아이코닉']]);
+    expect(() => validateVehicleNameRepairPlan(r.plan as InfraRepairPlan)).not.toThrow();
+    expect(() => validateVehicleNameRepairPlan(r.trimPlan as InfraRepairPlan)).not.toThrow();
   });
 });

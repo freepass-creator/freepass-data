@@ -1,6 +1,7 @@
 /** 정체성 승격 계획서 생성 CLI(읽기 전용, 쓰기 0·네트워크 0). B3Q 가 운영 문서·마스터 스냅샷 JSON 을 만들어 이 도구에 넣고, 나온 계획서를 정해진 정정 경로
  * (VEHICLE_NAME_REPAIR_PLAN=<계획서> npm run repair:vehicle-name-parity → Codex 검토 → DRY_RUN → 정확한 digest 승인 → 적용 → 되읽기)로 적용한다.
- *   node dist/src/jobs/build-identity-promotion-plan.js --input <snapshot.json> --out <plan.json> [--held <held.json>]
+ *   node dist/src/jobs/build-identity-promotion-plan.js --input <snapshot.json> --out <plan.json> [--trim-out <trim-plan.json>] [--held <held.json>]
+ * 정체성 정정과 같은 상품의 세부트림은 두 번째 계획(--trim-out, 기본 <out 이름>.trim.json)에 담긴다 — out 을 적용·되읽기한 뒤 적용한다.
  * 입력 JSON: { "products": IdentityProduct[], "masters": IdentityMaster[], "label"?: string } (끝4·원문 차명·연식만, 전체 번호·고객정보 없음). */
 import { readFile, writeFile } from 'node:fs/promises';
 import { buildIdentityPromotionPlan, type IdentityMaster, type IdentityProduct } from '../application/identity-promotion-plan.js';
@@ -34,17 +35,18 @@ export function parseIdentitySnapshot(raw: unknown): { products: IdentityProduct
   return { products, masters, label: str(raw.label) || 'identity-promotion' };
 }
 
-export async function runIdentityPlanCli(argv: { input?: string | undefined; out?: string | undefined; held?: string | undefined }) {
+export async function runIdentityPlanCli(argv: { input?: string | undefined; out?: string | undefined; held?: string | undefined; trimOut?: string | undefined }) {
   if (!argv.input || !argv.out) throw new Error('IDENTITY_PLAN_ARGS_REQUIRED');
   const snapshot = parseIdentitySnapshot(JSON.parse(await readFile(argv.input, 'utf8')));
   const result = buildIdentityPromotionPlan(snapshot.products, snapshot.masters, { sourceLabel: snapshot.label });
   await writeFile(argv.out, JSON.stringify(result.plan, null, 2), { mode: 0o600 });
+  if (result.trimPlan) await writeFile(argv.trimOut ?? argv.out.replace(/(\.json)?$/i, '.trim.json'), JSON.stringify(result.trimPlan, null, 2), { mode: 0o600 });
   if (argv.held) await writeFile(argv.held, JSON.stringify({ stats: result.stats, held: result.held }, null, 2), { mode: 0o600 });
   return result;
 }
 
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('build-identity-promotion-plan.js')) {
-  runIdentityPlanCli({ input: arg('--input'), out: arg('--out'), held: arg('--held') })
+  runIdentityPlanCli({ input: arg('--input'), out: arg('--out'), held: arg('--held'), trimOut: arg('--trim-out') })
     .then(r => console.log(JSON.stringify({ status: 'PLAN_BUILT', writes: 0, ...r.stats })))
     .catch(e => { console.error(e instanceof Error && /^[A-Z_]+$/.test(e.message) ? e.message : 'IDENTITY_PLAN_FAILED'); process.exitCode = 1; });
 }
