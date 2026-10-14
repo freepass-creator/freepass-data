@@ -53,7 +53,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       if (!plateRaw) continue;
       rowCount++;
       // 번호 형식은 엄격히: 숫자 2~3자리 + 한글 한 글자 + 숫자 4자리만(구두점·영문이 섞인 표기는 별도 차량으로 편입하지 않고 보류한다).
-      if (!/^d{2,3}[가-힣]d{4}$/.test(plateRaw) || !isAssignedPlate(plateRaw)) { held.push({ tab: tab.title, row: i + 1, reason: 'PLATE_INVALID' }); continue; }
+      if (!/^\d{2,3}[가-힣]\d{4}$/.test(plateRaw) || !isAssignedPlate(plateRaw)) { held.push({ tab: tab.title, row: i + 1, reason: 'PLATE_INVALID' }); continue; }
       const plate = plateIdentityKey(plateRaw);
       if (seen.has(plate)) { duplicates.add(plate); continue; }
       seen.add(plate);
