@@ -266,7 +266,7 @@ describe('손오공 공식 API 어댑터', () => {
     expect(tabsDiffer.complete).toBe(true);
     expect(tabsDiffer.notes).toContain('TAB_GENERATIONS_DIFFER');
     expect(tabsDiffer.generatedAt).toBe('2026-10-14T06:00:00.000Z');
-    // 한 탭 안에서 쪽마다 생성 시각이 다르면 그 탭을 다시 읽는다. 그래도 섞여 있고 합집합이 정합(겹침 없음·서로 다른 차 수 = 총수)이면 받는다
+    // 한 탭 안에서 쪽마다 생성 시각이 다르면 그 탭을 다시 읽고, 그래도 섞여 있으면 불완전
     const mixedPages = (secondTotal: number) => world(u => {
       if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
       if (u.searchParams.get('tab') !== 'sub') return json([], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 0 });
@@ -274,10 +274,10 @@ describe('손오공 공식 API 어댑터', () => {
       return page === 1 ? json([row(1, '100하1111'), row(2, '100하2222')], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 3 })
         : json(page === 2 ? [row(3, '100하3333')] : [], { generatedAt: '2026-10-14T06:30:00.000Z', totalCount: secondTotal });
     }, false);
+    // 쪽마다 판이 다르면 총수·고유 id 수가 맞아도 받지 않는다(한 대가 빠지고 다른 한 대가 들어와도 수는 같다 — Codex #666 ⑶)
     const consistent = await readSonogongApi(mixedPages(3).client);
-    expect(consistent.complete).toBe(true);
-    expect(consistent.notes).toContain('SNAPSHOT_MIXED_PAGES_CONSISTENT:sub');
-    expect(consistent.records.length).toBe(3);
+    expect(consistent.complete).toBe(false);
+    expect(consistent.incompleteReason).toBe('SNAPSHOT_CHANGED_DURING_READ');
     // 총수까지 바뀌었으면(판이 정말 바뀜) 불완전
     const changed = await readSonogongApi(mixedPages(4).client);
     expect(changed.complete).toBe(false);

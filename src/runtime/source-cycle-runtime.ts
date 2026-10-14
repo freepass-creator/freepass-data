@@ -19,6 +19,7 @@ import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusH
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { parseDetailCache, waitForUpstreamRefresh, type DetailCache } from '../adapters/sonogong-detail-cache.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
 import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
@@ -351,7 +352,24 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             if (typeof pass.at === 'string' && Date.now() - Date.parse(pass.at) < SONOGONG_API_POLICY.minPassIntervalMinutes * 60_000) return soft('SONOGONG_API_PASS_INTERVAL');
           } catch { /* 최초·읽기 불가는 허용 — 아래 읽기 안전장치가 막는다 */ }
           const client = createSonogongApiClient({ base: apiBase, key: apiKey });
-          const read = await readSonogongApi(client);
+          // 상세 캐시(커맨드 센터 승인 2026-10-16): 직전 회차에서 목록 행 digest 가 같은 차의 상세를 재사용(6시간 상한·24시간마다 전수 갱신).
+          // 상태 파일이 없거나 손상·형식 불일치면 캐시 없음(전수 읽기)으로 폴백한다. SOURCE_CYCLE_SONOGONG_DETAIL_CACHE=off 면 쓰지 않는다.
+          const cacheFile = join(directory, 'sonogong-detail-cache.json');
+          const cacheOn = (env.SOURCE_CYCLE_SONOGONG_DETAIL_CACHE ?? '').trim().toLowerCase() !== 'off';
+          let detailCache: DetailCache | null = null;
+          if (cacheOn) try { detailCache = parseDetailCache(JSON.parse(await readFile(cacheFile, 'utf8'))); } catch { detailCache = null; }
+          // 갱신 직후 시작: 상류 생성 시각이 바뀐 것을 확인한 뒤 읽는다(읽는 도중 판이 바뀌는 일을 줄임). 최대 대기 시간 상한(기본 5분, 0 = 기다리지 않음) 뒤에는 그대로 읽는다.
+          // 무인 정시 회차만 기다린다 — 수동 plan 은 기다리지 않는다.
+          if (unattended && cacheOn && detailCache?.lastGeneratedAt) {
+            const maxWaitMin = Number(env.SOURCE_CYCLE_SONOGONG_WAIT_MAX_MIN ?? '5');
+            const maxWaitMs = Number.isFinite(maxWaitMin) && maxWaitMin >= 0 && maxWaitMin <= 20 ? maxWaitMin * 60_000 : 5 * 60_000;
+            await waitForUpstreamRefresh(async () => {
+              const first = await client.get('/vehicles', { tab: 'rent', page: 1, pageSize: 1 });
+              return typeof first.attrs.generatedAt === 'string' ? first.attrs.generatedAt : null;
+            }, { lastGeneratedAt: detailCache.lastGeneratedAt, maxWaitMs, pollMs: 60_000, sleep: ms => new Promise(r => setTimeout(r, ms)) });
+          }
+          const read = await readSonogongApi(client, cacheOn ? { detailCache } : {});
+          if (cacheOn && unattended && read.detailCacheOut) await writeJsonAtomic(cacheFile, read.detailCacheOut);
           // 행 수 하한(부분 읽기 방어): 잠금 제외 노출 문서 80%·직전 정상 회차 목록 수 80% 중 큰 값. 기준 파일 손상은 이번 회차만 불인정 후 복구.
           const exposedDocs = (await commands.documents('RP012')).filter(d => {
             const f = decodeFields(d.fields as never) as Record<string, unknown>;
