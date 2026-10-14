@@ -110,6 +110,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
 /** 표시 상태가 정하는 status_kind (ERP5 재고 계약표). 예전에는 노출이면 무조건 «가용» 이어서 계약중·상품화중 문서가 계약 검사의
  * status_kind 드리프트로 잡혔다(2026-10-13 발행 단계 33건). 검토되지 않은 상태는 «불가»(fail-closed, 독립 검토 2026-10-14): 가용으로 추정해 노출하지 않는다. */
 export const MONTHLY_PRODUCT_TYPE = '월렌트';
+/** 손오공 공식 API 탭 → 상품 구분: rent=중고렌트, sub=오공구독, pick=픽업구독(소비처 구독 표시 규칙의 고정 어휘). */
+export const SONOGONG_PRODUCT_TYPES: ReadonlySet<string> = new Set(['중고렌트', '오공구독', '픽업구독']);
 export const statusKindOf = (display: string, listable: boolean) =>
   !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : PROVIDER_AVAILABLE_STATUS_LABELS.has(display) ? '가용' : '불가'; })();
 /** 공급사 시트가 주는 차 한 대 사실(색상·연료·최초등록·연식·주행거리)을 «새 문서»에만 싣는다. 허용 키·짧은 문자열만 통과한다(기존 문서는 건드리지 않는다). */
@@ -140,6 +142,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,
     ...(r.raw.product_group ? { product_group: r.raw.product_group } : {}),
     ...(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT' ? { product_type: MONTHLY_PRODUCT_TYPE } : {}),
+    // 손오공 상품 구분(구독·픽업구독 화면 표시, 기존 구독 상품 규칙 재사용): 어댑터가 탭에서 정한 값이 고정 어휘일 때만 쓴다.
+    ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }

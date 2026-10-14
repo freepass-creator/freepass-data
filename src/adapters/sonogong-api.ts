@@ -15,6 +15,8 @@ export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
 /** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
+/** 탭 → 상품 구분(구독·픽업구독을 화면에서 구분). 소비처 어휘: 중고렌트·오공구독·픽업구독. */
+const PRODUCT_TYPE_BY_TAB: Record<SonogongApiTab, string> = { rent: '중고렌트', sub: '오공구독', pick: '픽업구독' };
 
 export class SonogongApiError extends Error {
   constructor(readonly code: string, readonly status?: number) { super(code); this.name = 'SonogongApiError'; }
@@ -165,7 +167,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         // 계약중은 모든 원천에서 같게(커맨드 센터 2026-10-14): 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 raw 로 제외.
         status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
         terms, observedAt,
-        raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
+        raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
           prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }

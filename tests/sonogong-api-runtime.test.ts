@@ -35,6 +35,15 @@ describe('손오공 공식 API 런타임 연결', () => {
     expect(partialRead.complete).toBe(false);
   });
 
+  it('writes the Sonogong product type from the tab (rent=중고렌트, sub=오공구독, pick=픽업구독) only for the fixed vocabulary', async () => {
+    const { nativeCycleFields } = await import('../src/infra/source-cycle-firestore.js');
+    const product = (type: unknown) => ({ record: { ...rec('12가1001'), raw: { source: 'sonogong-partner-api', product_type: type } },
+      listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null }) as never;
+    expect(nativeCycleFields(product('픽업구독')).product_type).toBe('픽업구독');
+    expect(nativeCycleFields(product('오공구독')).product_type).toBe('오공구독');
+    expect(nativeCycleFields(product('임의값')).product_type).toBeUndefined();
+    expect(nativeCycleFields(product(undefined)).product_type).toBeUndefined();
+  });
   it('one-time enroll cap: raises the cap only when set (201+), absolute max 1000, and the confirmed cap otherwise', () => {
     const cfg = { sourceId: 'RP012', family: 'OTHER' as const, maxDowngradeRatio: 0.5 };
     const many = Array.from({ length: 250 }, (_, i) => rec(`12가${String(1000 + i)}`));
