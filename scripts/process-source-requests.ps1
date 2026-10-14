@@ -61,7 +61,10 @@ try {
     try {
       $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
       $props = @($state.PSObject.Properties)
-      if ($props.Count -gt 0 -and ($props | Where-Object { $_.Name -eq 'last' }).Count -eq 1) {                     # current schema {"last":{code:utc}}
+      $names = @($props | ForEach-Object { $_.Name })
+      $versionOk = (-not ($names -contains 'version')) -or ($state.version -eq 1)
+      # current schema: EXACTLY the known keys {version?, last}; any extra key or an unknown version is an unknown schema.
+      if ($names -contains 'last' -and -not ($names | Where-Object { $_ -notin @('version', 'last') }) -and $versionOk) {
         $state.last.PSObject.Properties | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
       } elseif ($props.Count -gt 0 -and -not ($props | Where-Object { $_.Name -notmatch '^RP\d{3}$' -or -not ($_.Value -is [datetime] -or "$($_.Value)" -match '^\d{4}-\d{2}-\d{2}T') })) { # legacy {"RP031":"<utc>"}
         $props | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
@@ -74,7 +77,7 @@ try {
     }
   }
   $save = {
-    $o = @{ last = @{} }
+    $o = @{ version = 1; last = @{} }
     foreach ($k in $last.Keys) { $o.last[$k] = $last[$k].ToString('o') }
     $tmp = $stateFile + '.' + $PID + '.tmp'
     ($o | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath $tmp -Encoding UTF8
@@ -123,15 +126,16 @@ try {
     if ($EnvFile) { $runArgs.EnvFile = $EnvFile }
     $exit = 1
     $env:SOURCE_CYCLE_REQUEST_RUN = '1'
+    $last[$code] = [datetime]::UtcNow       # interval base = the moment this runner is actually started (not the invocation start)
     try { & $runner @runArgs; $exit = $LASTEXITCODE } catch { $exit = 1 } finally { Remove-Item Env:\SOURCE_CYCLE_REQUEST_RUN -ErrorAction SilentlyContinue }
-    $last[$code] = $now
     & $save                                  # interval record first: a crash below can only delay, never re-run sooner
     foreach ($path in $claimed) {
       if (-not (Test-Path -LiteralPath $path)) { continue }
       $base = [IO.Path]::GetFileNameWithoutExtension($path)
       if ($exit -eq 0) { Move-Unique $path $processed ($base + '.exit0.json'); continue }
       # not executed / failed: put back under a unique name that carries the attempt count
-      $m = [regex]::Match($base, '^(?<id>.*)\.r(?<n>\d+)-\d{14,17}$')
+      # the attempt count survives Move-Unique collision suffixes (".d<N>" after the stamp)
+      $m = [regex]::Match($base, '^(?<id>.*)\.r(?<n>\d+)-\d{14,17}(\.d\d+)*$')
       $attempt = 1 + $(if ($m.Success) { [int]$m.Groups['n'].Value } else { 0 })
       $id = if ($m.Success) { $m.Groups['id'].Value } else { $base }
       if ($attempt -ge $MaxAttempts) { Move-Unique $path $rejected ("{0}.EXHAUSTED.json" -f $id); continue }
