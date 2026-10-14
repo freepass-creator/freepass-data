@@ -111,6 +111,17 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
 export const MONTHLY_PRODUCT_TYPE = '월렌트';
 export const statusKindOf = (display: string, listable: boolean) =>
   !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : PROVIDER_AVAILABLE_STATUS_LABELS.has(display) ? '가용' : '불가'; })();
+/** 공급사 시트가 주는 차 한 대 사실(색상·연료·최초등록·연식·주행거리)을 «새 문서»에만 싣는다. 허용 키·짧은 문자열만 통과한다(기존 문서는 건드리지 않는다). */
+const SHEET_SPEC_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage'] as const;
+export const sheetSpecFields = (spec: unknown): Fields => {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return {};
+  const out: Fields = {};
+  for (const key of SHEET_SPEC_KEYS) {
+    const v = (spec as Record<string, unknown>)[key];
+    if (typeof v === 'string' && v.trim() && v.length <= 40) out[key] = v.trim();
+  }
+  return out;
+};
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
   const r = p.record;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
@@ -121,7 +132,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     salePriceMap(r.terms);
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(!Object.keys(original).length ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
-      원문: { 차명: r.vehicleText, source: r.raw } } : {}),
+      원문: { 차명: r.vehicleText, source: r.raw }, ...sheetSpecFields(r.raw.spec) } : {}),
     price, source_cycle_price_digest: priceDigest(price),
     listable, status: listable ? display : '출고불가', status_kind: statusKindOf(display, listable),
     vehicle_status: listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',

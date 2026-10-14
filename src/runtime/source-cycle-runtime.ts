@@ -15,6 +15,7 @@ import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCaptur
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, autoplusSitemapFloor, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
+import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
@@ -75,7 +76,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
-    observationSources: env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1' ? ['RP012'] : ['RP012', 'RP023'], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
+    observationSources: env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1' || env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? ['RP012'] : ['RP012', 'RP023'], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -235,6 +236,53 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       } : collectionEvidence;
       // 오토플러스 홈피 쓰기(대표 2026-10-14: 홈피 = 판매 가능 정본, 번호라도 먼저 편입): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE=1 일 때만 켜진다(기본 꺼짐).
       // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지) — 켜는 순서는 설계 문서 §2.
+      // 오토플러스 시트 우선(대표 2026-10-14: 정본 = 구글시트, 홈피는 보조 교차). SOURCE_CYCLE_AUTOPLUS_SHEET=1 + SOURCE_CYCLE_AUTOPLUS_SHEET_ID(공급사 원본 시트 ID, 저장소에 두지 않는다).
+      // 홈피 관측 보고(교차 확인)는 위 documents 래퍼가 계속 만든다. 시트 읽기가 불완전하면 쓰기·부재 하향이 막힌다.
+      if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1') {
+        const sheetId = (env.SOURCE_CYCLE_AUTOPLUS_SHEET_ID ?? '').trim();
+        if (!/^[A-Za-z0-9_-]{20,80}$/.test(sheetId)) throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
+        plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['sheet'], maxDowngradeRatio: ratio }, async () => {
+          const observedAt = new Date().toISOString();
+          const gws = (args: string[], params: Record<string, unknown>) => JSON.parse(execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)],
+            { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/^[^{]*/, '')) as Record<string, unknown>;
+          const incomplete = (reason: string) => ({ observedAt, complete: false, completedScopes: [] as string[], visibilityComplete: false, incompleteReason: reason, heldCount: 0, rows: [] });
+          let tabs: AutoplusSheetTab[];
+          try {
+            const meta = gws(['sheets', 'spreadsheets', 'get'], { spreadsheetId: sheetId, fields: 'sheets(properties(title,hidden))' }) as
+              { sheets?: Array<{ properties?: { title?: string; hidden?: boolean } }> };
+            const titles = (meta.sheets ?? []).filter(x => x.properties?.title && !x.properties.hidden).map(x => x.properties!.title!);
+            if (!titles.length) return incomplete('SHEET_TABS_NOT_FOUND');
+            const got = gws(['sheets', 'spreadsheets', 'values', 'batchGet'], { spreadsheetId: sheetId,
+              ranges: titles.map(t => `'${t.replace(/'/g, "''")}'!A1:AB1500`), valueRenderOption: 'FORMATTED_VALUE' }) as { valueRanges?: Array<{ values?: unknown[][] }> };
+            tabs = titles.map((title, i) => ({ title, values: got.valueRanges?.[i]?.values ?? [] }));
+          } catch { return incomplete('SHEET_READ_FAILED'); }
+          const read = readAutoplusSheet(tabs, observedAt);
+          // 잠금·계약중 차는 시트에서 내려가도 정산 전 노출을 유지하므로 행 수 하한 계산에서 뺀다.
+          const exposedDocs = (await commands.documents('RP023')).filter(d => {
+            const f = decodeFields(d.fields as never) as Record<string, unknown>;
+            const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+              || f.status === '계약중' || f.status_kind === '계약중';
+            return f.listable === true && !locked;
+          }).length;
+          const countFile = join(directory, 'autoplus-sheet-count.json');
+          let previous = 0, stateError: string | null = null;
+          try {
+            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
+          } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+          const floor = autoplusSheetRowFloor(exposedDocs, previous);
+          let complete = read.complete, reason = read.incompleteReason;
+          if (complete && read.rowCount < floor) { complete = false; reason = 'SHEET_SHRUNK'; }
+          if (complete && stateError) { complete = false; reason = stateError; }
+          if (complete) {
+            const tmp = `${countFile}.${process.pid}.tmp`;
+            try { await writeFile(tmp, JSON.stringify({ count: read.rowCount, at: observedAt }), { mode: 0o600 }); await rename(tmp, countFile); }
+            catch { await unlink(tmp).catch(() => undefined); }
+          }
+          return { observedAt, complete, completedScopes: complete ? ['sheet'] : [], visibilityComplete: true, ...(reason ? { incompleteReason: reason } : {}),
+            heldCount: read.held.length + read.duplicatePlates.length, rows: read.records.map(record => ({ scope: 'sheet', record })) };
+        })));
+      } else
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1') {
         plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => {
           // 부분 목록 방어(독립 검토 2026-10-14): 사이트맵 상품 수가 ① 기존 노출 문서 수의 95% 미만이거나 ② 직전 정상 회차 사이트맵 수의 80% 미만이면
