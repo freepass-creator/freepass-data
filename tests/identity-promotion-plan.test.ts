@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildIdentityPromotionPlan, type IdentityMaster, type IdentityProduct } from '../src/application/identity-promotion-plan.js';
+import type { VehicleNameRepairPlan as InfraRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 const master = (over: Partial<IdentityMaster> & Pick<IdentityMaster, 'id' | 'sub_model'>): IdentityMaster => ({ maker: '현대', model: '아반떼', model_aliases: [], sub_model_aliases: [],
   yearFrom: null, yearTo: null, trims: [], ...over });
@@ -27,6 +28,12 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
       { id: 'p1', from: '', to: '프레스티지', evidence: '원문 차명: 아이오닉5 프레스티지 2WD 롱레인지' },
       { id: 'p2', from: '', to: '아이코닉', evidence: '원문 차명: 아르카나 1.6가솔린 아이코닉' }]);
     expect(r.held).toEqual([]);
+  });
+
+  it('its output is structurally assignable to the repair path plan type (infra) — compatibility is guarded at compile time', () => {
+    const r = buildIdentityPromotionPlan([product({ id: 'p1', maker: '현대', model: '아이오닉5', sub_model: '아이오닉5', rawName: '아이오닉5 프레스티지' })], masters);
+    const compatible: InfraRepairPlan = r.plan;     // 이 대입이 컴파일되지 않으면 정정 경로의 계획서 모양과 어긋난 것이다
+    expect(compatible.sourceDigest).toBe(r.plan.sourceDigest);
   });
 
   it('holds when the alias points to two masters and the year cannot decide (never guesses a generation)', () => {
