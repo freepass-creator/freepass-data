@@ -67,11 +67,12 @@ describe('손오공 공식 API 어댑터', () => {
     // 계약중은 모든 원천에서 같게: 판매 가능(문서 유지·«계약중» 선점 표시 노출), 출고가능 비교에서는 raw 로 제외
     expect(by['2222']!.status).toEqual({ raw: '계약중', saleAvailable: true });
     expect(by['1111']!.raw.images).toEqual(['https://example.invalid/a.jpg']);   // 사진: images[].url 중 https 만
-    // 구독(sub) 보증금 = 손오공 정책 «월 대여료×약정연수(최대 3개월)» 계산값. API 의 0(24개월)·빈칸(48개월)은 자리채움이라 ZERO·UNKNOWN 이 아니다.
-    expect(by['1111']!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule, t.raw.api_deposit])).toEqual([
-      [12, 900000, 'KNOWN', 900000, 'RENT_X_CONTRACT_YEARS_MAX3', 1000000], [24, 800000, 'KNOWN', 1600000, 'RENT_X_CONTRACT_YEARS_MAX3', 0],
-      [36, 700000, 'KNOWN', 2100000, 'RENT_X_CONTRACT_YEARS_MAX3', 2000000], [48, 650000, 'KNOWN', 1950000, 'RENT_X_CONTRACT_YEARS_MAX3', undefined],
-      [60, 600000, 'KNOWN', 1800000, 'RENT_X_CONTRACT_YEARS_MAX3', 3000000]]);
+    // 숫자가 먼저: 구독(sub)이어도 API 양수 보증금은 원문 금액 그대로(KNOWN, 계산 표식 없음 — 규칙 값은 raw.rule_deposit 검토용).
+    // API 0(24개월)·빈칸(48개월)은 자리채움 → 손오공 정책 «월 대여료×약정연수(최대 3개월)» 계산값(ZERO·UNKNOWN 아님).
+    expect(by['1111']!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule, t.raw.rule_deposit])).toEqual([
+      [12, 900000, 'KNOWN', 1000000, undefined, 900000], [24, 800000, 'KNOWN', 1600000, 'RENT_X_CONTRACT_YEARS_MAX3', undefined],
+      [36, 700000, 'KNOWN', 2000000, undefined, 2100000], [48, 650000, 'KNOWN', 1950000, 'RENT_X_CONTRACT_YEARS_MAX3', undefined],
+      [60, 600000, 'KNOWN', 3000000, undefined, 1800000]]);
     expect(read.notes).toContain('DEPOSIT_RULE_DIFFERS:6');   // 두 대 × (12·36·60개월)
     expect((by['1111']!.raw.prices as Record<string, unknown>).SUBSCRIBE_BUYOUT).toBeDefined();
     expect(by['1111']!.raw.detail).toBeDefined();
@@ -93,7 +94,7 @@ describe('손오공 공식 API 어댑터', () => {
     const read = await readSonogongApi(w.client);
     expect(read.complete).toBe(true);
     expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['1111', 'rent'], ['2222', 'sub']]);
-    // 구독 항의 API 양수 보증금이 정책 계산값과 다른 건수도 대조 경고로 센다(12·36·60개월 — 2222 의 상세)
+    // 구독 항의 API 양수 보증금(원문 금액 채택)이 정책 계산값과 다른 건수를 검토 경고로 센다(12·36·60개월 — 2222 의 상세)
     expect(read.notes).toEqual(['CROSS_TAB_DUPLICATE:1', 'CROSS_TAB_GENERATION_DIFFERENCE:1', 'DEPOSIT_RULE_DIFFERS:3']);
     const within = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111'), row(3, '100하1111')] : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 2 : 0 })
@@ -180,7 +181,7 @@ describe('손오공 공식 API 어댑터', () => {
     expect(read.notes).toContain('AMOUNT_UNPARSEABLE:2');   // 36개월 월 대여료 '문의' + 48개월 보증금 -5
     expect(read.notes).toContain('DEPOSIT_PLACEHOLDER_ZERO:1');
   });
-  it('구독·픽업구독 보증금 = 월 대여료×약정연수(최대 3개월) 계산값(KNOWN), API 0·빈칸은 ZERO 가 되지 않는다', async () => {
+  it('구독·픽업구독: API 보증금이 0·빈칸(자리채움)이면 월 대여료×약정연수(최대 3개월) 계산값(KNOWN), ZERO 가 되지 않는다', async () => {
     const sub = { SUBSCRIBE_RETURN: { monthly: { 12: 500000, 24: 500000, 36: 500000, 48: 500000 }, deposit: { 12: 0, 24: 0, 36: null } } };
     const read = await readSonogongApi(world(u => {
       if (u.pathname.endsWith('/vehicles')) {

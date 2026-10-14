@@ -42,7 +42,8 @@ export function computeSupplierRuleDeposit(code: SupplierDepositRuleCode, termMo
   return Number.isSafeInteger(amount) && amount > 0 ? { amount, multiplier } : null;
 }
 
-/** 공급사·상품 구분별 보증금 정책. SOURCE_AMOUNT = 공급사가 준 양의 금액을 그대로(0·빈칸은 UNKNOWN), RULE = 산출식.
+/** 공급사·상품 구분별 보증금 정책. 숫자가 먼저다: 어느 구분이든 공급사가 준 양의 금액이 있으면 그 금액(KNOWN 원문 금액).
+ * SOURCE_AMOUNT = 원문이 0·빈칸이면 UNKNOWN, RULE = 원문이 0·빈칸(자리채움)일 때 산출식.
  * zeroIsPlaceholder: 그 공급사의 숫자 0 은 자리채움(무보증 아님) — 엔진이 이전 회차의 ZERO 를 «보존»하지도 않는다. */
 export type SupplierDepositPolicy =
   | { provider: string; bucket: string; deposit: 'SOURCE_AMOUNT'; policySource: string }

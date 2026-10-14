@@ -6,7 +6,7 @@
 
 1. **원문 → 대수 → 정제.** 원천 엔진은 공급사 원문을 먼저 가져오고(원문은 `raw`·`source_cycle_record` 에 보존), 차량 대수를 맞춘 뒤, 공급사 **자기 정책**으로 값을 정제한다.
 2. **자리채움 0 은 «무보증»이 아니다.** 공급사 API·시트의 숫자 0·빈칸은 확인된 무보증이 아니다. 무보증(ZERO)은 명시 문구 근거가 있을 때만이다(기존 `deposit-evidence` 규칙 그대로).
-3. **정책 출처는 공급사마다.** 보증금은 공급사 정책이 정한 대로 **숫자(원문 금액)** 이거나 **산출식(규칙 코드)** 이다. 산출식 값은 계산값임을 표식으로 남긴다.
+3. **숫자가 먼저, 숫자가 없을 때 산출식.** 보증금은 공급사가 준 **숫자(원문 금액)** 이거나, 숫자가 없을 때(0·빈칸 = 자리채움) 공급사 정책의 **산출식(규칙 코드)** 이다. 양수 원문 금액은 어느 상품 구분이든 KNOWN 원문 금액(`SOURCE_AMOUNT`)이고 계산 표식을 달지 않는다 — 규칙 값과 다르면 검토 근거로만 남긴다(READ-RUNTIME «양수 원문 금액 우선», NEXT-START-HERE 2026-10-10). 산출식 값은 계산값임을 표식으로 남긴다.
 
 정본 코드: `src/domain/supplier-deposit-policy.ts` (규칙 표 + 공급사·상품 구분별 정책 표). 이 표에 없는 공급사는 정제하지 않는다(기존 원문 금액 경로).
 
@@ -15,12 +15,12 @@
 | 공급사 | 상품 구분(원천) | 보증금 | 규칙 코드 | 정책 출처 |
 |---|---|---|---|---|
 | RP012 손오공 | 중고렌트 (`tab=rent`) | 원문 금액: 상세 `prices.RENT_RETURN.deposit` 양수만 KNOWN. 0·빈칸 = UNKNOWN (API 에 무보증 표시 칸 없음) | — | 손오공 파트너 API(ERP 원값) |
-| RP012 손오공 | 오공구독 (`tab=sub`) | 산출식: 월 대여료 × 약정연수, 최대 3개월 (12개월 ×1 · 24개월 ×2 · 36개월 이상 ×3) | `RENT_X_CONTRACT_YEARS_MAX3` | 손오공 구독 정책 «월 대여료 × 약정연수 (최대 3개월)» |
+| RP012 손오공 | 오공구독 (`tab=sub`) | 원문 양수 금액이 있으면 그 금액. 0·빈칸이면 산출식: 월 대여료 × 약정연수, 최대 3개월 (12개월 ×1 · 24개월 ×2 · 36개월 이상 ×3) | `RENT_X_CONTRACT_YEARS_MAX3` | 손오공 구독 정책 «월 대여료 × 약정연수 (최대 3개월)» |
 | RP012 손오공 | 픽업구독 (`tab=pick`) | 위와 같음 | `RENT_X_CONTRACT_YEARS_MAX3` | 위와 같음 |
 | RP023 오토플러스 | 오플구독 | 산출식: 월 대여료 × 2(국산) / × 3(수입). 국산·수입을 가를 수 없으면 UNKNOWN | `AUTOPLUS_RENT_X2_DOMESTIC` · `AUTOPLUS_RENT_X3_IMPORT` | 오토플러스 구글 시트 계산 규칙 (#642) |
 
 - 약정연수 계산은 `contractYearsMultiplierMax3` 하나다. 비고 문구 해석(`resolveDepositByRuleNote`·`depositFromYearsRuleNote`)도 같은 함수를 쓴다.
-- 손오공 구독 항의 API 보증금은 대조용으로 `term.raw.api_deposit` 에 남기고, 양수인데 계산값과 다르면 읽기 경고 `DEPOSIT_RULE_DIFFERS:n` 으로 센다. 중고렌트 0 은 `DEPOSIT_PLACEHOLDER_ZERO:n`.
+- 손오공 구독 항의 API 양수 보증금이 계산값과 다르면 원문 금액을 쓰고, 계산값은 `term.raw.rule_deposit` 에 검토용으로 남기며 읽기 경고 `DEPOSIT_RULE_DIFFERS:n` 으로 센다. 구독 항의 API 0 은 `term.raw.api_deposit=0` 으로 남기고 산출식을 쓴다. 중고렌트 0 은 UNKNOWN 이고 `DEPOSIT_PLACEHOLDER_ZERO:n` 으로 센다.
 
 ## 엔진 쓰기와 표시
 

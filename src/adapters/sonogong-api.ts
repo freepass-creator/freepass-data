@@ -1,7 +1,7 @@
 /** 손오공 렌터카 공식 파트너 API(partner/v1) 읽기 어댑터 — 로그인 수집 대체(대표 2026-10-14).
  * 계약: 기준 주소 SONOGONG_API_BASE(https://sokrc.com/api/partner/…), 모든 요청에 헤더 x-partner-key(SONOGONG_API_KEY), 읽기 GET 만,
  * 목록 GET /vehicles?tab=rent|sub|pick&page&pageSize(≤50), 상세 GET /vehicles/{id}(보증금·보험은 상세에만 있음), 데이터는 1시간 단위 갱신.
- * 보증금은 공급사 정책 정제 표(domain/supplier-deposit-policy)를 따른다: 중고렌트 = 상세 원문 양수 금액, 구독·픽업구독 = 월 대여료×약정연수(최대 3개월). 0 은 무보증이 아니다.
+ * 보증금은 공급사 정책 정제 표(domain/supplier-deposit-policy)를 따른다: 양수 원문 금액이 먼저(모든 탭), 원문이 0·빈칸이면 구독·픽업구독만 월 대여료×약정연수(최대 3개월) 산출식, 중고렌트는 UNKNOWN. 0 은 무보증이 아니다.
  * 안전: 직렬·요청 간 최소 간격·재시도 0·429/401/403 즉시 정지·redirect 거부·허용 호스트 고정. 키·URL 쿼리·응답 본문은 오류·로그에 남기지 않는다.
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
@@ -104,7 +104,7 @@ export type SonogongApiRead = {
   listed: number; detailsRead: number;
   /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이),
    * AMOUNT_UNPARSEABLE:n(값은 있으나 읽을 수 없어 UNKNOWN 으로 둔 월 대여료·보증금 칸 수), FUEL_UNRESOLVED:n(허용 목록·별칭에 없는 연료 — 칸을 비우고 원문만 보존),
-   * DEPOSIT_RULE_DIFFERS:n(구독 항의 API 양수 보증금이 정책 계산값과 다름 — 계산값을 쓰고 API 값은 raw.api_deposit 에 대조용으로 남김),
+   * DEPOSIT_RULE_DIFFERS:n(구독 항의 API 양수 보증금이 정책 계산값과 다름 — 원문 금액을 쓰고 계산값은 raw.rule_deposit 에 검토용으로 남김),
    * DEPOSIT_PLACEHOLDER_ZERO:n(중고렌트 항의 API 보증금 0 — 자리채움이라 UNKNOWN 으로 둠). */
   notes: string[];
 };
@@ -201,8 +201,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         if (rent.unparseable) amountUnparseable++;
         if (rent.amount.state !== 'KNOWN') continue;
         // 공급사 정책 정제(domain/supplier-deposit-policy, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»):
-        // rent(중고렌트) = 상세 보증금 원문 금액(양수만 KNOWN, 0·빈칸 = 자리채움 → UNKNOWN — API 에 무보증 표시 칸이 없다),
-        // sub·pick(구독) = 손오공 정책 «월 대여료 × 약정연수(최대 3개월)» 계산값(KNOWN, raw.deposit_rule). API 의 0·빈칸은 자리채움이라 ZERO 가 되지 않는다.
+        // 양수 원문 금액 = KNOWN(모든 탭). 원문 0·빈칸 = 자리채움(API 에 무보증 표시 칸 없음) → sub·pick 은 손오공 정책 «월 대여료 × 약정연수(최대 3개월)»
+        // 계산값(KNOWN, raw.deposit_rule), rent 는 UNKNOWN. 어느 경우도 ZERO 가 되지 않는다.
         let depositAmount: SourceAmount = { state: 'UNKNOWN', value: null };
         let apiDeposit: SourceAmount | null = null;
         if (detail) {
@@ -211,16 +211,21 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
           apiDeposit = parsed.amount;
         }
         const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab] };
-        if (policy?.deposit === 'RULE') {
+        // 숫자가 먼저, 숫자가 없을 때 산출식(«값이 숫자로 존재하거나 산출식으로 존재», READ-RUNTIME «양수 원문 금액 우선»):
+        // 양수 원문 금액은 어느 탭이든 KNOWN(원문 금액, 계산 표식 없음). 구독 항의 규칙 값이 다르면 raw.rule_deposit 와 경고로만 남긴다.
+        if (apiDeposit?.state === 'KNOWN') {
+          depositAmount = apiDeposit;
+          if (policy?.deposit === 'RULE') {
+            const computed = computeSupplierRuleDeposit(policy.rules[0]!, months, rent.amount.value);
+            if (computed && computed.amount !== apiDeposit.value) { depositRuleDiffers++; raw.rule_deposit = computed.amount; }
+          }
+        } else if (policy?.deposit === 'RULE') {
+          // API 0·빈칸·상세 없음 = 자리채움 → 공급사 정책 산출식
           const rule = policy.rules[0]!;
           const computed = computeSupplierRuleDeposit(rule, months, rent.amount.value);
-          if (computed) {
-            depositAmount = { state: 'KNOWN', value: computed.amount }; raw.deposit_rule = rule;
-            if (apiDeposit?.state === 'KNOWN' && apiDeposit.value !== computed.amount) depositRuleDiffers++;
-          }
-          if (apiDeposit && apiDeposit.state !== 'UNKNOWN') raw.api_deposit = apiDeposit.value;   // 원문 값은 대조용으로만 남긴다
-        } else if (apiDeposit?.state === 'KNOWN') depositAmount = apiDeposit;
-        else if (apiDeposit?.state === 'ZERO') depositPlaceholderZero++;
+          if (computed) { depositAmount = { state: 'KNOWN', value: computed.amount }; raw.deposit_rule = rule; }
+          if (apiDeposit?.state === 'ZERO') raw.api_deposit = 0;   // 자리채움 원문은 대조용으로만
+        } else if (apiDeposit?.state === 'ZERO') depositPlaceholderZero++;
         terms.push({ months, monthlyRent: rent.amount, deposit: depositAmount, mileage: null, raw });
       }
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
