@@ -18,6 +18,7 @@ import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusH
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { GoogleAuth } from 'google-auth-library';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
 import { readIronHomepage, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
@@ -96,7 +97,14 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
+  // 온라인 전송(SHEETS_TRANSPORT=adc): Firestore 도 gcloud 사용자 토큰이 아니라 ADC(WIF)로 접근한다(키 파일 없음).
+  const adcFirestoreToken = async () => {
+    const token = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/datastore'] }).getAccessToken().catch(() => null);
+    if (!token || /\s/.test(token)) throw new Error('FIRESTORE_AUTH_UNAVAILABLE');
+    return token;
+  };
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
+    ...(env.SHEETS_TRANSPORT === 'adc' ? { token: adcFirestoreToken } : {}),
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
@@ -135,8 +143,26 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     const out = execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     return new Response(out.slice(out.indexOf('{')), { status: 200 });
   };
+  // 온라인(GitHub Actions) 전송: SHEETS_TRANSPORT=adc 이면 Application Default Credentials 로 읽기 전용 토큰을 받는다. Actions 의 OIDC → Workload Identity Federation
+  // 설정 파일(external_account, GOOGLE_APPLICATION_CREDENTIALS 가 가리키는 «키 없는» 파일)이 그대로 쓰이고, 저장소·비밀에 키 파일이 없다.
+  // 서비스 계정에 시트 «보기» 공유만 사람 손이다. 쓰기 범위 없음(GET 만).
+  let adcToken: (() => Promise<string>) | null = null;
+  const sheetsViaAdc = async (url: URL): Promise<Response> => {
+    if (!/^\/v4\/spreadsheets\/[^/:]+(\/values:batchGet)?$/.test(url.pathname)) throw new Error('SHEETS_URL_UNSUPPORTED');
+    adcToken ??= async () => {
+      const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
+      const token = await auth.getAccessToken().catch(() => null);
+      if (!token || /\s/.test(token)) throw new Error('SHEETS_AUTH_UNAVAILABLE');
+      return token;
+    };
+    const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
+      headers: { authorization: `Bearer ${await adcToken()}` } });
+    if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
+    return response;
+  };
+  const adcTransport = env.SHEETS_TRANSPORT === 'adc';
   const get = async (url: URL, authenticated: boolean) => {
-    if (authenticated && url.hostname === 'sheets.googleapis.com') return sheetsViaGws(url);
+    if (authenticated && url.hostname === 'sheets.googleapis.com') return adcTransport ? sheetsViaAdc(url) : sheetsViaGws(url);
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
@@ -368,16 +394,23 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         if (!/^[A-Za-z0-9_-]{20,80}$/.test(sheetId)) throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
         plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['sheet'], maxDowngradeRatio: ratio }, async () => {
           const observedAt = new Date().toISOString();
-          const gws = (args: string[], params: Record<string, unknown>) => JSON.parse(execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)],
-            { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/^[^{]*/, '')) as Record<string, unknown>;
+          // 전송 공통: gws(운영 PC) 또는 ADC(온라인). 같은 URL 모양을 get() 이 처리한다.
+          const sheetsApi = async (kind: 'get' | 'batchGet', params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+            const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(String(params.spreadsheetId))}${kind === 'batchGet' ? '/values:batchGet' : ''}`);
+            for (const [k, v] of Object.entries(params)) {
+              if (k === 'spreadsheetId') continue;
+              if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, String(item)); else url.searchParams.set(k, String(v));
+            }
+            return await (await get(url, true)).json() as Record<string, unknown>;
+          };
           const incomplete = (reason: string) => ({ observedAt, complete: false, completedScopes: [] as string[], visibilityComplete: false, incompleteReason: reason, heldCount: 0, rows: [] });
           let tabs: AutoplusSheetTab[];
           try {
-            const meta = gws(['sheets', 'spreadsheets', 'get'], { spreadsheetId: sheetId, fields: 'sheets(properties(title,hidden))' }) as
+            const meta = await sheetsApi('get', { spreadsheetId: sheetId, fields: 'sheets(properties(title,hidden))' }) as
               { sheets?: Array<{ properties?: { title?: string; hidden?: boolean } }> };
             const titles = (meta.sheets ?? []).filter(x => x.properties?.title && !x.properties.hidden).map(x => x.properties!.title!);
             if (!titles.length) return incomplete('SHEET_TABS_NOT_FOUND');
-            const got = gws(['sheets', 'spreadsheets', 'values', 'batchGet'], { spreadsheetId: sheetId,
+            const got = await sheetsApi('batchGet', { spreadsheetId: sheetId,
               ranges: titles.map(t => `'${t.replace(/'/g, "''")}'!A1:AB1500`), valueRenderOption: 'FORMATTED_VALUE' }) as { valueRanges?: Array<{ values?: unknown[][] }> };
             tabs = titles.map((title, i) => ({ title, values: got.valueRanges?.[i]?.values ?? [] }));
           } catch { return incomplete('SHEET_READ_FAILED'); }
@@ -472,13 +505,20 @@ export const commands = configured?.commands;
 export const control = configured?.control;
 
 /** 무인 회차 실행 전 필수 조건 점검. 없으면 회차를 돌리지 않고 코드만 돌려준다(원천별 AUTH_FAILED 로 3회 정지되는 사고 방지). */
-export type UnattendedProbes = { gwsBin(env: NodeJS.ProcessEnv): string | null; gcloudToken(): Promise<string> };
-const defaultProbes: UnattendedProbes = { gwsBin: resolveGwsBin, gcloudToken: gcloudUserToken };
+export type UnattendedProbes = { gwsBin(env: NodeJS.ProcessEnv): string | null; gcloudToken(): Promise<string>; adcToken(env: NodeJS.ProcessEnv): Promise<string | null> };
+const defaultProbes: UnattendedProbes = { gwsBin: resolveGwsBin, gcloudToken: gcloudUserToken,
+  adcToken: async () => (await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/datastore'] }).getAccessToken().catch(() => null)) ?? null };
 export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonly string[], probes: UnattendedProbes = defaultProbes) {
   const missing: string[] = [];
   const sheets = kinds.includes('F05') || kinds.includes('AICA');
-  if (sheets && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
-  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
+  const adc = env.SHEETS_TRANSPORT === 'adc';   // 온라인: gws·gcloud 불필요, ADC(WIF) 토큰만
+  if (sheets && !adc && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
+  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws' && !adc) missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
+  if (adc) {
+    const token = await probes.adcToken(env).catch(() => null);
+    if (!token) missing.push('PREFLIGHT_ADC_TOKEN_MISSING');
+    return missing;
+  }
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   return missing;

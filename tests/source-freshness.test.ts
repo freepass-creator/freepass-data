@@ -55,7 +55,7 @@ describe('unattended run record and preflight (사고: 예약 환경에 시트 �
   const dirs: string[] = [];
   afterEach(async () => { for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true }); });
   const privateDir = async () => { const d = await mkdtemp(join(tmpdir(), 'unattended-')); dirs.push(d); return d; };
-  const probes = (over: Partial<UnattendedProbes> = {}): UnattendedProbes => ({ gwsBin: () => 'gws', gcloudToken: async () => 'synthetic', ...over });
+  const probes = (over: Partial<UnattendedProbes> = {}): UnattendedProbes => ({ gwsBin: () => 'gws', gcloudToken: async () => 'synthetic', adcToken: async () => 'synthetic', ...over });
 
   it('reports every missing prerequisite by code and never starts a cycle', async () => {
     const none = probes({ gwsBin: () => null, gcloudToken: async () => { throw new Error('no login'); } });
@@ -63,6 +63,13 @@ describe('unattended run record and preflight (사고: 예약 환경에 시트 �
       .toEqual(['PREFLIGHT_GWS_MISSING', 'PREFLIGHT_SHEETS_TRANSPORT_UNSET', 'PREFLIGHT_GCLOUD_TOKEN_MISSING']);
     expect(await unattendedPreflight({ SHEETS_TRANSPORT: 'gws' }, ['F05'], probes())).toEqual([]);
     expect(await unattendedPreflight({}, ['IANCAR'], probes())).toEqual([]);      // 시트 원천이 없으면 gws·전송 설정은 요구하지 않음
+  });
+  it('online transport (SHEETS_TRANSPORT=adc) needs neither gws nor a gcloud user token — only an ADC (WIF) token', async () => {
+    const online = { SHEETS_TRANSPORT: 'adc' };
+    const noLocalTools = probes({ gwsBin: () => null, gcloudToken: async () => { throw new Error('no login'); }, adcToken: async () => 'synthetic' });
+    expect(await unattendedPreflight(online, ['F05', 'AICA'], noLocalTools)).toEqual([]);
+    expect(await unattendedPreflight(online, ['F05'], probes({ adcToken: async () => null }))).toEqual(['PREFLIGHT_ADC_TOKEN_MISSING']);
+    expect(await unattendedPreflight(online, ['F05'], probes({ adcToken: async () => { throw new Error('no wif'); } }))).toEqual(['PREFLIGHT_ADC_TOKEN_MISSING']);
   });
   it('a known exemption removes a stale source from unhealthy/escalate without a time cap, and lifts when the replacement source completes cleanly', () => {
     const stale = [beat('RP012', 600), beat('RP013', 10)];                              // RP012 10시간 전 = escalate 대상이지만 알려진 예외
