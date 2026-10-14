@@ -51,7 +51,11 @@ export function summarizeSonogong(observations: readonly SonogongBucketObservati
   const statusTally: Record<string, Record<string, number>> = {};
   for (const v of vehicles) for (const [k, val] of Object.entries(v.statusValues)) { (statusTally[k] ??= {})[val] = (statusTally[k]![val] ?? 0) + 1; }
   const docsExposed = [...docByPlate.values()].filter(d => d.listable).length;
+  // 형식 오류·빈 버킷·선언 총계 불일치를 «0건 정상» 으로 읽지 않는다(B3Q 독립 검토 지적 ③과 같은 기준).
+  const invalidBuckets = observations.filter(o => !o.complete || o.records.length === 0 || o.records.length !== o.declaredTotal
+    || o.records.some(r => !object(r.list) || r.list.id === undefined || r.list.id === null)).map(o => o.bucket);
   return {
+    valid: observations.length > 0 && invalidBuckets.length === 0, invalidBuckets,
     buckets: observations.map(o => ({ bucket: o.bucket, declaredTotal: o.declaredTotal, rows: o.records.length,
       detailFailures: o.records.filter(r => r.detail === null).length, complete: o.complete, observedAt: o.observedAt })),
     sourceVehicles: vehicles.length, sourceWithPlate: plates.size, sourceWithoutPlate: vehicles.filter(v => !v.plate).length,

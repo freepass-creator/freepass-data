@@ -20,6 +20,15 @@ describe('손오공 원천↔문서 차이표(관측 전용)', () => {
       ['3', '12하1003', 'USED_RENT', true, false], ['4', null, expect.any(String), true, false], ['5', '12가1005', expect.any(String), false, true]]);
     expect(v[0]!.statusValues).toEqual({ status: '출고가능' });
   });
+  it('flags empty / incomplete / count-mismatched buckets as invalid instead of a normal zero', () => {
+    expect(summarizeSonogong(observations, []).valid).toBe(true);
+    const empty = summarizeSonogong([obs('LOW_TCAR', [])], []);
+    expect(empty.valid).toBe(false);
+    expect(empty.invalidBuckets).toEqual(['LOW_TCAR']);
+    expect(summarizeSonogong([{ ...observations[0]!, declaredTotal: 9 }], []).valid).toBe(false);
+    expect(summarizeSonogong([{ ...observations[0]!, complete: false }], []).valid).toBe(false);
+    expect(summarizeSonogong([], []).valid).toBe(false);
+  });
   it('summarizes NEW / MISSING / both by plate with last 4 digits only', () => {
     const docs = [{ plate: '12가1001', listable: true, status: '출고가능' }, { plate: '12가1002', listable: true, status: '계약중' },
       { plate: '99다9999', listable: true, status: '출고가능' }, { plate: '34나3434', listable: false, status: '출고불가' }];
