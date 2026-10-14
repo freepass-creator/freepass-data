@@ -232,13 +232,42 @@ export const IANCAR_COPY_VERIFICATION_METHOD = 'IANCAR_COMPRESSED_COPY';
 /** 이안카(RP031) 압축 사본 승인 상품: 사본 refs 가 전부 IANCAR_COMPRESSED_COPY 방식이고(ONE 원본 결속 refs 아님) 드라이브 파일 ID·sha256 등 승인 조건을 모두 갖춘 상품.
  * 이 상품은 ONE 원천이 아니라 우리 드라이브 사본(sha256 검증)으로만 서빙한다(대표 2026-10-14·15: 화면 요청이 이안카 서버를 부르지 않는다). */
 export function isIancarCopyPhotoProduct(product: Rec | undefined): boolean {
-  if (!product || product.provider_company_code !== 'RP031' || !isApprovedVehiclePhotoProduct(product)) return false;
-  return product.photo_original_refs.every(ref => (ref as Rec).sourceKind === undefined
-    && (ref as Rec).vehiclePhotoVerificationMethod === IANCAR_COPY_VERIFICATION_METHOD);
+  return isSupplierCopyPhotoProduct(product, IANCAR_ONLY_COPY_SUPPLIERS);
 }
-/** 공개 응답용 «승인 사본 수»: 사본 서빙이 보장될 때(= isIancarCopyPhotoProduct)만 refs 수, 아니면 0. 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
+/** 공개 응답용 «승인 사본 수»(이안카 한정, 종전 이름). 공급사 불문은 approvedPhotoCount. */
 export function approvedIancarPhotoCount(product: Rec | undefined): number {
   return isIancarCopyPhotoProduct(product) ? (product!.photo_original_refs as unknown[]).length : 0;
+}
+
+/** 공급사 공통 사본 서빙(2026-10-15 설계 승인): 사본 서빙을 허용하는 공급사 목록(허용표). 표에 없는 공급사는 종전 동작 그대로다(fail-closed).
+ * 기본 = 이안카(RP031) 하나. 운영은 환경변수 FREEPASS_DATA_PHOTO_COPY_SUPPLIERS(쉼표 목록)로 넓힌다 — RP031 은 항상 포함(실수로 빼도 이안카가 끊기지 않게). */
+export const SUPPLIER_FOLDER_COPY_METHOD = 'SUPPLIER_FOLDER_COPY';
+export const KAKAO_COLLECT_METHOD = 'AUTO_KAKAO_COLLECT';
+const IANCAR_ONLY_COPY_SUPPLIERS: ReadonlySet<string> = new Set(['RP031']);
+export const DEFAULT_PHOTO_COPY_SUPPLIERS: ReadonlySet<string> = IANCAR_ONLY_COPY_SUPPLIERS;
+export function parsePhotoCopySuppliers(text: string | undefined | null): ReadonlySet<string> {
+  const out = new Set<string>(['RP031']);
+  for (const part of String(text ?? '').split(',')) {
+    const code = part.trim().toUpperCase();
+    if (/^RP\d{3}$/.test(code)) out.add(code);   // 형식이 틀린 항목은 무시(허용표를 넓히지 않는다)
+  }
+  return out;
+}
+/** 공급사별 허용 등록 방법: 이안카는 압축 사본 방법만(종전 규칙 유지), 그 밖의 허용 공급사는 폴더 사본 방법·카톡 수집 등록. */
+const allowedCopyMethods = (supplier: string): readonly string[] =>
+  supplier === 'RP031' ? [IANCAR_COPY_VERIFICATION_METHOD] : [SUPPLIER_FOLDER_COPY_METHOD, KAKAO_COLLECT_METHOD];
+/** 사본 승인 상품: 허용표 안의 공급사이고, isApprovedVehiclePhotoProduct 조건을 갖추고, refs 가 전부 그 공급사의 허용 방법이며 ONE 결속 refs(sourceKind)가 아닌 상품.
+ * 이런 상품은 원천 라이브가 아니라 우리 드라이브 사본(sha256 검증)으로만 서빙한다. */
+export function isSupplierCopyPhotoProduct(product: Rec | undefined, suppliers: ReadonlySet<string> = DEFAULT_PHOTO_COPY_SUPPLIERS): boolean {
+  const supplier = typeof product?.provider_company_code === 'string' ? product.provider_company_code : '';
+  if (!product || !supplier || !suppliers.has(supplier) || !isApprovedVehiclePhotoProduct(product)) return false;
+  const methods = allowedCopyMethods(supplier);
+  return product.photo_original_refs.every(ref => (ref as Rec).sourceKind === undefined
+    && methods.includes(String((ref as Rec).vehiclePhotoVerificationMethod)));
+}
+/** 공개 응답용 «승인 사본 수»(공급사 불문): 사본 서빙이 보장될 때(= isSupplierCopyPhotoProduct)만 refs 수, 아니면 0. 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
+export function approvedPhotoCount(product: Rec | undefined, suppliers: ReadonlySet<string> = DEFAULT_PHOTO_COPY_SUPPLIERS): number {
+  return isSupplierCopyPhotoProduct(product, suppliers) ? (product!.photo_original_refs as unknown[]).length : 0;
 }
 
 /** ID 기반 서빙 게이트용: 상품 문서에 등록된 ONE 사진 ID 목록(중복·빈 값 없음, 1~200개). 없으면 게이트 대상 아님. */
@@ -376,6 +405,8 @@ export function createVehiclePhotoReader(
   idGateSuppliers: ReadonlySet<string> = new Set(),
   /** 사본이 없는 이안카(RP031) 상품을 ONE 라이브로 서빙할지. 기본 true(종전 동작). false 면 사본 없는 RP031 은 «사진 없음»(404)이며 ONE 을 호출하지 않는다. */
   iancarLivePhotoFallback: boolean = true,
+  /** 사본 서빙을 허용하는 공급사(허용표). 기본 = 이안카만. 표 밖 공급사는 종전 동작. */
+  copySuppliers: ReadonlySet<string> = DEFAULT_PHOTO_COPY_SUPPLIERS,
 ) {
   const cache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
   type ReviewedImage = { result: VehiclePhotoRead; expiresAt: number; productId: string; connection: string };
@@ -555,7 +586,7 @@ export function createVehiclePhotoReader(
     const mediaOnly = consumerId === 'erp5-public-media';
     // 이안카 사본 우선(2026-10-15): 승인된 압축 사본 refs 가 있으면 ONE 원천이 아니라 드라이브 사본(sha256 검증)으로만 서빙한다.
     // 공개 게이트(isPublicIancarPhotoProduct 의 ONE 차량 ID 요구)는 사본 경로에 걸지 않는다 — 사본 승인 조건은 isApprovedVehiclePhotoProduct 가 같은 상태 규칙으로 본다.
-    const copyFirst = isIancarCopyPhotoProduct(product);
+    const copyFirst = isSupplierCopyPhotoProduct(product, copySuppliers);
     // 사본이 없는 이안카 상품은 라이브 폴백을 끊을 수 있다(iancarLivePhotoFallback=false): 화면 요청이 ONE 을 두드리지 않고 «사진 없음»(404)이다.
     if (!copyFirst && !iancarLivePhotoFallback && product?.provider_company_code === 'RP031') {
       emit('PUBLIC_INELIGIBLE'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND');
@@ -563,7 +594,7 @@ export function createVehiclePhotoReader(
     // The machine media consumer never falls through to approved Drive or other suppliers.
     if (mediaOnly && !copyFirst && !isPublicIancarPhotoProduct(product)) { emit('PUBLIC_INELIGIBLE'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const consumerSources = copyFirst ? [approvedSource] : mediaOnly ? sources.filter(candidate => candidate === iancarSource) : sources;
-    const publicStill = (value: Rec | undefined) => copyFirst ? isIancarCopyPhotoProduct(value) : isPublicIancarPhotoProduct(value);
+    const publicStill = (value: Rec | undefined) => copyFirst ? isSupplierCopyPhotoProduct(value, copySuppliers) : isPublicIancarPhotoProduct(value);
     const source = consumerSources.find(candidate => candidate.eligible(product));
     if (!source || !product || !hasVehiclePhotoVerification(product)) { emit('APPROVAL_INVALID'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const refs = product.photo_original_refs as Rec[];
