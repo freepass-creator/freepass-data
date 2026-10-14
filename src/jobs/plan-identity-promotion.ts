@@ -26,7 +26,10 @@ const report = planIdentityPromotion({ products: products as IdentityPromotionPr
 // 계획 검증·승인 digest 확인은 repair:vehicle-name-parity 가 한다(이 job 은 쓰기 저장소를 들이지 않는다).
 const planDigests = report.plans.map((plan) => ({ sourceDigest: plan.sourceDigest, planDigest: stableDigest(plan),
   productIdentityCount: plan.productIdentityRepairs.length }));
+// 세부트림 계획은 정체성 계획을 모두 적용·되읽기한 뒤에 쓴다(한 상품을 한 계획에 겹치지 않는 정정 경로 제약).
+const trimPlanDigests = report.trimPlans.map((plan) => ({ sourceDigest: plan.sourceDigest, planDigest: stableDigest(plan),
+  productTrimCount: plan.productTrimRepairs.length }));
 const out = process.env.IDENTITY_PROMOTION_OUT?.trim();
 if (out) await writeFile(out, JSON.stringify(report, null, 2) + '\n', 'utf8');
 console.log(JSON.stringify({ status: 'PLAN_ONLY', ruleVersion: report.ruleVersion, snapshotDigest: report.snapshotDigest,
-  productsDigest: report.productsDigest, counts: report.counts, planDigests, ...(out ? { out } : { holds: report.holds.slice(0, 50) }) }, null, 2));
+  productsDigest: report.productsDigest, counts: report.counts, planDigests, trimPlanDigests, trimHeld: report.trimHolds.length, ...(out ? { out } : { holds: report.holds.slice(0, 50) }) }, null, 2));

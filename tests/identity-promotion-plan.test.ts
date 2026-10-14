@@ -3,8 +3,8 @@ import { planIdentityPromotion } from '../src/application/identity-promotion-pla
 import type { VehicleMasterRecord } from '../src/domain/vehicle-identity-resolution.js';
 import { validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
-const record = (masterId: string, maker: string, model: string, sub: string, subAliases: string[] = []): VehicleMasterRecord => ({
-  masterId, trimId: `${masterId}-t1`, names: [maker, model, sub, '기본'], aliases: [[maker], [model], [sub, ...subAliases], ['기본']],
+const record = (masterId: string, maker: string, model: string, sub: string, subAliases: string[] = [], trim = '기본', trimAliases: string[] = []): VehicleMasterRecord => ({
+  masterId, trimId: `${masterId}-${trim}`, names: [maker, model, sub, trim], aliases: [[maker], [model], [sub, ...subAliases], [trim, ...trimAliases]],
 });
 const records = [
   record('m-cn7', '현대', '아반떼', '더 뉴 아반떼 CN7', ['아반떼 CN7']),
@@ -12,6 +12,9 @@ const records = [
   record('m-gn7', '현대', '그랜저', '그랜저 GN7'),
   record('m-gn7h', '현대', '그랜저', '그랜저 하이브리드 GN7'),
   record('m-k5', '기아', 'K5', '더 뉴 K5 DL3'),
+  record('m-cn7', '현대', '아반떼', '더 뉴 아반떼 CN7', ['아반떼 CN7'], '인스퍼레이션'),
+  record('m-cn7', '현대', '아반떼', '더 뉴 아반떼 CN7', ['아반떼 CN7'], '모던'),
+  record('m-cn7', '현대', '아반떼', '더 뉴 아반떼 CN7', ['아반떼 CN7'], '모던 플러스'),
 ];
 const engineDoc = (rawName: string, extra: Record<string, unknown> = {}) => ({
   maker: '', model: '', sub_model: rawName, trim_name: '', vehicle_review_required: true, 원문: { 차명: rawName }, ...extra,
@@ -53,6 +56,18 @@ describe('identity promotion plan (read-only, unique master only)', () => {
       { id: 'blank', data: engineDoc('') },
     ]);
     expect(report.counts).toMatchObject({ scanned: 3, eligible: 1, planned: 0, byReason: { RAW_NAME_MISSING: 1 } });
+  });
+
+  it('puts trim fills in a separate second plan, only when one trim of the chosen master is named verbatim', () => {
+    const report = plan([
+      { id: 'a', data: engineDoc('아반떼 CN7 1.6 인스퍼레이션') },
+      { id: 'b', data: engineDoc('아반떼 CN7 모던 플러스') },
+      { id: 'c', data: engineDoc('아반떼 CN7 1.6') },
+    ]);
+    expect(report.plans[0]!.productIdentityRepairs.map(i => i.id)).toEqual(['a', 'b', 'c']);
+    expect(report.trimPlans[0]!.productTrimRepairs).toEqual([expect.objectContaining({ id: 'a', from: '', to: '인스퍼레이션' })]);
+    expect(report.trimHolds).toEqual([{ id: 'b', reason: 'MULTIPLE_TRIM_MATCH', candidates: ['모던', '모던 플러스'] }, { id: 'c', reason: 'NO_TRIM_MATCH' }]);
+    for (const p of [...report.plans, ...report.trimPlans]) expect(() => validateVehicleNameRepairPlan(p)).not.toThrow();
   });
 
   it('splits plans at the apply limit and is deterministic', () => {

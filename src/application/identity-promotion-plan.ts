@@ -3,7 +3,9 @@
  *
  * 엔진이 마스터로 특정하지 못한 채 편입한 상품(vehicle_review_required, maker·model 빈칸, 원문 차명이 sub_model 에 임시)을
  * 활성 차종 마스터와 대조해, 원문 차명에 세부모델 이름(또는 등록된 별칭)이 «그대로» 들어 있고 그 후보가 마스터 하나로만
- * 특정될 때만 정체성(제조사·모델·세부모델) 정정 항목을 낸다. 세부트림은 같은 계획에 싣지 않는다(정정 경로 제약: 계획 둘).
+ * 특정될 때만 정체성(제조사·모델·세부모델) 정정 항목을 낸다. 세부트림은 같은 계획에 싣지 않는다(정정 경로 제약: 계획 둘) —
+ * 정체성이 특정된 상품에 한해, 그 마스터의 세부트림 이름(또는 별칭)이 원문에 그대로 있고 하나뿐일 때만 «두 번째 계획»(trimPlans)으로 낸다.
+ * 적용 순서: plans(정체성) 전부 적용·되읽기 → trimPlans.
  *
  * 차종 기준 한 장(«지어내지 않는다», 별칭은 조건 없이 하나로 이어질 때만)을 따른다: 부분 일치·최장 일치 우선·연식 추정을
  * 하지 않는다. 둘 이상 걸리거나, 원문에 다른 제조사가 보이거나, 원문 동력 표기(하이브리드·전기)가 고른 세부모델과 어긋나면
@@ -34,12 +36,17 @@ export type IdentityPromotionItem = { id: string; from: IdentityTriple; to: Iden
 export type IdentityPromotionRepairPlan = {
   sourceDigest: string; masterRepairs: []; productRepairs: []; productIdentityRepairs: IdentityPromotionItem[];
 };
+export type TrimPromotionItem = { id: string; from: string; to: string; evidence: string };
+export type TrimPromotionRepairPlan = { sourceDigest: string; masterRepairs: []; productRepairs: []; productTrimRepairs: TrimPromotionItem[] };
+export type TrimPromotionHoldReason = 'NO_TRIM_MATCH' | 'MULTIPLE_TRIM_MATCH';
 export type IdentityPromotionHold = { id: string; rawName: string; reason: IdentityPromotionHoldReason; candidates?: string[] };
 export type IdentityPromotionReport = {
   ruleVersion: typeof IDENTITY_PROMOTION_RULE_VERSION; mode: 'PLAN_ONLY';
   snapshotDigest: string; productsDigest: string;
   counts: { scanned: number; eligible: number; planned: number; held: number; byReason: Partial<Record<IdentityPromotionHoldReason, number>> };
   plans: IdentityPromotionRepairPlan[]; holds: IdentityPromotionHold[];
+  /** 정체성 계획을 모두 적용한 뒤에 쓰는 세부트림 계획(같은 상품을 한 계획에 겹치지 않는다). */
+  trimPlans: TrimPromotionRepairPlan[]; trimHolds: Array<{ id: string; reason: TrimPromotionHoldReason; candidates?: string[] }>;
 };
 
 const clean = (value: unknown) => typeof value === 'string' ? value.normalize('NFKC').trim().replace(/\s+/g, ' ') : '';
@@ -48,13 +55,18 @@ export const compactVehicleName = (value: unknown) => clean(value).toLowerCase()
 const HYBRID = /하이브리드|hev|e-?tech/i;
 const ELECTRIC = /전기|(^|[^a-z])ev([^a-z]|$)/i;
 
-type MasterEntry = { masterId: string; maker: string; model: string; subModel: string; names: string[] };
+type MasterEntry = { masterId: string; maker: string; model: string; subModel: string; names: string[];
+  trims: Array<{ name: string; keys: string[] }> };
+/** 세부트림 이름·별칭 대조 최소 길이(«LX»·«GT» 같은 2글자 등급명은 허용). */
+export const MIN_TRIM_NAME_LENGTH = 2;
 
 function masterEntries(records: VehicleMasterRecord[]): MasterEntry[] {
   const byId = new Map<string, MasterEntry>();
   for (const record of records) {
     const [maker, model, subModel] = record.names;
-    const entry = byId.get(record.masterId) ?? { masterId: record.masterId, maker, model, subModel, names: [] };
+    const entry = byId.get(record.masterId) ?? { masterId: record.masterId, maker, model, subModel, names: [], trims: [] };
+    const trimKeys = [...new Set([record.names[3], ...(record.aliases[3] ?? [])].map(compactVehicleName).filter(k => k.length >= MIN_TRIM_NAME_LENGTH))];
+    if (clean(record.names[3]) && !entry.trims.some(t => t.name === clean(record.names[3]))) entry.trims.push({ name: clean(record.names[3]), keys: trimKeys });
     for (const name of [subModel, ...(record.aliases[2] ?? [])]) {
       const key = compactVehicleName(name);
       if (key.length >= MIN_SUB_MODEL_NAME_LENGTH && !entry.names.includes(key)) entry.names.push(key);
@@ -79,6 +91,7 @@ export function planIdentityPromotion(input: {
   const masters = masterEntries(input.records);
   const makers = [...new Set(masters.map(m => canonicalVehicleMakerName(m.maker)))];
   const items: IdentityPromotionItem[] = [], holds: IdentityPromotionHold[] = [];
+  const trimItems: TrimPromotionItem[] = [], trimHolds: IdentityPromotionReport['trimHolds'] = [];
   const targets = input.products.filter(p => isIdentityPromotionTarget(p.data)).sort((a, b) => a.id.localeCompare(b.id));
   for (const { id, data } of targets) {
     const rawName = rawNameOf(data);
@@ -104,6 +117,15 @@ export function planIdentityPromotion(input: {
       sub_model: typeof data.sub_model === 'string' ? data.sub_model : '' };
     items.push({ id, from, to,
       evidence: `원문 차명 «${rawName}» 에 세부모델 «${hit.subModel}»(또는 등록 별칭)이 그대로 있고 활성 마스터 ${hit.masterId} 하나로만 특정됨 · ${IDENTITY_PROMOTION_RULE_VERSION} · snapshot ${input.snapshotDigest.slice(0, 12)}` });
+    // 세부트림: 세부모델 이름 부분을 뺀 원문에서 찾는다(세부모델 이름 안의 글자가 트림으로 잡히지 않게).
+    const rest = hit.names.reduce((acc, name) => acc.split(name).join(' '), raw);
+    const trimHits = hit.trims.filter(t => t.keys.some(k => rest.includes(k)));
+    const currentTrim = typeof data.trim_name === 'string' ? data.trim_name : '';
+    if (trimHits.length === 1) {
+      if (clean(currentTrim) !== trimHits[0]!.name) trimItems.push({ id, from: currentTrim, to: trimHits[0]!.name,
+        evidence: `원문 차명 «${rawName}» 에 세부트림 «${trimHits[0]!.name}»(또는 등록 별칭)이 그대로 있고 마스터 ${hit.masterId} 안에서 하나뿐 · ${IDENTITY_PROMOTION_RULE_VERSION}` });
+    } else trimHolds.push({ id, reason: trimHits.length ? 'MULTIPLE_TRIM_MATCH' : 'NO_TRIM_MATCH',
+      ...(trimHits.length ? { candidates: trimHits.map(t => t.name) } : {}) });
   }
   const productsDigest = stableDigest(targets.map(p => ({ id: p.id, maker: p.data.maker ?? null, model: p.data.model ?? null,
     sub_model: p.data.sub_model ?? null, rawName: rawNameOf(p.data) })));
@@ -113,9 +135,14 @@ export function planIdentityPromotion(input: {
     plans.push({ sourceDigest: stableDigest({ ruleVersion: IDENTITY_PROMOTION_RULE_VERSION, snapshotDigest: input.snapshotDigest, productsDigest, part: plans.length }),
       masterRepairs: [], productRepairs: [], productIdentityRepairs: chunk });
   }
+  const trimPlans: TrimPromotionRepairPlan[] = [];
+  for (let at = 0; at < trimItems.length; at += IDENTITY_PROMOTION_PLAN_CHUNK) {
+    trimPlans.push({ sourceDigest: stableDigest({ ruleVersion: IDENTITY_PROMOTION_RULE_VERSION, snapshotDigest: input.snapshotDigest, productsDigest, trimPart: trimPlans.length }),
+      masterRepairs: [], productRepairs: [], productTrimRepairs: trimItems.slice(at, at + IDENTITY_PROMOTION_PLAN_CHUNK) });
+  }
   const byReason: Partial<Record<IdentityPromotionHoldReason, number>> = {};
   for (const h of holds) byReason[h.reason] = (byReason[h.reason] ?? 0) + 1;
   return { ruleVersion: IDENTITY_PROMOTION_RULE_VERSION, mode: 'PLAN_ONLY', snapshotDigest: input.snapshotDigest, productsDigest,
     counts: { scanned: input.products.length, eligible: targets.length, planned: items.length, held: holds.length, byReason },
-    plans, holds };
+    plans, holds, trimPlans, trimHolds };
 }
