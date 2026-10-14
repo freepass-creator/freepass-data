@@ -139,11 +139,54 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
   });
 
   it('stops after the configured consecutive failures and records only safe codes', async () => {
-    const w = world({ vehicles: [1, 2, 3, 4, 5].map(n => veh(n)), failDetail: Object.fromEntries([1, 2, 3, 4, 5].map(n => [`V${n}`, 'IANCAR_PHOTO_DETAIL_STALE'])) });
+    const w = world({ vehicles: [1, 2, 3, 4, 5].map(n => veh(n)), failDetail: Object.fromEntries([1, 2, 3, 4, 5].map(n => [`V${n}`, 'IANCAR_PHOTO_IDENTITY_MISMATCH'])) });
     const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
     expect(r.stop).toBe('CONSECUTIVE_FAILURES');
     expect(r.rows).toHaveLength(3);
-    expect(r.rows.every(x => x.code === 'IANCAR_PHOTO_DETAIL_STALE')).toBe(true);
+    expect(r.rows.every(x => x.code === 'IANCAR_PHOTO_IDENTITY_MISMATCH')).toBe(true);
+  });
+
+  it('B3Q: a vehicle whose detail is marked stale is skipped and the run continues — stale is not a failure; only a long stale streak stops the run (upstream stop)', async () => {
+    const stale = Object.fromEntries([1, 2, 3].map(n => [`V${n}`, 'IANCAR_PHOTO_DETAIL_STALE']));
+    const w = world({ vehicles: [1, 2, 3, 4, 5].map(n => veh(n)), failDetail: stale });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.stop).toBe('COMPLETED');                       // 3대 stale 후에도 계속 → 나머지 정상 복사
+    expect(r.counts.SKIPPED_STALE).toBe(3);
+    expect(r.counts.FAILED).toBe(0);
+    expect(r.counts.COPIED).toBe(2);
+    const all = world({ vehicles: [1, 2, 3, 4, 5].map(n => veh(n)), failDetail: Object.fromEntries([1, 2, 3, 4, 5].map(n => [`V${n}`, 'IANCAR_PHOTO_DETAIL_STALE'])) });
+    const stopped = await runIancarPhotoCopy(all.deps, 'FULL', limits({ maxConsecutiveStale: 3 }));
+    expect(stopped.stop).toBe('SOURCE_STALE');
+    expect(stopped.rows).toHaveLength(3);                   // 연속 3대 stale 이면 더 두드리지 않는다
+  });
+
+  it('a stale skip does not hide real failures: the failure streak is untouched by stale vehicles', async () => {
+    const w = world({ vehicles: [1, 2, 3, 4].map(n => veh(n)),
+      failDetail: { V2: 'IANCAR_PHOTO_DETAIL_STALE' }, failDownload: v => (v === 'V1' || v === 'V3' || v === 'V4' ? 'IANCAR_ONE_API_HTTP_599' : null) });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.stop).toBe('CONSECUTIVE_FAILURES');           // V1 실패, V2 stale(건너뜀), V3·V4 실패 → 누적 3
+    expect(r.counts).toMatchObject({ FAILED: 3, SKIPPED_STALE: 1 });
+  });
+
+  it('B3Q: rotating supplier photo ids do not turn a finished, intact folder into «changed» — same count and integrity is SAME', async () => {
+    const stored = ['old-a', 'old-b'];
+    const files: DriveFileInfo[] = stored.map((id, i) => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: `h${i}`, srcKey: srcKey(id), image: true, copySha256: `h${i}` }));
+    const w = world({ vehicles: [veh(1)], photos: { V1: ['new-a', 'new-b'] },        // 같은 장수, 전혀 다른 id
+      folders: { '12가1001': [{ folderId: 'F0', name: '12가1001', fingerprint: 'fp-from-old-id-scheme', files }] } });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.counts.SKIPPED_SAME).toBe(1);
+    expect(w.calls.download + w.calls.upload).toBe(0);
+    expect(photoCopyCsv(r)).toBe('번호,폴더\n12가1001,F0\n');
+  });
+
+  it('a finished folder whose photo count changed, or whose integrity mark is broken, is held for replacement (no writes)', async () => {
+    const good = (i: number): DriveFileInfo => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: `h${i}`, srcKey: srcKey(`x${i}`), image: true, copySha256: `h${i}` });
+    const resized = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b', 'c'] }, folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', files: [good(0), good(1)] }] } });
+    expect((await runIancarPhotoCopy(resized.deps, 'FULL', limits())).rows[0]!.status).toBe('NEEDS_REPLACEMENT');
+    const broken = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b'] }, folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', files: [good(0), { ...good(1), copySha256: 'tampered' }] }] } });
+    const r = await runIancarPhotoCopy(broken.deps, 'FULL', limits());
+    expect(r.rows[0]!.status).toBe('NEEDS_REPLACEMENT');
+    expect(broken.calls.download + broken.calls.upload).toBe(0);
   });
 
   it('Codex ①: download/drive failures accumulate even when every detail read succeeds (the consecutive-failure stop is reachable)', async () => {
