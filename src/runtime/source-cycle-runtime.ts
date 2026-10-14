@@ -15,7 +15,7 @@ import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' wit
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
-import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, autoplusSitemapFloor, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
+import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
@@ -25,18 +25,6 @@ import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
-
-/** 오토플러스(RP023) 홈피 쓰기 플러그인: 사이트맵 전수 읽기 결과(번호·가격)를 엔진 레코드로 넘긴다. 읽기가 불완전(실패·보류·중복 번호)이면
- * complete=false 라 부재 추론·적용이 막힌다. 상태는 «목록에 있음 = 출고가능(게시)», 사라짐은 엔진의 부재 하향이 출고불가로 내린다. */
-export function autoplusHomepageWritePlugin(ratio: number, collect: () => Promise<AutoplusHomepageCollection>) {
-  return sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
-    const c = await collect();
-    return { observedAt: c.observedAt, complete: c.complete, completedScopes: ['homepage'], visibilityComplete: true,
-      ...(c.incompleteReason ? { incompleteReason: c.incompleteReason } : {}),
-      heldCount: c.held.length + c.failures.length + c.duplicatePlates.length,
-      rows: c.records.map(record => ({ scope: 'homepage', record })) };
-  });
-}
 
 /** ERP4 단독 수집 원천(손오공 RP012·오토플러스 RP023)의 관측 전용 플러그인. 엔진은 쓰지 않고, 공급사 문서 전체(source 값과 무관)를 세며
  * 관측 시각은 «지금»이 아니라 노출 문서의 마지막 수정 시각이다 — 수집기가 멈추면 시각이 늙어 신선도 감시가 STALE 로 잡는다
@@ -101,7 +89,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
-      ...(env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1' || env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
+      ...(env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -296,8 +284,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         if (!home || !erp4) return null;
         return Date.parse(home) < Date.parse(erp4) ? home : erp4;
       } : collectionEvidence;
-      // 오토플러스 홈피 쓰기(대표 2026-10-14: 홈피 = 판매 가능 정본, 번호라도 먼저 편입): SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE=1 일 때만 켜진다(기본 꺼짐).
-      // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지) — 켜는 순서는 설계 문서 §2.
+      // 오토플러스 홈피 쓰기 모드는 폐기(대표 2026-10-14 «구버전 과감하게 폐기, 어설프게 양립하다가 다 망해»): RP023 쓰기 경로는 시트 하나뿐.
+      // ERP4 의 RP023 쓰기 제외가 먼저 배포되어야 한다(이중 쓰기 금지).
       // 오토플러스 시트 우선(대표 2026-10-14: 정본 = 구글시트, 홈피는 보조 교차). SOURCE_CYCLE_AUTOPLUS_SHEET=1 + SOURCE_CYCLE_AUTOPLUS_SHEET_ID(공급사 원본 시트 ID, 저장소에 두지 않는다).
       // 홈피 관측 보고(교차 확인)는 위 documents 래퍼가 계속 만든다. 시트 읽기가 불완전하면 쓰기·부재 하향이 막힌다.
       // 손오공 공식 파트너 API(대표 2026-10-14 «손오공 연동»): SOURCE_CYCLE_SONOGONG_API=1 + SONOGONG_API_KEY + SONOGONG_API_BASE 가 모두 있을 때만.
@@ -420,51 +408,6 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { observedAt, complete, completedScopes: complete ? ['sheet'] : [], visibilityComplete: true, ...(reason ? { incompleteReason: reason } : {}),
             heldCount: read.held.length + read.duplicatePlates.length, rows: read.records.map(record => ({ scope: 'sheet', record })) };
-        })));
-      } else
-      if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1') {
-        plugins.push(plateUidPlugin(autoplusHomepageWritePlugin(ratio, async () => {
-          // 부분 목록 방어(독립 검토 2026-10-14): 사이트맵 상품 수가 ① 기존 노출 문서 수의 95% 미만이거나 ② 직전 정상 회차 사이트맵 수의 80% 미만이면
-          // incomplete 로 두어 쓰기·부재 하향을 막는다. 노출 문서가 0 이면 하한 0 이지만 하향할 대상도 없다.
-          // 계약 잠금·계약중 차는 홈피에서 내려가도 정산이 끝날 때까지 노출을 유지하므로 사이트맵 하한 계산에서 뺀다(2026-10-14 실측: 잠금 6 때문에 50 의 95%=48 > 사이트맵 45 로 SITEMAP_SHRUNK 보류).
-          const exposedDocs = (await commands.documents('RP023')).filter(d => {
-            const f = decodeFields(d.fields as never) as Record<string, unknown>;
-            // 잠금 판정은 source-cycle-firestore.ts envelope 과 같게: locked_by_contract(true 또는 LEDGER·정산원장 같은 값)·status/status_kind «계약중».
-            const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
-              || f.status === '계약중' || f.status_kind === '계약중';
-            return f.listable === true && !locked;
-          }).length;
-          const countFile = join(directory, 'autoplus-sitemap-count.json');
-          // 직전 사이트맵 수 기준 파일: 없음(ENOENT, 최초)만 허용하고, 읽기 실패·손상·형식 오류는 완전 읽기로 인정하지 않는다(독립 검토 2026-10-14).
-          let previous = 0, stateError: string | null = null;
-          try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count;
-            else stateError = 'SITEMAP_COUNT_STATE_INVALID';
-          } catch (e) {
-            if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SITEMAP_COUNT_STATE_INVALID';
-          }
-          // 기존 노출 문서가 0 이면 하한 0(편입은 허용, 하향할 대상이 없다). 아니면 노출 95% 와 직전 정상 회차 80% 중 큰 값.
-          const floor = autoplusSitemapFloor(exposedDocs, previous);
-          const collected = await collectAutoplusHomepage(
-            createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
-            undefined, { minExpectedProducts: floor });
-          // 기준 파일은 임시 파일에 쓴 뒤 rename 으로 원자 교체한다(쓰기 실패가 빈 파일·부분 JSON 을 남겨 영구 불인정이 되지 않게).
-          const saveCount = async () => {
-            const tmp = `${countFile}.${process.pid}.tmp`;
-            try {
-              await writeFile(tmp, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 });
-              await rename(tmp, countFile);
-              return true;
-            } catch { await unlink(tmp).catch(() => undefined); return false; }
-          };
-          if (collected.complete) {
-            const saved = await saveCount();
-            // 기준 파일이 손상이었으면 이번 회차만 불인정(쓰기·하향 차단)하고, 같은 회차에서 확인된 완전 수집으로 파일을 복구해 한 회차 손실로 끝낸다.
-            if (stateError) return { ...collected, complete: false, incompleteReason: stateError };
-            if (!saved) return { ...collected, complete: false, incompleteReason: 'SITEMAP_COUNT_STATE_WRITE_FAILED' };
-          }
-          return collected;
         })));
       } else plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');

@@ -25,6 +25,16 @@ const rentOf = (v: unknown): SourceAmount | null => {
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
 };
 
+/** 보증금 칸(원 단위 정수): 0 = 무보증(ZERO), 1원~1억 = KNOWN, 빈칸·형식 밖 = UNKNOWN(지어내지 않는다). 열이 없으면 전부 UNKNOWN. */
+const DEPOSIT_MAX = 100_000_000;
+const depositOf = (v: unknown): SourceAmount => {
+  const t = clean(v).replace(/[,\s원]/g, '');
+  if (t === '') return unknownAmount;
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n < 0 || n > DEPOSIT_MAX) return unknownAmount;
+  return n === 0 ? { state: 'ZERO', value: 0 } : { state: 'KNOWN', value: n };
+};
+
 /** 머리글 행을 찾는다: «차량번호»와 «판매상태» 가 같은 행에 있어야 한다(앞 30행 안). */
 const headerRow = (values: unknown[][]) => values.slice(0, 30).findIndex(r => {
   const cells = r.map(clean);
@@ -41,6 +51,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
     const headers = tab.values[hi]!.map(clean);
     const iPlate = headers.indexOf('차량번호'), iStatus = headers.indexOf('판매상태');
     const iKind = headers.indexOf('차종'), iModel = headers.indexOf('모델명'), iColor = headers.indexOf('색상'), iFuel = headers.indexOf('연료');
+    const iDeposit = headers.findIndex(h => h.replace(/\s+/g, '') === '보증금');
     const iFirst = headers.indexOf('최초등록일'), iMileage = headers.findIndex(h => h.replace(/\s+/g, '') === '예상주행거리');
     // 요금 열: «<개월>개월 <1|2|3>만km» (줄바꿈·공백 차이는 무시)
     const rateColumns = headers.map((h, index) => {
@@ -64,9 +75,10 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       const sellable = SELLABLE.has(status) || contracted;
       if (!sellable && !NOT_SELLABLE.has(status)) { held.push({ tab: tab.title, row: i + 1, reason: 'STATUS_UNKNOWN' }); continue; }
       const terms: SourceTerm[] = [];
+      const deposit = iDeposit >= 0 ? depositOf(row[iDeposit]) : unknownAmount;   // 시트 보증금 열(있으면) — 전에는 읽지 않아 RP023 보증금이 전부 미상이었다
       for (const col of rateColumns) {
         const rent = rentOf(row[col.index]);
-        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit: unknownAmount, mileage: `${col.km}km/year`, raw: {} });
+        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit, mileage: `${col.km}km/year`, raw: {} });
       }
       const kind = iKind >= 0 ? clean(row[iKind]) : '', model = iModel >= 0 ? clean(row[iModel]) : '';
       const vehicleText = model && kind && !model.includes(kind) ? `${kind} ${model}` : (model || kind);
