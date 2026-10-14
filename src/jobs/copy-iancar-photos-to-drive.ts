@@ -57,6 +57,7 @@ export function photoCopyLimitsFromEnv(env: NodeJS.ProcessEnv = process.env): Ph
     timeBudgetMs: int(env.IANCAR_PHOTO_COPY_TIME_BUDGET_MIN, d.timeBudgetMs / 60_000, 1, 180) * 60_000,
     intervalMs: int(env.IANCAR_PHOTO_COPY_INTERVAL_MS, d.intervalMs, 1000, 60_000),
     maxConsecutiveFailures: d.maxConsecutiveFailures,
+    maxConsecutiveStale: int(env.IANCAR_PHOTO_COPY_MAX_CONSECUTIVE_STALE, d.maxConsecutiveStale, 1, 100),
     pilotOnly: int(env.IANCAR_PHOTO_PILOT_ONLY, d.pilotOnly, 1, 100),
   };
 }
@@ -140,7 +141,7 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   iancarPhotoCopyCli(process.argv.slice(2)).then(result => {
-    if (['RATE_LIMITED', 'CONSECUTIVE_FAILURES'].includes(result.stop) || result.counts.FAILED > 0) process.exitCode = 1;
+    if (['RATE_LIMITED', 'CONSECUTIVE_FAILURES', 'SOURCE_STALE'].includes(result.stop) || result.counts.FAILED > 0) process.exitCode = 1;
   }).catch(error => {
     const code = error instanceof IancarOneApiError ? error.code : error instanceof Error && /^[A-Z0-9_]{3,64}$/.test(error.message) ? error.message : 'PHOTO_COPY_ERROR';
     // 준비 판정 거부는 원인 코드(issues)만 함께 낸다: 값·번호·URL 없음.

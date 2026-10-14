@@ -13,19 +13,21 @@ export type PhotoCopyLimits = {
   timeBudgetMs: number;
   /** 공급사 호출(상세·사진) 사이의 최소 간격. */ intervalMs: number;
   maxConsecutiveFailures: number;
+  /** 상세 응답이 stale 로 표시된 차량은 «건너뛰고 계속»(실패로 세지 않음) — 단 연속 N대가 stale 이면 상류 정지로 보고 회차를 끝낸다(공급사 호출 낭비 방지). */
+  maxConsecutiveStale: number;
   /** PILOT: 사진이 있는 차량을 번호 순서로 N대까지만 다룬다(이미 복사된 차량도 N 에 포함 — 파일럿 집합 고정). */ pilotOnly: number;
 };
 export const DEFAULT_PHOTO_COPY_LIMITS: PhotoCopyLimits = {
-  maxVehicles: 40, maxPhotos: 400, maxPerVehicle: 10, timeBudgetMs: 40 * 60_000, intervalMs: 1500, maxConsecutiveFailures: 3, pilotOnly: 10,
+  maxVehicles: 40, maxPhotos: 400, maxPerVehicle: 10, timeBudgetMs: 40 * 60_000, intervalMs: 1500, maxConsecutiveFailures: 3, maxConsecutiveStale: 10, pilotOnly: 10,
 };
 
 export type PhotoCopyDeps = { source: PhotoCopySource; compress: PhotoCompressor; drive: PhotoCopyDrive;
   sleep(ms: number): Promise<void>; now(): number };
 
 /** SKIPPED_EXISTING = 기존 폴더에 이 잡이 올리지 않은 사진이 이미 있어 건너뜀(기존 사진 정본 보존). AMBIGUOUS_FOLDER = 사진이 든 같은 번호 폴더가 둘 이상(사람 정리 필요, 쓰기 0). */
-export type VehicleCopyStatus = 'COPIED' | 'PLANNED_COPY' | 'SKIPPED_SAME' | 'SKIPPED_EXISTING' | 'NO_TARGET' | 'NEEDS_REPLACEMENT' | 'AMBIGUOUS_FOLDER' | 'FAILED' | 'NOT_ATTEMPTED';
+export type VehicleCopyStatus = 'COPIED' | 'PLANNED_COPY' | 'SKIPPED_SAME' | 'SKIPPED_EXISTING' | 'SKIPPED_STALE' | 'NO_TARGET' | 'NEEDS_REPLACEMENT' | 'AMBIGUOUS_FOLDER' | 'FAILED' | 'NOT_ATTEMPTED';
 export type VehicleCopyRow = { plate4: string; status: VehicleCopyStatus; photos: number; written: number; code?: string };
-export type PhotoCopyStop = 'COMPLETED' | 'RATE_LIMITED' | 'CONSECUTIVE_FAILURES' | 'TIME_BUDGET' | 'MAX_VEHICLES' | 'MAX_PHOTOS' | 'PILOT_SET_DONE';
+export type PhotoCopyStop = 'COMPLETED' | 'RATE_LIMITED' | 'CONSECUTIVE_FAILURES' | 'SOURCE_STALE' | 'TIME_BUDGET' | 'MAX_VEHICLES' | 'MAX_PHOTOS' | 'PILOT_SET_DONE';
 export type PhotoCopyResult = {
   mode: PhotoCopyMode; stop: PhotoCopyStop; vehicles: number; rows: VehicleCopyRow[];
   counts: Record<VehicleCopyStatus, number>; photosWritten: number; bytesWritten: number;
@@ -36,8 +38,10 @@ export type PhotoCopyResult = {
 const tail4 = (plate: string) => plate.replace(/\D/g, '').slice(-4) || '----';
 const fileName = (index: number) => `${String(index + 1).padStart(2, '0')}.jpg`;
 const srcKeyOf = (photoId: string) => createHash('sha256').update(`iancar-one-photo/1\n${photoId}`).digest('hex').slice(0, 16);
+/** 앨범 지문(완료 표식): 공급사 사진 id 는 회차마다 회전(24시간 참조)하므로 id 목록으로 계산하지 않는다 — 사진 수만 담는다.
+ * «같은 폴더가 끝까지 복사됐고 파일 무결성(copySha256 = 드라이브 체크섬)이 맞고 장수가 같다» 가 SAME 판정이고, 지문은 완료 시각 표식으로 쓴다. */
 export const albumFingerprint = (ids: readonly string[]): string =>
-  createHash('sha256').update(JSON.stringify(['iancar-photo-set/1', ids])).digest('hex').slice(0, 16);
+  createHash('sha256').update(JSON.stringify(['iancar-photo-set/2', ids.length])).digest('hex').slice(0, 16);
 const safeCode = (e: unknown): string => {
   const raw = e && typeof e === 'object' ? ((e as { code?: unknown }).code ?? (e as { message?: unknown }).message) : '';
   return typeof raw === 'string' && /^[A-Z0-9_]{3,64}$/.test(raw) ? raw : 'UNKNOWN_ERROR';
@@ -46,8 +50,11 @@ const safeCode = (e: unknown): string => {
 const isRateLimited = (code: string) => code === 'IANCAR_ONE_API_HTTP_429' || code === 'DRIVE_RATE_LIMITED';
 /** 이 잡이 올린 파일이 «완료»인지: 원본 표식 + 올릴 때의 로컬 sha256 표식이 드라이브가 계산한 체크섬과 같아야 한다(이전 체크섬 불일치·부분 파일은 완료로 인정하지 않는다). */
 const isComplete = (f: DriveFileInfo, photoId: string) => f.srcKey === srcKeyOf(photoId) && !!f.sha256 && f.copySha256 === f.sha256;
+/** 파일 무결성: 올릴 때 남긴 로컬 sha256 표식이 드라이브 체크섬과 같다(id·원본 표식과 무관 — id 회전에 영향받지 않음). */
+const intact = (f: DriveFileInfo) => !!f.sha256 && f.copySha256 === f.sha256;
 const emptyCounts = (): Record<VehicleCopyStatus, number> =>
-  ({ COPIED: 0, PLANNED_COPY: 0, SKIPPED_SAME: 0, SKIPPED_EXISTING: 0, NO_TARGET: 0, NEEDS_REPLACEMENT: 0, AMBIGUOUS_FOLDER: 0, FAILED: 0, NOT_ATTEMPTED: 0 });
+  ({ COPIED: 0, PLANNED_COPY: 0, SKIPPED_SAME: 0, SKIPPED_EXISTING: 0, SKIPPED_STALE: 0, NO_TARGET: 0, NEEDS_REPLACEMENT: 0, AMBIGUOUS_FOLDER: 0, FAILED: 0, NOT_ATTEMPTED: 0 });
+const isStale = (code: string) => code === 'IANCAR_PHOTO_DETAIL_STALE';
 
 /** 한 회차 실행. DRY_RUN = 상세·드라이브 읽기만(다운로드·업로드·폴더 생성·지문 기록 0). */
 export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMode, limits: PhotoCopyLimits = DEFAULT_PHOTO_COPY_LIMITS): Promise<PhotoCopyResult> {
@@ -56,7 +63,7 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
   const write = mode !== 'DRY_RUN';
   const vehicles = (await deps.source.listVehicles()).slice().sort((a, b) => a.plate.localeCompare(b.plate, 'ko') || a.vehicleId.localeCompare(b.vehicleId));
   result.vehicles = vehicles.length;
-  let lastCall = 0, consecutiveFailures = 0, attempts = 0, withPhotos = 0;
+  let lastCall = 0, consecutiveFailures = 0, consecutiveStale = 0, attempts = 0, withPhotos = 0;
   const pace = async () => {   // 공급사 호출 사이 최소 간격(첫 호출 전에는 기다리지 않는다)
     if (lastCall) { const wait = lastCall + limits.intervalMs - deps.now(); if (wait > 0) await deps.sleep(wait); }
     lastCall = deps.now();
@@ -65,6 +72,9 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
   // 연속 실패 카운터는 «차량 한 대를 끝까지 처리했는가»로만 센다: 상세 조회가 성공해도 다운로드·드라이브 쓰기 실패는 누적된다(Codex 지적 ①).
   const record = (plate: string, status: VehicleCopyStatus, photos = 0, written = 0, code?: string) => {
     result.rows.push({ plate4: tail4(plate), status, photos, written, ...(code ? { code } : {}) }); result.counts[status]++;
+    // stale 건너뜀은 실패도 성공도 아니다: 실패 카운터는 그대로 두고 stale 연속만 센다(정상 차량이 나오면 둘 다 0).
+    if (status === 'SKIPPED_STALE') { consecutiveStale++; return; }
+    consecutiveStale = 0;
     consecutiveFailures = status === 'FAILED' ? consecutiveFailures + 1 : 0;
   };
 
@@ -77,6 +87,12 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
     try { await pace(); ids = await deps.source.photoIds(vehicle); }
     catch (error) {
       const code = safeCode(error);
+      if (isStale(code)) {
+        // 상세가 stale 로 표시된 차량: 창이 지나면 자연 해소되므로 이 차량만 건너뛰고 계속한다(실패로 세지 않음). 연속 stale 이 많으면 상류 정지.
+        record(vehicle.plate, 'SKIPPED_STALE', 0, 0, code);
+        if (consecutiveStale >= limits.maxConsecutiveStale) return finish('SOURCE_STALE');
+        continue;
+      }
       record(vehicle.plate, 'FAILED', 0, 0, code);
       if (isRateLimited(code)) return finish('RATE_LIMITED');
       if (consecutiveFailures >= limits.maxConsecutiveFailures) return finish('CONSECUTIVE_FAILURES');
@@ -98,21 +114,26 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       if (folder && folder.files.some(f => f.image && f.srcKey === null)) { record(vehicle.plate, 'SKIPPED_EXISTING', selected.length); continue; }
       if (!folder && write) folder = await deps.drive.createVehicleFolder(vehicle.plate, vehicle.label);
       const byName = new Map((folder?.files ?? []).map(f => [f.name, f]));
+      const folderFiles = folder?.files ?? [];
       const missing: number[] = [];
       let conflict = false;
+      if (folder?.fingerprint) {
+        // 끝까지 복사가 끝난 폴더(완료 표식 있음): 공급사 사진 id 는 회차마다 회전하므로 id·원본 표식은 비교하지 않는다.
+        // 같음 = 01..N 이름이 모두 있고(장수 = 이번 원천 장수) 모든 파일의 무결성(copySha256 = 드라이브 체크섬)이 맞는 것. 장수가 다르거나 무결성이 깨졌으면 교체 보류.
+        const sameShape = folderFiles.length === selected.length && selected.every((_, index) => { const f = byName.get(fileName(index)); return !!f && intact(f); });
+        if (!sameShape) { record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue; }
+        // 이미 복사된 차량도 등록 대상 목록에 넣는다(앞 회차의 등록이 실패·미실행이었을 수 있다 — 등록 도구는 refs 가 있으면 건너뛴다).
+        result.completed.push({ plate: vehicle.plate, folderId: folder.folderId, files: selected.length });
+        record(vehicle.plate, 'SKIPPED_SAME', selected.length); continue;
+      }
+      // 아직 끝나지 않은 폴더(비어 있음·부분 복사): 이어서 채운다. 이미 있는 파일은 «같은 원본 표식 + 무결성»일 때만 인정하고 아니면 교체 보류.
       selected.forEach((id, index) => {
         const existing = byName.get(fileName(index));
         if (!existing) missing.push(index);
         else if (!isComplete(existing, id)) conflict = true;   // 같은 이름인데 원본이 다르거나 완료 표식이 없는 파일 → 교체 보류(삭제·덮어쓰기 없음)
       });
-      const hasFolderFiles = (folder?.files.length ?? 0) > 0;
-      if (conflict || (folder?.fingerprint && folder.fingerprint !== fingerprint) || (hasFolderFiles && (folder?.files.length ?? 0) > selected.length)) {
+      if (conflict || folderFiles.length > selected.length) {
         record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue;   // 교체는 별도 승인 경로: 쓰기·삭제 없음
-      }
-      if (!missing.length && folder?.fingerprint === fingerprint) {
-        // 이미 복사된 차량도 등록 대상 목록에 넣는다(앞 회차의 등록이 실패·미실행이었을 수 있다 — 등록 도구는 refs 가 있으면 건너뛴다).
-        if (folder) result.completed.push({ plate: vehicle.plate, folderId: folder.folderId, files: selected.length });
-        record(vehicle.plate, 'SKIPPED_SAME', selected.length); continue;
       }
       if (!write) { record(vehicle.plate, 'PLANNED_COPY', selected.length, 0); continue; }
 
