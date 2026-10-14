@@ -109,9 +109,18 @@ describe('source cycle planning/application', () => {
     const stored = first.entries[0]!.after;
     const later = planSourceCycle(config, evidence([record('n1')]), { products: [stored], complete: true }, now).plan;
     expect(later.entries.map(e => e.kind)).toEqual(['REEXPOSE']);
-    // 판매 불가이거나 상태를 모르면 편입하지 않는다
+    // «1차 무조건 갖고 온다»(대표 10-14): 판매 불가·상태 불명 새 차도 식별자만 있으면 편입하되 노출하지 않는다(사유로 구분)
     const stopped = record('n2'); stopped.status.saleAvailable = false; stopped.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
-    expect(planSourceCycle(config, evidence([stopped]), { products: [], complete: true }, now).plan.entries).toHaveLength(0);
+    const stoppedPlan = planSourceCycle(config, evidence([stopped]), { products: [], complete: true }, now).plan;
+    expect(stoppedPlan.entries.map(e => [e.kind, e.after.listable, e.after.publication_withdrawal?.reason])).toEqual([['ENROLL', false, 'SOURCE_NOT_SELLABLE']]);
+    expect(stoppedPlan.warnings).toContain('ENROLLED_NOT_SELLABLE:1');
+    expect(stoppedPlan.sourceCount).toBe(0);                       // 판매 가능 대수에는 세지 않는다
+    const unknownStatus = record('n3', ''); unknownStatus.status.saleAvailable = null;
+    const unknownPlan = planSourceCycle(config, evidence([unknownStatus]), { products: [], complete: true }, now).plan;
+    expect(unknownPlan.entries.map(e => [e.kind, e.after.listable, e.after.publication_withdrawal?.reason])).toEqual([['ENROLL', false, 'INFO_INCOMPLETE']]);
+    // 이미 문서가 있는 차의 상태 불명은 기존 노출을 바꾸지 않고 보류한다
+    const existing = planSourceCycle(config, evidence([unknownStatus]), { products: [product('n3')], complete: true }, now).plan;
+    expect(existing.entries).toHaveLength(0);
   });
   it('caps new enrollments per cycle at max(100, 50% of existing exposed documents) and carries the rest over', () => {
     const rows = Array.from({ length: 5 }, (_, i) => record(`c${i}`));
