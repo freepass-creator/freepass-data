@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { identityMastersFromSnapshot, identityProductsFromCapture } from '../src/adapters/identity-snapshot.js';
+import { identityMastersFromSnapshot, identityProductsFromCapture, identityProductsFromPlainDocs } from '../src/adapters/identity-snapshot.js';
 import { buildIdentityPromotionPlan, type IdentityMaster, type IdentityProduct } from '../src/application/identity-promotion-plan.js';
 import type { Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
 
@@ -28,6 +28,35 @@ describe('정체성 계획서 입력 내보내기(읽기 전용)', () => {
     const masters = identityMastersFromSnapshot(master as never);
     expect(masters).toEqual([{ id: 'm1', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE', model_aliases: ['아이오닉5'], sub_model_aliases: ['아이오닉5'],
       yearFrom: 2021, yearTo: null, trims: [{ name: '프레스티지', aliases: [] }] }]);
+  });
+  it('plain docs input gives the same products as the sealed capture, masked to the last 4 digits', () => {
+    const docs = [
+      { id: 'RP012_A', data: { car_number: '12가3456', maker: '', model: '', sub_model: '아이오닉5 프레스티지', vehicle_review_required: true,
+        원문: { 차명: '아이오닉5 프레스티지' }, first_registration_date: '2022-03', listable: true } },
+      { id: 'RP001_B', data: { car_number: '34나5678', maker: '현대', model: '아반떼', sub_model: '더 뉴 아반떼 CN7', car_name: '아반떼' } },
+    ];
+    expect(identityProductsFromPlainDocs(docs)).toEqual(identityProductsFromCapture(cap));
+    expect(identityProductsFromPlainDocs(docs, { includeAll: true }).map(p => p.id)).toEqual(['RP001_B', 'RP012_A']);
+    expect(JSON.stringify(identityProductsFromPlainDocs(docs, { includeAll: true }))).not.toMatch(/\d{2,3}[가-힣]\d{4}/);
+    expect(identityProductsFromPlainDocs([{ id: '', data: {} }, { id: 'x', data: null as never }] as never)).toEqual([]);
+  });
+  it('master year range: master year_start/year_end first, then trim model_year_* or production_*; trims string list only without trim docs', () => {
+    const masters = identityMastersFromSnapshot({
+      masters: [
+        { id: 'a', data: { maker: '기아', model: '카니발', sub_model: '카니발 KA4', year_start: '2020', year_end: '2023' } },
+        { id: 'b', data: { maker: '기아', model: '쏘렌토', sub_model: '쏘렌토 MQ4', year_end: '현재' } },
+        { id: 'c', data: { maker: '현대', model: '투싼', sub_model: '투싼 NX4', trims: ['프리미엄', '인스퍼레이션'] } },
+      ],
+      trims: [
+        { id: 'tb', data: { master_id: 'b', trim: '노블레스', production_start: '2020-07', production_end: '현재', trim_aliases: ['노블'] } },
+      ],
+    } as never);
+    const by = Object.fromEntries(masters.map(m => [m.id, m]));
+    expect([by.a!.yearFrom, by.a!.yearTo]).toEqual([2020, 2023]);
+    expect([by.b!.yearFrom, by.b!.yearTo]).toEqual([2020, null]);                       // 마스터 year_end «현재» → 끝 제한 없음, 시작은 트림 production_start
+    expect(by.b!.trims).toEqual([{ name: '노블레스', aliases: ['노블'] }]);
+    expect([by.c!.yearFrom, by.c!.yearTo]).toEqual([null, null]);                      // 연식 근거 없음 → 제한 없음
+    expect(by.c!.trims).toEqual([{ name: '프리미엄', aliases: [] }, { name: '인스퍼레이션', aliases: [] }]);
   });
   it('its output feeds the plan generator directly (structural compatibility + end-to-end plan)', () => {
     const products: IdentityProduct[] = identityProductsFromCapture(cap);
