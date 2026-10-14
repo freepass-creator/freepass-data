@@ -28,6 +28,8 @@ export interface CycleCommands {
   precheck?(afters: readonly CycleProduct[]): Promise<void>;
 }
 export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
+  /** 회차당 신규 편입 상한(기본 100)과 하한 보장(기본 30, 원천 판매가능의 25% 가 이보다 작을 때). 초과분은 다음 회차로 이월한다. */
+  maxEnrollPerCycle?: number; minEnrollPerCycle?: number;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
   unassignedPlateCount?: number };

@@ -176,6 +176,15 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  // 신규 편입 회차 상한(독립 검토 BLOCK, 대표 2026-10-14): 한 회차에 min(100, max(30, 원천 판매가능의 25%))대까지만 넣고 나머지는 다음 회차로 이월한다.
+  // 키 순서가 고정이라 같은 입력이면 같은 대수가 들어가고, 적용 재계획(replay)도 같은 결과다. 이월분은 보류가 아니라 대기라 held 에 세지 않는다.
+  const enrollCap = Math.min(config.maxEnrollPerCycle ?? 100, Math.max(config.minEnrollPerCycle ?? 30, Math.floor(plan.sourceCount * 0.25)));
+  const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');
+  if (enrolls.length > enrollCap) {
+    const deferred = new Set(enrolls.slice(enrollCap).map(e => sourceProductKey(e.after.record)));
+    plan.entries = plan.entries.filter(e => e.kind !== 'ENROLL' || !deferred.has(sourceProductKey(e.after.record)));
+    plan.warnings.push(`ENROLL_CAP_DEFERRED:${deferred.size}:cap${enrollCap}`);
+  }
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
   return { plan, digest: stableDigest(plan), writes: 0 as const, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }

@@ -955,6 +955,7 @@ describe('status_kind 는 표시 상태가 정한다 (발행 단계 status_kind 
     expect(statusKindOf('상품화중', true)).toBe('준비');
     expect(statusKindOf('출고협의', true)).toBe('협의');
     expect(statusKindOf('출고가능', false)).toBe('불가');
-    expect(statusKindOf('알 수 없음', true)).toBe('가용');
+    expect(statusKindOf('배차중', true)).toBe('가용');
+    expect(statusKindOf('알 수 없음', true)).toBe('불가');
   });
 });

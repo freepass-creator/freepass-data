@@ -1,5 +1,7 @@
 import { classifyReadError, type SourceEngine, type SourceFamily, type SourceProductRecord, type SourceRead } from '../domain/source-engine.js';
 import { sharedSheetEngine } from './shared-sheet-engine.js';
+import { ERP5_INVENTORY_STATUS_KINDS, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
+const KNOWN_SALE_STATUS: ReadonlySet<string> = new Set([...Object.keys(ERP5_INVENTORY_STATUS_KINDS), ...PROVIDER_AVAILABLE_STATUS_LABELS, '배차문의', '수리중']);
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
 
@@ -71,11 +73,12 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
         switch (def.kind) {
           case 'F05':
-            r.status.saleAvailable = read.raw.visibilityComplete !== true ? null : !row.hiddenTab && !row.hiddenByUser &&
-              !row.hiddenByFilter && status !== '출고불가';
+            // 모르는 상태값은 판매 가능으로 추정하지 않는다(null → STATUS_UNKNOWN 보류). 알려진 값 = 검토된 어휘 + 공급사 표기(배차문의·수리중).
+            r.status.saleAvailable = read.raw.visibilityComplete !== true ? null :
+              row.hiddenTab || row.hiddenByUser || row.hiddenByFilter || status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             break;
           case 'AICA':
-            r.status.saleAvailable = status !== '출고불가';
+            r.status.saleAvailable = status === '출고불가' ? false : KNOWN_SALE_STATUS.has(status) ? true : null;
             // Preserve the provider spelling in status.raw; expose its common label as evidence.
             r.raw = { ...r.raw, sourceCycleDisplayStatus: status === '배차문의' ? '출고협의' : status === '수리중' ? '상품화중' : status };
             break;
