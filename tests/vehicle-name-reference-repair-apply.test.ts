@@ -646,6 +646,20 @@ describe('product identity applier guards (Codex 적용기 검토 5건)', () => 
     expect(store.get('products/p-guard')).toMatchObject({ sub_model: 'Model A New' });
   });
 
+  it('Codex #664 확인: false·빈 문자열·null·undefined 는 «잠금/철회 아님»이고, 빈 객체·문자열·true 는 표식 있음(보수)', async () => {
+    for (const value of [null, undefined, false, '']) {
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: value, publication_withdrawal: value });
+      await expect(applyApproved(plan())).resolves.toMatchObject({ productIdentityCount: 1 });
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '' });
+    }
+    for (const marker of [{}, 'x', true, 0]) {
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', publication_withdrawal: marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/PUBLICATION_WITHDRAWN/);
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+    }
+  });
+
   it('(a)(b) also protect productTrim name repairs', async () => {
     store.set('products/p-trim', { trim_name: 'Old', locked_by_contract: 'LEDGER' });
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
