@@ -31,7 +31,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
     maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
-    ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}) }, plannedAt: now,
+    ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
+    ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -220,7 +221,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 대표 2026-10-14: 상한은 원천 판매 가능 대수의 100%(오매핑 폭주 방지용), 초과분은 다음 회차로 이월한다. 승인 단계는 두지 않는다.
   // 커맨드 센터 확정 2026-10-14: 회차당 max(100, 기존 노출 문서 수의 50%) — «원천 100% = 사실상 무제한» 안은 반려(오매핑 폭주 방어가 안 된다). 초과분은 이월.
   // 설정은 상한을 «줄이기만» 할 수 있다(독립 검토 2026-10-14): 확정 상한과 설정값 중 작은 쪽. minEnrollPerCycle 은 더 이상 상한을 올리지 못한다.
-  const enrollCap = Math.min(Math.max(100, Math.ceil(plan.exposedBefore * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
+  // 한 번만 상향(대표 2026-10-14 손오공 최초 편입 201대+): enrollCapOnce 는 운영 변수(SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE)가 «이번 한 회차에 한해» 켠다 —
+  // 회차 직후 러너가 표식 파일을 남겨 다음 회차부터 자동 원복한다. 절대 상한 1000, plan.config 에 기록되어 적용 재계획(replay)과 같은 결과가 된다.
+  const confirmedCap = Math.min(Math.max(100, Math.ceil(plan.exposedBefore * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
+  const enrollCap = config.enrollCapOnce && Number.isSafeInteger(config.enrollCapOnce) && config.enrollCapOnce > confirmedCap
+    ? Math.min(config.enrollCapOnce, 1000) : confirmedCap;
   const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');
   if (enrolls.length > enrollCap) {
     const deferred = new Set(enrolls.slice(enrollCap).map(e => sourceProductKey(e.after.record)));

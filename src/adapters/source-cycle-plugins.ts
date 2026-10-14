@@ -33,6 +33,8 @@ export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
   /** 원천에 없는 노출 문서를 내릴 때 남기는 사유. 기본은 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN. */
   absenceReason?: string;
+  /** 이번 한 회차 한정 신규 편입 상한 상향(최초 대량 편입). 러너가 회차 성공(APPLIED) 직후 enrollCapOnceMarker 파일을 남겨 다음 회차부터 자동 원복한다. */
+  enrollCapOnce?: number; enrollCapOnceMarker?: string;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
 }

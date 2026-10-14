@@ -58,13 +58,36 @@ describe('손오공 공식 API 어댑터', () => {
     expect(w.sleeps.length).toBe(w.calls.length);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r]));
     expect(by['1111']!.status).toEqual({ raw: '출고가능', saleAvailable: true });
-    expect(by['2222']!.status).toEqual({ raw: '계약중', saleAvailable: false });
+    // 계약중은 모든 원천에서 같게: 판매 가능(문서 유지·«계약중» 선점 표시 노출), 출고가능 비교에서는 raw 로 제외
+    expect(by['2222']!.status).toEqual({ raw: '계약중', saleAvailable: true });
+    expect(by['1111']!.raw.images).toEqual(['https://example.invalid/a.jpg']);   // 사진: images[].url 중 https 만
     expect(by['1111']!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value])).toEqual([
       [12, 900000, 'KNOWN', 1000000], [24, 800000, 'ZERO', 0], [36, 700000, 'KNOWN', 2000000], [48, 650000, 'UNKNOWN', null], [60, 600000, 'KNOWN', 3000000]]);
     expect((by['1111']!.raw.prices as Record<string, unknown>).SUBSCRIBE_BUYOUT).toBeDefined();
     expect(by['1111']!.raw.detail).toBeDefined();
     expect(by['1111']!.raw.spec).toMatchObject({ year: '2023', first_registration_date: '2023-05', mileage: '12345' });
     expect(JSON.stringify(read)).not.toContain(KEY);
+  });
+  it('같은 번호가 다른 탭에도 있으면 rent > sub > pick 우선순위로 하나만 채택하고 경고만 남긴다(불완전 아님), 같은 탭 안 중복은 불완전', async () => {
+    const w = world(u => {
+      if (u.pathname.endsWith('/vehicles')) {
+        const tab = u.searchParams.get('tab');
+        if (tab === 'rent') return json([row(1, '100하1111', { tab: 'rent', manufactureYearMonth: '2023-05', prices: { RENT_RETURN: { monthly: { 36: 500000 } } } })], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 1 });
+        if (tab === 'sub') return json([row(1, '100하1111', { manufactureYearMonth: '2024-02' }), row(2, '100하2222')], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 2 });
+        return json([], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 0 });
+      }
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, id === 1 ? '100하1111' : '100하2222'));
+    });
+    const read = await readSonogongApi(w.client);
+    expect(read.complete).toBe(true);
+    expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['1111', 'rent'], ['2222', 'sub']]);
+    expect(read.notes).toEqual(['CROSS_TAB_DUPLICATE:1', 'CROSS_TAB_GENERATION_DIFFERENCE:1']);
+    const within = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111'), row(3, '100하1111')] : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 2 : 0 })
+      : json(detail(1, '100하1111'))).client);
+    expect(within.complete).toBe(false);
+    expect(within.incompleteReason).toBe('DUPLICATE_PLATES');
   });
   it('429·401 은 첫 응답에서 정지하고 재시도하지 않으며 오류에 키·본문이 없다', async () => {
     for (const status of [429, 401]) {
