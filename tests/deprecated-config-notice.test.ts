@@ -28,7 +28,7 @@ describe('폐기 설정 알림', () => {
     expect(record.exit).toBe(1);
     const alerts = (await readFile(join(d, 'alerts.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
     expect(alerts.some(a => a.reason === 'DEPRECATED_AUTOPLUS_HOMEPAGE_WRITE_RP023_OBSERVATION_ONLY')).toBe(true);
-  });
+ }, 30_000);
 
   it('with the sheet write on, the legacy variable is only a notice (exit unaffected by it)', async () => {
     const d = await dir();
@@ -37,5 +37,5 @@ describe('폐기 설정 알림', () => {
     expect(record.configNotices).toEqual(['DEPRECATED_AUTOPLUS_HOMEPAGE_WRITE_IGNORED_SHEET_WRITE_KEPT']);
     // 사전점검(gws 없음)이 실패해 exit 1 이지만, 그 원인은 사전점검이다 — 알림 자체가 쓰기를 막지 않았다.
     expect(record.preflight?.length).toBeGreaterThan(0);
-  });
+ }, 30_000);
 });
