@@ -6,7 +6,7 @@ import { decodeErp5Value, type Erp5SourceCapture } from './erp5-source-capture.j
 import type { VehicleMasterSnapshot } from './vehicle-identity-inputs.js';
 
 /** build-identity-promotion-plan 입력 모양(application 의 IdentityProduct·IdentityMaster 와 같은 구조 — 어댑터는 application 에 의존하지 않는다, 호환은 시험의 대입이 지킨다). */
-export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean };
+export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean; supplier?: string };
 export type SnapshotMaster = { id: string; maker: string; model: string; sub_model: string; model_aliases: string[]; sub_model_aliases: string[];
   yearFrom: number | null; yearTo: number | null; trims: Array<{ name: string; aliases: string[] }> };
 type Rec = Record<string, unknown>;
@@ -35,7 +35,8 @@ function snapshotProductOf(id: string, f: Rec, includeAll: boolean): SnapshotPro
   const original = object(f.원문) ? f.원문 : {};
   return { id, plate4: str(f.car_number).replace(/\D/g, '').slice(-4),
     maker: str(f.maker), model: str(f.model), sub_model: str(f.sub_model), trim_name: str(f.trim_name),
-    rawName: str(original.차명) || str(f.car_name), year: yearOf(f), listable: f.listable === true };
+    rawName: str(original.차명) || str(f.car_name), year: yearOf(f), listable: f.listable === true,
+    ...(str(f.provider_company_code) ? { supplier: str(f.provider_company_code) } : {}) };
 }
 
 export function identityProductsFromCapture(capture: Erp5SourceCapture, options: { includeAll?: boolean } = {}): SnapshotProduct[] {
