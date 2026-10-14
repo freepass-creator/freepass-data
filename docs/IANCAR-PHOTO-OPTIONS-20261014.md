@@ -1,5 +1,7 @@
 # 이안카 사진 — 어떻게 할지 (읽기 전용 조사 한 장, 2026-10-14, DATA)
 
+> **후속(대표 결정 10-14)**: 드라이브 저장(b안)으로 결정됨 → 설계는 `IANCAR-PHOTO-DRIVE-DESIGN-20261014.md`.
+
 > 질문: 대표 «이안카 사진을 어떻게 할지». 코드 변경 없음. 근거는 저장소 코드·문서(`docs/IANCAR-ONE-API.md`, `src/adapters/iancar-one-api.ts`, `docs/IANCAR-PHOTO-GATE-ROLLOUT.md`)이며, **이 세션은 ONE API 키가 없어 실호출·상태코드 측정은 하지 않았다** — 실측 칸은 «문서 기록»으로 표시했다.
 
 ## ① ONE API 사진 필드
