@@ -96,6 +96,9 @@ export type IancarOneListCapture = {
     vehicleId: string;
     payload: JsonObject;
     fingerprint: string;
+    /** 차 한 대만 보류(전량 읽기 FULL_FACTS 전용). identity=true 는 번호로 문서를 특정할 수 없는 보류(번호 없음·형식 불일치·중복 번호),
+     * false 는 번호는 확인됐지만 요금 사실이 검토 기준에 못 미친 보류(요금 없음·기준 밖 값·중복 요금 행). 나머지 차의 회차는 계속된다. */
+    hold?: { code: string; identity: boolean };
   }>;
   sourceDigest: string;
   issues: string[];
@@ -522,9 +525,13 @@ export async function collectIancarOneFullFacts(
   const observationNow = () => Date.parse(now) + Date.now() - wallStartedAt;
   const capture = await collectIancarOneVehicleList(config, fetcher, now);
   if (!capture.readyForRawIngest) return { ...capture, factScope: 'FULL_FACTS' };
+  // 번호 문제는 그 차만 보류한다(대표 2026-10-14 «데이터만큼은 정확하게»: 한 대의 번호 문제로 나머지 전부를 멈추지 않는다).
+  // 번호가 없거나 형식이 다르거나 두 차가 같은 번호면 어느 문서인지 특정할 수 없으므로 상세를 읽지 않고 «식별 보류»로 넘긴다.
   const plates = capture.records.map(record => clean(record.payload.plate_number).replace(/\s/g, ''));
-  if (plates.some(plate => !/^\d{2,3}[가-힣]\d{4}$/.test(plate)) || new Set(plates).size !== plates.length)
-    throw new IancarOneApiError('IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW');
+  const plateCounts = new Map<string, number>();
+  for (const plate of plates) plateCounts.set(plate, (plateCounts.get(plate) ?? 0) + 1);
+  const identityHold = (index: number): string | null => !IANCAR_PLATE.test(plates[index]!)
+    ? 'IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW' : plateCounts.get(plates[index]!)! > 1 ? 'IANCAR_ONE_DUPLICATE_PLATE' : null;
   for (const record of capture.records) {
     if (!['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'].includes(clean(record.payload.inventory_status))
       || typeof record.payload.available !== 'boolean'
@@ -542,6 +549,12 @@ export async function collectIancarOneFullFacts(
     const index = next++;
     const record = capture.records[index];
     if (!record) return;
+    const identityCode = identityHold(index);
+    if (identityCode) {
+      records[index] = { ...structuredClone(record), hold: { code: identityCode, identity: true } };
+      onProgress?.(++completed, capture.total);
+      continue;
+    }
     const responses = await Promise.allSettled([
       client.getVehicle(record.vehicleId),
       client.getAvailability(record.vehicleId),
@@ -574,23 +587,26 @@ export async function collectIancarOneFullFacts(
     }
     if (((detail as JsonObject).data as JsonObject).plate_number !== record.payload.plate_number)
       throw new IancarOneApiError('IANCAR_ONE_PLATE_MISMATCH');
+    // 응답 봉투(성공·배열·갱신 시각·차량 ID)가 깨진 것은 전송 문제라 회차 전체 실패로 남긴다. 봉투가 정상이고 «이 차의 요금 사실»만 기준에
+    // 못 미치면(요금 없음·기준 밖 값·중복 행) 그 차만 보류한다 — 틀린 요금은 어디에도 쓰지 않고, 나머지 차는 계속 진행한다.
     if (!isObject(rates) || rates.success !== true || !Array.isArray(rates.data)
-      || !rates.data.length || !rates.data.every(isObject) || !instant(rates.updated_at)
+      || !rates.data.every(isObject) || !instant(rates.updated_at)
       || Date.parse(rates.updated_at) > observationNow() + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
       throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    let rateHold: string | null = rates.data.length ? null : 'IANCAR_ONE_RATES_EMPTY';
     const keys = new Set<string>();
     for (const rate of rates.data as JsonObject[]) {
+      if (rateHold) break;
       if (!integer(rate.rental_period) || rate.rental_period < 1 || rate.rental_period > 60
         || !integer(rate.monthly_rate) || rate.monthly_rate < 100_000 || rate.monthly_rate > 20_000_000
         || !integer(rate.deposit) || rate.deposit < 0
         || !integer(rate.contracted_mileage) || rate.contracted_mileage < 1
         || !['month', 'year'].includes(String(rate.mileage_period))
         || rate.currency !== 'KRW' || rate.vat_included !== true
-        || !isObject(rate.contract_conditions) || !clean(rate.contract_conditions.version))
-        throw new IancarOneApiError('IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW');
+        || !isObject(rate.contract_conditions) || !clean(rate.contract_conditions.version)) { rateHold = 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW'; break; }
       const key = `${rate.rental_period}:${rate.contracted_mileage}:${rate.mileage_period}`;
-      if (keys.has(key)) throw new IancarOneApiError('IANCAR_ONE_DUPLICATE_RATE');
+      if (keys.has(key)) { rateHold = 'IANCAR_ONE_DUPLICATE_RATE'; break; }
       keys.add(key);
     }
     const payload: JsonObject = { ...structuredClone(record.payload),
@@ -603,7 +619,8 @@ export async function collectIancarOneFullFacts(
       } };
     const providerFacts = { ...payload, rateRequestEvidence: {
       ...(payload.rateRequestEvidence as JsonObject), captured_at: null } };
-    records[index] = { vehicleId: record.vehicleId, payload, fingerprint: digest(providerFacts) };
+    records[index] = { vehicleId: record.vehicleId, payload, fingerprint: digest(providerFacts),
+      ...(rateHold ? { hold: { code: rateHold, identity: false } } : {}) };
     onProgress?.(++completed, capture.total);
   }
   };
