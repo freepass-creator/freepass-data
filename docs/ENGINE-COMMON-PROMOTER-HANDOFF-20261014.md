@@ -15,7 +15,7 @@
 | 2-4 | 사진 연결 승격(photo_original_refs 등록) | 대기 | — |
 | 3 | 엔진 온라인 실행 설계(Actions) + DRY_RUN 워크플로 | DESIGNED · CODED · TESTED(설계 `docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md`(#605) §5) — 실행은 읽기 SA·변수 등록 후 | #608 |
 | 3-1 | 시트 읽기 ADC 전송(SHEETS_TRANSPORT=adc, gws 없이 F05·아이카·오토플러스 시트) | CODED · TESTED | #618 |
-| 4 | 5칸 지표·dispatchGap heartbeat + gap 사유 코드 | 대기 | — |
+| 4 | 5칸 지표·dispatchGap heartbeat(이미 main) + gap 사유 코드 `dispatchGapReasons` | CODED · TESTED | #619 |
 
 ## 2. 정체성 승격 계획서 생성기 (2-1)
 
