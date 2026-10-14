@@ -2,7 +2,7 @@
  * 판매 가능 정의: 원천 = 읽은 레코드 중 status.saleAvailable === true(원천별 상태 해석은 어댑터가 이미 끝냄),
  * ERP5 = 노출(listable) 문서. 키 = 차량번호, 번호 없는 월렌트는 UID(sourceProductKey).
  * 번호는 끝 4자리만 내보낸다. 읽기 전용 — 쓰기 0. */
-import { sourceProductKey, compactRecord, type SourceProductRecord } from '../domain/source-engine.js';
+import { sourceProductKey, compactRecord, termIdentity, type SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { CycleProduct } from '../ports/source-cycle.js';
@@ -28,6 +28,18 @@ export type SourceReconciliation = {
   matched: boolean; countEqual: boolean;
 };
 
+/** 계획 단계와 같은 규칙: 원천 보증금이 UNKNOWN 이면 문서의 KNOWN/ZERO 보증금을 보존한다 — 이 경우는 값 불일치가 아니다
+ * (B3Q 실측 2026-10-14: RP018 9·RP013 2 가 DEPOSIT_PRESERVED 건수와 같았다). */
+const withPreservedDeposit = (source: SourceProductRecord, doc: SourceProductRecord): SourceProductRecord => {
+  const terms = source.terms.map(term => {
+    if (term.deposit.state !== 'UNKNOWN') return term;
+    const same = doc.terms.filter(p => termIdentity(p) === termIdentity(term));
+    const prior = same[0] ?? (doc.terms.filter(p => p.months === term.months).length === 1 ? doc.terms.find(p => p.months === term.months) : undefined);
+    return prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO') ? { ...term, deposit: structuredClone(prior.deposit) } : term;
+  });
+  return { ...source, terms };
+};
+
 /** 차량 키: 번호가 있으면 번호(같은 차가 다른 UID 로 읽혀도 한 대), 없으면(번호 없는 월렌트) UID. 독립 검토: UID 키만 쓰면 UID 연결 대상이 NEW+MISSING 으로 나온다. */
 const keyOf = (r: SourceProductRecord) => r.plate && isAssignedPlate(r.plate) ? `P:${plateIdentityKey(r.plate)}` : `U:${sourceProductKey(r)}`;
 
@@ -39,7 +51,7 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
   const sameKeys = [...source.keys()].filter(k => erp.has(k));
   const newKeys = [...source.keys()].filter(k => !erp.has(k)).sort();
   const missingKeys = [...erp.keys()].filter(k => !source.has(k)).sort();
-  const mismatchKeys = sameKeys.filter(k => facts(source.get(k)!) !== facts(erp.get(k)!.record)).sort();
+  const mismatchKeys = sameKeys.filter(k => facts(withPreservedDeposit(source.get(k)!, erp.get(k)!.record)) !== facts(erp.get(k)!.record)).sort();
   const cut = (keys: string[], pick: (k: string) => SourceProductRecord) => keys.slice(0, LIST_LIMIT).map(k => last4(pick(k)));
   return {
     definition: { source: 'saleAvailable===true', erp: 'listable', key: 'plate|uid' },

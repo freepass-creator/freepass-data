@@ -30,6 +30,14 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     const r = reconcileSource([fresh], [doc(old, true)]);
     expect(r).toMatchObject({ same: 1, newCount: 0, missingCount: 0 });
   });
+  it('does not count a preserved deposit (source UNKNOWN, document KNOWN) as a value mismatch', () => {
+    const source = rec('12가1001', true), stored = rec('12가1001', true);
+    source.terms[0]!.deposit = { state: 'UNKNOWN', value: null } as never;
+    stored.terms[0]!.deposit = { state: 'KNOWN', value: 1000000 } as never;
+    expect(reconcileSource([source], [doc(stored, true)])).toMatchObject({ mismatchCount: 0, matched: true });
+    const changedRent = rec('12가1001', true, 700000); changedRent.terms[0]!.deposit = { state: 'UNKNOWN', value: null } as never;
+    expect(reconcileSource([changedRent], [doc(stored, true)]).mismatchCount).toBe(1);   // 대여료가 다르면 여전히 불일치
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);
