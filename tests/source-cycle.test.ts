@@ -316,9 +316,30 @@ describe('runner safety and heartbeat', () => {
   it('persists three failures, alerts and stops before a fourth source read', async () => {
     const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
     for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
-    expect((await runSourceCycle(p, m.commands, ctrl)).status).toBe('STOPPED');
+    expect((await runSourceCycle(p, m.commands, ctrl, { now: () => now })).status).toBe('STOPPED');
     expect(read).toHaveBeenCalledTimes(3); expect(alerts).toHaveLength(3); expect(alerts[2]).toContain('STOPPED');
     expect((await ctrl.load(config.sourceId)).lastCompleteAt).toBeNull(); expect(m.order).toEqual([]);
+  });
+  it('a stopped source retries once after the cooldown and stops again if it still fails (auto-recovery, not a manual-only stop)', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
+    for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    // 냉각 전: 읽지 않는다
+    expect((await runSourceCycle(p, m.commands, ctrl, { now: () => now + 10 * 60_000 })).status).toBe('STOPPED');
+    expect(read).toHaveBeenCalledTimes(3);
+    // 냉각 후: 한 번 더 시도하고, 계속 실패하면 다시 정지
+    const after = await runSourceCycle(p, m.commands, ctrl, { now: () => now + 61 * 60_000 });
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(after.status).toBe('STOPPED');
+    expect(alerts).toContain('AUTO_RECOVER_AFTER_COOLDOWN');
+  });
+  it('a stopped state with a missing, broken or future attempt time cannot stay stopped forever', async () => {
+    for (const bad of [null, 'not-a-date', new Date(now + 3 * 3600_000).toISOString()]) {
+      const { ctrl } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
+      for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+      const st = await ctrl.load(config.sourceId); st.lastAttemptAt = bad as never; await ctrl.save(config.sourceId, st);
+      await runSourceCycle(p, m.commands, ctrl, { now: () => now + 61 * 60_000 });
+      expect(read).toHaveBeenCalledTimes(4);
+    }
   });
   it('ratio guard alerts before writes and success resets the failure streak', async () => {
     const { ctrl, alerts } = control(), m = memory([product('a')]);

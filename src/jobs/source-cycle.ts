@@ -5,6 +5,8 @@ import { planSourceCycle, applySourceCycle, deepEqual, type CycleCommands, type 
 import { sourceCyclePlugin, type CyclePlugin, type CycleCapture, type CycleSourceDefinition } from '../adapters/source-cycle-plugins.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 
+/** 연속 실패 정지 뒤 자동 재시도까지의 냉각 시간. */
+export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
     /** 같은 회차에서 방금 읽어 세운 계획을 바로 적용한다(무인 회차 전용). 사람이 검토한 계획 파일 승인 경로(approvedPlan)와 섞지 않는다. */
@@ -14,7 +16,17 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
   const clock = options.now ?? Date.now;
   try {
     const state = await control.load(plugin.sourceId);
-    if (state.stopped) return { status: 'STOPPED', writes: 0, summary: '연속 실패 3회: 수동 원인 확인 필요' };
+    // 연속 실패 정지는 «냉각 시간(기본 60분) 뒤 한 번 더 시도»로 자동 복구한다(대표 2026-10-14 «걸림돌 해제»).
+    // 적용 불확실(APPLY_UNCERTAIN)은 쓰기 결과를 사람이 확인해야 하므로 자동 복구하지 않는다. 복구 뒤 실패가 이어지면 다시 정지(실패 수를 2 로 되돌려 한 번만 더 시도).
+    if (state.stopped) {
+      const last = Date.parse(state.lastAttemptAt ?? '');
+      // 시각이 없거나 깨졌거나 미래(시계 이상)면 영구 정지가 되지 않게 «냉각 끝»으로 본다. 다음 회차는 어차피 새로 읽고 계획·CAS·되읽기를 거치므로 재시도는 멱등이다.
+      const now = clock();
+      const cooled = state.error !== 'APPLY_UNCERTAIN' && (!Number.isFinite(last) || last > now + 5 * 60_000 || now - last >= SOURCE_STOP_COOLDOWN_MS);
+      if (!cooled) return { status: 'STOPPED', writes: 0, summary: '연속 실패 3회: 수동 원인 확인 필요' };
+      state.stopped = false; state.failures = 2;
+      await control.alert(plugin.sourceId, 'AUTO_RECOVER_AFTER_COOLDOWN');
+    }
     const previousFailures = state.failures;
     let plan: CyclePlan | null = null;
     let outcome: Awaited<ReturnType<typeof applySourceCycle>> | null = null;
