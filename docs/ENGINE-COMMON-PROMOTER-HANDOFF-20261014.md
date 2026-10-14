@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 0 | 열린 원천 엔진 가지 정리(#603 아이언 홈피, #604 손오공 교체 1회) | 둘 다 main 최신 기준, 서로 충돌 없음, 합친 상태에서 tsc·시험 통과 | 리베이스 불필요 |
 | 2-1 | 정체성 승격 계획서 생성기(읽기 전용) — main #611·#612·#613 + 결함 2건 수정(엔진 편입 문서 검출, 세부트림 두 번째 계획) | CODED · TESTED | #620 (#607 은 대체·닫음) |
-| 2-2 | 확정 규칙 한정 자동 적용(repair:vehicle-name-parity 경로) | 다음 | — |
+| 2-2 | 확정 규칙 한정 자동 적용 — 엔진 회차 안 정체성 정제(대표 10-15 «손오공 새로 API 연동해서 땡겨온 애들은 … 모델명도 정제되어 있지 않고»). 2-1 과 같은 대조 함수(`matchIdentity`), 마스터 하나로 특정될 때만 | CODED · TESTED(운영 적용·되읽기 미확인) | `work/freepass-data/engine-identity-refine-20261015` |
 | 2-3 | 보증금 계산값(deposit_source=CALCULATED) | 대기 | — |
 | 2-4 | 사진 연결 승격(photo_original_refs 등록) | 대기 | — |
 | 3 | 엔진 온라인 실행 설계(Actions) + DRY_RUN 워크플로 | DESIGNED · CODED · TESTED(설계 `docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md`(#605) §5) — 실행은 읽기 SA·변수 등록 후 | #608 |
@@ -27,6 +27,21 @@
 - 적용 순서: 첫 계획 적용·되읽기 → 두 번째(세부트림) 계획. 정정 경로는 `repair:vehicle-name-parity`(검토 → DRY_RUN → digest 승인 → 적용 → 되읽기).
 - 클라우드 #607 은 main 생성기와 중복이라 닫음.
 - 남은 것: 적용 후에도 `vehicle_review_required` 표식은 적용기가 지우지 않는다(현행 그대로).
+
+## 2-2. 엔진 회차 정체성 정제 (2026-10-15)
+
+- 규칙은 새로 만들지 않았다: 2-1 생성기의 대조를 순수 함수 `matchIdentity`(`src/application/identity-promotion-plan.ts`)로 꺼내 생성기와 엔진이 같이 쓴다.
+  마스터 하나로 특정(후보 둘 이상이면 연식이 정확히 하나로 좁힐 때만) → 제조사·모델·세부모델(마스터 이름), 세부트림은 하나로 특정될 때만, 아니면 지금처럼 원문 차명·검토 필요.
+- 마스터: 실행기(`src/runtime/source-cycle-runtime.ts`)가 회차마다 첫 목록 읽기 때 한 번 기존 경로(`captureVehicleMasterSnapshotReadOnly`)로 읽고 기존 검증기(`verifiedMasterRecords`: 최신 5분·digest·완전성·이름 일치)를 통과할 때만 대조기를 만든다.
+  못 읽음·검증 실패·시간 초과(120초)·빈 마스터 → 정제 안 함(지금 동작). 상태는 실행 기록 `identityRefine`(`ENABLED:<digest12>`·`SKIPPED:<사유>`·`DISABLED`)에 남는다. 끄기: `SOURCE_CYCLE_IDENTITY_REFINE=0`.
+- 쓰는 곳(`src/infra/source-cycle-firestore.ts` `nativeCycleFields`): 새 문서, 또는 엔진 편입 보류 문서(`source_cycle_record` 있음 + `vehicle_review_required:true` + 제조사·모델 빈칸)만.
+  쓰는 칸: maker·model·sub_model·trim_name(하나로 특정 + 기존 빈칸일 때만)·year(기존 문서에 없고 원천 연식이 있을 때만)·`vehicle_review_required:false`·`vehicle_title_source:'MASTER_MATCH'`·`vehicle_master_id`. `원문.차명`은 그대로.
+  제조사·모델이 하나라도 있는 문서(사람·ERP4)·검토가 끝난 문서는 건드리지 않는다.
+- 기존 보류 문서: 다시 쓰기 사유 `VEHICLE_IDENTITY`(지금 마스터로 하나로 특정될 때만 → 쓰고 나면 조건 거짓, 되풀이 없음). 특정 안 되는 보류 문서는 사유가 없어 일괄 UPDATE 없음.
+  계획 경고: `VEHICLE_IDENTITY_REFINE:<n>`, 쓰기가 있는 계획에는 `IDENTITY_MASTER:<digest12>` — 승인 계획을 다른 마스터로 적용하면 재계획이 달라져 `CYCLE_REPLAN_REQUIRED`.
+- 시험: `tests/engine-identity-refine.test.ts`(유일 일치 채움·연식 못 가름 보류·모르는 모델 보류·사람/ERP4 정체성 불변·보류 문서 1회 다시 쓰기·마스터 못 읽음 → 정제 없음·반복 쓰기 없음·마스터 바뀐 승인 계획 거부).
+- 모름: 운영 보류 문서 중 몇 대가 정제될지는 오프라인에서 알 수 없다(운영 products·마스터를 읽지 않음). 첫 회차 실행 기록의 `VEHICLE_IDENTITY_REFINE:<n>` 경고로 확인.
+- 온라인 읽기 전용 SA 로 도는 DRY_RUN 에서 마스터 읽기(데이터 접근 기록 쓰기 포함)가 권한으로 실패하면 `SKIPPED:VEHICLE_MASTER_UNAVAILABLE` 로 정제 없이 돈다(회차는 막지 않음).
 
 ## 3. 막힌 것 / 결정필요
 
