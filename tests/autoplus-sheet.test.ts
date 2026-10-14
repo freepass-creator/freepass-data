@@ -28,8 +28,8 @@ describe('오토플러스 시트 어댑터', () => {
     expect(by['4216']!.vehicleText).toBe('디 올뉴니로EV 에어');   // 모델명이 차종을 이미 포함하면 앞에 붙이지 않는다
   });
   it('모르는 판매상태·잘못된 번호는 보류하고, 중복 번호는 읽기를 불완전으로 둔다', () => {
-    const held = readAutoplusSheet([{ title: 't', values: [header, car(1, '05수4216', '이상한상태'), car(2, 'ABC', '판매중'), car(3, '36너2705', '판매중')] }], NOW);
-    expect(held.held.map(h => h.reason).sort()).toEqual(['PLATE_INVALID', 'STATUS_UNKNOWN']);
+    const held = readAutoplusSheet([{ title: 't', values: [header, car(1, '05수4216', '이상한상태'), car(2, 'ABC', '판매중'), car(3, '36너2705', '판매중'), car(4, '12가-3456', '판매중'), car(5, 'ABC1', '판매중')] }], NOW);
+    expect(held.held.map(h => h.reason).sort()).toEqual(['PLATE_INVALID', 'PLATE_INVALID', 'PLATE_INVALID', 'STATUS_UNKNOWN']);
     expect(held.records.map(r => r.plate)).toEqual(['36너2705']);
     const dup = readAutoplusSheet([{ title: 't', values: [header, car(1, '05수4216', '판매중'), car(2, '05수4216', '판매중')] }], NOW);
     expect(dup.complete).toBe(false);
