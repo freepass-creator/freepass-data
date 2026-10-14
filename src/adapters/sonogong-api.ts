@@ -15,6 +15,8 @@ export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
 /** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
+/** 탭 → 상품 구분(구독·픽업구독을 화면에서 구분). 소비처 어휘: 중고렌트·오공구독·픽업구독. */
+const PRODUCT_TYPE_BY_TAB: Record<SonogongApiTab, string> = { rent: '중고렌트', sub: '오공구독', pick: '픽업구독' };
 
 export class SonogongApiError extends Error {
   constructor(readonly code: string, readonly status?: number) { super(code); this.name = 'SonogongApiError'; }
@@ -76,6 +78,8 @@ export type SonogongApiRead = {
   observedAt: string; complete: boolean; incompleteReason?: string; tabsRead: SonogongApiTab[];
   records: SourceProductRecord[]; held: Array<{ tab: SonogongApiTab; reason: string }>; duplicatePlates: string[];
   listed: number; detailsRead: number;
+  /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이). */
+  notes: string[];
 };
 
 export async function readSonogongApi(client: SonogongApiClient, opts: { now?: () => string } = {}): Promise<SonogongApiRead> {
@@ -100,16 +104,25 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
     rowsByTab.set(tab, rows);
   }
   const observedAt = generatedAt ?? clock();
-  const records: SourceProductRecord[] = [], held: SonogongApiRead['held'] = [], seen = new Set<string>(), duplicates = new Set<string>();
-  let listed = 0, detailsRead = 0;
+  const records: SourceProductRecord[] = [], held: SonogongApiRead['held'] = [], duplicates = new Set<string>();
+  // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 앞선 탭 하나만 채택하고 경고로 센다(불완전 아님).
+  // 같은 탭 안에서 같은 번호가 두 번이면 원천 오류라 읽기를 불완전으로 둔다.
+  const seen = new Map<string, { tab: SonogongApiTab; ym: string }>();
+  let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0;
   for (const tab of SONOGONG_API_TABS) {
     for (const row of rowsByTab.get(tab) ?? []) {
       listed++;
       const plateRaw = String(row.carNumber ?? '').replace(/\s+/g, '');
       if (!/^\d{2,3}[가-힣]\d{4}$/.test(plateRaw) || !isAssignedPlate(plateRaw)) { held.push({ tab, reason: 'PLATE_INVALID' }); continue; }
       const plate = plateIdentityKey(plateRaw);
-      if (seen.has(plate)) { duplicates.add(plate); continue; }
-      seen.add(plate);
+      const ymRaw = String(row.manufactureYearMonth ?? '').slice(0, 7);
+      const earlier = seen.get(plate);
+      if (earlier) {
+        if (earlier.tab === tab) duplicates.add(plate);
+        else { crossTabDuplicates++; if (earlier.ym && ymRaw && earlier.ym !== ymRaw) generationDifferences++; }
+        continue;
+      }
+      seen.set(plate, { tab, ym: ymRaw });
       if (typeof row.hasActiveContract !== 'boolean') { held.push({ tab, reason: 'STATUS_UNKNOWN' }); continue; }
       const id = typeof row.id === 'number' || typeof row.id === 'string' ? String(row.id) : '';
       if (!id) { held.push({ tab, reason: 'ID_MISSING' }); continue; }
@@ -147,18 +160,25 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       if (typeof row.displacementCc === 'number') spec.engine_cc = String(row.displacementCc);
       const name = typeof detail?.carName === 'string' && detail.carName.trim() ? detail.carName.trim()
         : [row.brand, row.model, row.detailName].filter(x => typeof x === 'string' && x).join(' ');
+      // 사진: 상세(없으면 목록)의 images[].url 중 https 주소만. 없으면 사진 없음(빈 배열).
+      const imageSource = Array.isArray(detail?.images) ? detail!.images as unknown[] : Array.isArray(row.images) ? row.images as unknown[] : [];
+      const images = imageSource.map(i => object(i) ? i.url : i).filter((u): u is string => typeof u === 'string' && /^https:\/\//.test(u));
       records.push({ sourceId: 'RP012', uid: plate, plate, vehicleText: name,
-        status: row.hasActiveContract ? { raw: '계약중', saleAvailable: false } : { raw: '출고가능', saleAvailable: true },
+        // 계약중은 모든 원천에서 같게(커맨드 센터 2026-10-14): 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 raw 로 제외.
+        status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
         terms, observedAt,
-        raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
-          prices: structuredClone(prices), ...(Object.keys(spec).length ? { spec } : {}) },
+        raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
+          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }
   }
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
   if (!records.length) incomplete ??= 'API_EMPTY';
+  const notes: string[] = [];
+  if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
+  if (generationDifferences) notes.push(`CROSS_TAB_GENERATION_DIFFERENCE:${generationDifferences}`);
   return { observedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
-    records, held, duplicatePlates: [...duplicates], listed, detailsRead };
+    records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
 }
 
 /** 행 수 하한(부분 읽기 방어): 직전 정상 회차 목록 수와 잠금 제외 노출 문서 수 중 큰 값의 80%. */
