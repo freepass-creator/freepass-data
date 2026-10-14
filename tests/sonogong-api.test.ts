@@ -54,6 +54,10 @@ describe('손오공 공식 API 어댑터', () => {
     expect(read.complete).toBe(true);
     expect(read.listed).toBe(2);
     expect(read.detailsRead).toBe(2);
+    // 신선도 창 기준은 «읽은 시각»(상류 generatedAt 이 아니다): generatedAt 은 따로 보존
+    expect(read.generatedAt).toBe('2026-10-14T06:00:00.000Z');
+    expect(read.observedAt).not.toBe(read.generatedAt);
+    expect(Date.now() - Date.parse(read.observedAt)).toBeLessThan(60_000);
     expect(w.calls.filter(c => c.startsWith('/api/partner/v1/vehicles?')).length).toBe(3);
     expect(w.sleeps.length).toBe(w.calls.length);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r]));
@@ -107,7 +111,8 @@ describe('손오공 공식 API 어댑터', () => {
       : Number(u.pathname.split('/').at(-1)) === 2 ? new Response('', { status: 404 }) : ok(u));
     const read = await readSonogongApi(w.client);
     expect(read.complete).toBe(false);
-    expect(read.incompleteReason).toBe('API_DETAIL_FAILED');
+    expect(read.incompleteReason).toBe('API_DETAIL_FAILED_HTTP_404_1OF2');   // 진단: 상태 코드·건수만(키·URL 없음)
+    expect(read.notes).toContain('DETAIL_FAIL:HTTP_404:1');
     const r2 = read.records.find(r => r.plate!.endsWith('2222'))!;
     expect(r2.terms.every(t => t.deposit.state === 'UNKNOWN')).toBe(true);
   });
