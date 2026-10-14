@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessFreshness } from '../src/application/source-freshness.js';
+import { assessFreshness, parseFreshnessExempt } from '../src/application/source-freshness.js';
 import { runUnattended, unattendedPreflight, runtimeCli, type UnattendedProbes } from '../src/runtime/source-cycle-runtime.js';
 
 const now = Date.parse('2026-10-13T12:00:00.000Z');
@@ -63,6 +63,29 @@ describe('unattended run record and preflight (사고: 예약 환경에 시트 �
       .toEqual(['PREFLIGHT_GWS_MISSING', 'PREFLIGHT_SHEETS_TRANSPORT_UNSET', 'PREFLIGHT_GCLOUD_TOKEN_MISSING']);
     expect(await unattendedPreflight({ SHEETS_TRANSPORT: 'gws' }, ['F05'], probes())).toEqual([]);
     expect(await unattendedPreflight({}, ['IANCAR'], probes())).toEqual([]);      // 시트 원천이 없으면 gws·전송 설정은 요구하지 않음
+  });
+  it('a known exemption removes a stale source from unhealthy/escalate without a time cap, and lifts when the replacement source completes cleanly', () => {
+    const stale = [beat('RP012', 600), beat('RP013', 10)];                              // RP012 10시간 전 = escalate 대상이지만 알려진 예외
+    const exempt = [{ source: 'RP012', reason: 'SONOGONG_LOCKED', liftWhenCompleted: 'RP040' }];
+    const base = assessFreshness(stale, [], { now });
+    expect(base).toMatchObject({ status: 'UNHEALTHY', unhealthy: ['RP012:STALE'] });
+    expect(base.escalate).toHaveLength(1);
+    const withExempt = assessFreshness(stale, [], { now, exempt });
+    expect(withExempt).toMatchObject({ status: 'HEALTHY', unhealthy: [], escalate: [], fresh: 1 });
+    expect(withExempt.exempt).toEqual(['RP012:SONOGONG_LOCKED:STALE:600m']);
+    // 대체 원천(RP040)이 실패 없이 첫 완료 → 예외 해제, RP012 는 다시 감시된다
+    const replaced = assessFreshness([...stale, beat('RP040', 5)], [], { now, exempt });
+    expect(replaced.exempt).toEqual([]);
+    expect(replaced.unhealthy).toContain('RP012:STALE');
+    // 대체 원천이 실패 중이면 해제되지 않는다
+    const failing = assessFreshness([...stale, beat('RP040', 5, { failures: 1 })], [], { now, exempt });
+    expect(failing.exempt).toHaveLength(1);
+  });
+  it('the exemption setting is parsed strictly: malformed entries are ignored and never widen what is excluded', () => {
+    expect(parseFreshnessExempt('RP012=SONOGONG_LOCKED>RP040, RP034=EXCLUDED_BY_DECISION')).toEqual([
+      { source: 'RP012', reason: 'SONOGONG_LOCKED', liftWhenCompleted: 'RP040' }, { source: 'RP034', reason: 'EXCLUDED_BY_DECISION' }]);
+    expect(parseFreshnessExempt('*=ALL,rp012=low,RP012=bad reason,RP012')).toEqual([]);
+    expect(parseFreshnessExempt(undefined)).toEqual([]);
   });
   it('a failed preflight writes one run record and one RUNNER alert, exit 1, no source touched', async () => {
     const dir = await privateDir();
