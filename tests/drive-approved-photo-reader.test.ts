@@ -33,7 +33,28 @@ describe('승인 사진 드라이브 reader', () => {
     expect(seen[1]!.url.startsWith('https://www.googleapis.com/drive/v3/files/FILE_ID_1?alt=media')).toBe(true);
     expect(seen[1]!.auth).toBe('Bearer TOKEN');
   });
-  it('환경변수: drive-public 일 때만 주입, 그 밖은 꺼짐(실패 폐쇄)', () => {
+  it('Cloud Run 토큰 제공자: 메타데이터 → 자기 가장 drive.readonly 토큰, 캐시, 실패 폐쇄', async () => {
+    const { createCloudRunDriveTokenProvider } = await import('../src/infra/drive-approved-photo-reader.js');
+    const calls: string[] = [];
+    const fake = async (url: string, init?: { body?: string }) => {
+      calls.push(url);
+      if (url.endsWith('/email')) return { ok: true, status: 200, text: async () => 'svc@proj.iam.gserviceaccount.com', json: async () => ({}) };
+      if (url.endsWith('/token')) return { ok: true, status: 200, text: async () => '', json: async () => ({ access_token: 'BASE' }) };
+      expect(JSON.parse(init!.body!).scope).toEqual(['https://www.googleapis.com/auth/drive.readonly']);
+      return { ok: true, status: 200, text: async () => '', json: async () => ({ accessToken: 'DRIVE', expireTime: new Date(Date.now() + 900_000).toISOString() }) };
+    };
+    const provider = createCloudRunDriveTokenProvider(fake as never);
+    expect(await provider()).toBe('DRIVE');
+    expect(await provider()).toBe('DRIVE');
+    expect(calls.filter(u => u.includes('generateAccessToken'))).toHaveLength(1);
+    const denied = createCloudRunDriveTokenProvider((async (url: string) => url.includes('generateAccessToken')
+      ? { ok: false, status: 403, text: async () => '', json: async () => ({}) }
+      : url.endsWith('/email') ? { ok: true, status: 200, text: async () => 'svc@proj.iam.gserviceaccount.com', json: async () => ({}) }
+        : { ok: true, status: 200, text: async () => '', json: async () => ({ access_token: 'BASE' }) }) as never);
+    await expect(denied()).rejects.toThrow('VEHICLE_PHOTO_READER_UNAVAILABLE');
+  });
+  it('환경변수: drive-public·drive-api 일 때만 주입, 그 밖은 꺼짐(실패 폐쇄)', () => {
+    expect(approvedPhotoReaderFromEnv({ FREEPASS_DATA_APPROVED_PHOTO_READER: 'drive-api' } as never)).toBeTypeOf('function');
     expect(approvedPhotoReaderFromEnv({ FREEPASS_DATA_APPROVED_PHOTO_READER: 'drive-public' } as never)).toBeTypeOf('function');
     for (const v of [undefined, '', 'off', 'DRIVE-PUBLIC', 'drive', ' x ']) expect(approvedPhotoReaderFromEnv({ FREEPASS_DATA_APPROVED_PHOTO_READER: v } as never)).toBeUndefined();
   });

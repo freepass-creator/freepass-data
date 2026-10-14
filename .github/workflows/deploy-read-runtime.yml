@@ -137,7 +137,7 @@ jobs:
           test -n "$ARTIFACT_REPOSITORY"
           test -n "$RUNTIME_SERVICE_ACCOUNT"
           [[ -z "${IANCAR_PHOTO_ID_GATE_SUPPLIERS:-}" || "${IANCAR_PHOTO_ID_GATE_SUPPLIERS:-}" =~ ^(RP[0-9]{3})(,RP[0-9]{3})*$ ]]
-          [[ -z "${APPROVED_PHOTO_READER:-}" || "${APPROVED_PHOTO_READER:-}" = 'drive-public' ]]
+          [[ -z "${APPROVED_PHOTO_READER:-}" || "${APPROVED_PHOTO_READER:-}" =~ ^(drive-public|drive-api)$ ]]
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             test -n "$CONSUMERS_SECRET_NAME"
             [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
