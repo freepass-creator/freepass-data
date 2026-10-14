@@ -104,17 +104,30 @@ describe('손오공 공식 API 어댑터', () => {
       expect(error.message).not.toContain('SECRET_BODY');
     }
   });
-  it('상세 429 는 회차 전체를 멈추고, 상세 404 는 그 차만 보증금 미확인으로 두고 불완전', async () => {
+  it('상세 429 는 회차 전체를 멈추고, 상세 404 한두 건은 그 차만 건너뛰고(보증금 미확인) 완전 읽기로 계속한다', async () => {
     const stop = world(u => u.pathname.endsWith('/vehicles') ? ok(u) : new Response('', { status: 429 }));
     await expect(readSonogongApi(stop.client)).rejects.toMatchObject({ status: 429 });
     const w = world(u => u.pathname.endsWith('/vehicles') ? ok(u)
       : Number(u.pathname.split('/').at(-1)) === 2 ? new Response('', { status: 404 }) : ok(u));
     const read = await readSonogongApi(w.client);
-    expect(read.complete).toBe(false);
-    expect(read.incompleteReason).toBe('API_DETAIL_FAILED_HTTP_404_1OF2');   // 진단: 상태 코드·건수만(키·URL 없음)
-    expect(read.notes).toContain('DETAIL_FAIL:HTTP_404:1');
+    expect(read.complete).toBe(true);                                   // 허용 한도 max(5, 목록의 2%) 이내의 404
+    expect(read.notes).toContain('DETAIL_404:2222');                    // 끝 4자리만
     const r2 = read.records.find(r => r.plate!.endsWith('2222'))!;
     expect(r2.terms.every(t => t.deposit.state === 'UNKNOWN')).toBe(true);
+    expect(read.records).toHaveLength(2);                               // 목록 행은 보존
+  });
+  it('상세 404 가 허용 한도(5건·2%)를 넘으면 불완전, 404 가 아닌 상세 실패(500)는 한 건이어도 불완전', async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => row(i + 1, `100하${1000 + i}`));
+    const many = world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? rows : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 6 : 0 })
+      : new Response('', { status: 404 }));
+    const overLimit = await readSonogongApi(many.client);
+    expect(overLimit.complete).toBe(false);
+    expect(overLimit.incompleteReason).toBe('API_DETAIL_FAILED_HTTP_404_6OF6');
+    const five = world(u => u.pathname.endsWith('/vehicles') ? ok(u) : Number(u.pathname.split('/').at(-1)) === 2 ? new Response('', { status: 500 }) : ok(u));
+    const server = await readSonogongApi(five.client);
+    expect(server.complete).toBe(false);
+    expect(server.incompleteReason).toBe('API_DETAIL_FAILED_HTTP_500_1OF2');
   });
   it('목록·상세 번호가 다르면 차를 만들지 않고, 형식 이상·중복 번호·상태 미상은 보류·불완전', async () => {
     const w = world(u => {
