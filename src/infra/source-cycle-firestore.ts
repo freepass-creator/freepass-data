@@ -72,6 +72,20 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
   if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
   return priceDigest(price) === priceDigest(salePriceMap(record.terms, false));
 }
+/** 계약 잠금 필드 판정(허용값 표 하나): 비어 있지 않은 값은 전부 잠금이다 — true, 'LEDGER'(정산원장), 그 밖에 알 수 없는 값도 보수적으로 잠금.
+ * 비잠금은 없음(undefined/null)·false·빈 문자열뿐. (runtime 의 노출 대수 판정과 같은 규칙) */
+export const isContractLockValue = (v: unknown): boolean => v !== undefined && v !== null && v !== false && v !== '';
+/** 엔진 작성 표식: 엔진이 문서를 쓸 때마다 «누가·어떤 표시 상태로·어느 관측 시각에» 썼는지 한 칸에 남긴다. 계약중 문서를 엔진 소유로 취급하는 유일한 증거다. */
+export const SOURCE_CYCLE_WRITER = 'source-engine';
+/** 엔진이 «원천이 직접 계약중으로 읽은 값»을 쓴 문서만 계약 잠금이 아니다. 증거 = 엔진 작성 표식(by·status 계약중) + 엔진이 쓴 모양(표시 상태 계약중·선점·노출,
+ * 원천 기록 상태 원문 계약중) + 어떤 계약 잠금 필드 값도 없음. 표식이 없거나 다른 주체이거나, ERP 가 status_kind 를 계약중으로 바꿨거나 잠금 필드를 걸었으면 잠금이다
+ * (원천이 출고가능으로 바뀌어도 장부 잠금 차량은 덮어쓰지 않는다 — Codex 독립 검토 2026-10-14 P1 2건). */
+const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean => {
+  const mark = f.source_cycle_write as { by?: unknown; status?: unknown } | null | undefined;
+  return !!mark && typeof mark === 'object' && mark.by === SOURCE_CYCLE_WRITER && mark.status === '계약중' &&
+    f.status === '계약중' && f.status_kind === '선점' && f.vehicle_status === '계약중' && f.listable === true &&
+    record.status.raw === '계약중' && f.source_cycle_record !== undefined && !isContractLockValue(f.locked_by_contract);
+};
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
@@ -104,7 +118,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
-    locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',
+    locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
     publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
 }
@@ -153,6 +167,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),
+    source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -257,7 +272,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
-          'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract',
+          'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
           'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type']) query.append('mask.fieldPaths', fieldPath(field));
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
