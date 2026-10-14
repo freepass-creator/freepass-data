@@ -12,6 +12,12 @@ export const ERP5_INVENTORY_STATUS_KINDS = Object.freeze({
 export type Erp5InventoryStatus = keyof typeof ERP5_INVENTORY_STATUS_KINDS;
 export type Erp5InventoryStatusKind = (typeof ERP5_INVENTORY_STATUS_KINDS)[Erp5InventoryStatus];
 
+/** 원천의 «계약중» 계열 표기(대표 2026-10-14 «계약중이라고 되어 있는 거는 연동해서 계약중으로, 출고불가만 안 올린다»).
+ * 이 값들은 모든 원천에서 원문을 «계약중» 으로 통일해 노출(선점)한다. 공급사 표기는 raw.provider_status 에 남긴다.
+ * 뜻이 갈리는 표기(출고대기 등)는 넣지 않는다 — 모르는 값은 계속 보류(STATUS_UNKNOWN). */
+export const CONTRACTED_STATUS_SYNONYMS: ReadonlySet<string> = new Set(['계약중', '계약진행', '계약진행중', '계약대기', '상담중', '예약', '예약중', '선점', 'RESERVED']);
+export const isContractedStatus = (value: unknown) => typeof value === 'string' && CONTRACTED_STATUS_SYNONYMS.has(value.trim());
+
 /** Only `출고불가` closes a product; it is a status change, never a deletion. */
 export const ERP5_UNAVAILABLE_STATUS: Erp5InventoryStatus = '출고불가';
 

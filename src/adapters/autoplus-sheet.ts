@@ -1,9 +1,11 @@
 /** 오토플러스(RP023) 공급사 시트 어댑터 — 대표 2026-10-14: 오토플러스 정본 = 구글시트, 홈페이지는 보조(교차 확인).
  * 시트 탭 구조(원본 «New 오토플러스 재고 리스트»): 상단 안내 문구 뒤에 머리글 행(No.·차량번호·차종·모델명·색상·연료·최초등록일·예상 주행거리·판매상태·
  * «12개월 2만km» 같은 요금 열…)이 있고 그 아래가 차량 행이다. 탭 이름·머리글 행 위치는 바뀔 수 있어 «차량번호»와 «판매상태» 머리글을 모두 가진 탭만 쓴다.
- * 판매상태: 판매중·할인판매·상품대기 = 출고가능, 계약중 = 판매 가능이되 «계약중»(선점) 표시, 상담중 = 계약 진행(판매 불가), 보류 = 불가. 모르는 값은 보류(STATUS_UNKNOWN)다. */
+ * 판매상태: 판매중·할인판매·상품대기 = 출고가능, 계약중·상담중 등 계약 계열(CONTRACTED_STATUS_SYNONYMS) = 판매 가능이되 «계약중»(선점) 표시
+ * (대표 2026-10-14 «계약중은 연동해서 계약중으로, 출고불가만 안 올린다»), 보류·판매완료 = 불가. 모르는 값은 보류(STATUS_UNKNOWN)다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 
 export type AutoplusSheetTab = { title: string; values: unknown[][] };
 export type AutoplusSheetRead = {
@@ -11,8 +13,8 @@ export type AutoplusSheetRead = {
   records: SourceProductRecord[]; held: Array<{ tab: string; row: number; reason: string }>; duplicatePlates: string[];
 };
 
-const SELLABLE = new Set(['판매중', '할인판매', '상품대기', '계약중']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
-const NOT_SELLABLE = new Set(['상담중', '보류', '판매완료', '출고완료', '판매불가']);
+const SELLABLE = new Set(['판매중', '할인판매', '상품대기']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
+const NOT_SELLABLE = new Set(['보류', '판매완료', '출고완료', '판매불가', '출고불가']);   // 출고불가 = 대표 10-14 «출고불가만 안 올린다»(보류로 빠지면 회차 부재 하향 전체가 멈춘다)
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
 const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
 const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -21,6 +23,19 @@ const rentOf = (v: unknown): SourceAmount | null => {
   if (t === '' || /^[-–—xX]$/.test(t)) return null;           // 빈칸·«-» = 제안 없음
   const n = Number(t);
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
+};
+
+/** 보증금 칸: 1원~1억 정수 = KNOWN, **명시 문구(«무보증»·«보증금없음»)만 ZERO**. 숫자 0·문자열 «0»·빈칸·형식 밖 = UNKNOWN —
+ * 산출 근거 없는 0 은 확정 0원이 아니다(대표 정산 규칙 «0원 확정 금지», Codex 독립 검토 2026-10-15). 열이 없으면 전부 UNKNOWN. */
+const DEPOSIT_MAX = 100_000_000;
+const EXPLICIT_NO_DEPOSIT = new Set(['무보증', '보증금없음']);
+const depositOf = (v: unknown): SourceAmount => {
+  const t = clean(v).replace(/[,\s원]/g, '');
+  if (t === '') return unknownAmount;
+  if (EXPLICIT_NO_DEPOSIT.has(t)) return { state: 'ZERO', value: 0 };
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > DEPOSIT_MAX) return unknownAmount;
+  return { state: 'KNOWN', value: n };
 };
 
 /** 머리글 행을 찾는다: «차량번호»와 «판매상태» 가 같은 행에 있어야 한다(앞 30행 안). */
@@ -39,6 +54,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
     const headers = tab.values[hi]!.map(clean);
     const iPlate = headers.indexOf('차량번호'), iStatus = headers.indexOf('판매상태');
     const iKind = headers.indexOf('차종'), iModel = headers.indexOf('모델명'), iColor = headers.indexOf('색상'), iFuel = headers.indexOf('연료');
+    const iDeposit = headers.findIndex(h => h.replace(/\s+/g, '') === '보증금');
     const iFirst = headers.indexOf('최초등록일'), iMileage = headers.findIndex(h => h.replace(/\s+/g, '') === '예상주행거리');
     // 요금 열: «<개월>개월 <1|2|3>만km» (줄바꿈·공백 차이는 무시)
     const rateColumns = headers.map((h, index) => {
@@ -58,12 +74,14 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       if (seen.has(plate)) { duplicates.add(plate); continue; }
       seen.add(plate);
       const status = clean(row[iStatus]);
-      const sellable = SELLABLE.has(status);
+      const contracted = isContractedStatus(status);
+      const sellable = SELLABLE.has(status) || contracted;
       if (!sellable && !NOT_SELLABLE.has(status)) { held.push({ tab: tab.title, row: i + 1, reason: 'STATUS_UNKNOWN' }); continue; }
       const terms: SourceTerm[] = [];
+      const deposit = iDeposit >= 0 ? depositOf(row[iDeposit]) : unknownAmount;   // 시트 보증금 열(있으면) — 전에는 읽지 않아 RP023 보증금이 전부 미상이었다
       for (const col of rateColumns) {
         const rent = rentOf(row[col.index]);
-        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit: unknownAmount, mileage: `${col.km}km/year`, raw: {} });
+        if (rent && rent.state === 'KNOWN') terms.push({ months: col.months, monthlyRent: rent, deposit, mileage: `${col.km}km/year`, raw: {} });
       }
       const kind = iKind >= 0 ? clean(row[iKind]) : '', model = iModel >= 0 ? clean(row[iModel]) : '';
       const vehicleText = model && kind && !model.includes(kind) ? `${kind} ${model}` : (model || kind);
@@ -77,7 +95,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       if (mileage) spec.mileage = mileage;
       records.push({ sourceId: 'RP023', uid: plate, plate, vehicleText,
         // 표시 상태는 «출고가능»(판매 가능) 또는 시트 상태 그대로(계약중 등) — 판매 가능 판정은 saleAvailable 하나가 정한다.
-        status: { raw: sellable && status !== '계약중' ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
+        status: { raw: contracted ? '계약중' : sellable ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
         raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, product_group: 'LONG_TERM', product_type: '오플구독', ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }

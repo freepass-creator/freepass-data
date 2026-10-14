@@ -35,9 +35,23 @@ const enc = v => v === null ? { nullValue: null } : typeof v === 'boolean' ? { b
 mkdirSync(dir + '/backups-approved-photos', { recursive: true });
 const out = [];
 
+// 문서 ID 가 번호가 아닌 공급사가 있다(이안카 = iancar_<해시>): 번호 ID 문서가 없으면 car_number 로 «정확히 1건» 찾는다. 여러 건이면 등록하지 않는다.
+const queryUrl = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents:runQuery`;
+async function docIdFor(plate) {
+  const direct = await fetch(base + encodeURIComponent(plate), { headers: H });
+  if (direct.status !== 404) return { id: plate, res: direct };
+  const q = await fetch(queryUrl, { method: 'POST', headers: H, body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'products' }],
+    where: { fieldFilter: { field: { fieldPath: 'car_number' }, op: 'EQUAL', value: { stringValue: plate } } }, limit: 3 } }) });
+  const hits = q.ok ? (await q.json()).filter(x => x.document) : [];
+  if (hits.length !== 1) return { id: null, many: hits.length > 1 };
+  const id = hits[0].document.name.split('/').pop();
+  return { id, res: await fetch(base + encodeURIComponent(id), { headers: H }) };
+}
+
 for (const r of rows) {
-  const res = await fetch(base + encodeURIComponent(r.plate), { headers: H });
-  if (res.status === 404) { out.push(`${r.plate.slice(-4)} 문서 없음`); continue; }
+  const found = await docIdFor(r.plate);
+  if (!found.id) { out.push(`${r.plate.slice(-4)} ${found.many ? '문서 여러 개 — 등록 안 함' : '문서 없음'}`); continue; }
+  const docId = found.id; const res = found.res;
   const doc = await res.json(); const f = dec({ mapValue: { fields: doc.fields } });
   const key = vehiclePhotoKey(f);
   if (!key) { out.push(`${r.plate.slice(-4)} vehicleKey 불가(공급사 코드 없음)`); continue; }
@@ -61,9 +75,9 @@ for (const r of rows) {
   if (!apply) continue;
   writeFileSync(`${dir}/backups-approved-photos/${r.plate.slice(-4)}-${Date.now()}.json`, JSON.stringify(doc), 'utf8');
   const q = new URLSearchParams(); q.append('updateMask.fieldPaths', 'photo_original_refs'); q.set('currentDocument.updateTime', doc.updateTime);
-  const w = await fetch(base + encodeURIComponent(r.plate) + '?' + q, { method: 'PATCH', headers: H, body: JSON.stringify({ fields: { photo_original_refs: enc(refs) } }) });
+  const w = await fetch(base + encodeURIComponent(docId) + '?' + q, { method: 'PATCH', headers: H, body: JSON.stringify({ fields: { photo_original_refs: enc(refs) } }) });
   if (!w.ok) { out.push(`${r.plate.slice(-4)} 쓰기 실패 ${w.status}`); continue; }
-  const back = dec({ mapValue: { fields: (await (await fetch(base + encodeURIComponent(r.plate), { headers: H })).json()).fields } });
+  const back = dec({ mapValue: { fields: (await (await fetch(base + encodeURIComponent(docId), { headers: H })).json()).fields } });
   const ok = Array.isArray(back.photo_original_refs) && back.photo_original_refs.length === refs.length && back.photo_original_refs.every((x, i) => x.driveFileId === refs[i].driveFileId && x.sha256 === refs[i].sha256);
   out.push(`${r.plate.slice(-4)} 되읽기 ${ok ? 'MATCH' : 'MISMATCH'}`);
   appendFileSync(dir + '/audit-approved-photos.jsonl', JSON.stringify({ at: now, l4: r.plate.slice(-4), n: refs.length, prior, method: METHOD, ok }) + '\n');

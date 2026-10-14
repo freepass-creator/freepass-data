@@ -50,8 +50,13 @@ const safeCode = (e: unknown): string => {
 const isRateLimited = (code: string) => code === 'IANCAR_ONE_API_HTTP_429' || code === 'DRIVE_RATE_LIMITED';
 /** 이 잡이 올린 파일이 «완료»인지: 원본 표식 + 올릴 때의 로컬 sha256 표식이 드라이브가 계산한 체크섬과 같아야 한다(이전 체크섬 불일치·부분 파일은 완료로 인정하지 않는다). */
 const isComplete = (f: DriveFileInfo, photoId: string) => f.srcKey === srcKeyOf(photoId) && !!f.sha256 && f.copySha256 === f.sha256;
+/** 차량 표식: 번호 해시(번호 자체는 파일 속성에 남기지 않는다). 올린 파일에 붙이고 SAME 판정에서 검증한다. */
+export const plateKeyOf = (plate: string): string =>
+  createHash('sha256').update(`iancar-photo-plate/1\n${plate.normalize('NFKC').replace(/\s+/g, '')}`).digest('hex').slice(0, 16);
 /** 파일 무결성: 올릴 때 남긴 로컬 sha256 표식이 드라이브 체크섬과 같다(id·원본 표식과 무관 — id 회전에 영향받지 않음). */
 const intact = (f: DriveFileInfo) => !!f.sha256 && f.copySha256 === f.sha256;
+/** 다른 차량의 파일이 아니다: 차량 표식이 없으면(옛 파일럿 파일) 폴더가 «이름 첫 토큰 = 번호»로 이미 고른 것이라 허용, 있으면 이 차량의 해시와 같아야 한다. */
+const ownedBy = (f: DriveFileInfo, plateKey: string) => f.plateKey === undefined || f.plateKey === null || f.plateKey === plateKey;
 const emptyCounts = (): Record<VehicleCopyStatus, number> =>
   ({ COPIED: 0, PLANNED_COPY: 0, SKIPPED_SAME: 0, SKIPPED_EXISTING: 0, SKIPPED_STALE: 0, NO_TARGET: 0, NEEDS_REPLACEMENT: 0, AMBIGUOUS_FOLDER: 0, FAILED: 0, NOT_ATTEMPTED: 0 });
 const isStale = (code: string) => code === 'IANCAR_PHOTO_DETAIL_STALE';
@@ -84,7 +89,13 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
     if (write && attempts >= limits.maxVehicles) return finish('MAX_VEHICLES');
 
     let ids: string[];
-    try { await pace(); ids = await deps.source.photoIds(vehicle); }
+    let detailsVersion: string | null = null;
+    try {
+      await pace();
+      const got = await deps.source.photoIds(vehicle);
+      ids = Array.isArray(got) ? got : got.ids;
+      detailsVersion = Array.isArray(got) ? null : (got.version ?? null);
+    }
     catch (error) {
       const code = safeCode(error);
       if (isStale(code)) {
@@ -102,6 +113,7 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
     withPhotos++;
     const selected = ids.slice(0, Math.max(1, limits.maxPerVehicle));
     const fingerprint = albumFingerprint(selected);
+    const plateKey = plateKeyOf(vehicle.plate);
 
     try {
       // 기존 구조 재사용(번호 기준 매칭): «<번호>» 또는 «<번호> <차종>» 폴더. 사진이 든 폴더가 둘 이상이면 사람 정리 전까지 쓰기 0.
@@ -120,17 +132,21 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       if (folder?.fingerprint) {
         // 끝까지 복사가 끝난 폴더(완료 표식 있음): 공급사 사진 id 는 회차마다 회전하므로 id·원본 표식은 비교하지 않는다.
         // 같음 = 01..N 이름이 모두 있고(장수 = 이번 원천 장수) 모든 파일의 무결성(copySha256 = 드라이브 체크섬)이 맞는 것. 장수가 다르거나 무결성이 깨졌으면 교체 보류.
-        const sameShape = folderFiles.length === selected.length && selected.every((_, index) => { const f = byName.get(fileName(index)); return !!f && intact(f); });
+        // 또한 모든 파일이 «이 차량의 것»이어야 한다(차량 표식 검증 — 다른 차량의 정상 파일이 같은 이름·장수로 들어와도 SAME 이 아니다).
+        const sameShape = folderFiles.length === selected.length
+          && selected.every((_, index) => { const f = byName.get(fileName(index)); return !!f && intact(f) && ownedBy(f, plateKey); });
         if (!sameShape) { record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue; }
         // 이미 복사된 차량도 등록 대상 목록에 넣는다(앞 회차의 등록이 실패·미실행이었을 수 있다 — 등록 도구는 refs 가 있으면 건너뛴다).
         result.completed.push({ plate: vehicle.plate, folderId: folder.folderId, files: selected.length });
-        record(vehicle.plate, 'SKIPPED_SAME', selected.length); continue;
+        // 상세 갱신 시각이 완료 때와 다르면 «바뀐 차량» 신호로만 알린다(교체·쓰기 아님: 가격·옵션 갱신으로도 바뀌므로 보류 사유로 쓰지 않는다).
+        const versionChanged = !!detailsVersion && !!folder.detailsVersion && folder.detailsVersion !== detailsVersion;
+        record(vehicle.plate, 'SKIPPED_SAME', selected.length, 0, versionChanged ? 'DETAILS_UPDATED_AT_CHANGED' : undefined); continue;
       }
       // 아직 끝나지 않은 폴더(비어 있음·부분 복사): 이어서 채운다. 이미 있는 파일은 «같은 원본 표식 + 무결성»일 때만 인정하고 아니면 교체 보류.
       selected.forEach((id, index) => {
         const existing = byName.get(fileName(index));
         if (!existing) missing.push(index);
-        else if (!isComplete(existing, id)) conflict = true;   // 같은 이름인데 원본이 다르거나 완료 표식이 없는 파일 → 교체 보류(삭제·덮어쓰기 없음)
+        else if (!isComplete(existing, id) || !ownedBy(existing, plateKey)) conflict = true;   // 같은 이름인데 원본이 다르거나 완료 표식이 없거나 다른 차량 표식인 파일 → 교체 보류(삭제·덮어쓰기 없음)
       });
       if (conflict || folderFiles.length > selected.length) {
         record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue;   // 교체는 별도 승인 경로: 쓰기·삭제 없음
@@ -146,10 +162,10 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
         await pace();
         const original = await deps.source.download(vehicle, id);
         const compressed = await deps.compress(original);
-        await deps.drive.upload(folder!.folderId, fileName(index), compressed.bytes, srcKeyOf(id));
+        await deps.drive.upload(folder!.folderId, fileName(index), compressed.bytes, srcKeyOf(id), plateKey);
         written++; result.photosWritten++; result.bytesWritten += compressed.bytes.length;
       }
-      await deps.drive.setFingerprint(folder!.folderId, fingerprint, new Date(deps.now()).toISOString());
+      await deps.drive.setFingerprint(folder!.folderId, fingerprint, new Date(deps.now()).toISOString(), detailsVersion);
       result.completed.push({ plate: vehicle.plate, folderId: folder!.folderId, files: selected.length });
       record(vehicle.plate, 'COPIED', selected.length, written);
     } catch (error) {

@@ -131,10 +131,6 @@ export function mapAutoplusDetail(data: Record<string, unknown>, observedAt: str
       product_group: 'LONG_TERM', product_type: '오플구독' }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } };
 }
 
-/** 사이트맵 상품 수 하한: 기존 노출 문서가 0 이면 0(편입은 허용, 하향할 대상이 없다), 아니면 노출 95% 와 직전 정상 회차 80% 중 큰 값. */
-export const autoplusSitemapFloor = (exposedDocs: number, previousCount: number): number =>
-  exposedDocs === 0 ? 0 : Math.max(Math.ceil(exposedDocs * 0.95), Math.ceil(previousCount * 0.8));
-
 export type AutoplusHomepageCollection = {
   observedAt: string; complete: boolean; incompleteReason?: string; productCount: number; records: SourceProductRecord[];
   failures: Array<{ productId: string; code: string }>; held: Array<{ productId: string; reason: string }>; duplicatePlates: string[];
