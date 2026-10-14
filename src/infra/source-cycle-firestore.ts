@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
+import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 
@@ -197,6 +198,34 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     return name?.trim() ? { provider_name: name, policy_code: mode('policy_code') ?? configured?.policy_code ?? null } : null;
   };
   const commands: CycleCommands = {
+    async storeRaw({ sourceId, records, held, observedAt, complete }) {
+      const entries = [...records.map(r => rawEntryOfRecord(sourceId, r)), ...held.map(h => rawEntryOfHeld(sourceId, h))];
+      const seen = new Set(entries.map(e => e.key));
+      const existing = new Map<string, { first: string | null; absent: string | null; digest: string | null }>();
+      const q = await request(':runQuery', 'POST', { structuredQuery: { from: [{ collectionId: 'source_raw' }],
+        where: { fieldFilter: { field: { fieldPath: 'source_id' }, op: 'EQUAL', value: { stringValue: sourceId } } },
+        select: { fields: ['key', 'first_seen_at', 'absent_since', 'raw_digest'].map(fieldPath => ({ fieldPath })) } } });
+      for (const row of (Array.isArray(q) ? q : []) as Array<{ document?: Doc }>) if (row.document) {
+        const f = decodeFields(row.document.fields);
+        if (typeof f.key === 'string') existing.set(f.key, { first: (f.first_seen_at as string) ?? null, absent: (f.absent_since as string) ?? null, digest: (f.raw_digest as string) ?? null });
+      }
+      const docName = (key: string) => `projects/${project}/databases/(default)/documents/source_raw/${encodeURIComponent(key)}`;
+      const writes: unknown[] = [];
+      for (const e of entries) {
+        const prior = existing.get(e.key);
+        const fields = { source_id: sourceId, key: e.key, kind: e.kind, plate: e.plate, uid: e.uid, vehicle_text: e.vehicleText, status_raw: e.statusRaw,
+          sale_available: e.saleAvailable, terms: e.terms, raw: e.raw, held_reasons: e.heldReasons, raw_digest: e.rawDigest, observed_at: observedAt,
+          first_seen_at: prior?.first ?? observedAt, last_seen_at: observedAt, absent_since: null, read_complete: complete };
+        writes.push({ update: { name: docName(e.key), fields: encodeFields(fields as never) }, updateMask: { fieldPaths: Object.keys(fields) } });
+      }
+      let absentMarked = 0;
+      if (complete) for (const [key, prior] of existing) if (!seen.has(key) && !prior.absent) {
+        absentMarked++;
+        writes.push({ update: { name: docName(key), fields: encodeFields({ absent_since: observedAt, read_complete: true } as never) }, updateMask: { fieldPaths: ['absent_since', 'read_complete'] } });
+      }
+      for (let i = 0; i < writes.length; i += 200) await request(':commit', 'POST', { writes: writes.slice(i, i + 200) });
+      return { stored: entries.length, absentMarked };
+    },
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
       const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = []; let page = ''; const pages = new Set<string>();

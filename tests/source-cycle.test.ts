@@ -313,6 +313,17 @@ describe('source plugins', () => {
 });
 
 describe('runner safety and heartbeat', () => {
+  it('stores the raw layer with zero gates (even incomplete reads) and a store failure never blocks the cycle', async () => {
+    const { ctrl, alerts } = control(), m = memory([product('a')]);
+    const stored: Array<{ records: number; complete: boolean }> = [];
+    m.commands.storeRaw = async input => { stored.push({ records: input.records.length, complete: input.complete }); return { stored: input.records.length, absentMarked: 0 }; };
+    await runSourceCycle(plugin(async () => capture([record('a'), record('b')])), m.commands, ctrl, { now: () => now });
+    expect(stored).toEqual([{ records: 2, complete: true }]);
+    m.commands.storeRaw = async () => { throw new Error('FIRESTORE_REQUEST_FAILED'); };
+    const after = await runSourceCycle(plugin(async () => capture([record('a'), record('b')])), m.commands, ctrl, { now: () => now });
+    expect(alerts).toContain('RAW_STORE_FAILED');
+    expect(['STOPPED', 'LOCKED']).not.toContain(after.status);
+  });
   it('persists three failures, alerts and stops before a fourth source read', async () => {
     const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
     for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
