@@ -155,9 +155,9 @@ for (const [relativeFile, required] of requiredGatewayUsage) {
 // whole-document replacement must match a reviewed call signature below (receiver and
 // target document for set()); a new call, a changed target, or a stale entry fails. Comments and string contents are ignored.
 const preservationAllowlist = [
-  { kind: 'fieldDelete', file: 'src/infra/iancar-publication-withdrawal-firestore.ts',
-    call: 'const patch = row.exists ? Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()]))',
-    reason: 'restore from typed backup; PR1c narrows this' },
+  { kind: 'fieldDelete', file: 'src/infra/iancar-photo-firestore.ts',
+    call: 'tx.update(refs[i]!, Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()])));',
+    reason: 'photo-only restore from typed backup; only photo keys added by the photo writer, never price/inventory' },
   { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
     call: 'return externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds };',
     reason: 'vehicle UID rollback restores typed pre-apply backup; normal apply is add-only' },

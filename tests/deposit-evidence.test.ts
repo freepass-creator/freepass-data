@@ -4,6 +4,8 @@ import { buildZeroDepositCandidateAudit } from '../src/application/audit-zero-de
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
+import { readIancarEngineDeposit } from '../src/domain/deposit-evidence.js';
+import { salePriceMap, type SourceTerm } from '../src/domain/source-engine.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
   const waiverBasis = { field: '원문.전체.장기보증', text: '무보증' } as const;
@@ -422,7 +424,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       depositEvidenceBasis: { field: 'deposit_note', text: '무보증' } });
     const iancar = withCompatibilityDepositEvidence({ provider_company_code: 'RP031', product_type: '중고렌트', deposit_note: '국산: 월 대여료×2',
       price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
-    expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+    expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' });
   });
 
   it('keeps guide and compatibility equivalent, while mapper only shares the narrow RP012 subscription years-rule scope', () => {
@@ -509,6 +511,113 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
           .toEqual(mapperExpected);
         expect(compat.rent).toBe(rent);
       }
+    }
+  });
+});
+
+describe('이안카(RP031) 보증금은 원천 엔진 근거만 읽는다', () => {
+  const now = '2026-10-14T00:00:00Z';
+  const amount = (value: number) => value === 0 ? { state: 'ZERO' as const, value: 0 as const } : { state: 'KNOWN' as const, value };
+  const term = (months: number, mileage: string, rent: number, deposit: number): SourceTerm =>
+    ({ months, mileage, monthlyRent: amount(rent), deposit: amount(deposit), raw: {} });
+  const engineProduct = (terms: SourceTerm[]): Record<string, any> => ({
+    provider_company_code: 'RP031', product_type: '중고렌트', car_number: '000가0000', price: salePriceMap(terms),
+    source_cycle_write: { by: 'source-engine', status: '출고가능', at: now },
+    source_cycle_record: { sourceId: 'RP031', uid: 'synthetic', plate: '000가0000', vehicleText: 'synthetic',
+      status: { raw: 'AVAILABLE', saleAvailable: true }, terms, observedAt: now, raw: {}, vehicleHold: [] } });
+  const terms = [term(24, '20000km/year', 500000, 0), term(24, '30000km/year', 600000, 1000000), term(36, '20000km/year', 450000, 700000)];
+
+  it('엔진 KNOWN·ZERO 를 그대로 읽고, ONE 의 0원은 무보증(ZERO)으로 남는다', () => {
+    const p = engineProduct(terms);
+    expect(readIancarEngineDeposit(p, '36', now)).toEqual({ state: 'KNOWN', amount: 700000, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE' });
+    expect(readIancarEngineDeposit(p, '24_연20000km', now)).toEqual({ state: 'ZERO', amount: 0, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE',
+      depositEvidenceBasis: { field: 'source_cycle_record.terms', text: '무보증', source: 'source-engine', at: now } });
+    expect(readIancarEngineDeposit(p, '24_연30000km', now)).toMatchObject({ state: 'KNOWN', amount: 1000000 });
+    // 개월 키는 엔진 판매 가격 칸과 같은 대표 항(연 환산 약정거리 최소)
+    expect(readIancarEngineDeposit(p, '24', now)).toMatchObject({ state: 'ZERO', amount: 0 });
+    // 짧은 신선도 창 없음: 시간이 지나도 ZERO·KNOWN 유지
+    expect(readIancarEngineDeposit(p, '24', '2026-12-31T00:00:00Z')).toMatchObject({ state: 'ZERO' });
+    expect(readIancarEngineDeposit(p, '24', '2026-12-31T00:00:00Z', { maxAgeSeconds: 900 }).state).toBe('UNKNOWN');
+  });
+
+  it('월 단위 옵션 키는 (개월, 월 약정거리) 항과 맞춘다', () => {
+    const p = engineProduct([term(3, '2000km/month', 500000, 200000), term(3, '3000km/month', 540000, 0)]);
+    expect(readIancarEngineDeposit(p, '3_월3000km', now)).toMatchObject({ state: 'ZERO', amount: 0 });
+    expect(readIancarEngineDeposit(p, '3_월2000km', now)).toMatchObject({ state: 'KNOWN', amount: 200000 });
+    expect(readIancarEngineDeposit(p, '3', now)).toMatchObject({ state: 'KNOWN', amount: 200000 });
+    expect(readIancarEngineDeposit(p, '3_연2000km', now).state).toBe('UNKNOWN');
+    expect(readIancarEngineDeposit(p, '6', now).state).toBe('UNKNOWN');
+  });
+
+  it('price 칸 보증금이 엔진 항과 다르면 UNKNOWN', () => {
+    const p = engineProduct(terms);
+    p.price['24_연30000km'].deposit = 900000;
+    expect(readIancarEngineDeposit(p, '24_연30000km', now)).toEqual({ state: 'UNKNOWN', amount: null, reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' });
+    const unknownTerm = engineProduct([{ ...term(12, '20000km/year', 500000, 1), deposit: { state: 'UNKNOWN', value: null } }]);
+    expect(readIancarEngineDeposit(unknownTerm, '12', now).state).toBe('UNKNOWN');
+  });
+
+  it('엔진이 쓰지 않은 문서·옛 1차 발행 문서·삭제/철회·번호판 불일치·다른 공급사는 UNKNOWN', () => {
+    const p = engineProduct(terms);
+    const legacy = { provider_company_code: 'RP031', car_number: '000가0000', price: p.price, source: 'EANCAR_ONE_API',
+      source_schema: 'iancar-one-phase-one-product/1', iancar_phase_one: { stage: 'PHASE_ONE', terms: [] } };
+    expect(readIancarEngineDeposit(legacy, '36', now).state).toBe('UNKNOWN');
+    for (const patch of [{ source_cycle_write: { by: 'erp4' } }, { source_cycle_write: null }, { source_cycle_record: null },
+      { provider_company_code: 'RP012' }, { _deleted: true }, { deletedAt: 'x' }, { publication_withdrawal: { reason: 'SOURCE_ABSENCE_HOLD' } },
+      { car_number: '111가1111' }, { product_type: '픽업구독' }, { deposit_free: false }])
+      expect(readIancarEngineDeposit({ ...p, ...patch }, '24', now).state).toBe('UNKNOWN');
+    // 미래 관측 거절
+    expect(readIancarEngineDeposit(p, '36', '2026-10-13T23:58:00Z').state).toBe('UNKNOWN');
+  });
+
+  it('Codex #639 ②: a changed monthly rent (price row no longer equals the engine record term) is never confirmed, even if the deposit number matches', () => {
+    const p = engineProduct(terms);
+    expect(readIancarEngineDeposit(p, '36', now)).toMatchObject({ state: 'KNOWN', amount: 700000 });
+    const repriced = structuredClone(p); repriced.price['36'].rent = 460000;           // 월요금이 바뀐 칸 — 보증금 숫자(700000)는 그대로
+    expect(readIancarEngineDeposit(repriced, '36', now).state).toBe('UNKNOWN');
+    const zeroRepriced = structuredClone(p); zeroRepriced.price['24_연20000km'].rent = 510000;   // 0 보증금도 월요금이 다르면 ZERO 확정 금지
+    expect(readIancarEngineDeposit(zeroRepriced, '24_연20000km', now).state).toBe('UNKNOWN');
+  });
+
+  it('Codex #639 ③: a paid-deposit note that is not the waiver/varies note blocks the source ZERO (no 0-won confirmation)', () => {
+    const p = engineProduct(terms);
+    expect(readIancarEngineDeposit({ ...p, deposit_note: '보증금 30만원 별도 납부' }, '24_연20000km', now).state).toBe('UNKNOWN');
+    expect(readIancarEngineDeposit({ ...p, deposit_note: '무보증' }, '24_연20000km', now)).toMatchObject({ state: 'ZERO' });
+    expect(readIancarEngineDeposit({ ...p, deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인' }, '24_연20000km', now)).toMatchObject({ state: 'ZERO' });
+    // 양수 보증금 확인은 안내문과 무관(막지 않는다)
+    expect(readIancarEngineDeposit({ ...p, deposit_note: '보증금 30만원 별도 납부' }, '36', now)).toMatchObject({ state: 'KNOWN', amount: 700000 });
+  });
+
+  it('Codex #639 ①: a document the engine has not written yet (no mark, no record) keeps its existing verified value through the legacy publication evidence instead of turning UNKNOWN', () => {
+    const t = (key: string, months: number, km: number, period: 'month' | 'year', rent: number, dep: number) => ({
+      key, termMonths: months, contractedMileage: { km, period }, monthlyRent: { currency: 'KRW', amount: rent }, vatIncluded: true,
+      deposit: { currency: 'KRW', amount: dep }, depositState: dep === 0 ? 'ZERO' : 'KNOWN', compatibilityPriceKey: `${months}_${period === 'month' ? '월' : '연'}${km}km` });
+    const legacy: Record<string, any> = { provider_company_code: 'RP031', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
+      iancar_one_vehicle_id: 'V-1', car_number: '000가0000', product_type: '중고렌트', _direct_ingest_at: Date.parse('2026-10-14T00:00:00Z'),
+      price: { '24_연20000km': { rent: 500000, deposit: 1000000 }, '24': { rent: 500000, deposit: 1000000 } },
+      iancar_phase_one: { stage: 'PHASE_ONE', publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE', sourceVehicleId: 'V-1', sourceSyncedAt: '2026-10-14T00:00:00Z',
+        sourceDigest: 'a'.repeat(64), ratesDigest: 'b'.repeat(64), priceAliases: { '24': '24:20000:year' },
+        terms: [t('24:20000:year', 24, 20000, 'year', 500000, 1000000)] } };
+    expect(readIancarEngineDeposit(legacy, '24_연20000km', now)).toMatchObject({ state: 'KNOWN', amount: 1000000 });   // 보존
+    // 표식이나 기록이 «하나라도» 있는데 맞지 않으면(다른 주체가 덮음) 보존하지 않는다
+    expect(readIancarEngineDeposit({ ...legacy, source_cycle_write: { by: 'erp4' } }, '24_연20000km', now).state).toBe('UNKNOWN');
+    // 근거가 없는 문서는 여전히 UNKNOWN
+    expect(readIancarEngineDeposit({ provider_company_code: 'RP031', car_number: '1', price: { '24': { rent: 1, deposit: 5 } } }, '24', now).state).toBe('UNKNOWN');
+    // null 은 «없음»이라 레거시 보존이 유지된다
+    expect(readIancarEngineDeposit({ ...legacy, source_cycle_write: null, source_cycle_record: null }, '24_연20000km', now)).toMatchObject({ state: 'KNOWN', amount: 1000000 });
+  });
+
+  it('Codex #639 재검토: a corrupted (non-object) engine mark or record never falls back to the legacy evidence', () => {
+    const base: Record<string, any> = { provider_company_code: 'RP031', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
+      iancar_one_vehicle_id: 'V-1', car_number: '000가0000', product_type: '중고렌트', _direct_ingest_at: Date.parse('2026-10-14T00:00:00Z'),
+      price: { '24_연20000km': { rent: 500000, deposit: 1000000 } },
+      iancar_phase_one: { stage: 'PHASE_ONE', publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE', sourceVehicleId: 'V-1', sourceSyncedAt: '2026-10-14T00:00:00Z',
+        sourceDigest: 'a'.repeat(64), ratesDigest: 'b'.repeat(64), priceAliases: {},
+        terms: [{ key: '24:20000:year', termMonths: 24, contractedMileage: { km: 20000, period: 'year' }, monthlyRent: { currency: 'KRW', amount: 500000 },
+          vatIncluded: true, deposit: { currency: 'KRW', amount: 1000000 }, depositState: 'KNOWN', compatibilityPriceKey: '24_연20000km' }] } };
+    for (const bad of ['broken', 7, true, [], ['x'], '']) {
+      expect(readIancarEngineDeposit({ ...base, source_cycle_write: bad }, '24_연20000km', now).state, `mark ${JSON.stringify(bad)}`).toBe('UNKNOWN');
+      expect(readIancarEngineDeposit({ ...base, source_cycle_record: bad }, '24_연20000km', now).state, `record ${JSON.stringify(bad)}`).toBe('UNKNOWN');
     }
   });
 });
