@@ -6,17 +6,24 @@ import { appendFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** 온라인에서 읽을 수 있는 원천과 필요한 변수. 시트 원천(F05·AICA)은 gws(회사 계정 위임) 의존이라 아직 넣지 않는다. */
+/** 온라인에서 읽을 수 있는 원천과 필요한 변수. 시트 원천(F05·AICA)은 gws(회사 계정 위임) 의존이라 아직 넣지 않는다.
+ * IRON 은 홈페이지 상세 모드(SOURCE_CYCLE_IRON_HOMEPAGE=1)면 고정 호스트만 읽어 변수가 필요 없고, 옛 목록 모드만 SOURCE_CYCLE_IRON_LIST_URL 이 필요하다. */
 export const ONLINE_DRY_RUN_SOURCES = Object.freeze({
   IANCAR: ['EANCAR_ONE_API_BASE_URL', 'EANCAR_ONE_API_KEY'],
   IRON: ['SOURCE_CYCLE_IRON_LIST_URL'],
   AUTOPLUS: [],
 });
-/** 자식 프로세스에 절대 넘기지 않는 쓰기·승인·인계 스위치. */
+/** 그 원천을 계획하는 데 필요한 변수(읽기 모드에 따라 다르다). */
+export function requiredVars(kind, env) {
+  if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') return [];
+  return ONLINE_DRY_RUN_SOURCES[kind];
+}
+/** 자식 프로세스에 절대 넘기지 않는 쓰기·승인·인계 스위치.
+ * SOURCE_CYCLE_IRON_HOMEPAGE 는 쓰기 스위치가 아니라 «읽기 모드 선택»(홈페이지 상세)이라 넘긴다 — 지우면 DRY_RUN 이 운영과 다른 옛 목록 경로를 검증한다. */
 export const WRITE_SWITCHES = Object.freeze(['SOURCE_CYCLE_UNATTENDED', 'SOURCE_CYCLE_APPROVED_DIGEST', 'SOURCE_CYCLE_TAKEOVER',
   'SOURCE_CYCLE_SONOGONG_API', 'SOURCE_CYCLE_SONOGONG_REPLACE_ONCE', 'SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE',
   'SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE', 'SOURCE_CYCLE_AUTOPLUS_SHEET', 'SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE',
-  'SOURCE_CYCLE_IRON_HOMEPAGE', 'SONOGONG_API_KEY', 'SONOGONG_ACCOUNT_JSON']);
+  'SONOGONG_API_KEY', 'SONOGONG_ACCOUNT_JSON']);
 
 export function dryRunEnv(base, kind, privateDir) {
   const env = { ...base };
@@ -47,7 +54,7 @@ function main() {
   const kinds = parseSources(process.env.SOURCES);
   const rows = [];
   for (const kind of kinds) {
-    const missing = ONLINE_DRY_RUN_SOURCES[kind].filter(name => !process.env[name]?.trim());
+    const missing = requiredVars(kind, process.env).filter(name => !process.env[name]?.trim());
     if (missing.length) { rows.push({ kind, source: null, status: 'SKIPPED', summary: `missing ${missing.join(',')}` }); continue; }
     const privateDir = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), `source-cycle-${kind}-`));
     const run = spawnSync(process.execPath, ['dist/src/runtime/source-cycle-runtime.js'],

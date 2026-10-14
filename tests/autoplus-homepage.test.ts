@@ -87,4 +87,18 @@ describe('오토플러스 홈피 어댑터(관측 전용)', () => {
     const cmp = compareAutoplusHomepage(records, [{ plate: '12가3456', listable: true }, { plate: '99다1111', listable: true }, { plate: '34나7890', listable: false }]);
     expect(cmp).toMatchObject({ homepage: 2, exposedDocs: 2, both: 1, onlyHomepageCount: 0, exposedNotOnHomepageCount: 1, exposedNotOnHomepageLast4: ['1111'] });
   });
+  it('compare: 같은 차의 대여료 차이(시트 문서 vs 홈피)를 건수·끝 4자리로만 센다', () => {
+    const records = [mapAutoplusDetail(detail(), 't'), mapAutoplusDetail(detail({ productId: 'C12345678902', carNumber: '34나7890' }), 't')]
+      .map(m => ('record' in m ? m.record : null)!);
+    const terms = records[0]!.terms;
+    expect(terms.length).toBeGreaterThan(0);
+    const same = Object.fromEntries(terms.map(t => [`${t.months}_연${/^(\d+)/.exec(t.mileage!)![1]}km`, { rent: t.monthlyRent.value as number, deposit: null }]));
+    const off = Object.fromEntries(Object.entries(same).map(([k, v], i) => [k, i === 0 ? { ...v, rent: v.rent + 10000 } : v]));
+    const cmp = compareAutoplusHomepage(records, [{ plate: '12가3456', listable: true, price: off }, { plate: '34나7890', listable: true, price: same }, { plate: '99다1111', listable: true }]);
+    expect(cmp).toMatchObject({ rentComparedPlates: 2, rentMismatchCount: 1, rentMismatchLast4: ['3456'], rentMismatchTerms: 1, rentNotComparableTerms: 0 });
+    expect(JSON.stringify(cmp)).not.toContain('12가3456');
+    // 문서에 그 항이 없으면 비교 불가(불일치 아님)
+    const none = compareAutoplusHomepage(records, [{ plate: '12가3456', listable: true, price: {} }]);
+    expect(none).toMatchObject({ rentComparedPlates: 0, rentMismatchCount: 0, rentNotComparableTerms: terms.length });
+  });
 });

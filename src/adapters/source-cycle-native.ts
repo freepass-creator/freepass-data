@@ -1,7 +1,8 @@
 import { sharedSheetEngine } from './shared-sheet-engine.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
-import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isAssignedPlate, isValidSheetPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
@@ -73,14 +74,19 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     if (scopes.includes(tab.title) && (m?.properties?.hidden || !m || !grid || !Array.isArray(grid.rowMetadata) ||
       grid.rowMetadata.length < tab.rowCount || (m.properties?.gridProperties?.rowCount ?? 0) < tab.rowCount)) complete = false;
     const seen = new Set<string>();
+    // 숨김: 탭 숨김·사용자가 숨긴 행만 «숨김» 으로 본다. 필터로 가려진 행(hiddenByFilter)은 공유 «보기» 상태일 뿐 데이터라 그대로 읽는다
+    // (전에는 누군가 필터를 걸면 그 행들이 빈 행이 되어 부재 하향됐다). 사용자가 숨긴 이 공급사 행은 빼되 «없음» 이 아니라 보류로 센다(아래).
+    const hiddenAt = (i: number) => !!(m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser);
     // 행별 키: 번호 → 시트 UID → (없으면) 지문#순번. 순번은 같은 지문의 탭 안 출현 순서(원천 행 위치는 이 순번으로만 보조 키가 된다).
-    const rowKeys: Array<{ uid: string | null; fp: string | null }> = [];
+    // 번호 칸에 숫자가 있는데 번호 모양(12가3456)이 아니면(«신차(11/5)» 등) 문서 ID 로 쓰지 않고 PLATE_INVALID 로 보류한다.
+    const rowKeys: Array<{ uid: string | null; fp: string | null; invalidPlate?: true }> = [];
     const fpCount = new Map<string, number>();
     for (let i = 0; i < tab.values.length; i++) {
       const r = tab.values[i]!;
       const sup = i === 0 ? undefined : sharedSheetChannelOf(tab.title, r[0]);
-      const hid = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      const hid = hiddenAt(i);
       if (i === 0 || !sup || sup.code !== source || hid || tab.title === '종합' || r.every(c => c === '' || c === null)) { rowKeys.push({ uid: null, fp: null }); continue; }
+      if (plateIndex >= 0 && isAssignedPlate(r[plateIndex]) && !isValidSheetPlate(r[plateIndex])) { rowKeys.push({ uid: null, fp: null, invalidPlate: true }); continue; }
       const base = sourceUid(r[plateIndex], originalHeaders.includes('UID') ? r[uidIndex] : null);
       const fp = rowFingerprint(source, tab.title, r, originalHeaders);
       if (base) { rowKeys.push({ uid: base, fp }); continue; }
@@ -96,7 +102,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!;
       const supplier = sharedSheetChannelOf(tab.title, row[0]);
-      const hiddenRow = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      const hiddenRow = hiddenAt(i);
       if (!supplier || supplier.code !== source || hiddenRow || tab.title === '종합' || row.every(c => c === '' || c === null)) continue;
       const rowUid = rowKeys[i]?.uid ?? null;
       if (!rowUid) continue;
@@ -114,8 +120,12 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     for (let i = 1; i < tab.values.length; i++) {
       const row = tab.values[i]!, original = [...row];
       const supplier = sharedSheetChannelOf(tab.title, row[0]);
-      const hidden = m?.properties?.hidden || grid?.rowMetadata?.[i]?.hiddenByUser || grid?.rowMetadata?.[i]?.hiddenByFilter;
+      const hidden = hiddenAt(i);
       const blank = row.every(c => c === '' || c === null);
+      // 사용자가 숨긴 이 공급사 행: 읽지 않지만 «없는 차» 로 두지 않는다 — 보류로 세어 부재 하향을 막는다(숨김 = 판매 종료인지는 원천이 말하지 않는다).
+      if (supplier?.code === source && hidden && tab.title !== '종합' && !blank) {
+        holds.push('ROW_HIDDEN_BY_USER'); tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
+      }
       // 이 원천의 탭에 있는 보이는 데이터 행인데 회사명이 어느 공급사 코드에도 매핑되지 않으면 «없는 차량»이 아니라 «알 수 없는 행»이다.
       // 조용히 버리면 같은 차량이 부재로 오인돼 내려간다(2026-10-13 경진 → 경진렌트 표기 변경 실측). 보류로 세어 부재 하향을 막는다.
       if (!supplier && scopes.includes(tab.title) && !hidden && tab.title !== '종합' && !blank) holds.push('COMPANY_UNMAPPED');
@@ -125,7 +135,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       const uid = rowKeys[i]?.uid ?? null;
       const notChosen = !!uid && !conflictingUids.has(uid) && chosen.get(uid)?.index !== i;
       if (!uid || seen.has(uid) || conflictingUids.has(uid) || notChosen) {
-        holds.push(!uid ? 'UID_REQUIRED' : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
+        holds.push(!uid ? (rowKeys[i]?.invalidPlate ? 'PLATE_INVALID' : 'UID_REQUIRED') : conflictingUids.has(uid) ? 'DUPLICATE_UID_CONFLICT' : 'DUPLICATE_UID_SUSPECT');
         tab.values[i] = Array(tab.values[0]!.length).fill(''); continue;
       }
       seen.add(uid); row[uidIndex] = uid;
@@ -135,7 +145,9 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
   copy.digest = sharedSheetCaptureDigest(copy);
   const engine = sharedSheetEngine(async () => copy);
   const converted = engine.toRecords({ raw: copy, observedAt: copy.readTime, attemptedAt: copy.readTime, complete, error: null });
+  const zeroRent = converted.records.reduce((n, r) => n + (typeof r.raw.rent_zero_terms === 'number' ? r.raw.rent_zero_terms : 0), 0);
   return { observedAt: capture.readTime, complete, completedScopes: complete ? scopes : [], visibilityComplete: complete,
+    ...(zeroRent ? { notes: [`RENT_ZERO:${zeroRent}`] } : {}),
     heldCount: holds.length + converted.held.length, heldReasons: [...holds, ...converted.held.map(h => h.reasons.join(','))],
     rows: converted.records.map(record => { const pos = positions.get(record.uid)!;
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
@@ -158,7 +170,7 @@ export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
 export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
   const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
-  let visibilityComplete = true, observationOnlyCount = 0;
+  let visibilityComplete = true, observationOnlyCount = 0, zeroRent = 0;
   const notes: string[] = [];
   const money = (value: unknown): SourceAmount => {
     if (typeof value === 'string') {
@@ -169,6 +181,13 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     }
     return amount(value);
   };
+  /** 월 대여료: 0 은 «그 기간 가격 없음»(null 로 돌려 기간을 뺀다, 건수만 센다). 타당 범위(10만~5천만원) 밖은 추정하지 않고 UNKNOWN(확인 필요 보류). */
+  const rentOf = (value: unknown): SourceAmount | null => {
+    const parsed = money(value);
+    if (parsed.state === 'ZERO') { zeroRent++; return null; }
+    return parsed.state === 'KNOWN' && !isPlausibleMonthlyRent(parsed.value) ? amount(null) : parsed;
+  };
+  const rentReviewHolds: string[] = [];
   for (const title of AICA_SCOPES) {
     const table = tables.find(t => t.title === title), headers = table?.values[0]?.map(v => String(v).trim());
     const sheet = meta?.sheets?.find(s => s.properties?.title === title);
@@ -193,22 +212,22 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     if (title === '월렌트' && (headers[0] !== '차종' || headers[1] !== '1개월')) continue;
     completedScopes.push(title);
     for (const [index, cells] of table.values.slice(1).entries()) {
-      if (grid.rowMetadata[index + 1]?.hiddenByUser || grid.rowMetadata[index + 1]?.hiddenByFilter ||
-          cells.every(v => v === '' || v == null)) continue;
+      // 필터로 가려진 행(hiddenByFilter)은 공유 «보기» 상태일 뿐 데이터라 그대로 읽는다. 사용자가 숨긴 행은 읽지 않되 «없음»(부재 하향)이 아니라 보류로 센다.
+      if (cells.every(v => v === '' || v == null)) continue;
+      if (grid.rowMetadata[index + 1]?.hiddenByUser) { monthlyHolds.push('ROW_HIDDEN_BY_USER'); continue; }
       if (title === '월렌트') {
         if (typeof cells[1] === 'string' && cells[1].trim() === '무보증') continue;
-        const rent = money(cells[1]), name = typeof cells[0] === 'string' ? cells[0] : '';
+        const name = typeof cells[0] === 'string' ? cells[0] : '';
+        // 요금 칸이 «가격 없음» 낱말(공통 시트와 같은 목록)이거나 0 이면 제안이 없는 것이다.
+        if (isNoPriceText(cells[1])) continue;
+        const rent = rentOf(cells[1]);
+        if (rent === null) continue;
         if (rent.state === 'UNKNOWN') {
-          // 요금 칸이 비어 있거나 «없음» 류 표시면 제안이 없는 것이다. 값이 있는데 읽을 수 없으면(잘못된 금액·음수) 조용히 버리지 않고
-          // 보류로 센다 — 버리면 기존 월렌트 모델이 «부재» 로 하향될 수 있다.
-          const raw = cells[1];
-          const marker = raw == null || (typeof raw === 'string' && ['', '-', '--', '—', 'x', 'X', '없음', 'N/A'].includes(raw.trim()));
-          if (!marker) {
-            monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
-            // 같은 모델(UID)에 해석 가능한 다른 행이 있어도 그 UID 그룹 전체를 보류한다(해석 실패 행이 있는데 한쪽만 통과시키지 않는다).
-            const unparsedUid = (typeof cells[0] === 'string' ? cells[0] : '').normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
-            if (unparsedUid) unparseableMonthlyUids.add(`RP004:MONTHLY:${unparsedUid}`);
-          }
+          // 값이 있는데 읽을 수 없거나(잘못된 금액·음수) 타당 범위 밖이면 조용히 버리지 않고 보류로 센다 — 버리면 기존 월렌트 모델이 «부재» 로 하향될 수 있다.
+          monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
+          // 같은 모델(UID)에 해석 가능한 다른 행이 있어도 그 UID 그룹 전체를 보류한다(해석 실패 행이 있는데 한쪽만 통과시키지 않는다).
+          const unparsedUid = (typeof cells[0] === 'string' ? cells[0] : '').normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
+          if (unparsedUid) unparseableMonthlyUids.add(`RP004:MONTHLY:${unparsedUid}`);
           continue;
         }
         const normalized = name.normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
@@ -223,20 +242,31 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         continue;
       }
       const get = (header: string) => cells[headers.indexOf(header)];
-      const plate = isAssignedPlate(get('차량번호')) ? plateIdentityKey(get('차량번호')) : null;
+      const plate = isValidSheetPlate(get('차량번호')) ? plateIdentityKey(get('차량번호')) : null;
       const deposit = get('장기보증');
+      // 연주행: UNFORMATTED 읽기라 숫자 칸(20000)은 숫자로 온다 — 문자열과 같게 글자로 남긴다(전에는 숫자면 약정거리가 빠졌다).
+      const mileageCell = get('연주행');
+      const mileage = typeof mileageCell === 'string' ? mileageCell
+        : typeof mileageCell === 'number' && Number.isFinite(mileageCell) ? String(mileageCell) : null;
+      let rentReview = false;
       const terms = [36, 48, 60].flatMap(months => {
         const rent = get(`${months}개월`);
-        // Blank periods are absent offers, not offers with an UNKNOWN rent.
-        if (rent == null || (typeof rent === 'string' && ['', '-', '--', '\u2014', 'x', 'X', '\uc5c6\uc74c', 'N/A'].includes(rent.trim()))) return [];
-        return [{ months, monthlyRent: typeof rent === 'string' && rent.trim() === '무보증' ? amount(null) : money(rent), deposit: money(deposit),
-          mileage: typeof get('연주행') === 'string' ? String(get('연주행')) : null, raw: { rent, deposit: deposit ?? null } }];
+        // Blank / «가격 없음» 낱말 / 0 = 그 기간 제안 없음(UNKNOWN 대여료가 아니다).
+        if (isNoPriceText(rent)) return [];
+        const monthlyRent = typeof rent === 'string' && rent.trim() === '무보증' ? amount(null) : rentOf(rent);
+        if (monthlyRent === null) return [];
+        if (monthlyRent.state === 'UNKNOWN') rentReview = true;
+        return [{ months, monthlyRent, deposit: money(deposit), mileage, raw: { rent, deposit: deposit ?? null } }];
       });
       const vehicleText = [get('차종분류'), get('트림')].filter(v => v != null && v !== '').join(' ');
       // 차량 행이 아닌 안내 문구 행(차량번호·차종·트림·요금이 모두 비고 배차상태 칸에만 글, 예: «수수료 고정 50만원»)은 «번호 미배정 차량»이 아니다.
       // 보류로 세면 RP004 전체의 부재 하향이 막힌다(2026-10-14 5411 실측). 번호·차종·요금 중 하나라도 있으면 지금처럼 보류한다.
       const plateCell = get('차량번호');
       if (!plate && vehicleText === '' && terms.length === 0 && (plateCell == null || String(plateCell).trim() === '')) continue;
+      // 번호 칸에 숫자가 있는데 번호 모양이 아니면(«신차(11/5)» 등) 문서 ID 로 쓰지 않고 보류한다(번호 미배정과 구분).
+      if (!plate && isAssignedPlate(plateCell)) { monthlyHolds.push('PLATE_INVALID'); continue; }
+      // 대여료 해석 불가·범위 밖: 행은 그대로 내보내(TERMS_HOLD) 기존 문서를 지키고, 사유를 보류로 드러낸다.
+      if (rentReview) rentReviewHolds.push('RENT_REVIEW_REQUIRED');
       rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
         vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
@@ -252,8 +282,10 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     if (drop) monthlyHolds.push('MONTHLY_RENT_UNPARSEABLE');
     return !drop;
   });
+  if (zeroRent) notes.push(`RENT_ZERO:${zeroRent}`);
+  const heldReasons = [...monthlyHolds, ...rentReviewHolds];
   return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
-    completedScopes, visibilityComplete, rows: keptRows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount,
+    completedScopes, visibilityComplete, rows: keptRows, heldCount: heldReasons.length, heldReasons, observationOnlyCount,
     ...(notes.length ? { notes } : {}) };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({

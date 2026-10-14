@@ -3,7 +3,8 @@
  *  - 목록: GET /sitemap-ext.xml 의 /rent/<영문2+숫자>/C<11자리> URL 전부(= 게시 중 전수). 홈피 LP API 는 추천 20 고정이라 쓰지 않는다.
  *  - 상세: 상품 자기 상세 URL GET → Set-Cookie·RB_TOKEN(JWT)·_csrf → POST /api/v1/car/getRentCarDetail.rb (본문 productId).
  *  - 호출 규칙: 완전 직렬, 차 사이 150ms, resultCode 1020 이면 응답 msg 의 새 토큰으로 60ms 후 최대 4회.
- * 상태 신호는 «사이트맵에 있음 = 게시 중» 뿐이고(상세 응답에 상태 필드 없음), 보증금은 응답에 없다(UNKNOWN 으로 두고 규칙은 별도 정책). */
+ * 상태 신호는 «사이트맵에 있음 = 게시 중» 뿐이고(상세 응답에 상태 필드 없음), 보증금은 응답에 없다(UNKNOWN). 대표 2026-10-14 «시트를 메인으로 하되 홈페이지를 참고»: RP023 쓰기·보증금 계산은 시트(autoplus-sheet)만, 홈피는 비교 보고만. */
+import { MONTHLY_RENT_MIN, MONTHLY_RENT_MAX } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 
@@ -93,7 +94,7 @@ export function createAutoplusHomepageClient(options: {
 
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
 /** 월 대여료만 KNOWN: 숫자 또는 숫자 문자열, 정수, 10만~5천만 원. true/객체/범위 밖 값은 UNKNOWN(독립 검토 2026-10-14: Number(true)=1 이 가격이 되어 REEXPOSE 됨). */
-const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
+const RENT_MIN = MONTHLY_RENT_MIN, RENT_MAX = MONTHLY_RENT_MAX;   // 공용 월 대여료 타당 범위(공통 시트·아이카와 같은 값)
 const amountOf = (v: unknown): SourceAmount => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : NaN;
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
@@ -163,16 +164,47 @@ export async function collectAutoplusHomepage(client: AutoplusHomepageClient, no
     productCount: urls.length, records, failures, held, duplicatePlates: [...duplicatePlates], excluded };
 }
 
-/** Firestore RP023 문서와의 비교(순수): 번호 기준 집합 차이와 가격 있는 대수만 센다. 값·전체 번호는 담지 않고 끝 4자리만 나열한다. */
+/** 문서 판매 가격 칸에서 (개월, 연 약정거리) 항의 대여료를 찾는다: 옵션 키 «{개월}_연{km}km» 가 우선, 없으면 개월 키의 mileage 가 같을 때만. */
+const docRentOf = (price: unknown, months: number, mileage: string | null): number | null => {
+  if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
+  const p = price as Record<string, unknown>, km = /^(\d+)km\/year$/.exec(mileage ?? '')?.[1];
+  const pick = (v: unknown) => v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  const option = km ? pick(p[`${months}_연${km}km`]) : null;
+  const plain = pick(p[String(months)]);
+  const row = option ?? (plain && plain.mileage === mileage ? plain : null);
+  return row && typeof row.rent === 'number' && Number.isSafeInteger(row.rent) ? row.rent : null;
+};
+
+/** Firestore RP023 문서와의 비교(순수): 번호 기준 집합 차이와 가격 있는 대수, 그리고 같은 차의 대여료 차이(시트=정본, 홈피=참고, 대표 2026-10-14)를 센다.
+ * 값·전체 번호는 담지 않고 끝 4자리만 나열한다. 홈피는 쓰지 않는다(보고 전용). */
 export function compareAutoplusHomepage(records: readonly SourceProductRecord[],
-  docs: ReadonlyArray<{ plate: string | null; listable: boolean }>) {
+  docs: ReadonlyArray<{ plate: string | null; listable: boolean; price?: unknown }>) {
   const last4 = (p: string) => p.replace(/\D/g, '').slice(-4);
   const home = new Set(records.map(r => r.uid));
   const exposed = new Set(docs.filter(d => d.listable && d.plate).map(d => plateIdentityKey(d.plate!)));
   const all = new Set(docs.filter(d => d.plate).map(d => plateIdentityKey(d.plate!)));
   const onlyHomepage = [...home].filter(p => !all.has(p)), exposedNotOnHomepage = [...exposed].filter(p => !home.has(p));
+  // 대여료 대조: 홈피 항(개월·약정거리)마다 문서의 같은 항 대여료와 비교한다. 문서에 그 항이 없으면 «비교 불가»로 세고 불일치로 보지 않는다.
+  const priceByPlate = new Map(docs.filter(d => d.plate && d.price !== undefined).map(d => [plateIdentityKey(d.plate!), d.price]));
+  const rentMismatch: string[] = [];
+  let rentComparedPlates = 0, rentComparedTerms = 0, rentMismatchTerms = 0, rentNotComparableTerms = 0;
+  for (const r of records) {
+    if (!priceByPlate.has(r.uid) || !r.terms.length) continue;
+    let compared = 0, mismatched = 0;
+    for (const t of r.terms) {
+      const docRent = docRentOf(priceByPlate.get(r.uid), t.months, t.mileage);
+      if (docRent === null || t.monthlyRent.state !== 'KNOWN') { rentNotComparableTerms++; continue; }
+      compared++;
+      if (docRent !== t.monthlyRent.value) mismatched++;
+    }
+    if (compared) rentComparedPlates++;
+    rentComparedTerms += compared; rentMismatchTerms += mismatched;
+    if (mismatched) rentMismatch.push(r.uid);
+  }
   return { homepage: home.size, homepageWithPrice: records.filter(r => r.terms.length > 0).length, exposedDocs: exposed.size,
     both: [...home].filter(p => exposed.has(p)).length,
     onlyHomepageCount: onlyHomepage.length, onlyHomepageLast4: onlyHomepage.map(last4).sort(),
-    exposedNotOnHomepageCount: exposedNotOnHomepage.length, exposedNotOnHomepageLast4: exposedNotOnHomepage.map(last4).sort() };
+    exposedNotOnHomepageCount: exposedNotOnHomepage.length, exposedNotOnHomepageLast4: exposedNotOnHomepage.map(last4).sort(),
+    rentComparedPlates, rentComparedTerms, rentMismatchTerms, rentNotComparableTerms,
+    rentMismatchCount: rentMismatch.length, rentMismatchLast4: rentMismatch.map(last4).sort() };
 }

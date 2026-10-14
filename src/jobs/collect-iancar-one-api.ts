@@ -11,7 +11,6 @@ import {
 } from '../adapters/iancar-one-api.js';
 import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 import { createHash } from 'node:crypto';
-import { checkIancarSyncExpect } from '../domain/iancar-sync-gate.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 // Strict isolated entrypoint. Never reaches legacy reports, DB access or private raw capture.
@@ -129,31 +128,14 @@ if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
   console.log(JSON.stringify(await runIancarPhotoRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
   process.exit(0);
 }
-if ([...requested].some(arg => arg.startsWith('--restore-sync='))) {
-  // 1차 발행(--apply-sync) 백업 복원. 기본은 계획만, --apply 는 IANCAR_SYNC_RESTORE_APPROVED=true 필요. 문서는 삭제하지 않는다.
-  const args = [...requested];
-  if (args.some(arg => !arg.startsWith('--restore-sync=') && !arg.startsWith('--expected-digest=') && arg !== '--apply')) throw new Error('IANCAR_RESTORE_OPTIONS_MIXED');
-  const backupPath = args.find(arg => arg.startsWith('--restore-sync='))!.slice('--restore-sync='.length);
-  const expectedSourceDigest = args.find(arg => arg.startsWith('--expected-digest='))?.slice('--expected-digest='.length);
-  if (!backupPath || !expectedSourceDigest) throw new Error('IANCAR_RESTORE_BACKUP_INVALID');
-  if (requested.has('--apply') && process.env.IANCAR_SYNC_RESTORE_APPROVED !== 'true') throw new Error('IANCAR_SYNC_RESTORE_APPROVAL_REQUIRED');
-  const { runIancarPhaseOneRestore } = await import('./data-access-runtime.js');
-  console.log(JSON.stringify(await runIancarPhaseOneRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
-  process.exit(0);
-}
-const allowed = new Set(['--refresh-facts', '--photos-pending', '--keep-withdrawn', '--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos', '--sync', '--apply-sync']);
+// 이안카 상품 문서(가격·재고·상태)의 유일한 작성 주체는 원천 엔진(source-engine)이다. 옛 1차 발행(--sync/--apply-sync 등)은 2026-10-14 폐기.
+const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
 
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
-if (requested.has('--apply-sync') && !requested.has('--sync')) throw new Error('IANCAR_SYNC_MODE_REQUIRED');
-if (requested.has('--sync')) {
-  if ([...requested].some(arg => !['--sync', '--apply-sync', '--save-private', '--photos-pending', '--keep-withdrawn', '--refresh-facts'].includes(arg))) throw new Error('IANCAR_SYNC_OPTIONS_MIXED');
-  if (requested.has('--apply-sync') && process.env.EANCAR_ONE_SYNC_APPROVED !== 'true') throw new Error('IANCAR_SYNC_APPROVAL_REQUIRED');
-}
-
 if (requested.has('--photos')) {
   if ([...requested].some(arg => !['--photos', '--apply-photos', '--save-private'].includes(arg))) throw new Error('IANCAR_PHOTO_OPTIONS_MIXED');
   if (requested.has('--apply-photos') && process.env.IANCAR_PHOTO_PUBLICATION_APPROVED !== 'true') throw new Error('IANCAR_PHOTO_APPROVAL_REQUIRED');
@@ -204,10 +186,10 @@ if (requested.has('--photos')) {
 }
 if (requested.has('--apply-photos')) throw new Error('IANCAR_PHOTOS_MODE_REQUIRED');
 
-const capture = requested.has('--phase-one') || requested.has('--sync')
+const capture = requested.has('--phase-one')
   ? await collectIancarOnePhaseOneFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_PHASE_ONE_FACTS', completed, total }));
-  }, { photos: requested.has('--sync') }) : requested.has('--full-facts')
+  }) : requested.has('--full-facts')
   ? await collectIancarOneFullFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
   }) : await collectIancarOneVehicleList(config);
@@ -227,11 +209,16 @@ const report: Record<string, unknown> = {
   sourceDigest: capture.sourceDigest,
   coverage: batch.coverage,
   issues: capture.issues,
+  // 차 한 대만 보류된 건수(사유 코드별). 번호·원문은 싣지 않는다.
+  vehicleHolds: capture.records.reduce<Record<string, number>>((counts, record) => {
+    if (record.hold) counts[record.hold.code] = (counts[record.hold.code] ?? 0) + 1;
+    return counts;
+  }, {}),
   canonicalPublication: 'NOT_AUTHORIZED_BY_RAW_COLLECTION',
   consumerReadback: 'NOT_VERIFIED'
 };
 
-if ((requested.has('--phase-one') || requested.has('--sync')) && capture.readyForRawIngest) {
+if (requested.has('--phase-one') && capture.readyForRawIngest) {
   const phaseOne = projectIancarOnePhaseOne(capture);
   report.phaseOne = { stage: phaseOne.stage, policyStage: phaseOne.policyStage,
     publicationAuthorized: phaseOne.publicationAuthorized, vehicleCount: phaseOne.vehicles.length,
@@ -291,45 +278,8 @@ if (requested.has('--apply-raw')) {
   };
 }
 
-if (requested.has('--sync')) {
-  if (!capture.readyForRawIngest || capture.issues.length) {
-    console.log(JSON.stringify({ ...report, status: 'HOLD_SOURCE_REVIEW', writeExecuted: false }, null, 2));
-    process.exit(2);
-  }
-  const { runIancarPhaseOnePublication } = await import('./data-access-runtime.js');
-  const input = { capture, apply: false, mirrorInventory: true,
-    ...(requested.has('--photos-pending') ? { photoPending: true } : {}), ...(requested.has('--keep-withdrawn') ? { keepWithdrawn: true } : {}), ...(requested.has('--refresh-facts') ? { refreshFacts: true } : {}),
-    ...(process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET ? { privateEvidenceBucket: process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET } : {}) };
-  const plan = await runIancarPhaseOnePublication(input);
-  report.publicationPlan = plan;
-  if (requested.has('--photos-pending') && !requested.has('--keep-withdrawn') && !requested.has('--apply-sync')) {
-    // 같은 수집으로 «해제 제외» 판을 함께 계획한다(승인 전 두 digest).
-    report.publicationPlanKeepWithdrawn = await runIancarPhaseOnePublication({ ...input, keepWithdrawn: true });
-  }
-  if (requested.has('--apply-sync')) {
-    // 승인된 계획 건수 관문(fail-closed): 설정 누락·형식 오류·필수 항목 누락·범위 밖이면 쓰기 전에 멈춘다.
-    const gate = checkIancarSyncExpect(process.env.IANCAR_SYNC_EXPECT, plan as unknown as Record<string, unknown>);
-    if (!gate.ok) {
-      console.log(JSON.stringify({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', reasons: gate.reasons, publicationPlan: plan, writeExecuted: false }, null, 2));
-      process.exit(3);
-    }
-  }
-  if (requested.has('--apply-sync')) {
-    const result = await runIancarPhaseOnePublication({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
-    // Only redacted counts/references leave the private evidence boundary.
-    report.publication = { status: result.status, sourceDigest: capture.sourceDigest,
-      sourceSyncedAt: capture.syncedAt, open: result.open, created: result.created, absenceHeld: result.absenceHeld,
-      withPhotos: result.withPhotos, photoCount: result.photoCount,
-      skippedCount: result.skippedCount, skippedByReason: result.skippedByReason,
-      skippedRatio: result.skippedRatio, maxSkippedRatio: result.maxSkippedRatio, warnings: result.warnings,
-      runId: 'runId' in result ? result.runId : null,
-      privateBackupObject: 'privateBackupObject' in result ? result.privateBackupObject : null };
-  }
-}
-
 report.status = capture.issues.length
   ? 'HOLD_SOURCE_REVIEW'
-  : requested.has('--apply-sync') ? 'IANCAR_ATOM_SYNC_VERIFIED_CONSUMERS_PENDING'
   : requested.has('--apply-raw')
     ? 'RAW_INGESTED_NOT_CANONICAL'
     : 'OBSERVED_NOT_PUBLISHED';

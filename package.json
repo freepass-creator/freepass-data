@@ -58,8 +58,6 @@
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
     "source:sonogong": "tsx src/jobs/collect-sonogong.ts",
-    "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
-    "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
     "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
     "copy:iancar-photos": "tsx src/jobs/copy-iancar-photos-to-drive.ts",
@@ -77,7 +75,8 @@
     "apply:vehicle-uid-migration": "tsx src/jobs/apply-vehicle-uid-migration.ts",
     "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts",
     "apply:period-fee-ledger": "tsx src/jobs/apply-period-fee-ledger.ts",
-    "test:source-cycle-ci": "node --test tests/source-cycle-dry-run-ci.node.mjs"
+    "test:source-cycle-ci": "node --test tests/source-cycle-dry-run-ci.node.mjs",
+    "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

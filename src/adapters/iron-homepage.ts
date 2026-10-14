@@ -5,27 +5,90 @@
  * 이 모듈을 import 하는 것만으로 접속하지 않는다(fetch 주입). 번호 전체·원문은 로그·오류에 남기지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 
 export const IRON_HOMEPAGE_POLICY = Object.freeze({ host: 'ironrentcar.com', baseUrl: 'https://ironrentcar.com', maxPages: 10, minIntervalMs: 500, timeoutMs: 20_000 });
+/** 차량 사진 원본 호스트(공개 버킷, scripts/ops/photo-cache-iron.mjs 와 같은 값). 이 호스트·이 경로만 사진으로 받는다(https 만). */
+export const IRON_PHOTO_POLICY = Object.freeze({ host: 'cbtbscasurhavjvjfvpv.supabase.co', pathPrefix: '/storage/v1/object/public/vehicle-product-images/' });
 export type IronCondition = 'new' | 'used';
 export type IronListing = { id: string; url: string; condition: IronCondition; sold: boolean };
 
 const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' };
 const text = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, m => ENTITIES[m] ?? m).replace(/\s+/g, ' ').trim();
-const won = (value: string): number => {
-  const t = text(value).replace(/,/g, '');
-  const man = /([\d.]+)\s*만원/.exec(t);
+/** 할인 전 정가(취소선 <del>/<s>/<strike>)는 지운다 — 앞에 있는 정가를 실제 요금으로 읽지 않는다. */
+const withoutStruck = (html: string) => html.replace(/<(del|s|strike)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+/** 금액 해석: 숫자가 없으면 null(모름), «0원»·«0만원» 은 0. */
+const wonOrNull = (value: string): number | null => {
+  const t = text(withoutStruck(value)).replace(/,/g, '');
+  const man = /(\d+(?:\.\d+)?)\s*만\s*원/.exec(t);
   if (man) return Math.round(Number(man[1]) * 10_000);
-  const plain = /([\d.]+)\s*원/.exec(t);
-  return plain ? Math.round(Number(plain[1])) : 0;
+  const plain = /(\d+(?:\.\d+)?)\s*원/.exec(t);
+  return plain ? Math.round(Number(plain[1])) : null;
 };
+const won = (value: string): number => wonOrNull(value) ?? 0;
 const amount = (n: number): SourceAmount => Number.isSafeInteger(n) && n > 0 ? { state: 'KNOWN', value: n } : { state: 'UNKNOWN', value: null };
+/** 보증금: «0원»·«없음»·«무보증» 은 ZERO(확인된 0), 숫자가 있으면 KNOWN, 블록이 없거나 읽을 수 없으면 UNKNOWN. */
+export const ironDeposit = (block: string): SourceAmount => {
+  const t = text(withoutStruck(block));
+  if (!t) return { state: 'UNKNOWN', value: null };
+  if (/무보증|보증금\s*없음|^없음$/.test(t)) return { state: 'ZERO', value: 0 };
+  const n = wonOrNull(block);
+  return n === 0 ? { state: 'ZERO', value: 0 } : n === null ? { state: 'UNKNOWN', value: null } : amount(n);
+};
+/** 약정거리: «연 2만km»→20000km/year, «월 2,000km»→2000km/month, 단위 없는 «2만km»→20000km. 없으면 null. */
+export const ironMileage = (label: string): string | null => {
+  const m = /(연|월|년)?\s*(\d+(?:[.,]\d+)*)\s*(만)?\s*(?:km|킬로)/i.exec(label);
+  if (!m) return null;
+  const n = Math.round(Number(m[2]!.replace(/,/g, '')) * (m[3] ? 10_000 : 1));
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return `${n}km${m[1] === '월' ? '/month' : m[1] ? '/year' : ''}`;
+};
+/** 주행거리(누적): «12,345 km»→12345, «1.2만km»→12000. */
+export const ironOdometer = (value: string): string | null => {
+  const m = /(\d+(?:[.,]\d+)*)\s*(만)?/.exec(value);
+  if (!m) return null;
+  const n = Math.round(Number(m[1]!.replace(/,/g, '')) * (m[2] ? 10_000 : 1));
+  return Number.isSafeInteger(n) && n >= 0 ? String(n) : null;
+};
 const absolute = (href: string, base: string): string | null => {
   try {
     const url = new URL(href, base);
     return url.protocol === 'https:' && url.hostname === IRON_HOMEPAGE_POLICY.host ? url.toString() : null;   // 다른 호스트로 새지 않는다
   } catch { return null; }
 };
+/** 사진 주소: 홈페이지 호스트, 또는 사진 버킷 호스트의 공개 사진 경로만(https). `/_next/image?url=` 는 원본으로 푼다. */
+const photoUrl = (href: string, base: string): string | null => {
+  let url: URL;
+  try { url = new URL(href, base); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username || url.password) return null;
+  if (url.hostname === IRON_HOMEPAGE_POLICY.host) {
+    if (url.pathname === '/_next/image') { const original = url.searchParams.get('url'); return original ? photoUrl(original, base) : null; }
+    return url.toString();
+  }
+  return url.hostname === IRON_PHOTO_POLICY.host && url.pathname.startsWith(IRON_PHOTO_POLICY.pathPrefix) ? url.toString() : null;
+};
+/** 상세 배지 → 상태. 배지는 상품 본문(배지 묶음 → 없으면 <main>)에서만 읽는다. 상태 어휘가 둘 이상 섞이면 STATUS_AMBIGUOUS, 모르는 배지만
+ * 있으면 STATUS_UNKNOWN 으로 보류(판매 가능으로 추정하지 않는다). 배지가 하나도 없으면 ERP4 기준대로 출고협의. */
+const SOLD_BADGES = new Set(['판매완료', '출고완료', '출고불가']);
+type IronStatus = { raw: string; saleAvailable: boolean | null; provider?: string; hold?: 'STATUS_UNKNOWN' | 'STATUS_AMBIGUOUS' };
+export function ironStatusFromBadges(badges: readonly string[], listedSold: boolean): IronStatus {
+  const label = (b: string) => SOLD_BADGES.has(b) ? '출고불가' : isContractedStatus(b) ? '계약중' :
+    ['즉시출고', '출고가능', '출고협의'].includes(b) ? b : null;
+  const known = new Set(badges.map(label).filter((x): x is string => !!x));
+  const unknown = badges.filter(b => !label(b));
+  // 목록 카드의 판매완료 표시는 그대로 판매 불가(팔린 차를 파는 쪽으로 틀리지 않는다).
+  if (listedSold) return { raw: '출고불가', saleAvailable: false };
+  if (known.size > 1) return { raw: '상태확인필요', saleAvailable: null, hold: 'STATUS_AMBIGUOUS' };
+  const only = [...known][0];
+  if (only === '출고불가') return { raw: '출고불가', saleAvailable: false };
+  if (only === '계약중') {
+    const provider = badges.find(b => isContractedStatus(b))!;
+    return { raw: '계약중', saleAvailable: true, ...(provider !== '계약중' ? { provider } : {}) };
+  }
+  if (only) return { raw: only, saleAvailable: true };
+  if (unknown.length) return { raw: '상태확인필요', saleAvailable: null, hold: 'STATUS_UNKNOWN' };
+  return { raw: '출고협의', saleAvailable: true };
+}
 
 /** 목록 페이지 → 상품 id·판매완료 여부·다음 페이지(«더보기»). */
 export function parseIronListingPage(html: string, pageUrl: string, condition: IronCondition): { listings: IronListing[]; nextUrl: string | null } {
@@ -56,44 +119,55 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
   const plate = (facts.get('차량번호') ?? '').replace(/\s/g, '');
   if (!/^\d{2,3}[가-힣]\d{4}$/.test(plate) || !isAssignedPlate(plate)) throw new Error('IRON_PLATE_INVALID');
   const subtitle = text(/<(\w+)\b[^>]*product-detail-subtitle[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '');
-  const deposit = won(/<(\w+)\b[^>]*product-detail-price-block--deposit[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '');
+  const deposit = ironDeposit(/<(\w+)\b[^>]*product-detail-price-block--deposit[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '');
   const terms: SourceTerm[] = [];
   for (const m of html.matchAll(/<(\w+)\b[^>]*product-detail-rent-row[^>]*>([\s\S]*?)<\/\1>/gi)) {
-    const period = /(\d+)/.exec(text(/<dt\b[^>]*>([\s\S]*?)<\/dt>/i.exec(m[2]!)?.[1] ?? ''))?.[1];
+    // 기간 칸에는 약정거리가 함께 올 수 있다(«연 2만km · 48개월») — 개월은 «N개월» 로만, 약정거리는 km 표기로 따로 읽는다.
+    const label = text(/<dt\b[^>]*>([\s\S]*?)<\/dt>/i.exec(m[2]!)?.[1] ?? '');
+    const months = Number(/(\d+)\s*개월/.exec(label)?.[1]);
     const rent = won(/<dd\b[^>]*>([\s\S]*?)<\/dd>/i.exec(m[2]!)?.[1] ?? '');
-    const months = Number(period);
     if (Number.isSafeInteger(months) && months > 0 && rent > 0) terms.push({ months, monthlyRent: amount(rent),
-      deposit: deposit > 0 ? amount(deposit) : { state: 'UNKNOWN', value: null }, mileage: null, raw: {} });
+      deposit: { ...deposit }, mileage: ironMileage(label), raw: {} });
   }
-  const badges = [...html.matchAll(/<[^>]*\bbadge-pill\b[^>]*>([\s\S]*?)<\/[^>]+>/gi)].map(m => text(m[1]!));
-  const sold = listing.sold || badges.includes('판매완료');
-  // 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출로), 그 밖은 배지 어휘: 즉시출고·출고가능, 배지가 없으면 출고협의(ERP4 와 같은 기준).
-  const display = sold ? '출고불가' : badges.includes('즉시출고') ? '즉시출고' : badges.includes('출고가능') ? '출고가능' : '출고협의';
+  // 배지는 상품 본문에서만: 배지 묶음(product-detail-badges)이 있으면 그 안, 없으면 <main> 안(추천·비슷한 차 카드의 배지를 섞지 않는다).
+  const main = /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html)?.[1] ?? html;
+  const badgeScope = /<(\w+)\b[^>]*\bproduct-detail-badges\b[^>]*>([\s\S]*?)<\/\1>/i.exec(main)?.[2] ?? main;
+  const badges = [...new Set([...badgeScope.matchAll(/<[^>]*\bbadge-pill\b[^>]*>([\s\S]*?)<\/[^>]+>/gi)].map(m => text(m[1]!)).filter(Boolean))];
+  const status = ironStatusFromBadges(badges, listing.sold);
+  const sold = status.saleAvailable === false;
   const galleryAt = html.search(/product-detail-gallery/);
   const images = [...new Set([...(galleryAt >= 0 ? html.slice(galleryAt, galleryAt + 20_000) : '').matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)]
-    .map(m => {
-      const abs = absolute(m[1]!, listing.url);
-      if (!abs) return null;
-      const u = new URL(abs);
-      if (u.pathname === '/_next/image') { const original = u.searchParams.get('url'); return original ? absolute(original, listing.url) : abs; }
-      return abs;
-    }).filter((u): u is string => !!u))];
+    .map(m => photoUrl(m[1]!.replace(/&amp;/g, '&'), listing.url)).filter((u): u is string => !!u))];
   const spec: Record<string, string> = {};
   const year = /(\d{2,4})\s*년식/.exec(subtitle)?.[1];
   if (year) spec.year = String(Number(year) < 100 ? 2000 + Number(year) : Number(year));
   if (facts.get('유종')) spec.fuel_type = facts.get('유종')!;
   if (facts.get('외장 색상')) spec.ext_color = facts.get('외장 색상')!;
   if (facts.get('내장 색상')) spec.int_color = facts.get('내장 색상')!;
-  const mileage = /\d+/.exec((facts.get('주행거리') ?? '').replace(/,/g, ''))?.[0];
+  const mileage = ironOdometer(facts.get('주행거리') ?? '');
   if (mileage) spec.mileage = mileage;
   const key = plateIdentityKey(plate);
   return { sourceId: 'RP006', uid: key, plate: key, vehicleText: title,
-    status: { raw: display, saleAvailable: !sold }, terms, observedAt,
+    status: { raw: status.raw, saleAvailable: status.saleAvailable }, terms, observedAt,
     raw: { source: 'ironrentcar-web', source_external_id: listing.id, condition: listing.condition, sold,
+      ...(status.provider ? { provider_status: status.provider } : {}), ...(status.hold ? { status_hold: status.hold, badges: badges.join('|').slice(0, 200) } : {}),
       product_type: listing.condition === 'new' ? '신차렌트' : '중고렌트', product_group: 'LONG_TERM', variant: subtitle.split('·')[0]?.trim() ?? '',
       images, ...(Object.keys(spec).length ? { spec } : {}) },
     vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
 }
+
+/** 사이트맵의 상품 상세 id(/vehicles/{id}). urlset 이 닫히지 않았으면(잘림) null. */
+export function parseIronSitemapIds(xml: string): string[] | null {
+  if (!/<\/urlset>\s*$/.test(xml.trim())) return null;
+  const ids = new Set<string>();
+  for (const m of xml.matchAll(/<loc>\s*https:\/\/ironrentcar\.com\/vehicles\/([^"'?/#<\s]+)[^<]*<\/loc>/g)) ids.add(m[1]!);
+  return [...ids];
+}
+
+/** 축소 하한 비교용 레코드: 판매 가능이고 계약중이 아닌 것만 — 비교 상대(노출·잠금 없음·계약중 제외 문서)와 같은 것끼리 센다.
+ * 판매완료·보류까지 센 전체 레코드 수로 비교하면 판매 가능 차가 크게 줄어도 하한을 통과한다(2026-10-14). */
+export const ironFloorRecords = (records: readonly SourceProductRecord[]) =>
+  records.filter(r => r.status.saleAvailable === true && r.status.raw !== '계약중');
 
 export type IronHomepageRead = { observedAt: string; complete: boolean; incompleteReason?: string; records: SourceProductRecord[];
   held: Array<{ id: string; reason: string }>; duplicatePlates: string[]; listed: number; sold: number; notes: string[] };
@@ -127,6 +201,17 @@ export async function readIronHomepage(fetchHtml: (url: string) => Promise<strin
     if (pageUrl) incomplete ??= 'IRON_LIST_PAGE_LIMIT';
     if (count === 0) incomplete ??= 'IRON_LIST_EMPTY';
   }
+  // 완전성 대조: «더보기» 링크가 없다는 것만으로는 목록 끝이 증명되지 않는다. 사이트맵이 읽히면 사이트맵의 상품 id 가 전부 목록에 있어야 한다
+  // (빠진 것이 있으면 목록이 덜 읽힌 것 → 불완전, 쓰기·부재 하향 차단). 사이트맵을 못 읽으면 기존 기준으로 두고 note 만 남긴다.
+  const notes: string[] = [];
+  let sitemapIds: string[] | null = null;
+  try { sitemapIds = parseIronSitemapIds(await get(`${IRON_HOMEPAGE_POLICY.baseUrl}/sitemap.xml`)); } catch { sitemapIds = null; }
+  if (sitemapIds === null) notes.push('IRON_SITEMAP_UNAVAILABLE');
+  else {
+    const missing = sitemapIds.filter(id => !found.has(id)).length;
+    notes.push(`IRON_SITEMAP:${sitemapIds.length}:missing${missing}`);
+    if (missing > 0) incomplete ??= 'IRON_LIST_SHORT_OF_SITEMAP';
+  }
   const records: SourceProductRecord[] = [], held: IronHomepageRead['held'] = [], seen = new Set<string>(), duplicates = new Set<string>();
   let sold = 0;
   for (const listing of found.values()) {
@@ -144,5 +229,5 @@ export async function readIronHomepage(fetchHtml: (url: string) => Promise<strin
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
   if (!records.length) incomplete ??= 'IRON_EMPTY';
   return { observedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), records, held,
-    duplicatePlates: [...duplicates], listed: found.size, sold, notes: [] };
+    duplicatePlates: [...duplicates], listed: found.size, sold, notes };
 }

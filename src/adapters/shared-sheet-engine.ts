@@ -60,7 +60,7 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
     const raw: RawRecord = { rawRecordId: `offline:${i}`, runId: 'offline', sourceId: batch.source.sourceId,
       sourceRecordId: item.sourceRecordId, sourceFingerprint: stableDigest(p), observedAt: String(p.readTime), payload: p };
     // Reuse the existing term/deposit and master-HOLD rules; do not borrow legacy supplements.
-    const normalized = normalizeSharedSheet(raw);
+    const normalized = normalizeSharedSheet(raw, undefined, { sourceEngineRentRules: true });
     const cells = p.values as unknown[];
     const cell = (h: string) => cells[sharedSheetHeaders.indexOf(h)] ?? null;
     const text = (h: string) => String(cell(h) ?? '').trim();
@@ -71,9 +71,11 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
       vehicleText: text('차명 원문'), status: { raw: text('차량상태'), saleAvailable: sharedSheetStatusPolicy(text('차량상태'))?.exposure === 'VISIBLE'
         ? true : sharedSheetStatusPolicy(text('차량상태')) ? false : null },
       terms: normalized.record.candidate.priceTerms.map(t => ({ months: t.termMonths,
-        monthlyRent: amount(t.monthlyRent.amount === 0 ? 'ZERO' : 'KNOWN', t.monthlyRent.amount), deposit: amount(t.depositState, t.deposit?.amount),
+        // 월 대여료는 KNOWN(타당 범위 안 양수)만 들어온다 — 0 은 정규화에서 «가격 없음» 으로 빠진다(0원 가격 노출 금지).
+        monthlyRent: amount('KNOWN', t.monthlyRent.amount), deposit: amount(t.depositState, t.deposit?.amount),
         mileage: text('연주행') || null, raw: { rent: cell(`${t.termMonths}개월`), shortDeposit: cell('단기보증'), longDeposit: cell('장기보증'), mileage: cell('연주행') } })),
-      observedAt: String(p.readTime), raw: { cells: structuredClone(tab.values[row - 1]), headers: [...tab.values[0]!] },
+      observedAt: String(p.readTime), raw: { cells: structuredClone(tab.values[row - 1]), headers: [...tab.values[0]!],
+        ...(normalized.zeroRentTerms ? { rent_zero_terms: normalized.zeroRentTerms } : {}) },
       vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
     // An invalid supplied period must not disappear from an otherwise apparently valid bundle.
     if (normalized.suppliedTerms !== r.terms.length) r.terms.push({ months: 0, monthlyRent: { state: 'UNKNOWN', value: null },
@@ -81,6 +83,8 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
     records.push(r);
     const reasons = validateSourceRecord(r);
     if (p.quarantine === 'DUPLICATE_IDENTITY' || p.quarantine === 'PLATE_ON_MULTIPLE_SUPPLIERS') reasons.push('DUPLICATE_PLATE_SUSPECT');
+    // 대여료 해석 불가·타당 범위 밖은 그 사유를 보류 사유로 드러낸다(TERMS_HOLD 만으로는 «가격 없음» 과 구분되지 않는다).
+    if (normalized.record.candidate.issues.includes('RENT_REVIEW_REQUIRED')) reasons.push('RENT_REVIEW_REQUIRED');
     if (reasons.length) held.push({ row, reasons });
   }
   const counts = new Map<string, number>();
