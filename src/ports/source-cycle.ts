@@ -39,6 +39,8 @@ export type CyclePlan = {
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
   observationOnlyCount?: number;
+  /** 읽기 단계 보류 사유 코드별 건수(대수 대조에서 «왜 못 들어왔나» 를 가르는 근거). 번호·원문은 담지 않는다. */
+  heldReasons?: Record<string, number>;
   observedSellableCount?: number; unassignedPlateCount?: number;
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,
