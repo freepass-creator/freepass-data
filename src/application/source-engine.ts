@@ -32,6 +32,11 @@ export async function planSourceRecords(reader: Pick<SourceRecordCommands, 'read
     if (before && (sourceProductKey(before) !== key || Date.parse(before.observedAt) >= Date.parse(r.observedAt))) {
       plan.held.push({ key, reasons: ['STALE_OR_MISMATCHED_RECORD'] }); continue;
     }
+    // 번호 미배정(신차) 새 차는 products 에 번호 공란 문서로 만들지 않는다 — ERP4 발행 게이트의 «빈 차량번호» 위반(회차 전체 중단)의 원인(2026-10-14).
+    // 시트 줄 UID 는 이미 신원 키이므로 번호가 생기면 같은 UID 로 편입된다. 이미 있는 문서의 갱신은 막지 않는다(삭제·하향 없음).
+    if (!before && !String(r.plate ?? '').trim()) {
+      plan.held.push({ key, reasons: ['NEW_VEHICLE_PLATE_UNASSIGNED_UID_PENDING'] }); continue;
+    }
     if (!before && r.vehicleHold.length) {
       plan.held.push({ key, reasons: ['NEW_VEHICLE_REVIEW_REQUIRED'] }); continue;
     }
