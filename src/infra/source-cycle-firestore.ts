@@ -10,6 +10,7 @@ import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
+import { isAutoplusDepositRuleCode } from '../domain/autoplus-deposit-rule.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -216,6 +217,14 @@ export const sheetSpecFields = (spec: unknown): Fields => {
   }
   return out;
 };
+/** 오토플러스(RP023) 계산 보증금 표식(대표 2026-10-14 «보증금 칸이 아니라 곱하기 계산 규칙»): 모든 항이 같은 규칙으로 계산된 KNOWN 보증금일 때만
+ * deposit_source=CALCULATED·deposit_rule 을 쓴다. 규칙을 못 정한 회차(UNKNOWN → 기존 값 보존)에는 아무것도 쓰지 않아 기존 표식이 보존된 값과 함께 남는다. */
+export const calculatedDepositFields = (r: SourceProductRecord): Fields => {
+  if (r.sourceId !== 'RP023' || !r.terms.length) return {};
+  const rules = new Set(r.terms.map(t => t.deposit.state === 'KNOWN' ? t.raw?.deposit_rule : null));
+  const [rule] = [...rules];
+  return rules.size === 1 && isAutoplusDepositRuleCode(rule) ? { deposit_source: 'CALCULATED', deposit_rule: rule } : {};
+};
 /** 이안카(RP031) 공급사 차량 ID 칸. 사진 경로(isPublicIancarPhotoProduct)·정책 연결이 이 칸으로 원천 차량을 찾는다.
  * 원천 기록의 vehicle_id 를 쓴다: 문서에 없으면 채우고, 같으면 그대로. 같은 번호 문서에 «다른» ID 가 이미 있으면 덮어쓰지 않는다(공급사 신원 충돌 —
  * 기존 ID 에 묶인 사진·정책·보증금 근거가 다른 차로 옮겨 가지 않게). 충돌은 iancar_one_vehicle_id_conflict 에 관측 ID 와 시각으로 남겨 사람이 본다. */
@@ -245,6 +254,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
       원문: { 차명: r.vehicleText, source: r.raw }, ...sheetSpecFields(r.raw.spec) } : {}),
     ...(identity ? identityFields(identity, original, r, isNew) : {}),
     price, source_cycle_price_digest: priceDigest(price),
+    ...(price === original.price ? {} : calculatedDepositFields(r)),
     listable, status: listable ? display : '출고불가', status_kind: statusKindOf(display, listable),
     vehicle_status: listable ? display : '출고불가', source: original.source ?? r.raw.source ?? 'source-cycle',
     source_tab: r.raw.source_tab ?? null, source_row: r.raw.source_row ?? null,
