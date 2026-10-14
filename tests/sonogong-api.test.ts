@@ -258,18 +258,66 @@ describe('손오공 공식 API 어댑터', () => {
         { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 2 : 0 })
       : json(detail(1, '100하1111')), false).client);
     expect(missing.incompleteReason).toBe('API_COUNT_MISMATCH');
-    // 쪽마다 generatedAt 이 다르면 읽는 도중 판이 바뀐 것
-    const changed = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+    // 탭끼리 생성 시각이 달라도 이상이 아니다(탭별 스냅숏) — 요약에만 남기고 신선도는 가장 오래된 시각으로 판정한다
+    const tabsDiffer = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111')] : [],
         { generatedAt: u.searchParams.get('tab') === 'pick' ? '2026-10-14T07:00:00.000Z' : '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 1 : 0 })
       : json(detail(1, '100하1111'))).client);
+    expect(tabsDiffer.complete).toBe(true);
+    expect(tabsDiffer.notes).toContain('TAB_GENERATIONS_DIFFER');
+    expect(tabsDiffer.generatedAt).toBe('2026-10-14T06:00:00.000Z');
+    // 한 탭 안에서 쪽마다 생성 시각이 다르면 그 탭을 다시 읽는다. 그래도 섞여 있고 합집합이 정합(겹침 없음·서로 다른 차 수 = 총수)이면 받는다
+    const mixedPages = (secondTotal: number) => world(u => {
+      if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
+      if (u.searchParams.get('tab') !== 'sub') return json([], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 0 });
+      const page = Number(u.searchParams.get('page'));
+      return page === 1 ? json([row(1, '100하1111'), row(2, '100하2222')], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 3 })
+        : json(page === 2 ? [row(3, '100하3333')] : [], { generatedAt: '2026-10-14T06:30:00.000Z', totalCount: secondTotal });
+    }, false);
+    const consistent = await readSonogongApi(mixedPages(3).client);
+    expect(consistent.complete).toBe(true);
+    expect(consistent.notes).toContain('SNAPSHOT_MIXED_PAGES_CONSISTENT:sub');
+    expect(consistent.records.length).toBe(3);
+    // 총수까지 바뀌었으면(판이 정말 바뀜) 불완전
+    const changed = await readSonogongApi(mixedPages(4).client);
     expect(changed.complete).toBe(false);
     expect(changed.incompleteReason).toBe('SNAPSHOT_CHANGED_DURING_READ');
+    // 겹침이 섞이면(쪽이 밀림) 불완전
+    const overlapped = await readSonogongApi(world(u => {
+      if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
+      if (u.searchParams.get('tab') !== 'sub') return json([], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 0 });
+      const page = Number(u.searchParams.get('page'));
+      return page === 1 ? json([row(1, '100하1111'), row(2, '100하2222')], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: 3 })
+        : json(page === 2 ? [row(2, '100하2222'), row(3, '100하3333')] : [], { generatedAt: '2026-10-14T06:30:00.000Z', totalCount: 3 });
+    }, false).client);
+    expect(overlapped.complete).toBe(false);
+    expect(overlapped.incompleteReason).toBe('SNAPSHOT_CHANGED_DURING_READ');
     // generatedAt 이 없는 쪽은 판정에 쓰지 않는다
     const none = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111')] : [], {})
       : json(detail(1, '100하1111'))).client);
     expect(none.complete).toBe(true);
+  });
+  it('읽는 동안 목록이 바뀌어 상세의 번호가 다른 차는 그 차만 보류하고 나머지는 정상 반영한다, 많이 바뀌었을 때만 회차를 불완전로 둔다', async () => {
+    const rows = [row(1, '100하1111'), row(2, '100하2222'), row(3, '100하3333')];
+    const one = await readSonogongApi(world(u => {
+      if (u.pathname.endsWith('/vehicles')) return json(u.searchParams.get('tab') === 'sub' ? rows : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 3 : 0 });
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, id === 2 ? '100하9999' : `100하${String(id).repeat(4)}`));   // 2번 차만 상세의 번호가 다르다
+    }).client);
+    expect(one.complete).toBe(true);
+    expect(one.records.map(r => r.plate!.slice(-4)).sort()).toEqual(['1111', '3333']);
+    expect(one.held).toEqual([{ tab: 'sub', reason: 'IDENTITY_MISMATCH' }]);
+    expect(one.notes).toContain('IDENTITY_MISMATCH_HELD:1');
+    // 목록의 10%·5대를 넘게 어긋나면 회차 전체 불완전
+    const many = Array.from({ length: 8 }, (_, i) => row(i + 1, `100하${String(i + 1).repeat(4)}`));
+    const wide = await readSonogongApi(world(u => {
+      if (u.pathname.endsWith('/vehicles')) return json(u.searchParams.get('tab') === 'sub' ? many : [], { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 8 : 0 });
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, '100하0000'));   // 전부 어긋남
+    }).client);
+    expect(wide.complete).toBe(false);
+    expect(wide.incompleteReason).toBe('API_IDENTITY_MISMATCH');
   });
   it('최초등록일은 상세의 실제 칸이 있을 때만, 연료는 공통 별칭으로 바꾸고 모르면 비운다(원문은 raw 에 보존)', async () => {
     const read = await readSonogongApi(world(u => {

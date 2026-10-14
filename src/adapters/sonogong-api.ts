@@ -114,37 +114,56 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   const clock = opts.now ?? (() => new Date().toISOString());
   const rowsByTab = new Map<SonogongApiTab, Record<string, unknown>[]>();
   let generatedAt: string | null = null, incomplete: string | undefined;
-  // 페이지마다 온 상류 생성 시각(ms). 둘 이상이면 읽는 도중 스냅숏이 바뀐 것이다(페이지가 서로 다른 판에서 왔다).
+  // 탭 안에서 페이지마다 온 상류 생성 시각(ms)·총수. 한 탭 안에서 둘 이상이면 읽는 도중 스냅숏이 바뀐 것이다(페이지가 서로 다른 판에서 왔다).
+  // 탭끼리는 따로 만든 스냅숏일 수 있어 서로 달라도 이상이 아니다(탭 사이 차이는 요약에만 남긴다).
   const generations = new Set<number>();
-  for (const tab of SONOGONG_API_TABS) {
+  const tabNotes: string[] = [];
+  type TabRead = { rows: Record<string, unknown>[]; total: number | null; done: boolean; overlap: boolean; gens: Set<number>; totals: Set<number>; unique: number };
+  const readTab = async (tab: SonogongApiTab): Promise<TabRead> => {
     const rows: Record<string, unknown>[] = [];
     // 완료 판정은 «누적 행 수»가 아니라 서로 다른 차 식별자(id, 없으면 행 내용) 수로 한다(Codex #643 ③): 읽는 도중 페이지가 밀려 같은 차가 두 페이지에 오면
-    // 행 수만으로 총수에 닿아 뒤 차량을 놓친 채 완료로 보인다. 겹친 행은 한 번만 쓰고 불완전(API_PAGE_OVERLAP)으로 둔다.
+    // 행 수만으로 총수에 닿아 뒤 차량을 놓친 채 완료로 보인다. 겹친 행은 한 번만 쓴다.
     const seenIds = new Set<string>();
-    let total: number | null = null, done = false;
+    const gens = new Set<number>(), totals = new Set<number>();
+    let total: number | null = null, done = false, overlap = false;
     for (let page = 1; page <= SONOGONG_API_POLICY.maxPages; page++) {
       const { data, attrs } = await client.get('/vehicles', { tab, page, pageSize: SONOGONG_API_POLICY.pageSize });
       const batch = listRows(data);
       if (!batch) throw new SonogongApiError('SONOGONG_API_INVALID_RESPONSE');
       if (typeof attrs.generatedAt === 'string' && Number.isFinite(Date.parse(attrs.generatedAt))) {
+        gens.add(Date.parse(attrs.generatedAt));
         generations.add(Date.parse(attrs.generatedAt));
         generatedAt = !generatedAt || Date.parse(attrs.generatedAt) < Date.parse(generatedAt) ? attrs.generatedAt : generatedAt;
       }
-      total = totalOf(data, attrs) ?? total;
+      const pageTotal = totalOf(data, attrs);
+      if (pageTotal !== null) totals.add(pageTotal);
+      total = pageTotal ?? total;
       for (const row of batch) {
         const key = typeof row.id === 'number' || typeof row.id === 'string' ? `id:${row.id}` : `row:${JSON.stringify(row)}`;
-        if (seenIds.has(key)) { incomplete ??= 'API_PAGE_OVERLAP'; continue; }
+        if (seenIds.has(key)) { overlap = true; continue; }
         seenIds.add(key); rows.push(row);
       }
       // 끝 판정: 총수가 있으면 총수에 닿을 때까지, 없으면 빈 페이지가 올 때까지 읽는다(요청 크기보다 작은 페이지만으로 끝났다고 보지 않는다 —
       // 서버가 페이지 크기를 줄여 주면 뒤 페이지를 통째로 놓친다). 상한(maxPages)을 넘으면 불완전.
       if (batch.length === 0 || (total !== null && seenIds.size >= total)) { done = true; break; }
     }
-    if (!done) incomplete ??= 'API_PAGE_LIMIT';
-    if (total !== null && rows.length !== total) incomplete ??= 'API_COUNT_MISMATCH';
-    rowsByTab.set(tab, rows);
+    return { rows, total, done, overlap, gens, totals, unique: seenIds.size };
+  };
+  for (const tab of SONOGONG_API_TABS) {
+    // 읽는 동안 이 탭의 판이 바뀌었으면(생성 시각·총수가 페이지마다 다름) 그 탭만 처음부터 다시 읽는다(최대 2회 — 목록 읽기는 1분 안쪽이라 값싸다).
+    // 그래도 섞여 있으면 «합집합이 정합»할 때만 받는다: 겹침 없음·끝까지 읽음·서로 다른 차 수 = 총수. 아니면 종전처럼 SNAPSHOT_CHANGED_DURING_READ.
+    let read = await readTab(tab);
+    for (let retry = 0; retry < 2 && (read.gens.size > 1 || read.totals.size > 1); retry++) read = await readTab(tab);
+    const mixed = read.gens.size > 1 || read.totals.size > 1;
+    if (!read.done) incomplete ??= 'API_PAGE_LIMIT';
+    if (read.overlap) incomplete ??= mixed ? 'SNAPSHOT_CHANGED_DURING_READ' : 'API_PAGE_OVERLAP';
+    if (read.total !== null && read.unique !== read.total) incomplete ??= mixed ? 'SNAPSHOT_CHANGED_DURING_READ' : 'API_COUNT_MISMATCH';
+    if (mixed && !read.overlap && read.done && read.total !== null && read.unique === read.total && read.totals.size <= 1) tabNotes.push(`SNAPSHOT_MIXED_PAGES_CONSISTENT:${tab}`);
+    else if (mixed) incomplete ??= 'SNAPSHOT_CHANGED_DURING_READ';
+    rowsByTab.set(tab, read.rows);
   }
-  if (generations.size > 1) incomplete ??= 'SNAPSHOT_CHANGED_DURING_READ';
+  // 탭 사이 생성 시각 차이는 이상이 아니다(탭별 스냅숏) — 신선도 판정은 가장 오래된 생성 시각(generatedAt)을 쓴다.
+  if (generations.size > 1) tabNotes.push('TAB_GENERATIONS_DIFFER');
   // 신선도 창(엔진 OTHER 30분)의 기준은 «읽은 시각»이다. 상류 generatedAt 은 최대 1시간 묵을 수 있어 그대로 observedAt 으로 쓰면 항상 SOURCE_STALE 이 된다
   // (2026-10-14 첫 DRY_RUN: SOURCE_INCOMPLETE,SOURCE_STALE). 상류 정지 여부는 generatedAt 으로 따로 판정한다(guards).
   const observedAt = clock();
@@ -158,6 +177,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // 같은 탭 안에서 같은 번호가 두 번이면(정상·보류 무관) 원천 오류라 읽기를 불완전으로 둔다.
   const accepted = new Map<string, { tab: SonogongApiTab; ym: string; index: number }>();
   let crossTabContractConflicts = 0;
+  let identityMismatches = 0;
   let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
   let depositRuleDiffers = 0, depositPlaceholderZero = 0;
   for (const tab of SONOGONG_API_TABS) {
@@ -203,7 +223,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         }
       } else incomplete ??= 'API_DETAIL_LIMIT';
       if (detail && plateIdentityKey(String(detail.carNumber ?? '')) !== plate) {
-        held.push({ tab, reason: 'IDENTITY_MISMATCH' }); incomplete ??= 'API_IDENTITY_MISMATCH'; continue;
+        held.push({ tab, reason: 'IDENTITY_MISMATCH' }); identityMismatches++; continue;
       }
       const prices = object(detail?.prices) ? detail.prices as Record<string, unknown> : object(row.prices) ? row.prices as Record<string, unknown> : {};
       const priced = object(prices[RETURN_TYPE[tab]]) ? prices[RETURN_TYPE[tab]] as Record<string, unknown> : null;
@@ -271,6 +291,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       accepted.set(plate, { tab, ym: ymRaw, index: records.length - 1 });
     }
   }
+  // 목록과 상세의 차량 번호가 다른 차(읽는 동안 목록이 바뀜)는 그 차만 보류한다. 변경이 많을 때(목록의 10% 또는 5대 초과)만 회차 전체를 불완전로 둔다(대표 10-15).
+  if (identityMismatches > Math.max(5, Math.ceil(listed * 0.1))) incomplete ??= 'API_IDENTITY_MISMATCH';
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
   if (!records.length) incomplete ??= 'API_EMPTY';
   const notes: string[] = [];
@@ -288,6 +310,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
     const [code, n] = [...failureCodes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]!;
     incomplete = `API_DETAIL_FAILED_${code}_${n}of${listed}`.replace(/[^A-Z0-9_a-z]/g, '').toUpperCase().slice(0, 63);
   }
+  if (identityMismatches) notes.push(`IDENTITY_MISMATCH_HELD:${identityMismatches}`);
+  for (const note of tabNotes) notes.push(note);
   for (const [code, n] of failureCodes) notes.push(`DETAIL_FAIL:${code}:${n}`.slice(0, 60));
   if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
   if (crossTabContractConflicts) notes.push(`CROSS_TAB_CONTRACT_CONFLICT:${crossTabContractConflicts}`);

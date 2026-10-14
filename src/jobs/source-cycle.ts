@@ -10,7 +10,9 @@ export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
     /** 같은 회차에서 방금 읽어 세운 계획을 바로 적용한다(무인 회차 전용). 사람이 검토한 계획 파일 승인 경로(approvedPlan)와 섞지 않는다. */
-    autoApprove?: boolean } = {}) {
+    autoApprove?: boolean;
+    /** 사람이 손으로 돌리는 «계획만 만들기»(--plan, 적용 없음). 이 실행의 실패는 무인 회차의 연속 실패 수·정지 상태를 바꾸지 않는다(2026-10-16 수동 plan 이 정지를 오염). */
+    manualPlan?: boolean } = {}) {
   const release = await control.acquire(plugin.sourceId);
   if (!release) return { status: 'LOCKED', writes: 0, summary: '원천 잠금: 중복 회차 생략' };
   const clock = options.now ?? Date.now;
@@ -171,6 +173,11 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       // Only internal safe codes reach logs; no provider response bodies or customer raw data.
       const candidate = e instanceof Error ? e.message : '';
       const reason = /^[A-Z0-9_,]+$/.test(candidate) ? candidate : 'CYCLE_ERROR';
+      if (options.manualPlan === true && options.apply !== true) {
+        // 수동 plan 의 실패는 무인 회차의 실패 수·정지·마지막 시도 시각을 건드리지 않는다(저장하지 않음). 사유만 알린다.
+        return { status: 'HOLD', writes: 0, verified: 0,
+          summary: `${summary ? summary + ' · ' : ''}수동 plan 보류 ${reason}${readDetail ? ` · 불완전 사유 ${readDetail}` : ''} (연속 실패 수 변경 없음)`, plan };
+      }
       state.failures = previousFailures + 1; state.stopped = state.failures >= 3; state.error = reason;
       await control.save(plugin.sourceId, state);
       try { await control.heartbeat(plugin.sourceId, state, plan); }

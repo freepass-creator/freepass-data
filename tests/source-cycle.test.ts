@@ -355,6 +355,19 @@ describe('runner safety and heartbeat', () => {
     expect(read).toHaveBeenCalledTimes(3); expect(alerts).toHaveLength(3); expect(alerts[2]).toContain('STOPPED');
     expect((await ctrl.load(config.sourceId)).lastCompleteAt).toBeNull(); expect(m.order).toEqual([]);
   });
+  it('a manual plan-only run never counts its failures toward the unattended stop (2026-10-16: manual plans polluted failures 3 / stopped)', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
+    for (let i = 0; i < 5; i++) {
+      const result = await runSourceCycle(p, m.commands, ctrl, { now: () => now, manualPlan: true });
+      expect(result.status).toBe('HOLD');
+      expect(result.summary).toContain('연속 실패 수 변경 없음');
+    }
+    expect(await ctrl.load(config.sourceId)).toMatchObject({ failures: 0, stopped: false });
+    expect(alerts).toEqual([]);
+    // 무인 회차의 실패는 그대로 센다
+    await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    expect(await ctrl.load(config.sourceId)).toMatchObject({ failures: 1, stopped: false });
+  });
   it('a stopped source retries once after the cooldown and stops again if it still fails (auto-recovery, not a manual-only stop)', async () => {
     const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
     for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
