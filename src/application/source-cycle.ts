@@ -2,6 +2,7 @@ import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdenti
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { reconcileSource } from './source-reconciliation.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
 export * from '../ports/source-cycle.js';
@@ -167,7 +168,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
-  return { plan, digest: stableDigest(plan), writes: 0 as const };
+  // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
+  return { plan, digest: stableDigest(plan), writes: 0 as const, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }
 
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,
