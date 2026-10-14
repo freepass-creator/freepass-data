@@ -349,7 +349,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // API 교체 철회(대표 «손오공 기존 거 지우고 API 로»): 첫 «완전 읽기» 회차 한 번만, API 에 없는 기존 노출 문서를 부재 하향 대신 REPLACED_BY_API 로
           // 철회한다(삭제 아님, 계약 잠금은 건드리지 않음, 비율 가드 제외). 표식을 잠금 안에서 적용 전에 원자적으로 기록하고, 기록 실패·소진이면 철회하지 않는다.
           // 읽기 실패·API_SHRUNK 등 불완전이면 이 블록에 오지 않아 기존 문서는 그대로 남는다(공백 방지).
-          delete apiPlugin.absenceReason;
+          // 일반 부재 하향의 사유 라벨은 NOT_IN_API(API 에 없음, 같은 비율 가드). 교체 철회 회차에만 REPLACED_BY_API(잠금 문서 노출도 내림).
+          apiPlugin.absenceReason = 'NOT_IN_API';
           if (complete && env.SOURCE_CYCLE_SONOGONG_REPLACE_ONCE === '1' && env.SOURCE_CYCLE_UNATTENDED === '1') {
             const replacePath = join(directory, 'sonogong-replace-once.done');
             const claim = await claimEnrollCapOnce({
