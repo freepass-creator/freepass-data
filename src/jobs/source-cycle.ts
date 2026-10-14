@@ -67,6 +67,11 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
       state.observationOnlyCount = plugin.observationCountOfRead?.(read) ?? 0;
+      state.heldReasons = {};
+      for (const h of converted.held) for (const reason of h.reasons) {
+        const code = /^[A-Z][A-Z0-9_]{2,48}/.exec(reason)?.[0] ?? 'OTHER';
+        state.heldReasons[code] = (state.heldReasons[code] ?? 0) + 1;
+      }
       const unassigned = converted.held.filter(h => h.reasons.some(r => r.includes('UID_REQUIRED'))).length;
       state.unassignedPlateCount = unassigned;
       state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
