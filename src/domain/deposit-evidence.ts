@@ -1,3 +1,5 @@
+import { AUTOPLUS_DEPOSIT_RULES, autoplusRuleDeposit, isAutoplusDepositRuleCode, type AutoplusDepositRuleCode } from './autoplus-deposit-rule.js';
+
 /** Deposit evidence, not a pricing engine. A numeric placeholder is never proof of waiver. */
 export function assessDepositEvidence(input: {
   supplierId?: unknown;
@@ -156,9 +158,20 @@ export function depositEvidenceInputFromProduct(
     depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product, extra.termMonths),
     depositSourceWaiverText: sourceWaiverTextFromProduct(product, extra.termMonths).text,
     depositSourceRawAmount: sourceRawAmountFromProduct(product, extra.termMonths),
+    ...(calculatedDepositRuleFromProduct(product) ? { calculatedDepositRule: calculatedDepositRuleFromProduct(product) } : {}),
     sourceAmount,
     ...extra,
   };
+}
+
+/** 원천 엔진 작성 표식(infra SOURCE_CYCLE_WRITER 와 같은 값). */
+export const SOURCE_ENGINE_WRITER = 'source-engine';
+/** 계산 보증금 근거(오토플러스 RP023 만, 대표 2026-10-14): 원천 엔진이 쓴 문서이고 deposit_source=CALCULATED·deposit_rule 이 알려진 규칙일 때만 규칙 코드를 돌려준다.
+ * 다른 공급사·다른 쓰기 주체의 같은 필드는 근거가 아니다. */
+export function calculatedDepositRuleFromProduct(product: Record<string, unknown>): AutoplusDepositRuleCode | undefined {
+  const mark = product.source_cycle_write as { by?: unknown } | null | undefined;
+  return product.provider_company_code === 'RP023' && product.deposit_source === 'CALCULATED' && isAutoplusDepositRuleCode(product.deposit_rule)
+    && !!mark && typeof mark === 'object' && mark.by === SOURCE_ENGINE_WRITER ? product.deposit_rule : undefined;
 }
 
 /**
@@ -248,7 +261,7 @@ export function resolveDepositByRuleNote(input: {
 }
 
 export type DepositWithRuleResolution =
-  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode | 'SOURCE_RAW_AMOUNT'; differs: true } }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}` | `CALCULATED_RULE:${AutoplusDepositRuleCode}`; rule: null | { code: DepositRuleCode | AutoplusDepositRuleCode | 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode | 'SOURCE_RAW_AMOUNT'; differs: true } }
   | { state: 'ZERO'; amount: 0; reason: 'EXPLICIT_ZERO_DEPOSIT'; depositEvidenceBasis: DepositEvidenceBasis; rule: { code: 'ZERO_DEPOSIT'; multiplier: 0; label: string; depositEvidenceBasis: DepositEvidenceBasis } }
   | { state: 'UNKNOWN'; amount: null; reason: string; rule: null };
 
@@ -264,11 +277,23 @@ export function resolveDepositWithRuleNote(input: {
   depositSourceWaiverBasis?: unknown;
   depositSourceWaiverText?: unknown;
   depositSourceRawAmount?: unknown;
+  /** 엔진이 계산해 쓴 보증금의 규칙 코드(calculatedDepositRuleFromProduct). RP023 에서만 쓰인다. */
+  calculatedDepositRule?: unknown;
   hasPositivePaidDeposit?: boolean;
   /** 규칙을 거는 범위. 기본 ANY(호환 응답·안내). 표준화 매핑은 기존 정책 그대로 «RP012 구독의 원문 정확히 0 + 연수 규칙»만(근거가 약한 확대 금지). */
   ruleScope?: 'ANY' | 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
 }): DepositWithRuleResolution {
   const evidence = assessDepositEvidence(input);
+  // 오토플러스 계산 보증금(대표 2026-10-14 «보증금 칸이 아니라 곱하기 계산 규칙»): 문서 금액이 «현재 대여료 × 규칙 배수»와 정확히 같을 때만
+  // 계산값(KNOWN, CALCULATED_RULE)으로 보인다. 다르면(대여료가 바뀐 뒤 남은 낡은 계산값 등) 공급사 금액으로 둔갑하지 않게 UNKNOWN.
+  const calculated = normalizeDepositSupplierId(input.supplierId) === 'RP023' && isAutoplusDepositRuleCode(input.calculatedDepositRule)
+    ? input.calculatedDepositRule : null;
+  if (calculated && evidence.state === 'KNOWN') {
+    const expected = autoplusRuleDeposit(calculated, input.monthlyRent);
+    if (expected === null || expected !== evidence.amount) return { state: 'UNKNOWN', amount: null, reason: 'CALCULATED_DEPOSIT_RULE_MISMATCH', rule: null };
+    const r = AUTOPLUS_DEPOSIT_RULES[calculated];
+    return { state: 'KNOWN', amount: expected, reason: `CALCULATED_RULE:${calculated}`, rule: { code: calculated, multiplier: r.multiplier, label: r.label } };
+  }
   const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
   const sourceRawAmount = parseDepositSourceRawAmount(input.depositSourceRawAmount);
   const sourceRawCandidate = (input.sourceAmount === 0 || input.sourceAmount === '0' || input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '')

@@ -570,6 +570,7 @@ export function resolveReferenceDeposit(input: {
   depositFree?: unknown;
   depositFreeConfirmation?: unknown;
   depositSourceWaiverBasis?: unknown;
+  calculatedDepositRule?: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
   const resolved = resolveDepositWithRuleNote(input);

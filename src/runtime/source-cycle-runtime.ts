@@ -263,7 +263,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             for (const f of collected.failures) codes[f.code] = (codes[f.code] ?? 0) + 1;
             const comparison = compareAutoplusHomepage(collected.records, docs.map(d => {
               const f = decodeFields(d.fields as never) as Record<string, unknown>;
-              return { plate: typeof f.car_number === 'string' ? f.car_number : null, listable: f.listable === true };
+              return { plate: typeof f.car_number === 'string' ? f.car_number : null, listable: f.listable === true, price: f.price };
             }));
             if (collected.complete) homepageFreshAt = collected.observedAt;
             await writeFile(homepageReport, JSON.stringify({ at: new Date().toISOString(), complete: collected.complete, productCount: collected.productCount,
