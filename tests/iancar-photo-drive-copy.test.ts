@@ -41,7 +41,8 @@ function world(opts: { vehicles: SourceVehicle[]; photos?: Record<string, string
       upload: async (folderId, name, bytes, key) => {
         calls.upload++; log.push(`upload:${name}`);
         const f = [...folders.values()].flat().find(x => x.folderId === folderId)!;
-        const info: DriveFileInfo = { fileId: `X${++seq}`, name, sha256: createHash('sha256').update(bytes).digest('hex'), srcKey: key, image: true };
+        const sha = createHash('sha256').update(bytes).digest('hex');
+        const info: DriveFileInfo = { fileId: `X${++seq}`, name, sha256: sha, srcKey: key, image: true, copySha256: sha };
         f.files.push(info); return info;
       },
       setFingerprint: async (folderId, fp) => {
@@ -76,7 +77,7 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
 
   it('skips a vehicle whose folder fingerprint and files already match: detail only, zero downloads', async () => {
     const ids = ['a', 'b'];
-    const files: DriveFileInfo[] = ids.map((id, i) => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: 'x', srcKey: srcKey(id), image: true }));
+    const files: DriveFileInfo[] = ids.map((id, i) => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: 'x', srcKey: srcKey(id), image: true, copySha256: 'x' }));
     const w = world({ vehicles: [veh(1)], photos: { V1: ids }, folders: { '12가1001': [{ folderId: 'F0', name: '12가1001 쏘나타', fingerprint: albumFingerprint(ids), files }] } });
     const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
     expect(r.counts.SKIPPED_SAME).toBe(1);
@@ -85,14 +86,14 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
 
   it('never touches a folder that already holds photos this job did not upload (existing photo source of truth)', async () => {
     const w = world({ vehicles: [veh(1)], folders: { '12가1001': [{ folderId: 'F0', name: '12가1001 쏘나타', fingerprint: null,
-      files: [{ fileId: 'f0', name: 'IMG_1.jpg', sha256: 'x', srcKey: null, image: true }] }] } });
+      files: [{ fileId: 'f0', name: 'IMG_1.jpg', sha256: 'x', srcKey: null, image: true, copySha256: null }] }] } });
     const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
     expect(r.counts.SKIPPED_EXISTING).toBe(1);
     expect(w.calls.download + w.calls.upload + w.calls.create).toBe(0);
   });
 
   it('holds when two same-number folders both contain photos (no writes, no deletions)', async () => {
-    const withPhoto = (id: string, name: string): DriveVehicleFolder => ({ folderId: id, name, fingerprint: null, files: [{ fileId: id + 'f', name: '1.jpg', sha256: null, srcKey: null, image: true }] });
+    const withPhoto = (id: string, name: string): DriveVehicleFolder => ({ folderId: id, name, fingerprint: null, files: [{ fileId: id + 'f', name: '1.jpg', sha256: null, srcKey: null, image: true, copySha256: null }] });
     const w = world({ vehicles: [veh(1)], folders: { '12가1001': [withPhoto('A', '12가1001 쏘나타'), withPhoto('B', '12가1001 쏘나타 DN8 디 엣지')] } });
     const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
     expect(r.counts.AMBIGUOUS_FOLDER).toBe(1);
@@ -107,7 +108,7 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
   });
 
   it('resumes a partial copy: same-name same-source files are kept, only missing ones are downloaded; a different source at the same name needs replacement (held)', async () => {
-    const partial: DriveFileInfo = { fileId: 'f0', name: '01.jpg', sha256: 'x', srcKey: srcKey('a'), image: true };
+    const partial: DriveFileInfo = { fileId: 'f0', name: '01.jpg', sha256: 'x', srcKey: srcKey('a'), image: true, copySha256: 'x' };
     const w = world({ vehicles: [veh(1), veh(2)], photos: { V1: ['a', 'b'], V2: ['c', 'd'] }, folders: {
       '12가1001': [{ folderId: 'P1', name: '12가1001', fingerprint: null, files: [partial] }],
       '12가1002': [{ folderId: 'P2', name: '12가1002', fingerprint: null, files: [{ ...partial, srcKey: srcKey('OLD') }] }] } });
@@ -143,6 +144,54 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
     expect(r.stop).toBe('CONSECUTIVE_FAILURES');
     expect(r.rows).toHaveLength(3);
     expect(r.rows.every(x => x.code === 'IANCAR_PHOTO_DETAIL_STALE')).toBe(true);
+  });
+
+  it('Codex ①: download/drive failures accumulate even when every detail read succeeds (the consecutive-failure stop is reachable)', async () => {
+    const w = world({ vehicles: [1, 2, 3, 4, 5].map(n => veh(n)), failDownload: () => 'IANCAR_ONE_API_HTTP_599' });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.stop).toBe('CONSECUTIVE_FAILURES');
+    expect(r.counts.FAILED).toBe(3);
+    expect(w.calls.detail).toBe(3);
+  });
+
+  it('a normal vehicle between failures resets the streak', async () => {
+    const w = world({ vehicles: [1, 2, 3, 4, 5, 6].map(n => veh(n)), failDownload: v => (['V1', 'V2', 'V4', 'V5'].includes(v) ? 'IANCAR_ONE_API_HTTP_599' : null) });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.stop).toBe('COMPLETED');
+    expect(r.counts.FAILED).toBe(4);
+  });
+
+  it('Codex ②: a drive rate limit stops the run at once like a supplier 429', async () => {
+    const w = world({ vehicles: [veh(1), veh(2)] });
+    w.deps.drive.upload = async () => { throw Object.assign(new Error('DRIVE_RATE_LIMITED'), { code: 'DRIVE_RATE_LIMITED' }); };
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.stop).toBe('RATE_LIMITED');
+    expect(r.rows).toHaveLength(1);
+  });
+
+  it('Codex ③: resume only trusts a file whose completion mark equals the drive checksum; a bad earlier upload holds the vehicle and is excluded from the registration CSV', async () => {
+    const ids = ['a', 'b'];
+    const good = (id: string, i: number): DriveFileInfo => ({ fileId: `g${i}`, name: `0${i + 1}.jpg`, sha256: 'h', srcKey: srcKey(id), image: true, copySha256: 'h' });
+    const bad: DriveFileInfo = { ...good('a', 0), sha256: 'DIFFERENT' };                    // 이전 체크섬 불일치 실패 파일
+    const noMark: DriveFileInfo = { ...good('a', 0), copySha256: null };                    // 완료 표식 없음
+    for (const first of [bad, noMark]) {
+      const w = world({ vehicles: [veh(1)], photos: { V1: ids }, folders: { '12가1001': [{ folderId: 'P', name: '12가1001', fingerprint: null, files: [first] }] } });
+      const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+      expect(r.rows[0]!.status).toBe('NEEDS_REPLACEMENT');
+      expect(r.completed).toEqual([]);
+      expect(w.calls.download + w.calls.upload).toBe(0);
+    }
+    const ok = world({ vehicles: [veh(1)], photos: { V1: ids }, folders: { '12가1001': [{ folderId: 'P', name: '12가1001', fingerprint: null, files: [good('a', 0)] }] } });
+    expect((await runIancarPhotoCopy(ok.deps, 'FULL', limits())).rows[0]!.status).toBe('COPIED');
+  });
+
+  it('already-copied vehicles are listed for registration again (a failed earlier registration is retried; the tool skips documents that have refs)', async () => {
+    const ids = ['a'];
+    const f: DriveFileInfo = { fileId: 'f0', name: '01.jpg', sha256: 'x', srcKey: srcKey('a'), image: true, copySha256: 'x' };
+    const w = world({ vehicles: [veh(1)], photos: { V1: ids }, folders: { '12가1001': [{ folderId: 'F0', name: '12가1001', fingerprint: albumFingerprint(ids), files: [f] }] } });
+    const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(r.counts.SKIPPED_SAME).toBe(1);
+    expect(photoCopyCsv(r)).toBe('번호,폴더\n12가1001,F0\n');
   });
 
   it('paces supplier calls by the interval and never sleeps before the first call', async () => {

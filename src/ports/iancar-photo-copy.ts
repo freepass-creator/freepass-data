@@ -12,7 +12,8 @@ export interface PhotoCopySource {
 }
 export type PhotoCompressor = (input: { bytes: Buffer; contentType: string }) => Promise<{ bytes: Buffer; contentType: 'image/jpeg' }>;
 /** srcKey = 이 잡이 올린 파일의 원본 사진 표식(파일 속성). null = 이 잡이 올리지 않은 파일(기존 사진 정본 등). */
-export type DriveFileInfo = { fileId: string; name: string; sha256: string | null; srcKey: string | null; image: boolean };
+export type DriveFileInfo = { fileId: string; name: string; sha256: string | null; srcKey: string | null; image: boolean;
+  /** 올릴 때 파일 속성에 남긴 로컬 sha256(완료 표식). 드라이브가 계산한 sha256 과 같을 때만 «완료» 로 인정한다. */ copySha256: string | null };
 export type DriveVehicleFolder = { folderId: string; name: string; fingerprint: string | null; files: DriveFileInfo[] };
 export interface PhotoCopyDrive {
   /** 읽기 전용: 이안카 폴더 아래에서 이름의 첫 토큰이 «번호»인 폴더(이름 «<번호>» 또는 «<번호> <차종…>»)를 모두 돌려준다. 파일 목록 포함. */

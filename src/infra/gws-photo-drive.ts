@@ -16,17 +16,28 @@ const plateOfName = (name: string) => normalize(name).split(' ')[0] ?? '';
 const plateKey = (plate: string) => normalize(plate).replace(/\s+/g, '');
 const safeLabel = (label: string) => normalize(label).replace(/[\\/:*?"<>|]/g, '').slice(0, 40).trim();
 
-/** gws 실행기: 실행 파일 경로를 받아 stdout 의 JSON 만 읽는다(stderr 의 keyring 안내는 무시). 오류 본문은 던지지 않는다. */
+/** 드라이브 호출 한도·쿼터 신호(429 와 rateLimitExceeded·userRateLimitExceeded·quotaExceeded 이유). 본문은 어디에도 남기지 않고 이 판정에만 쓴다. */
+export const isDriveRateLimitSignal = (text: string): boolean =>
+  /\b429\b|rateLimitExceeded|userRateLimitExceeded|quotaExceeded|RESOURCE_EXHAUSTED/i.test(text);
+
+/** gws 실행기: 실행 파일 경로를 받아 stdout 의 JSON 만 읽는다(stderr 의 keyring 안내는 무시). 오류 본문은 던지지 않는다.
+ * 한도 초과(429·쿼터)는 전용 코드 DRIVE_RATE_LIMITED 로 올려 잡이 회차를 즉시 종료하게 한다. */
 export function gwsRunner(bin: string, options: { timeoutMs?: number } = {}): GwsRunner {
   return args => {
     let out: string;
-    try { out = execFileSync(bin, args, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: options.timeoutMs ?? 120_000 }); }
-    catch { throw new Error('GWS_DRIVE_CALL_FAILED'); }
+    try { out = execFileSync(bin, args, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: options.timeoutMs ?? 120_000 }); }
+    catch (error) {
+      const e = error as { stdout?: unknown; stderr?: unknown };
+      const text = `${typeof e.stdout === 'string' ? e.stdout : Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf8') : ''}\n${typeof e.stderr === 'string' ? e.stderr : Buffer.isBuffer(e.stderr) ? e.stderr.toString('utf8') : ''}`;
+      throw new Error(isDriveRateLimitSignal(text) ? 'DRIVE_RATE_LIMITED' : 'GWS_DRIVE_CALL_FAILED');
+    }
     const at = out.indexOf('{');
     if (at < 0) throw new Error('GWS_DRIVE_RESPONSE_INVALID');
     let json: unknown;
     try { json = JSON.parse(out.slice(at)); } catch { throw new Error('GWS_DRIVE_RESPONSE_INVALID'); }
-    if (json && typeof json === 'object' && 'error' in json) throw new Error('GWS_DRIVE_API_ERROR');
+    if (json && typeof json === 'object' && 'error' in json) {
+      throw new Error(isDriveRateLimitSignal(JSON.stringify((json as { error?: unknown }).error ?? '')) ? 'DRIVE_RATE_LIMITED' : 'GWS_DRIVE_API_ERROR');
+    }
     return json;
   };
 }
@@ -46,7 +57,8 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
         fields: 'nextPageToken,files(id,name,mimeType,sha256Checksum,appProperties)' })]) as { nextPageToken?: string };
       for (const f of asItems(res)) {
         if (!f.id || !f.name) continue;
-        out.push({ fileId: f.id, name: f.name, sha256: f.sha256Checksum ?? null, srcKey: f.appProperties?.srcKey ?? null, image: true });
+        out.push({ fileId: f.id, name: f.name, sha256: f.sha256Checksum ?? null, srcKey: f.appProperties?.srcKey ?? null, image: true,
+          copySha256: f.appProperties?.copySha256 ?? null });
       }
       page = typeof res.nextPageToken === 'string' ? res.nextPageToken : undefined;
     } while (page);
@@ -85,19 +97,20 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
     },
     async upload(folderId, name, bytes, srcKey) {
       const local = join(tempDir, `${randomUUID()}.jpg`);
+      const local256 = createHash('sha256').update(bytes).digest('hex');
       mkdirSync(tempDir, { recursive: true });
       writeFileSync(local, bytes, { mode: 0o600 });
       try {
+        // copySha256 = 완료 표식: 드라이브가 계산한 체크섬과 같을 때만 다음 회차가 «완료» 로 인정한다(불일치·부분 파일은 인정하지 않음).
         const res = run(['drive', 'files', 'create', '--params', JSON.stringify({ supportsAllDrives: true, fields: 'id,name,sha256Checksum' }),
-          '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copiedBy: 'iancar-photo-copy/1' } }),
+          '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copySha256: local256, copiedBy: 'iancar-photo-copy/1' } }),
           '--upload', local]) as Item;
         if (!res.id) throw new Error('DRIVE_UPLOAD_FAILED');
-        const local256 = createHash('sha256').update(bytes).digest('hex');
         // 체크섬은 업로드 응답에 없을 수 있다 — 없으면 한 번 조회한다. 있고 다르면 실패(되돌리지 않음: 지문이 없어 이 차량은 다음 회차에 재검증).
         let remote = res.sha256Checksum ?? null;
         if (!remote) remote = ((run(['drive', 'files', 'get', '--params', JSON.stringify({ fileId: res.id, supportsAllDrives: true, fields: 'sha256Checksum' })]) as Item).sha256Checksum) ?? null;
         if (remote && remote.toLowerCase() !== local256) throw new Error('DRIVE_UPLOAD_CHECKSUM_MISMATCH');
-        return { fileId: res.id, name, sha256: remote ?? local256, srcKey, image: true };
+        return { fileId: res.id, name, sha256: remote ?? local256, srcKey, image: true, copySha256: local256 };
       } finally { rmSync(local, { force: true }); }
     },
     async setFingerprint(folderId, fingerprint, copiedAtIso) {

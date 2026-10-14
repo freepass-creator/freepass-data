@@ -5,6 +5,7 @@
  * 환경: EANCAR_ONE_API_KEY(+선택 BASE_URL), IANCAR_PHOTO_DRIVE_ROOT_ID(공유 드라이브 «이안카» 폴더 id — 저장소에 두지 않는다), GWS_BIN(선택),
  *   한도: IANCAR_PHOTO_COPY_MAX_VEHICLES(40)·MAX_PHOTOS(400)·MAX_PER_VEHICLE(10)·TIME_BUDGET_MIN(40)·INTERVAL_MS(1500, 최소 1000)·PILOT_ONLY(10).
  * 출력: 번호는 끝 4자리만. 키·사진 URL·응답 본문은 어디에도 쓰지 않는다. 등록용 CSV(전체 번호)는 --out(비공개 디렉터리)에만 쓴다. */
+import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,10 @@ import { createGwsPhotoDrive, gwsRunner } from '../infra/gws-photo-drive.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, runIancarPhotoCopy, type PhotoCopyLimits, type PhotoCopyMode,
   type PhotoCopySource, type SourceVehicle } from '../application/iancar-photo-drive-copy.js';
+
+/** FULL 모드 승인 확인 값: 대상 «이안카» 폴더 id 에 묶인 해시(다른 폴더·실수로 복사한 값은 통하지 않는다). 파일럿 합격 뒤 사람이 이 값을 환경에 넣는다. */
+export const fullApprovalToken = (rootFolderId: string): string =>
+  createHash('sha256').update(`iancar-photo-copy-full/1\n${rootFolderId}`).digest('hex').slice(0, 16);
 
 const SELLABLE = new Set(['AVAILABLE', 'PREPARING', 'RESERVED']);   // 판매 노출 상태(IANCAR-ONE-API.md 매핑): 출고가능·상품화중·계약중
 const int = (value: string | undefined, fallback: number, min: number, max: number) => {
@@ -84,6 +89,8 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   if (mode !== 'DRY_RUN' && env.IANCAR_PHOTO_COPY_APPROVED !== 'true') throw new Error('IANCAR_PHOTO_COPY_APPROVAL_REQUIRED');
   const rootFolderId = (env.IANCAR_PHOTO_DRIVE_ROOT_ID ?? '').trim();
   if (!rootFolderId) throw new Error('IANCAR_PHOTO_DRIVE_ROOT_ID_REQUIRED');
+  // FULL 은 파일럿 한도(PILOT_ONLY)를 우회하는 모드이므로 «파일럿 합격 후 사람이 만든 확인 값» 이 있어야 한다: 값 = fullApprovalToken(대상 폴더에 묶임).
+  if (mode === 'FULL' && env.IANCAR_PHOTO_FULL_APPROVED !== fullApprovalToken(rootFolderId)) throw new Error('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
   const bin = resolveGwsBin(env);
   if (!bin) throw new Error('GWS_UNAVAILABLE');
   const limits = photoCopyLimitsFromEnv(env);
@@ -98,6 +105,8 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   if (out && result.completed.length) writeFileSync(resolve(out), photoCopyCsv(result), { mode: 0o600 });
   // 보고: 번호는 끝 4자리, 코드·건수만. completed(전체 번호)는 출력하지 않는다.
   log(JSON.stringify({ mode, stop: result.stop, vehicles: result.vehicles, counts: result.counts, photosWritten: result.photosWritten,
+    // 확인 값은 명시 요청(--print-full-token)이 있을 때만 DRY_RUN 결과에 싣는다(파일럿 합격 뒤 사람이 의도적으로 꺼내 환경에 넣는 값).
+    ...(mode === 'DRY_RUN' && argv.includes('--print-full-token') ? { fullApprovalToken: fullApprovalToken(rootFolderId) } : {}),
     bytesWritten: result.bytesWritten, limits: { maxVehicles: limits.maxVehicles, maxPhotos: limits.maxPhotos, maxPerVehicle: limits.maxPerVehicle,
       pilotOnly: mode === 'PILOT' ? limits.pilotOnly : null }, rows: result.rows }, null, 2));
   return result;

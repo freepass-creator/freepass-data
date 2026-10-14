@@ -2,7 +2,7 @@
  * 규칙: 직렬·간격·상한, 지문이 같으면 건너뜀, 압축본만 저장, 실패 재시도 0(그 차량은 변경 없이 다음 날), 429 는 즉시 종료, 삭제 없음.
  * 키·사진 URL·원문은 이 모듈에 들어오지 않는다(포트가 바이트와 코드만 준다). 결과의 번호는 끝 4자리 표시용 필드(plate4)와 비공개 CSV 용 전체 번호(plate)를 분리한다. */
 import { createHash } from 'node:crypto';
-import type { DriveVehicleFolder, PhotoCompressor, PhotoCopyDrive, PhotoCopySource, SourceVehicle } from '../ports/iancar-photo-copy.js';
+import type { DriveFileInfo, DriveVehicleFolder, PhotoCompressor, PhotoCopyDrive, PhotoCopySource, SourceVehicle } from '../ports/iancar-photo-copy.js';
 export type { DriveFileInfo, DriveVehicleFolder, PhotoCompressor, PhotoCopyDrive, PhotoCopySource, SourceVehicle } from '../ports/iancar-photo-copy.js';
 
 export type PhotoCopyMode = 'DRY_RUN' | 'PILOT' | 'FULL';
@@ -42,7 +42,10 @@ const safeCode = (e: unknown): string => {
   const raw = e && typeof e === 'object' ? ((e as { code?: unknown }).code ?? (e as { message?: unknown }).message) : '';
   return typeof raw === 'string' && /^[A-Z0-9_]{3,64}$/.test(raw) ? raw : 'UNKNOWN_ERROR';
 };
-const isRateLimited = (code: string) => code === 'IANCAR_ONE_API_HTTP_429';
+/** 원천(ONE) 429 와 드라이브 429/쿼터는 둘 다 «즉시 종료». */
+const isRateLimited = (code: string) => code === 'IANCAR_ONE_API_HTTP_429' || code === 'DRIVE_RATE_LIMITED';
+/** 이 잡이 올린 파일이 «완료»인지: 원본 표식 + 올릴 때의 로컬 sha256 표식이 드라이브가 계산한 체크섬과 같아야 한다(이전 체크섬 불일치·부분 파일은 완료로 인정하지 않는다). */
+const isComplete = (f: DriveFileInfo, photoId: string) => f.srcKey === srcKeyOf(photoId) && !!f.sha256 && f.copySha256 === f.sha256;
 const emptyCounts = (): Record<VehicleCopyStatus, number> =>
   ({ COPIED: 0, PLANNED_COPY: 0, SKIPPED_SAME: 0, SKIPPED_EXISTING: 0, NO_TARGET: 0, NEEDS_REPLACEMENT: 0, AMBIGUOUS_FOLDER: 0, FAILED: 0, NOT_ATTEMPTED: 0 });
 
@@ -59,8 +62,10 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
     lastCall = deps.now();
   };
   const finish = (stop: PhotoCopyStop) => { result.stop = stop; return result; };
+  // 연속 실패 카운터는 «차량 한 대를 끝까지 처리했는가»로만 센다: 상세 조회가 성공해도 다운로드·드라이브 쓰기 실패는 누적된다(Codex 지적 ①).
   const record = (plate: string, status: VehicleCopyStatus, photos = 0, written = 0, code?: string) => {
     result.rows.push({ plate4: tail4(plate), status, photos, written, ...(code ? { code } : {}) }); result.counts[status]++;
+    consecutiveFailures = status === 'FAILED' ? consecutiveFailures + 1 : 0;
   };
 
   for (const vehicle of vehicles) {
@@ -72,12 +77,11 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
     try { await pace(); ids = await deps.source.photoIds(vehicle); }
     catch (error) {
       const code = safeCode(error);
-      record(vehicle.plate, 'FAILED', 0, 0, code); consecutiveFailures++;
+      record(vehicle.plate, 'FAILED', 0, 0, code);
       if (isRateLimited(code)) return finish('RATE_LIMITED');
       if (consecutiveFailures >= limits.maxConsecutiveFailures) return finish('CONSECUTIVE_FAILURES');
       continue;
     }
-    consecutiveFailures = 0;
     if (!ids.length) { record(vehicle.plate, 'NO_TARGET'); continue; }   // 원천에 사진이 없는 차: «대상 없음», 정상
     withPhotos++;
     const selected = ids.slice(0, Math.max(1, limits.maxPerVehicle));
@@ -99,13 +103,17 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       selected.forEach((id, index) => {
         const existing = byName.get(fileName(index));
         if (!existing) missing.push(index);
-        else if (existing.srcKey !== srcKeyOf(id)) conflict = true;
+        else if (!isComplete(existing, id)) conflict = true;   // 같은 이름인데 원본이 다르거나 완료 표식이 없는 파일 → 교체 보류(삭제·덮어쓰기 없음)
       });
       const hasFolderFiles = (folder?.files.length ?? 0) > 0;
       if (conflict || (folder?.fingerprint && folder.fingerprint !== fingerprint) || (hasFolderFiles && (folder?.files.length ?? 0) > selected.length)) {
         record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue;   // 교체는 별도 승인 경로: 쓰기·삭제 없음
       }
-      if (!missing.length && folder?.fingerprint === fingerprint) { record(vehicle.plate, 'SKIPPED_SAME', selected.length); continue; }
+      if (!missing.length && folder?.fingerprint === fingerprint) {
+        // 이미 복사된 차량도 등록 대상 목록에 넣는다(앞 회차의 등록이 실패·미실행이었을 수 있다 — 등록 도구는 refs 가 있으면 건너뛴다).
+        if (folder) result.completed.push({ plate: vehicle.plate, folderId: folder.folderId, files: selected.length });
+        record(vehicle.plate, 'SKIPPED_SAME', selected.length); continue;
+      }
       if (!write) { record(vehicle.plate, 'PLANNED_COPY', selected.length, 0); continue; }
 
       // 한 차량을 쪼개지 않는다: 이번 회차 사진 상한을 넘기면(첫 차량 제외) 여기서 종료.
@@ -123,11 +131,9 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       await deps.drive.setFingerprint(folder!.folderId, fingerprint, new Date(deps.now()).toISOString());
       result.completed.push({ plate: vehicle.plate, folderId: folder!.folderId, files: selected.length });
       record(vehicle.plate, 'COPIED', selected.length, written);
-      consecutiveFailures = 0;
     } catch (error) {
       const code = safeCode(error);
-      record(vehicle.plate, 'FAILED', selected.length, 0, code);   // 부분 업로드는 지문이 없어 다음 회차가 이어서 채운다(같은 이름·같은 원본만 건너뜀)
-      consecutiveFailures++;
+      record(vehicle.plate, 'FAILED', selected.length, 0, code);   // 부분 업로드는 지문이 없어 다음 회차가 이어서 채운다(완료 표식이 있는 같은 이름·같은 원본만 건너뜀)
       if (isRateLimited(code)) return finish('RATE_LIMITED');
       if (consecutiveFailures >= limits.maxConsecutiveFailures) return finish('CONSECUTIVE_FAILURES');
     }

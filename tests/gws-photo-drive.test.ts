@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGwsPhotoDrive, type GwsRunner } from '../src/infra/gws-photo-drive.js';
-import { iancarPhotoCopyCli, photoCopyLimitsFromEnv } from '../src/jobs/copy-iancar-photos-to-drive.js';
+import { createGwsPhotoDrive, isDriveRateLimitSignal, type GwsRunner } from '../src/infra/gws-photo-drive.js';
+import { fullApprovalToken, iancarPhotoCopyCli, photoCopyLimitsFromEnv } from '../src/jobs/copy-iancar-photos-to-drive.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -66,6 +66,24 @@ describe('gws 드라이브 포트(공유 드라이브, 삭제 없음)', () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it('Codex ②/③: drive rate-limit signals become a dedicated code; the upload carries the local checksum as the completion mark', () => {
+    expect(isDriveRateLimitSignal('{"error":{"code":429,"message":"Too Many Requests"}}')).toBe(true);
+    expect(isDriveRateLimitSignal('{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}')).toBe(true);
+    expect(isDriveRateLimitSignal('{"error":{"code":404,"message":"File not found"}}')).toBe(false);
+    expect(isDriveRateLimitSignal('size 14290')).toBe(false);
+  });
+
+  it('records the completion mark (copySha256) on upload and reads it back when listing', async () => {
+    const bytes = Buffer.from('photo');
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    const calls: string[][] = [];
+    const run: GwsRunner = args => { calls.push(args); return args.includes('--upload') ? { id: 'F', sha256Checksum: sha } : { files: [] }; };
+    const drive = createGwsPhotoDrive({ run, rootFolderId: ROOT, tempDir: tmp() });
+    const info = await drive.upload('FOLDER', '01.jpg', bytes, 'k');
+    expect(info.copySha256).toBe(sha);
+    expect(json(calls.find(c => c.includes('--upload'))!).appProperties).toMatchObject({ srcKey: 'k', copySha256: sha });
+  });
+
   it('writes the album fingerprint to the folder properties and rejects an invalid root id', async () => {
     const calls: string[][] = [];
     const drive = createGwsPhotoDrive({ run: a => { calls.push(a); return {}; }, rootFolderId: ROOT, tempDir: tmp() });
@@ -86,5 +104,17 @@ describe('복사 잡 설정·승인', () => {
     await expect(iancarPhotoCopyCli(['--mode', 'PILOT'], { IANCAR_PHOTO_DRIVE_ROOT_ID: ROOT })).rejects.toThrow('IANCAR_PHOTO_COPY_APPROVAL_REQUIRED');
     await expect(iancarPhotoCopyCli(['--mode', 'FULL'], { IANCAR_PHOTO_COPY_APPROVED: 'true' })).rejects.toThrow('IANCAR_PHOTO_DRIVE_ROOT_ID_REQUIRED');
     await expect(iancarPhotoCopyCli(['--mode', 'NOPE'], {})).rejects.toThrow('PHOTO_COPY_MODE_INVALID');
+  });
+
+  it('Codex ⑤: FULL cannot bypass the pilot limit — it needs the confirmation value bound to the target folder', async () => {
+    const base = { IANCAR_PHOTO_COPY_APPROVED: 'true', IANCAR_PHOTO_DRIVE_ROOT_ID: ROOT };
+    await expect(iancarPhotoCopyCli(['--mode', 'FULL'], base)).rejects.toThrow('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
+    await expect(iancarPhotoCopyCli(['--mode', 'FULL'], { ...base, IANCAR_PHOTO_FULL_APPROVED: 'true' })).rejects.toThrow('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
+    await expect(iancarPhotoCopyCli(['--mode', 'FULL'], { ...base, IANCAR_PHOTO_FULL_APPROVED: fullApprovalToken('OTHERFOLDERID1234567890') })).rejects.toThrow('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
+    expect(fullApprovalToken(ROOT)).toMatch(/^[a-f0-9]{16}$/);
+    expect(fullApprovalToken(ROOT)).not.toBe(fullApprovalToken('OTHERFOLDERID1234567890'));
+    // 올바른 값이면 승인 검사는 통과하고 그 다음 단계(GWS·API 키)에서 멈춘다 — 승인 검사 자체가 거부 사유가 아니다.
+    await expect(iancarPhotoCopyCli(['--mode', 'FULL'], { ...base, IANCAR_PHOTO_FULL_APPROVED: fullApprovalToken(ROOT), GWS_BIN: 'gws-test-missing' }))
+      .rejects.not.toThrow('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
   });
 });

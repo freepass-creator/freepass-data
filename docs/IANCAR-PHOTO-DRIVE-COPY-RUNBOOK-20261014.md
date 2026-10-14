@@ -21,10 +21,13 @@
 |---|---|
 | `DRY_RUN`(기본) | 상세 조회(번호별 사진 id)와 드라이브 읽기만. 다운로드·업로드·폴더 생성·지문 기록 0. 결과: 차량별 PLANNED_COPY/SKIPPED_SAME/SKIPPED_EXISTING/NO_TARGET/NEEDS_REPLACEMENT/AMBIGUOUS_FOLDER |
 | `PILOT` | 사진이 있는 차량을 번호 순서로 `IANCAR_PHOTO_PILOT_ONLY`(기본 10)대까지(이미 복사된 차량도 포함 — 집합 고정). `IANCAR_PHOTO_COPY_APPROVED=true` 필요 |
-| `FULL` | 회차 한도 안에서 전체. 같은 승인 변수 필요 |
+| `FULL` | 회차 한도 안에서 전체. 승인 변수 + **`IANCAR_PHOTO_FULL_APPROVED=<확인 값>`**(대상 «이안카» 폴더 id 에 묶인 해시, 파일럿 합격 뒤 `--mode DRY_RUN --print-full-token` 으로 꺼내 환경에 넣는다). 없거나 다른 폴더 값이면 거부 — `--mode FULL` 로 파일럿 한도를 우회할 수 없다(Codex ⑤) |
 
 환경: `EANCAR_ONE_API_KEY`(+선택 `EANCAR_ONE_API_BASE_URL`), `IANCAR_PHOTO_DRIVE_ROOT_ID`, `GWS_BIN`(선택), `IANCAR_PHOTO_COPY_MODE`(또는 `--mode`). 한도(기본값): `MAX_VEHICLES` 40 · `MAX_PHOTOS` 400 · `MAX_PER_VEHICLE` 10 · `TIME_BUDGET_MIN` 40 · `INTERVAL_MS` 1500(최소 1000). **전체 첫 회차 상한은 파일럿 합격 뒤 이 변수로 조정**(93대를 1~2회에 끝내려면 MAX_VEHICLES·MAX_PHOTOS 상향).
 - 직렬(동시 1), 공급사 호출 사이 간격, **실패 재시도 0**(502/503/504 도 클라이언트 내장 재시도를 막고 한 번에 실패 처리), 429·연속 3회 실패는 즉시 종료.
+- **연속 실패 카운터**는 «차량 한 대를 끝까지 처리했는가»로 센다 — 상세 조회가 성공해도 다운로드·드라이브 쓰기 실패는 누적되어 연속 3회에서 종료한다(Codex ①). 정상 처리된 차량(복사·건너뜀·대상 없음 등)이 나오면 0 으로 돌아간다.
+- **드라이브 429·쿼터**(`DRIVE_RATE_LIMITED`)도 공급사 429 와 같이 회차를 즉시 종료한다(Codex ②).
+- **완료 표식**: 올린 파일에는 `srcKey`(원본 id 해시)와 `copySha256`(올릴 때 로컬 sha256)을 남기고, 다음 회차는 두 표식이 맞고 `copySha256` 이 드라이브 체크섬과 같을 때만 «완료»로 건너뛴다. 체크섬 불일치·표식 없는 같은 이름 파일은 `NEEDS_REPLACEMENT`(보류)이며 등록 CSV 에 들어가지 않는다(Codex ③). 이미 복사된 차량(`SKIPPED_SAME`)은 등록 CSV 에 다시 들어간다(앞 등록이 실패했어도 재시도, 등록 도구는 refs 가 있으면 건너뜀).
 - 상류 정지·신선도 초과(`UPSTREAM_STALE`) 중에는 목록 단계에서 `IANCAR_SOURCE_NOT_READY` 로 시작하지 않는다.
 
 ## 3. 실측 반영(B3Q)
