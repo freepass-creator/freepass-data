@@ -32,6 +32,14 @@ describe('손오공 API 읽기 판정(#601 독립 검토 결함 ①②)', () => 
     expect(judgeSonogongApiRead(read(90, { listed: 140 }), { exposedUnlockedDocs: 100, previousCount: 100, stateError: null })).toEqual({ complete: true, saveCount: 90 });
   });
 
+  it('an API snapshot older than 150 minutes is an upstream stall (soft UPSTREAM_STALE), a fresh hourly snapshot passes', () => {
+    const nowMs = Date.parse('2026-10-14T09:00:00Z');
+    const stale = judgeSonogongApiRead(read(100, { generatedAt: '2026-10-14T06:00:00.000Z' }), { exposedUnlockedDocs: 100, previousCount: 100, stateError: null, nowMs });
+    expect(stale).toEqual({ complete: false, incompleteReason: 'UPSTREAM_STALE', saveCount: null });
+    const fresh = judgeSonogongApiRead(read(100, { generatedAt: '2026-10-14T08:15:00.000Z' }), { exposedUnlockedDocs: 100, previousCount: 100, stateError: null, nowMs });
+    expect(fresh).toEqual({ complete: true, saveCount: 100 });
+  });
+
   it('a damaged baseline fails only this cycle and recovers the count from a read that clears the exposed-document floor', () => {
     expect(judgeSonogongApiRead(read(95), { exposedUnlockedDocs: 100, previousCount: 0, stateError: 'API_COUNT_STATE_INVALID' }))
       .toEqual({ complete: false, incompleteReason: 'API_COUNT_STATE_INVALID', saveCount: 95 });

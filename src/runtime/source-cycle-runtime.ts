@@ -19,6 +19,7 @@ import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from 
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
+import { readIronHomepage, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
@@ -193,6 +194,41 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
         undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+    } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
+      // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
+      // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.
+      const countFile = join(directory, 'iron-homepage-count.json');
+      plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
+        const fetchHtml = async (url: string) => {
+          const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
+          if (!response.ok) throw new Error(`IRON_HTTP_${response.status}`);
+          if (new URL(response.url || url).hostname !== IRON_HOMEPAGE_POLICY.host) throw new Error('IRON_HOST_REJECTED');
+          const html = await response.text();
+          if (!/<(?:!doctype|html)/i.test(html.slice(0, 300))) throw new Error('IRON_NOT_HTML');
+          return html;
+        };
+        const read = await readIronHomepage(fetchHtml);
+        const exposedDocs = (await commands.documents('RP006')).filter(d => {
+          const f = decodeFields(d.fields as never) as Record<string, unknown>;
+          const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+            || f.status === '계약중' || f.status_kind === '계약중';
+          return f.listable === true && !locked;
+        }).length;
+        let previous = 0, stateError: string | null = null;
+        try {
+          const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+          if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'IRON_COUNT_STATE_INVALID';
+        } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'IRON_COUNT_STATE_INVALID'; }
+        // 판정은 손오공 API 와 같은 순수 함수: 축소·불완전 읽기는 기준 파일에 저장하지 않고 하한은 고유 차량번호 수 기준.
+        const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
+        let complete = verdict.complete, reason = verdict.incompleteReason;
+        if (verdict.saveCount !== null && !(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
+          complete = false; reason = 'IRON_COUNT_STATE_WRITE_FAILED';
+        }
+        return { observedAt: read.observedAt, complete, completedScopes: complete ? ['homepage'] : [], visibilityComplete: true,
+          ...(reason ? { incompleteReason: reason } : {}), heldCount: read.held.length + read.duplicatePlates.length,
+          rows: read.records.map(record => ({ scope: 'homepage', record })) };
+      })));
     } else if (kind === 'IRON') {
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind, scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const url = new URL(required('SOURCE_CYCLE_IRON_LIST_URL'));
@@ -273,7 +309,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const soft = (reason: string): SonogongApiRead => ({ observedAt, complete: false, incompleteReason: reason, tabsRead: [], listed: 0, detailsRead: 0,
             notes: [], records: [], held: [], duplicatePlates: [] });
           // 부하 방어: 마지막 완전 읽기 후 55분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
-          try {
+          // 간격 기록은 «무인 정시 회차»만 남기고 지킨다: 수동 계획(DRY_RUN) 읽기가 간격을 소비해 같은 시간대 무인 APPLY 를 막지 않게 한다(B3Q 10-14).
+          const unattended = env.SOURCE_CYCLE_UNATTENDED === '1';
+          if (unattended) try {
             const pass = JSON.parse(await readFile(passFile, 'utf8')) as { at?: unknown };
             if (typeof pass.at === 'string' && Date.now() - Date.parse(pass.at) < SONOGONG_API_POLICY.minPassIntervalMinutes * 60_000) return soft('SONOGONG_API_PASS_INTERVAL');
           } catch { /* 최초·읽기 불가는 허용 — 아래 읽기 안전장치가 막는다 */ }
@@ -296,7 +334,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           let complete = verdict.complete, reason = verdict.incompleteReason;
           if (verdict.saveCount !== null) {
             const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
-              (!verdict.complete || await writeJsonAtomic(passFile, { at: observedAt }));
+              (!verdict.complete || !unattended || await writeJsonAtomic(passFile, { at: observedAt }));
             if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
           }
           // 한 회차 한정 편입 상한: 이 읽기 콜백은 원천 잠금 «안»에서 실행된다. 적용 «전에» 표식을 원자적으로 기록하고,
@@ -309,6 +347,20 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
                 try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, oncePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
             }, onceCap, observedAt);
             if (claim.granted) apiPlugin.enrollCapOnce = onceCap;
+          }
+          // API 교체 철회(대표 «손오공 기존 거 지우고 API 로»): 첫 «완전 읽기» 회차 한 번만, API 에 없는 기존 노출 문서를 부재 하향 대신 REPLACED_BY_API 로
+          // 철회한다(삭제 아님, 계약 잠금은 건드리지 않음, 비율 가드 제외). 표식을 잠금 안에서 적용 전에 원자적으로 기록하고, 기록 실패·소진이면 철회하지 않는다.
+          // 읽기 실패·API_SHRUNK 등 불완전이면 이 블록에 오지 않아 기존 문서는 그대로 남는다(공백 방지).
+          // 일반 부재 하향의 사유 라벨은 NOT_IN_API(API 에 없음, 같은 비율 가드). 교체 철회 회차에만 REPLACED_BY_API(잠금 문서 노출도 내림).
+          apiPlugin.absenceReason = 'NOT_IN_API';
+          if (complete && env.SOURCE_CYCLE_SONOGONG_REPLACE_ONCE === '1' && env.SOURCE_CYCLE_UNATTENDED === '1') {
+            const replacePath = join(directory, 'sonogong-replace-once.done');
+            const claim = await claimEnrollCapOnce({
+              read: async () => readFile(replacePath, 'utf8').catch(e => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e; }),
+              write: async text => { const tmp = `${replacePath}.${process.pid}.tmp`;
+                try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, replacePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
+            }, 1, observedAt);
+            if (claim.granted) apiPlugin.absenceReason = 'REPLACED_BY_API';
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));

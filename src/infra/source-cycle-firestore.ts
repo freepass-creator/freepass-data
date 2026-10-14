@@ -100,6 +100,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (engineOwned && storedKind.known && f.status_kind !== storedKind.statusKind) rewriteReasons.push('STATUS_KIND');
   // 월렌트 모델 문서의 상품 구분(product_type «월렌트»): 중앙 어휘 확장이 합쳐진 뒤 SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE=1 일 때만 켠다.
   if (engineOwned && writeMonthlyProductType && f.product_group === 'MONTHLY_RENT' && f.product_type !== MONTHLY_PRODUCT_TYPE) rewriteReasons.push('PRODUCT_TYPE');
+  // 오토플러스(RP023)는 상품 구분이 정책으로 «오플구독» 하나다. 구분이 빈 노출 문서는 한 번 다시 써서 채운다(되풀이되지 않음).
+  if (engineOwned && f.provider_company_code === 'RP023' && !(typeof f.product_type === 'string' && f.product_type.trim())) rewriteReasons.push('PRODUCT_TYPE');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -112,7 +114,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
 export const MONTHLY_PRODUCT_TYPE = '월렌트';
 /** 손오공 공식 API 탭 → 상품 구분: rent=중고렌트, sub=오공구독, pick=픽업구독(소비처 구독 표시 규칙의 고정 어휘). */
 export const SONOGONG_PRODUCT_TYPES: ReadonlySet<string> = new Set(['중고렌트', '오공구독', '픽업구독']);
-export const statusKindOf = (display: string, listable: boolean) =>
+export const IRON_PRODUCT_TYPES: ReadonlySet<string> = new Set(['신차렌트', '중고렌트']);
+/** 그 밖의 원천(F05 계열·아이카·오토플러스 등)의 상품 구분: 어댑터가 원천 자기 칸(상품구분/구분)이나 고정 정책에서 읽어 raw.product_type 에 둔 값이
+ * 중앙 어휘(erp5-product-mapping 의 상품 구분)일 때만, 그리고 기존 문서에 구분이 «비어 있을 때만» 채운다. 기존 값은 덮어쓰지 않는다. */
+export const COMMON_PRODUCT_TYPES: ReadonlySet<string> = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);export const statusKindOf = (display: string, listable: boolean) =>
   !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : PROVIDER_AVAILABLE_STATUS_LABELS.has(display) ? '가용' : '불가'; })();
 /** 공급사 시트가 주는 차 한 대 사실(색상·연료·최초등록·연식·주행거리)을 «새 문서»에만 싣는다. 허용 키·짧은 문자열만 통과한다(기존 문서는 건드리지 않는다). */
 const SHEET_SPEC_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage'] as const;
@@ -144,6 +149,11 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT' ? { product_type: MONTHLY_PRODUCT_TYPE } : {}),
     // 손오공 상품 구분(구독·픽업구독 화면 표시, 기존 구독 상품 규칙 재사용): 어댑터가 탭에서 정한 값이 고정 어휘일 때만 쓴다.
     ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함).
+    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
+      && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
+      ? { product_type: r.raw.product_type } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }

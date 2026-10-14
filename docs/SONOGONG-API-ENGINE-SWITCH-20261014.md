@@ -9,6 +9,7 @@
 | `SOURCE_CYCLE_SONOGONG_API=1` | 스위치(정확히 `1`) |
 | `SONOGONG_API_KEY` | 파트너 키 — 비공개 env 파일에만. 코드·로그·시험·문서에 값을 두지 않는다 |
 | `SONOGONG_API_BASE` | `https://sokrc.com/api/partner/v1` (호스트·경로 접두 고정, 다른 주소는 `SONOGONG_API_NOT_CONFIGURED`) |
+| `SOURCE_CYCLE_SONOGONG_REPLACE_ONCE=1` | (선택) API 교체 철회: 첫 «완전 읽기» 적용 회차 한 번만, API 에 없는 기존 노출 문서를 부재 하향 대신 `REPLACED_BY_API` 로 철회(삭제 아님·계약 잠금 제외·비율 가드 제외). 표식 `sonogong-replace-once.done` 을 잠금 안에서 적용 전에 원자 기록, 읽기 실패·SHRUNK 이면 철회 없음 |
 | `SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE=<n>` | (선택) 최초 대량 편입용 «이번 한 회차 한정» 편입 상한(101~1000). 잠금 안에서 적용 전에 표식 `sonogong-enroll-cap-once.done` 을 원자적으로 기록해 소진(기록 실패 시 올리지 않음), 다음 회차부터 자동 원복 |
 
 원천 목록(`SOURCE_CYCLE_SOURCES`)에 `SONOGONG` 이 있어야 하고, 켜지면 `RP012` 가 관측 전용에서 쓰기 허용으로 바뀐다(이중 쓰기 방지: ERP4 RP012 변동·등록 쓰기는 멈춘 상태여야 한다).

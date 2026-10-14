@@ -180,7 +180,10 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
-      if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before) || driftHeld.has(before.record.uid)) continue;
+      // 계약 잠금 문서는 부재 하향에서 보호된다. 단 «API 교체 철회»(REPLACED_BY_API, 대표 «API 연동 아닌 건 다 내려라»)는 한 번만(표식) 허용된 결정이라
+      // 잠금 문서도 «노출만» 내린다(하드 삭제 아님, 정산 원장·잠금 기록은 건드리지 않는다 — withdraw 는 listable·사유만 바꾼다).
+      const lockProtected = locked(before) && config.absenceReason !== 'REPLACED_BY_API';
+      if (!before.listable || seen.has(sourceProductKey(before.record)) || lockProtected || driftHeld.has(before.record.uid)) continue;
       if (Date.parse(before.record.observedAt) > at) { hold('OBSERVATION_FUTURE'); continue; }
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
@@ -190,8 +193,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
-  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason !== 'DECISION_WITHDRAWN');
-  const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
+  // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.
+  const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && !['DECISION_WITHDRAWN', 'REPLACED_BY_API'].includes(e.after.publication_withdrawal?.reason ?? ''));
+  // NOT_IN_API = 손오공 API 모드의 일반 부재 하향 라벨(SOURCE_ABSENT 와 같은 추론이므로 같은 비율 가드를 받는다).
+  const isAbsent = (e: { after: { publication_withdrawal?: { reason?: string } | null } }) => ['SOURCE_ABSENT', 'NOT_IN_API'].includes(e.after.publication_withdrawal?.reason ?? '');
+  const absentDown = downs.filter(isAbsent).length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
   if (plan.exposedBefore) {
@@ -204,8 +210,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
       const dropKeys = new Set<string>();
       const keyed = (list: typeof downs) => [...list].sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
-      const absentList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT'));
-      const explicitList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason !== 'SOURCE_ABSENT'));
+      const absentList = keyed(downs.filter(isAbsent));
+      const explicitList = keyed(downs.filter(e => !isAbsent(e)));
       absentList.slice(absentAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
       explicitList.slice(explicitAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
       if (dropKeys.size) {
