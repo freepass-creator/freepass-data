@@ -300,9 +300,19 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
   return replay;
 }
 /** Public-log-safe failure label: a fixed UPPER_SNAKE code thrown by our own code, else the error class name. Never free text. */
+/** 마스터 스냅샷 검사(scripts/supplier-input-sheet.mjs vehicleMasterSnapshotRows)가 `HOLD: <고정 문구>` 로 던지는 것들 — 고정 코드로 옮긴다.
+ * 문구는 우리 코드의 고정 문자열뿐이라 식별자·값이 섞이지 않는다. 목록에 없는 HOLD 는 아래에서 UNCODED_Error 로 남는다. */
+const MASTER_HOLD_CODES: ReadonlyArray<readonly [string, string]> = [
+  ['HOLD: Active Data vehicle master snapshot required', 'VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE'],
+  ['HOLD: Complete master and trim documents required', 'VEHICLE_MASTER_DOCUMENTS_INCOMPLETE'],
+  ['HOLD: Vehicle master snapshot digest mismatch', 'VEHICLE_MASTER_SNAPSHOT_DIGEST_MISMATCH'],
+  ['HOLD: Unique immutable master IDs required', 'VEHICLE_MASTER_IDS_NOT_UNIQUE'],
+  ['HOLD: Unique immutable trim IDs required', 'VEHICLE_TRIM_IDS_NOT_UNIQUE']];
 export function safeErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
+  const known = MASTER_HOLD_CODES.find(([text]) => message === text);
+  if (known) return known[1];
   return error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? `UNCODED_${error.name}` : 'UNCODED';
 }
 /** 예약 적용 울타리: 명령 시각 − 원천 관측 시각(계획 캡처 readTime)의 상한.
