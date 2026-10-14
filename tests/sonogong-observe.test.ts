@@ -20,6 +20,12 @@ describe('손오공 원천↔문서 차이표(관측 전용)', () => {
       ['3', '12하1003', 'USED_RENT', true, false], ['4', null, expect.any(String), true, false], ['5', '12가1005', expect.any(String), false, true]]);
     expect(v[0]!.statusValues).toEqual({ status: '출고가능' });
   });
+  it('keeps only enum-like status values; memo-like text with plates or digits becomes 기타', () => {
+    const v = readSonogongVehicles([obs('LOW_TCAR', [rec('9', '12가1009', 'TCAR_EXTERNAL', true,
+      { status: '출고가능', statusMemo: '12가1009 홍길동 010-1234-5678', stage: 3, state_note: '긴 메모 '.repeat(10), 'bad key': 'x' })])]);
+    expect(v[0]!.statusValues).toEqual({ status: '출고가능', statusMemo: '기타', stage: '3', state_note: '기타' });
+    expect(JSON.stringify(v)).not.toContain('010');
+  });
   it('flags empty / incomplete / count-mismatched buckets as invalid instead of a normal zero', () => {
     expect(summarizeSonogong(observations, []).valid).toBe(true);
     const empty = summarizeSonogong([obs('LOW_TCAR', [])], []);

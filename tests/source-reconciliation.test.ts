@@ -24,6 +24,12 @@ describe('원천 ↔ ERP5 정합 보고', () => {
       [doc(rec('12가1001', true, 500000), true), doc(rec('12가1002', true), false)]);
     expect(r).toMatchObject({ same: 1, mismatchCount: 1, mismatchLast4: ['1001'], newCount: 1, newHasDoc: 1, matched: false });
   });
+  it('keys by plate, so the same car under a different UID is one vehicle, not NEW + MISSING', () => {
+    const fresh = rec('12가1001', true); fresh.uid = 'NEW-UID';
+    const old = rec('12가1001', true); old.uid = 'iancar_OLD';
+    const r = reconcileSource([fresh], [doc(old, true)]);
+    expect(r).toMatchObject({ same: 1, newCount: 0, missingCount: 0 });
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);

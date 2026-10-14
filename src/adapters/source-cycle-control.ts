@@ -19,7 +19,7 @@ async function takeOverDeadLock(path: string, note?: (reason: string) => Promise
   // 인계하지 않고 보류+알림만 한다. 인계자가 하나뿐이면 두 인계자의 경쟁(검사~이동 사이 끼어들기)이 성립하지 않는다.
   // 죽은 잠금: 소유 pid 가 없고(ESRCH) STALE_LOCK_MS 이상 오래됐거나, 소유 정보가 비어 있거나 읽을 수 없고 STALE_LOCK_MS 이상 오래된 잠금.
   // 새 잠금은 소유 정보가 이미 든 파일로만 생긴다(임시 파일에 쓰고 link). «빈 잠금»은 예전 엔진이 남긴 것뿐이다.
-  // pid 재사용으로 무관한 프로세스가 살아 있어도 STALE_LOCK_MS 의 36배(6시간)가 지나면 죽은 잠금으로 본다(회차가 6시간 도는 일은 없다).
+  // 소유 pid 가 살아 있으면 얼마나 오래됐든 인계하지 않는다(멈춘 소유자의 재개와 새 소유자의 동시 쓰기 방지). 6시간 넘으면 알림만 남기고 사람이 해제한다.
   try {
     const before = await stat(path), raw = await readFile(path, 'utf8');
     const age = Date.now() - before.mtimeMs;
@@ -28,16 +28,19 @@ async function takeOverDeadLock(path: string, note?: (reason: string) => Promise
     try {
       const owner = JSON.parse(raw) as { pid?: unknown };
       if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0) {
-        if (processAlive(owner.pid) && age < STALE_LOCK_MS * 36) return false;
-        tag = processAlive(owner.pid) ? `dead-stale-pid-${owner.pid}` : `dead-pid-${owner.pid}`;
+        if (processAlive(owner.pid)) {
+          // 살아 있는 pid 의 잠금은 오래돼도 인계하지 않는다(독립 검토 2026-10-14): 멈췄다 재개한 소유자가 새 소유자와 동시에 쓸 수 있다.
+          // 6시간을 넘기면 pid 재사용 가능성이 있으므로 사람이 확인해 해제하도록 알림만 남긴다.
+          if (age >= STALE_LOCK_MS * 36) await note?.(`DEAD_LOCK_STALE_PID:${owner.pid}`).catch(() => undefined);
+          return false;
+        }
+        tag = `dead-pid-${owner.pid}`;
       }
     } catch { /* 레거시 빈 잠금·손상 잠금은 오래되면 죽은 잠금으로 본다 */ }
     // 이동 직전 같은 파일인지(mtime·크기·내용) 한 번 더 확인한다.
     const again = await stat(path);
     if (again.mtimeMs !== before.mtimeMs || again.size !== before.size || (await readFile(path, 'utf8')) !== raw) return false;
     await rename(path, `${path}.${tag}-${Date.now()}`);
-    // 6시간 넘게 정지한 «살아 있어 보이는» 소유자(pid 재사용이거나 멈춘 수동 실행)를 인계한 경우 소유권 재확인이 없으므로 알림으로 남긴다.
-    if (tag.startsWith('dead-stale-pid-')) await note?.(`DEAD_LOCK_STALE_PID:${tag.slice('dead-stale-pid-'.length)}`).catch(() => undefined);
     return true;
   } catch (e) {
     // 잠금이 그 사이 사라졌으면 정상(인계할 것이 없다). 그 밖의 파일 오류는 «죽은 잠금 보류» 와 구분되는 알림을 남긴다.

@@ -4,6 +4,7 @@
  * 번호는 끝 4자리만 내보낸다. 읽기 전용 — 쓰기 0. */
 import { sourceProductKey, compactRecord, type SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { CycleProduct } from '../ports/source-cycle.js';
 
 const clocks = ['observedAt', 'captured_at', 'synced_at'];
@@ -27,10 +28,13 @@ export type SourceReconciliation = {
   matched: boolean; countEqual: boolean;
 };
 
+/** 차량 키: 번호가 있으면 번호(같은 차가 다른 UID 로 읽혀도 한 대), 없으면(번호 없는 월렌트) UID. 독립 검토: UID 키만 쓰면 UID 연결 대상이 NEW+MISSING 으로 나온다. */
+const keyOf = (r: SourceProductRecord) => r.plate && isAssignedPlate(r.plate) ? `P:${plateIdentityKey(r.plate)}` : `U:${sourceProductKey(r)}`;
+
 export function reconcileSource(records: readonly SourceProductRecord[], products: readonly CycleProduct[]): SourceReconciliation {
   const source = new Map<string, SourceProductRecord>();
-  for (const r of records) if (r.status.saleAvailable === true) source.set(sourceProductKey(r), r);
-  const docs = new Map(products.map(p => [sourceProductKey(p.record), p]));
+  for (const r of records) if (r.status.saleAvailable === true) source.set(keyOf(r), r);
+  const docs = new Map(products.map(p => [keyOf(p.record), p]));
   const erp = new Map([...docs].filter(([, p]) => p.listable));
   const sameKeys = [...source.keys()].filter(k => erp.has(k));
   const newKeys = [...source.keys()].filter(k => !erp.has(k)).sort();

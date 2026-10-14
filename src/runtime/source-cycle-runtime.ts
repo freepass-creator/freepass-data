@@ -210,9 +210,13 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         return docs;
       };
       const evidence = kind === 'AUTOPLUS' && homepageReport ? async () => {
-        const erp4 = await collectionEvidence?.().catch(() => null) ?? null;
+        // 홈피 관측 신선도와 저장 데이터 반영 신선도를 분리한다(독립 검토 2026-10-14): 홈피를 방금 읽어도 문서가 낡았을 수 있으므로
+        // 홈피 완전 읽기 AND ERP4 수집 성공 중 «오래된 쪽»을 신선도 근거로 쓴다. ERP4 근거를 확인할 수 없으면 신선하다고 보지 않는다.
         const home = homepageFreshAt as string | null;
-        return home && (!erp4 || Date.parse(home) > Date.parse(erp4)) ? home : erp4;
+        if (!collectionEvidence) return home;
+        const erp4 = await collectionEvidence().catch(() => null);
+        if (!home || !erp4) return null;
+        return Date.parse(home) < Date.parse(erp4) ? home : erp4;
       } : collectionEvidence;
       plugins.push(collectorObservationPlugin(kind, ratio, documents, Date.now, evidence));
     } else throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
@@ -254,7 +258,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null;
       /** 공급사별 노출(listable=true) 수 전후: before=이번 회차 시작 전, after=이번 회차 적용 뒤(미적용이면 before 와 같다).
        *  prior=직전 회차 기록의 after. unexplained=before-prior(회차 밖에서 바뀐 수, 0 이면 설명됨). */
-      exposure?: { before: number; after: number; applied: boolean; prior: number | null; unexplained: number | null;
+      exposure?: { before: number; after: number | null; applied: boolean; prior: number | null; unexplained: number | null;
         /** 원천에서 판매 가능으로 읽은 대수와 적용 뒤 노출 대수의 차(대표 2026-10-14: 대수를 맞추고 그 대수의 데이터를 신선하게). 보류 행이 있으면 일부는 정당하다. */
         sourceSellable: number | null; gap: number | null } }>;
     freshness?: ReturnType<typeof assessFreshness> } = { started: new Date().toISOString(), finished: '', exit: 0 };
@@ -290,11 +294,13 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           const count = (kind: string) => plan.entries.filter(e => e.kind === kind).length;
           const applied = result.stage === 'APPLY' && result.status === 'APPLIED';
           const before = plan.exposedBefore;
-          const after = applied ? before - count('DOWNGRADE') + count('ENROLL') + count('REEXPOSE') : before;
+          // APPLY_UNCERTAIN 은 일부만 쓰였을 수 있어 노출 대수를 알 수 없다 — 추정값 대신 «미확인»(null)으로 기록한다(독립 검토 2026-10-14).
+          const uncertain = result.status === 'APPLY_UNCERTAIN';
+          const after = uncertain ? null : applied ? before - count('DOWNGRADE') + count('ENROLL') + count('REEXPOSE') : before;
           const prior = priorAfter.get(plugin.sourceId) ?? null;
           const sourceSellable = typeof plan.sourceCount === 'number' ? plan.sourceCount : null;
           exposure = { before, after, applied, prior, unexplained: prior === null ? null : before - prior,
-            sourceSellable, gap: sourceSellable === null ? null : sourceSellable - after };
+            sourceSellable, gap: sourceSellable === null || after === null ? null : sourceSellable - after };
         }
         record.reports.push({ source: plugin.sourceId, stage: result.stage, status: result.status, summary: result.summary,
           digest: 'planDigest' in result ? result.planDigest : null, ...(exposure ? { exposure } : {}) });

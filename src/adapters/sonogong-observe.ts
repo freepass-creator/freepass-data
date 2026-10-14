@@ -10,6 +10,14 @@ type Json = Record<string, unknown>;
 const object = (v: unknown): v is Json => !!v && typeof v === 'object' && !Array.isArray(v);
 const last4 = (plate: string) => plate.replace(/\D/g, '').slice(-4);
 const STATUS_KEY = /status|state|stage|상태/i;
+const SAFE_KEY = /^[A-Za-z_]{1,30}$/;
+/** 보고 파일에 남는 상태 값은 열거형으로 보이는 짧은 값만이다: 숫자가 섞인 문자열(차량번호·연락처)·긴 메모는 «기타» 로 바꾼다(독립 검토: 40자 절단은 비식별이 아니다). */
+const safeStatusValue = (value: string | number | boolean): string => {
+  if (typeof value === 'boolean') return String(value);
+  if (typeof value === 'number') return Number.isInteger(value) && Math.abs(value) < 1000 ? String(value) : '기타';
+  const v = value.trim();
+  return /^[A-Za-z가-힣_]{1,20}( [A-Za-z가-힣_]{1,20})?$/.test(v) ? v : '기타';
+};
 
 const hasPrice = (detail: Json | null) => Array.isArray(detail?.estimates) && (detail!.estimates as unknown[]).some(e => object(e)
   && e.creditType === 'LOW' && [12, 24, 36, 48, 60].some(m => {
@@ -27,7 +35,7 @@ export function readSonogongVehicles(observations: readonly SonogongBucketObserv
     const cls = classifySonokongRecord({ bucket: list.carSource, plateNumber: list.carNumber });
     const statusValues: Record<string, string> = {};
     for (const source of [list, record.detail ?? {}]) for (const [key, value] of Object.entries(source)) {
-      if (STATUS_KEY.test(key) && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) statusValues[key] = String(value).slice(0, 40);
+      if (STATUS_KEY.test(key) && SAFE_KEY.test(key) && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) statusValues[key] = safeStatusValue(value);
     }
     out.push({ id: String(list.id), plate: isAssignedPlate(plateRaw) ? plateIdentityKey(plateRaw) : null, bucket: observation.bucket,
       carSource: String(list.carSource ?? ''), commercialType: cls.status === 'CLASSIFIED' ? cls.commercialType : null,

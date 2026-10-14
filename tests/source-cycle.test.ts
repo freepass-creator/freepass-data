@@ -524,10 +524,11 @@ describe('죽은 프로세스의 잠금 인계 (강제 종료로 RP030 이 «중
     expect((await readdir(dir)).some(n => n.endsWith('.tmp'))).toBe(false);          // 임시 파일이 남지 않는다
     await release!();
     const reused = await lockFor({ token: 'x', pid: process.pid }, STALE_LOCK_MS * 36 + 60_000);
-    const again = await reused.ctrl.acquire('SRC');
-    expect(again).not.toBeNull();
-    expect((await readdir(reused.dir)).some(n => n.includes('.lock.dead-stale-pid-'))).toBe(true);
-    await again!();
+    // 살아 있는 pid 의 잠금은 6시간을 넘겨도 인계하지 않는다(멈춘 소유자의 재개와 동시 쓰기 방지) — 사람이 확인해 해제한다.
+    expect(await reused.ctrl.acquire('SRC')).toBeNull();
+    const names = await readdir(reused.dir);
+    expect(names.some(n => n.includes('.lock.dead-stale-pid-'))).toBe(false);
+    expect(names.some(n => n.endsWith('.lock'))).toBe(true);
   });
   it('acquire sweeps old leftover temp files (crash between write and link) but keeps recent ones, and a lock I/O error is alerted before it propagates', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lock-')); dirs.push(dir);
