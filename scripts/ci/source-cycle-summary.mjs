@@ -16,6 +16,11 @@ export function cycleSummaryMarkdown(resultText, heartbeatLines, five) {
     out.push('', '| 원천 | 단계 | 상태 | 요약 | 노출 전→후 | 원천 판매가능 | gap |', '|---|---|---|---|---|---|---|');
     for (const r of record.reports) out.push(`| ${cell(r.source)} | ${cell(r.stage)} | ${cell(r.status)} | ${cell(r.summary)} | ${cell(r.exposure?.before)}→${cell(r.exposure?.after)} | ${cell(r.exposure?.sourceSellable)} | ${cell(r.exposure?.gap)} |`);
   }
+  // 한 줄 판정(#629: ✅ 일치 / ⚠ 차이와 이유 / ❌ 정지·연속 차이)이 있으면 맨 위에 둔다 — 사람은 이 줄만 본다.
+  if (five && typeof five.verdictRows === 'function') {
+    const verdicts = five.verdictRows(heartbeatLines);
+    if (verdicts.length) out.splice(1, 0, '', ...verdicts.map(v => `- ${v.line}`));
+  }
   if (five) {
     const rows = five.fiveColumnRows(heartbeatLines);
     if (rows.length) out.push('', '### 5칸 지표', '', ...rows.map(row => `- ${five.fiveColumnLine(row)}`));

@@ -24,3 +24,10 @@ test('summary renders per-source rows and survives unreadable output', () => {
   assert.match(md, /0→330 \| 334 \| 4 \|/);
   assert.match(cycleSummaryMarkdown('SOURCE_CYCLE_RUNTIME_HOLD', [], null), /결과를 읽지 못함/);
 });
+
+test('summary puts the one-line verdicts on top when the report module provides them', () => {
+  const five = { verdictRows: () => [{ line: '손오공(RP012) ✅ 원천 출고가능 3 = 노출 3' }], fiveColumnRows: () => [], fiveColumnLine: () => '' };
+  const md = cycleSummaryMarkdown(JSON.stringify({ exit: 0, reports: [] }), ['{}'], five);
+  assert.match(md.split('\n').slice(0, 4).join('\n'), /손오공\(RP012\) ✅/);
+});
+
