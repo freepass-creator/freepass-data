@@ -408,9 +408,16 @@ const engineTerm = (v: unknown): v is EngineTerm => depositRecord(v) && Number.i
  *   필요한 호출자는 opts.maxAgeSeconds 로 명시적으로 창을 걸 수 있다.
  */
 export function readIancarEngineDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
-  opts: { maxAgeSeconds?: number } = {}): IancarEngineDepositResult {
+  opts: { maxAgeSeconds?: number; preserveStalePositiveReference?: boolean } = {}): IancarEngineDepositResult | ReturnType<typeof readIancarLegacyPublishedDeposit> {
   const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' as const });
   const mark = product.source_cycle_write, record = product.source_cycle_record;
+  // 이관 중 보존(Codex #639 ①): 엔진 작성 표식(source_cycle_write)도 원천 기록(source_cycle_record)도 «둘 다 없는» 기존 문서는 엔진이 아직 쓰지 않은 문서다.
+  // 이런 문서의 기존 KNOWN/ZERO 값을 일괄 UNKNOWN 으로 바꾸지 않고 옛 1차 발행 근거(iancar_phase_one) 판정을 그대로 쓴다. 엔진이 그 문서를 새로 확인해
+  // 표식·기록을 남기면 아래 엔진 근거가 이긴다. 표식이나 기록이 «하나라도 있는데» 맞지 않는 문서(다른 주체가 덮음 등)는 아래에서 UNKNOWN 이다.
+  if (product.provider_company_code === 'RP031' && !depositRecord(mark) && !depositRecord(record)) {
+    const legacy = readIancarLegacyPublishedDeposit(product, priceKey, now, opts.preserveStalePositiveReference === true ? { preserveStalePositiveReference: true } : {});
+    return legacy.state === 'UNKNOWN' ? unknown() : legacy;   // 미확인 사유 코드는 한 가지(엔진 근거 미확인)로 통일
+  }
   if (product.provider_company_code !== 'RP031' || !depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER
     || product._deleted || product.deletedAt || product.publication_withdrawal
     || !depositRecord(record) || record.sourceId !== 'RP031' || !Array.isArray(record.terms) || !record.terms.length
@@ -431,13 +438,90 @@ export function readIancarEngineDeposit(product: Record<string, unknown>, priceK
     term = representativeTerms(terms).find(t => t.months === Number(priceKey));
   }
   const row = product.price[priceKey];
+  // 월 대여료 일치(Codex #639 ②): 가격 칸의 월 대여료가 원천 기록 항의 월 대여료와 다르면(월요금이 바뀐 뒤 원천 조건과 달라진 칸) 보증금도 확인하지 않는다.
   if (!term || !depositRecord(row) || (term.deposit.state !== 'ZERO' && term.deposit.state !== 'KNOWN')
-    || row.deposit !== term.deposit.value) return unknown();
+    || row.deposit !== term.deposit.value || term.monthlyRent.state === 'UNKNOWN' || row.rent !== term.monthlyRent.value) return unknown();
   const amount = term.deposit.value as number;
+  // 0원 확정 금지(Codex #639 ③): 유상 보증금 안내(deposit_note)가 남아 있으면(무보증·기간별 상이 안내만 예외) 원천 ZERO 라도 확정하지 않는다.
+  const note = depositText(product.deposit_note);
   if (amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
-    || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value))) return unknown();
+    || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
+    || (note && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(note)))) return unknown();
   // ONE 이 0원으로 준 항은 원천이 직접 준 무보증이다(자리표시 0 이 아니라 엔진이 ZERO 로 판정해 기록한 값).
   if (amount === 0) return { state: 'ZERO', amount: 0, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE',
     depositEvidenceBasis: { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: observedAt } };
   return { state: 'KNOWN', amount, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE' };
+}
+
+
+// ── 옛 1차 발행 근거(iancar_phase_one) 읽기: 엔진 작성 표식이 «없는» 기존 문서의 값을 보존하기 위한 이관용 경로(Codex #639 ①).
+// 엔진이 그 문서를 새로 확인해 표식을 남기면 엔진 근거가 이긴다. 이관이 끝나면 이 함수와 호출을 지운다.
+const LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS = 15 * 60;
+const depositInteger = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
+/** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
+export function readIancarLegacyPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
+  options: { preserveStalePositiveReference?: boolean } = {}):
+  | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' }
+  | { state: 'KNOWN' | 'ZERO'; amount: number; reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT'; publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE';
+      publicationDecision: 'HOLD'; depositRuleDifference?: Extract<DepositWithRuleResolution, { state: 'KNOWN' }>['depositRuleDifference'] } {
+  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' as const });
+  const e = product.iancar_phase_one;
+  if (product.provider_company_code !== 'RP031' || product.source !== 'EANCAR_ONE_API'
+    || product.source_schema !== 'iancar-one-phase-one-product/1' || !depositRecord(e)
+    || e.stage !== 'PHASE_ONE' || e.publicationPlane !== 'ERP5_COMPATIBILITY_BRIDGE'
+    || !depositText(product.iancar_one_vehicle_id) || e.sourceVehicleId !== product.iancar_one_vehicle_id
+    || !/^\d{2,3}[가-힣]\d{4}$/.test(depositText(product.car_number).replace(/\s/g, ''))
+    || product._deleted || product.deletedAt || product.publication_withdrawal
+    || !/^[a-f0-9]{64}$/.test(String(e.sourceDigest)) || !/^[a-f0-9]{64}$/.test(String(e.ratesDigest))
+    || !depositInstant(now) || !depositInstant(e.sourceSyncedAt)
+    || product._direct_ingest_at !== Date.parse(e.sourceSyncedAt)
+    || !Array.isArray(e.terms) || !e.terms.length || !depositRecord(e.priceAliases) || !depositRecord(product.price)) return unknown();
+  const terms = e.terms;
+  for (const t of terms) {
+    if (!depositRecord(t) || !depositInteger(t.termMonths) || t.termMonths < 1 || t.termMonths > 60
+      || !depositRecord(t.contractedMileage) || !depositInteger(t.contractedMileage.km) || t.contractedMileage.km < 1
+      || !['month', 'year'].includes(String(t.contractedMileage.period))
+      || !depositRecord(t.monthlyRent) || t.monthlyRent.currency !== 'KRW' || !depositInteger(t.monthlyRent.amount)
+      || t.monthlyRent.amount < 100_000 || t.monthlyRent.amount > 20_000_000 || t.vatIncluded !== true
+      || !depositRecord(t.deposit) || t.deposit.currency !== 'KRW' || !depositInteger(t.deposit.amount) || t.deposit.amount < 0
+      || t.depositState !== (t.deposit.amount === 0 ? 'ZERO' : 'KNOWN')
+      || t.key !== `${t.termMonths}:${t.contractedMileage.km}:${t.contractedMileage.period}`
+      || t.compatibilityPriceKey !== `${t.termMonths}_${t.contractedMileage.period === 'month' ? '월' : '연'}${t.contractedMileage.km}km`) return unknown();
+  }
+  if (new Set(terms.map(t => (t as Record<string, unknown>).key)).size !== terms.length) return unknown();
+  const matching = terms.filter(t => depositRecord(t) && t.compatibilityPriceKey === priceKey);
+  let term = matching.length === 1 ? matching[0] as Record<string, unknown> : undefined;
+  if (!term && /^\d+$/.test(priceKey)) {
+    const scoped = terms.filter(t => depositRecord(t) && t.termMonths === Number(priceKey)) as Record<string, unknown>[];
+    if (!scoped.length || new Set(scoped.map(t => (t.contractedMileage as Record<string, unknown>).period)).size !== 1) return unknown();
+    const lowest = scoped.reduce((a, b) => Number((a.contractedMileage as Record<string, unknown>).km) < Number((b.contractedMileage as Record<string, unknown>).km) ? a : b);
+    if (e.priceAliases[priceKey] !== lowest.key) return unknown();
+    term = lowest;
+  }
+  const row = product.price[priceKey];
+  if (!term || !depositRecord(row) || !depositRecord(term.deposit) || !depositRecord(term.monthlyRent)
+    || row.deposit !== term.deposit.amount || row.rent !== term.monthlyRent.amount) return unknown();
+  const direct = product.price[String(term.compatibilityPriceKey)];
+  if (!depositRecord(direct) || direct.rent !== row.rent || direct.deposit !== row.deposit) return unknown();
+  if (term.deposit.amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
+    || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
+    || (depositText(product.deposit_note) && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(depositText(product.deposit_note))))) return unknown();
+  // Freshness cannot erase a structurally verified positive source amount. This is a
+  // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
+  if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000) return unknown();
+  if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
+    // Public/compat callers keep their previous fail-closed result. Only authenticated
+    // REFERENCE_ONLY/HOLD output can opt in to retaining a stale source amount.
+    if (!options.preserveStalePositiveReference || term.deposit.amount === 0) return unknown();
+    const source = resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+      termMonths: term.termMonths, monthlyRent: row.rent, hasPositivePaidDeposit: hasConflictingPaidDeposit(product.price),
+    }));
+    if (source.state !== 'KNOWN') return unknown();
+    return { state: 'KNOWN' as const, amount: source.amount, reason: 'SOURCE_AMOUNT',
+      ...(source.depositRuleDifference ? { depositRuleDifference: source.depositRuleDifference } : {}),
+      publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' as const };
+  }
+  return { state: term.depositState as 'ZERO' | 'KNOWN', amount: term.deposit.amount as number,
+    reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' };
 }
