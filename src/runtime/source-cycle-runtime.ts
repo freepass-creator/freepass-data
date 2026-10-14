@@ -514,6 +514,18 @@ export function deprecatedConfigNotices(env: NodeJS.ProcessEnv): Array<{ code: s
 }
 
 /** 스케줄러가 부르는 한 회차: 사전점검 → 계획·적용(원천별) → 신선도 판정 → 실행 기록 한 줄(unattended-runs.jsonl). 토큰·원문은 기록하지 않는다. */
+/** 무인 회차 종료 코드(순수). HOLD·STOPPED·APPLY_UNCERTAIN 이 있거나 신선도가 HEALTHY 가 아니면 1.
+ * 예외: 보고가 «모두 LOCKED»(다른 회차가 그 원천을 쓰는 중이라 이 회차는 아무것도 하지 않음)이면 신선도 판정을 종료 코드에 쓰지 않는다 —
+ * 쓰는 도중에는 상태 파일이 아직 확정 전이라 신선도가 낡은 값(STALE)으로 읽힌다(2026-10-16 RP031 :05 단독 회차 오경보: lastComplete 21:01Z 로 읽혀 124분 STALE).
+ * 잠금을 잡은 회차가 자기 결과로 신선도를 판정·기록한다. 즉시 실행 요청(REQUEST_RUN)에서 LOCKED·UNCHANGED_SYNC 는 «미실행» 이라 종료 코드 3. */
+export function unattendedExitCode(input: { statuses: readonly string[]; freshnessStatus: string; requestRun: boolean }): { exit: 0 | 1 | 3; freshnessSkipped: boolean } {
+  const onlyLocked = input.statuses.length > 0 && input.statuses.every(status => status === 'LOCKED');
+  const freshnessBad = input.freshnessStatus !== 'HEALTHY' && !onlyLocked;
+  if (input.statuses.some(status => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(status)) || freshnessBad) return { exit: 1, freshnessSkipped: false };
+  if (input.requestRun && input.statuses.some(status => ['LOCKED', 'UNCHANGED_SYNC'].includes(status))) return { exit: 3, freshnessSkipped: onlyLocked && input.freshnessStatus !== 'HEALTHY' };
+  return { exit: 0, freshnessSkipped: onlyLocked && input.freshnessStatus !== 'HEALTHY' };
+}
+
 export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
@@ -525,6 +537,8 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
         /** 원천에서 판매 가능으로 읽은 대수와 적용 뒤 노출 대수의 차(대표 2026-10-14: 대수를 맞추고 그 대수의 데이터를 신선하게). 보류 행이 있으면 일부는 정당하다. */
         sourceSellable: number | null; gap: number | null } }>;
     freshness?: ReturnType<typeof assessFreshness>;
+    /** 신선도 판정을 종료 코드에 쓰지 않은 사유 코드(SKIPPED_ALL_LOCKED = 모든 원천이 다른 회차의 잠금으로 건너뜀). */
+    freshnessNote?: string;
     /** 정체성 정제 상태: ENABLED:<마스터 digest 앞 12> · SKIPPED:<사유 코드>(정제 안 함 = 지금 동작) · DISABLED · NOT_LOADED(목록을 읽지 않음). */
     identityRefine?: string } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
@@ -594,10 +608,9 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           // 원천별 임계값: 설정(SOURCE_CYCLE_FRESHNESS_THRESHOLDS)이 우선, 없으면 손오공 API 모드에서만 기본 90분 정체·180분 에스컬레이션(커맨드 센터 10-14).
           sourceThresholds: env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS !== undefined ? parseFreshnessThresholds(env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS)
             : sonogongApiEnabled(env) ? parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT') : [] });
-      if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
-      // 즉시 실행 요청(처리기가 SOURCE_CYCLE_REQUEST_RUN=1 로 부름)은 «실제로 읽고 계획했는지»가 중요하다: 잠금(LOCKED)·변경 없음 생략(UNCHANGED_SYNC)은
-      // 정시 실행에는 정상이지만 요청에는 «미실행»이므로 종료 코드 3 으로 알려 처리기가 요청을 소비하지 않고 되돌리게 한다(독립 검토 2026-10-14).
-      else if (env.SOURCE_CYCLE_REQUEST_RUN === '1' && record.reports.some(r => ['LOCKED', 'UNCHANGED_SYNC'].includes(r.status))) record.exit = 3;
+      const decided = unattendedExitCode({ statuses: record.reports.map(r => r.status), freshnessStatus: record.freshness.status, requestRun: env.SOURCE_CYCLE_REQUEST_RUN === '1' });
+      record.exit = decided.exit;
+      if (decided.freshnessSkipped) record.freshnessNote = 'SKIPPED_ALL_LOCKED';
     }
   } catch (e) {
     const code = e instanceof Error && /^[A-Z_]+$/.test(e.message) ? e.message : 'UNATTENDED_RUN_ERROR';
