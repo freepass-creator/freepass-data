@@ -219,11 +219,20 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         writes.push({ update: { name: docName(e.key), fields: encodeFields(fields as never) }, updateMask: { fieldPaths: Object.keys(fields) } });
       }
       let absentMarked = 0;
-      if (complete) for (const [key, prior] of existing) if (!seen.has(key) && !prior.absent) {
+      // 식별 불가 보류 행이 있는 회차는 «이전 정상 레코드가 보류로 바뀐 것»과 «사라진 것»을 가를 수 없어 사라짐 표식을 유보한다.
+      if (complete && held.length === 0) for (const [key, prior] of existing) if (!seen.has(key) && !prior.absent) {
         absentMarked++;
         writes.push({ update: { name: docName(key), fields: encodeFields({ absent_since: observedAt, read_complete: true } as never) }, updateMask: { fieldPaths: ['absent_since', 'read_complete'] } });
       }
-      for (let i = 0; i < writes.length; i += 200) await request(':commit', 'POST', { writes: writes.slice(i, i + 200) });
+      // 요청 크기: 문서 수 200 이하 AND 직렬화 6MB 이하로 나눠 보낸다(Firestore 요청 한도 10MiB 보호).
+      let batch: unknown[] = [], bytes = 0;
+      const flush = async () => { if (batch.length) { await request(':commit', 'POST', { writes: batch }); batch = []; bytes = 0; } };
+      for (const w of writes) {
+        const size = Buffer.byteLength(JSON.stringify(w), 'utf8');
+        if (batch.length >= 200 || bytes + size > 6_000_000) await flush();
+        batch.push(w); bytes += size;
+      }
+      await flush();
       return { stored: entries.length, absentMarked };
     },
     async list(source) {

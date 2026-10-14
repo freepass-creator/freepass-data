@@ -25,6 +25,28 @@ export function maskPersonal(value: unknown, depth = 0): unknown {
   return null;
 }
 
+const PERSONAL_HEADER = /고객|성명|이름|연락|전화|휴대|주민|계좌|주소|예금주|이메일|email/i;
+/** 원문 레코드 raw 안의 headers/cells 쌍에서 개인정보 머리글 열의 값을 «***» 로 바꾼다(시트 계열). 다른 모양은 maskPersonal 만 적용. */
+export function maskRaw(raw: unknown): unknown {
+  const masked = maskPersonal(raw) as Record<string, unknown> | unknown;
+  if (!masked || typeof masked !== 'object' || Array.isArray(masked)) return masked;
+  const o = masked as Record<string, unknown>;
+  const headers = Array.isArray(o.headers) ? o.headers.map(h => String(h ?? '')) : null;
+  if (headers && Array.isArray(o.cells)) o.cells = (o.cells as unknown[]).map((c, i) => (headers[i] && PERSONAL_HEADER.test(headers[i]!) ? '***' : c));
+  if (headers && o.original && typeof o.original === 'object' && !Array.isArray(o.original)) {
+    o.original = Object.fromEntries(Object.entries(o.original as Record<string, unknown>).map(([k, v]) => [k, PERSONAL_HEADER.test(k) ? '***' : v]));
+  }
+  return o;
+}
+
+const MAX_RAW_BYTES = 600_000;
+/** 직렬화 크기가 한도를 넘으면 원문을 digest 와 크기만 남기고 접는다(문서 1MiB 한도 보호). */
+export function boundRaw(raw: unknown): unknown {
+  const text = JSON.stringify(raw ?? null);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  return bytes <= MAX_RAW_BYTES ? raw : { __oversize: true, bytes, digest: stableDigest(text).slice(0, 32) };
+}
+
 export type RawEntry = {
   key: string; kind: 'RECORD' | 'HELD'; sourceId: string; plate: string | null; uid: string | null; vehicleText: string;
   statusRaw: string | null; saleAvailable: boolean | null; terms: Array<{ months: number; rent: number | null; depositState: string; mileage: string | null }>;
@@ -39,8 +61,8 @@ export const rawKeyOf = (sourceId: string, record: Pick<SourceProductRecord, 'pl
 };
 
 export function rawEntryOfRecord(sourceId: string, r: SourceProductRecord): RawEntry {
-  const raw = maskPersonal(r.raw);
-  const terms = r.terms.map(t => ({ months: t.months, rent: t.monthlyRent.state === 'KNOWN' || t.monthlyRent.state === 'ZERO' ? t.monthlyRent.value : null,
+  const raw = boundRaw(maskRaw(r.raw));
+  const terms = r.terms.slice(0, 60).map(t => ({ months: t.months, rent: t.monthlyRent.state === 'KNOWN' || t.monthlyRent.state === 'ZERO' ? t.monthlyRent.value : null,
     depositState: t.deposit.state, mileage: t.mileage }));
   const base = { vehicleText: String(maskPersonal(r.vehicleText) ?? ''), statusRaw: r.status.raw ?? null, saleAvailable: r.status.saleAvailable, terms, raw };
   return { key: rawKeyOf(sourceId, r), kind: 'RECORD', sourceId, plate: r.plate ?? null, uid: r.uid || null, ...base, heldReasons: [],

@@ -13,6 +13,13 @@ describe('원천 원문 계층 규칙', () => {
     expect(maskPersonal({ a: { b: ['02-345-6789'] } })).toEqual({ a: { b: ['***'] } });
     expect((maskPersonal('x'.repeat(5000)) as string).length).toBe(4000);
   });
+  it('시트 머리글이 개인정보 열이면 그 열의 값을 가리고, 너무 큰 원문은 digest 로 접는다', async () => {
+    const { maskRaw, boundRaw } = await import('../src/domain/source-raw.js');
+    const masked = maskRaw({ headers: ['차량번호', '고객명', '연락처', '월렌트'], cells: ['12가3456', '홍길동', '대표 번호', '770,000'] }) as { cells: string[] };
+    expect(masked.cells).toEqual(['12가3456', '***', '***', '770,000']);
+    expect(boundRaw({ a: 'x'.repeat(700_000) })).toMatchObject({ __oversize: true });
+    expect(boundRaw({ a: 'small' })).toEqual({ a: 'small' });
+  });
   it('키는 원천__차량번호, 번호가 없으면 UID, 그것도 없으면 행 해시', () => {
     expect(rawKeyOf('RP999', rec())).toBe('RP999__12가3456');
     expect(rawKeyOf('RP999', rec({ plate: null, uid: 'RP004:MONTHLY:K5' }))).toBe('RP999__RP004:MONTHLY:K5');
