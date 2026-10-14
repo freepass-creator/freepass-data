@@ -13,43 +13,43 @@
   "change": {
     "counts": {
       "ADDED": 6,
-      "CHANGED": 89,
+      "CHANGED": 260,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1755
+      "UNCHANGED": 1628
     },
     "current": {
-      "count": 1850,
-      "digest": "38b812efa98a8d5950f6cad518dfc70644feb2a3db8b9c5d5691b59a2bf152fc",
-      "readTime": "2026-10-14T02:08:03.141550Z"
+      "count": 1894,
+      "digest": "3daae7b4ab471478a10074e319ef2644c38a4a3b9959ce8261b3c612019a6129",
+      "readTime": "2026-10-14T07:59:10.710843Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "3b4ff2053e8cd84f62bc65df9f3f42b8e490586730ecf1ad6008bc810da63b8b",
-    "inventoryTransitionCount": 1,
+    "digest": "f7f4a0a4f95422566f8d2aaf1bdc349f862b36eef83db875230472a79c3be162",
+    "inventoryTransitionCount": 10,
     "previous": {
-      "count": 1844,
-      "digest": "c267872bee3e25a6c774fea14256695a949c1784c56c26bb69ea74ab66d04ecf",
-      "readTime": "2026-10-14T01:06:52.328683Z"
+      "count": 1888,
+      "digest": "e3e3b27e3de14281f52b61764e1e3d8efee5a76112cbd35346b508842add0822",
+      "readTime": "2026-10-14T06:05:30.801969Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 1,
+    "inventoryTransitionCount": 10,
     "mappedForReview": 152,
-    "mappingHold": 1698,
-    "productFieldPathCount": 1000
+    "mappingHold": 1742,
+    "productFieldPathCount": 1045
   },
-  "runId": "38499371122-1",
+  "runId": "38531880184-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 1850
+      "products": 1894
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "38b812efa98a8d5950f6cad518dfc70644feb2a3db8b9c5d5691b59a2bf152fc",
+    "digest": "3daae7b4ab471478a10074e319ef2644c38a4a3b9959ce8261b3c612019a6129",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-14T02:08:03.141550Z"
+    "readTime": "2026-10-14T07:59:10.710843Z"
   },
   "version": "erp5-source-inventory/1"
 }
