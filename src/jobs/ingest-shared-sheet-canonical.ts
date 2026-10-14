@@ -80,22 +80,29 @@ export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: Shared
   if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
   verifiedMasterRecords(master, now);
 }
-export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
+/**
+ * The sealed master snapshot must be fresh at the entry fence (CLI start). After that fence an apply may legitimately run for
+ * many minutes (preflight, RAW load); judging the sealed snapshot against wall-clock time there turned a good run into
+ * VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE. In-flight checks evaluate it at its own capture time — completeness, immutable
+ * IDs and digest are still verified — while freshness against the live master is the digest comparison with a fresh read.
+ */
+const sealedNow = (master: VehicleMasterSnapshot, inFlight: boolean) => inFlight ? Date.parse(master.readAt) : Date.now();
+export function identityResolver(inputs: VehicleIdentityInputs | undefined, inFlight = false): SharedSheetIdentityResolver | undefined {
   if (!inputs) return undefined;
   assertVehicleIdentityInputs(inputs);
-  const master = indexVehicleMaster(verifiedMasterRecords(inputs.master));
+  const master = indexVehicleMaster(verifiedMasterRecords(inputs.master, sealedNow(inputs.master, inFlight)));
   const data = new Map(inputs.data.map(x => [x.plate, x.identity]));
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear, ...(row.specs ? { specs: row.specs } : {}) });
 }
-function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false) {
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
   const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
-  const master = snapshot ? { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs), master, { includeSupplierColors });
+  const master = snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, { includeSupplierColors });
   const normalize: typeof normalizeBase = raw => {
     const normalized = normalizeBase(raw);
     return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};
@@ -123,8 +130,8 @@ function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogSt
   } });
 }
 export async function planSharedSheetCanonical(store: CatalogStore, capture: SharedSheetCapture, target: string,
-  identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, operationalRefresh = false) {
-  const p = prepared(capture, identityInputs, includeSupplierColors);
+  identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, operationalRefresh = false, inFlight = false) {
+  const p = prepared(capture, identityInputs, includeSupplierColors, inFlight);
   const currentHead = await store.getSourceHead(p.sourceId);
   // A completed source run is immutable. New normalization must use a newly captured run.
   if (includeSupplierColors && currentHead?.runId === p.runId) {
@@ -261,7 +268,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
     planDigest: stableDigest(plan) } };
 }
 
-export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): asserts plan is SharedSheetPlan {
+export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest: string | undefined, target: string, inFlight = false): asserts plan is SharedSheetPlan {
   if (!plan || !digest || plan.schema !== 'shared-sheet-canonical-plan/v1' || plan.target !== target ||
       (plan.includeSupplierColors !== undefined && plan.includeSupplierColors !== true) ||
       (plan.operationalRefresh !== undefined && plan.operationalRefresh !== true) ||
@@ -273,21 +280,21 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
     assertVehicleIdentityInputs(plan.identityInputs);
     if (plan.identityRuleVersion !== VEHICLE_IDENTITY_RULE_VERSION) throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
-  if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
+  if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, inFlight).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
 export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<Set<string>> {
-  assertSharedSheetPlan(plan, digest, target);
+  assertSharedSheetPlan(plan, digest, target, true);
   const ownership = await store.getCatalogWriterOwnership();
   if (!ownership || ownership.mode !== 'EXCLUSIVE' || ownership.primaryWriterId !== actor.id || stableDigest(ownership) !== plan.ownershipDigest)
     throw new Error('SHARED_SHEET_EXCLUSIVE_WRITER_REQUIRED');
-  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, true);
   const head = await store.getSourceHead(p.sourceId);
   if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
   if (head?.runId === p.runId && (head.sourceId !== p.sourceId || head.observedAt !== p.head.observedAt ||
       stableDigest(head.checkpoint) !== stableDigest(p.head.checkpoint) || stableDigest(head.coverage) !== stableDigest(p.head.coverage)))
     throw new Error('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
-  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh);
+  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh, true);
   if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
   const replay = new Set<string>();
   for (let i = 0; i < plan.entries.length; i++) {
@@ -330,7 +337,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     return planSharedSheetCanonical(store, options.capture, options.target, options.identityInputs, options.includeSupplierColors, options.operationalRefresh);
   }
   const plan = options.plan;
-  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
+  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target, true);
   if (options.target === 'freepasserp5') {
     const current = options.currentVehicleMasterSnapshot;
     if (!current) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
@@ -340,7 +347,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
   }
   const replay = await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
-  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, true);
   // Immutable pre-write economics oracle for confirmed vehicle-price fees. A rent capture
   // is not a vehicle-price fact and must not recalculate or invent that basis.
   const beforeOffers = plan.operationalRefresh ? new Map((await store.listOffers()).map(x => [x.id, structuredClone(x)])) : null;
