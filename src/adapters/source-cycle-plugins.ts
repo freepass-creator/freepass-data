@@ -152,6 +152,20 @@ export function decisionWithdrawnPlugin(sourceId: string, clock: () => string = 
   return plugin;
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+/** 실제 달력 검증(윤년 포함): «YYYY-MM» 또는 «YYYY-MM-DD». 2026-99-99·2026-02-31·2025-02-29 는 최초등록일로 확정하지 않는다(Codex #644 ②). */
+export function validCalendarDate(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(text);
+  if (!m) return false;
+  const year = Number(m[1]), month = Number(m[2]);
+  if (year < 1900 || year > 2100 || month < 1 || month > 12) return false;
+  if (m[3] === undefined) return true;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  const day = Number(m[3]);
+  return day >= 1 && day <= days;
+}
+
 /** Read an existing ONE full-facts result. No second API client; PREPARING is a sellable source
  * state by SPEC2 even when provider `available` is false. Missing rates remain UNKNOWN/HOLD. */
 export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise<IancarOneListCapture>,
@@ -184,12 +198,14 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       if (typeof fuel === 'string' && fuel.trim()) spec.fuel_type = fuel.trim();
       if (typeof color === 'string' && color.trim()) spec.ext_color = color.trim();
       if (typeof mileage === 'number' && Number.isSafeInteger(mileage) && mileage >= 0) spec.mileage = String(mileage);
-      if (typeof registered === 'string' && /^\d{4}-\d{2}(-\d{2})?$/.test(registered.trim())) spec.first_registration_date = registered.trim();
+      if (typeof registered === 'string' && validCalendarDate(registered.trim())) spec.first_registration_date = registered.trim();
       const plate = typeof raw.plate_number === 'string' && raw.plate_number.trim() ? raw.plate_number.replace(/\s/g, '') : null;
       const record: SourceProductRecord = { sourceId: 'RP031', uid: item.vehicleId, plate,
         vehicleText: typeof detail.name === 'string' ? detail.name : '',
         status: { raw: String(raw.inventory_status ?? ''), saleAvailable: null },
-        observedAt: capture.syncedAt, raw: { ...structuredClone(raw), ...(Object.keys(spec).length ? { spec } : {}),
+        // 원문에 이미 spec 이 있으면 파생값으로 덮지 않는다(Codex #644 ①): 파생값은 원문에 «없는 칸만» 채우고 원문 값·추가 필드는 그대로 남긴다.
+        observedAt: capture.syncedAt, raw: { ...structuredClone(raw), ...(Object.keys(spec).length || isPlainObject(raw.spec)
+          ? { spec: { ...spec, ...(isPlainObject(raw.spec) ? structuredClone(raw.spec) : {}) } } : {}),
           ...(factHold ? { iancar_fact_hold: factHold } : {}) }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'],
         terms: (Array.isArray(rates) ? rates : []).map(value => {
           const rate = object(value);
