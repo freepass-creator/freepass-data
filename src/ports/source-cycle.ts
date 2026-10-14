@@ -59,6 +59,16 @@ export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: str
   lastAttemptAt: string | null; lastCompleteAt: string | null; readCount: number; heldCount: number; error: string | null };
 export const emptyCycleState = (): CycleState => ({ failures: 0, stopped: false, lastSyncedAt: null,
   lastAttemptAt: null, lastCompleteAt: null, readCount: 0, heldCount: 0, error: null });
+/** 저장된 회차 상태 검증(파일·Firestore 제어 저장소 공용). 형식이 틀리면 던진다 — 손상된 상태로 회차를 돌리지 않는다. */
+export function assertCycleState(value: CycleState): CycleState {
+  const nullableTime = (v: unknown) => v === null || (typeof v === 'string' && Number.isFinite(Date.parse(v)));
+  if (!value || !Number.isSafeInteger(value.failures) || value.failures < 0 || typeof value.stopped !== 'boolean' ||
+      (value.failures >= 3 && !value.stopped) || !nullableTime(value.lastSyncedAt) || !nullableTime(value.lastAttemptAt) ||
+      !nullableTime(value.lastCompleteAt) || !Number.isSafeInteger(value.readCount) || value.readCount < 0 ||
+      !Number.isSafeInteger(value.heldCount) || value.heldCount < 0 ||
+      !(value.error === null || typeof value.error === 'string')) throw new Error('CYCLE_STATE_INVALID');
+  return value;
+}
 export interface CycleControl {
   acquire(sourceId: string): Promise<null | (() => Promise<void>)>;
   load(sourceId: string): Promise<CycleState>;

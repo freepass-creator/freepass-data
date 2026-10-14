@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { firestoreCycleControl } from '../infra/source-cycle-control-firestore.js';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { assessFreshness, parseFreshnessExempt } from '../application/source-freshness.js';
@@ -101,10 +102,16 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
       ...(env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE === '1' || env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1' });
-  const control = fileCycleControl(directory, async (source, state, plan) => {
+  const cycleHeartbeat: Parameters<typeof fileCycleControl>[1] = async (source, state, plan) => {
+    await mkdir(directory, { recursive: true });   // Firestore 제어일 때는 잠금 단계가 폴더를 만들지 않는다
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
-  }, { takeOverDeadLocks: env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER !== '0' });   // 인계자는 «전체 정시 예약» 하나: 수동 실행·단독 원천 예약(-Source)은 보류+알림만
+  };
+  // 회차 제어 저장소: 기본은 파일(B3Q). 온라인 실행기(러너 휘발)는 SOURCE_CYCLE_CONTROL=firestore 로 잠금·상태·알림을 Firestore 에 둔다.
+  const takeOver = env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER !== '0';   // 인계자는 «전체 정시 예약» 하나: 수동 실행·단독 원천 예약(-Source)은 보류+알림만
+  const control = env.SOURCE_CYCLE_CONTROL === 'firestore'
+    ? firestoreCycleControl({ env, heartbeat: cycleHeartbeat, takeOverExpired: takeOver, fetcher })
+    : fileCycleControl(directory, cycleHeartbeat, { takeOverDeadLocks: takeOver });
   // ERP4 수집(쓰기) 단계의 마지막 성공 시각(SOURCE_CYCLE_ERP4_REPO=owner/repo 일 때만). 한 회차 안에서 두 원천이 같은 조회를 공유한다.
   const erp4Repo = env.SOURCE_CYCLE_ERP4_REPO && /^[\w.-]+\/[\w.-]+$/.test(env.SOURCE_CYCLE_ERP4_REPO) ? env.SOURCE_CYCLE_ERP4_REPO : null;
   let evidenceCache: { at: number; value: Promise<string | null> } | null = null;
