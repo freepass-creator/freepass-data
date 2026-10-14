@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, type VehicleTerms } from '../domain/iancar-policy-link.js';
-import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-publication-withdrawal-firestore.js';
+import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-backup-value.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 

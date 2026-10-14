@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
 import { selectErp5Policy } from '../adapters/erp5-product-mapping.js';
-import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarEngineDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 import sheetSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
@@ -1120,27 +1120,22 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
-    const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
-      ? readIancarPublishedDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
+    // 이안카(RP031)는 원천 엔진 근거만 쓴다(옛 1차 발행 칸 iancar_phase_one 은 근거가 아님). 엔진 근거가 없으면 미확인.
+    const publishedDeposit = supplierId === 'RP031' ? readIancarEngineDeposit(source, sourceKey, observedAt) : null;
     const deposit = publishedDeposit ? {
       depositAmount: publishedDeposit.amount,
       depositState: publishedDeposit.state,
       depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
         code: publishedDeposit.reason, multiplier: null,
-        label: publishedDeposit.reason === 'SOURCE_AMOUNT' ? '공급사 입력 금액' : '공급사 기간·주행거리 조건',
+        label: '공급사 기간·주행거리 조건',
+        ...('depositEvidenceBasis' in publishedDeposit ? { depositEvidenceBasis: publishedDeposit.depositEvidenceBasis } : {}),
       },
-      ...('depositRuleDifference' in publishedDeposit && publishedDeposit.depositRuleDifference
-        ? { depositRuleDifference: publishedDeposit.depositRuleDifference } : {}),
     } : resolveReferenceDeposit(depositInput);
     const depositEvidence = {
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
       sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
       sourceNote: text(source.deposit_note) || null,
       reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
-      ...(publishedDeposit && 'publicationEvidenceReason' in publishedDeposit ? {
-        publicationEvidenceReason: publishedDeposit.publicationEvidenceReason,
-        publicationDecision: publishedDeposit.publicationDecision,
-      } : {}),
     };
     const vehicleValueEvidence = publicVehicleValueEvidence(evidenceByTerm[sourceKey]?.vehicleValue ? rawVehicleValueEvidence : null);
     const withVehicleValueEvidence = (fee: CommissionResolution) => {

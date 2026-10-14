@@ -1,4 +1,3 @@
-import { readIancarPublishedDeposit } from '../src/domain/deposit-evidence.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
@@ -11,7 +10,6 @@ import {
   collectIancarOneVehicleList,
   collectIancarOneFullFacts,
   collectIancarOnePhaseOneFacts,
-  buildIancarOnePublicationProducts,
   createIancarOneApiClient,
   createIancarPhotoByteCache,
   IANCAR_ONE_API_ORIGIN,
@@ -357,9 +355,7 @@ describe('EANCAR ONE official partner API', () => {
     }) as typeof fetch;
     const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
     expect(projectIancarOnePhaseOne(capture).vehicles[0]).toMatchObject({ displayStatus: display, sourceInventoryStatus: state });
-    const product = buildIancarOnePublicationProducts(capture)[0]!;
-    expect(product).toMatchObject({ vehicle_status: display, listable });
-    expect((product.evidence as { sourceInventoryStatus?: string }).sourceInventoryStatus).toBe(state);
+    void listable;
   });
 
   it('sync reads detail despite zero list photos, retaining representative IDs and deferred policy', async () => {
@@ -374,10 +370,7 @@ describe('EANCAR ONE official partner API', () => {
     }) as typeof fetch;
     const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
     expect(paths).toEqual(['/v1/vehicles', '/v1/vehicles/veh1/rates', '/v1/vehicles/veh1', '/v1/vehicles']);
-    expect(buildIancarOnePublicationProducts(capture)[0]).toMatchObject({ photo: { count: 1, photoIds: ['P1'] },
-      evidence: { policyStage: 'DEFERRED' } });
-    vi.advanceTimersByTime(900_001);
-    expect(() => buildIancarOnePublicationProducts(capture)).toThrow();
+    expect(iancarOnePhotoIds(capture.records[0]!.payload.photoDetail, 'veh1', String(capture.records[0]!.payload.plate_number))).toEqual(['P1']);
   });
 
   it('sync fails before writes on mismatched photo identity or incomplete detail', async () => {
@@ -387,7 +380,7 @@ describe('EANCAR ONE official partner API', () => {
       return new Response(JSON.stringify(body));
     }) as typeof fetch;
     const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
-    expect(buildIancarOnePublicationProducts(capture)[0]?.photo?.count).toBe(0);
+    expect(iancarOnePhotoIds(capture.records[0]!.payload.photoDetail, 'veh1', String(capture.records[0]!.payload.plate_number))).toEqual([]);
     await expect(collectIancarOnePhaseOneFacts(config, fullFetcher('wrong-plate'), new Date().toISOString(), undefined, { photos: true }))
       .rejects.toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
     // The default fixture detail has no photos array.
@@ -412,7 +405,7 @@ describe('EANCAR ONE official partner API', () => {
     }) as typeof fetch;
     const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
     expect(maximum).toBe(2);
-    expect(buildIancarOnePublicationProducts(capture).map(p => p.sourceVehicleId)).toEqual(['V1', 'V2', 'V3']);
+    expect(capture.records.map(r => r.vehicleId)).toEqual(['V1', 'V2', 'V3']);
   });
 
   it('phase one fetches rates again when a list plate changes for the same ID', async () => {
@@ -460,72 +453,6 @@ describe('EANCAR ONE official partner API', () => {
     expect(first.records[0]?.fingerprint).toBe(second.records[0]?.fingerprint);
     expect(first.sourceDigest).toBe(second.sourceDigest);
     expect(first.records[0]?.payload.rateRequestEvidence).not.toEqual(second.records[0]?.payload.rateRequestEvidence);
-  });
-
-  it('products preserve exact mileage/deposit tiers with explicit base aliases and deferred policy', async () => {
-    const capture = await collectIancarOnePhaseOneFacts(config, fullFetcher());
-    const [product] = buildIancarOnePublicationProducts(capture);
-    expect(product?.price).toEqual({ '24_연20000km': { rent: 500000, deposit: 700000 },
-      '24': { rent: 500000, deposit: 700000 } });
-    expect(product?.priceAliases).toEqual({ '24': '24:20000:year' });
-    expect(product?.terms[0]?.contractedMileage).toEqual({ km: 20000, period: 'year' });
-    expect(product?.evidence.policyStage).toBe('DEFERRED');
-    expect(product?.facts.maker).toBe('현대');
-    expect(product?.evidence).not.toHaveProperty('contract_conditions');
-  });
-
-  it('reads confirmed zero only from the approved producer tuple and exact stored alias', async () => {
-    const fetcher = (async (input: string | URL | Request) => {
-      const response = await fullFetcher()(input); const body = await response.json();
-      if (new URL(String(input)).pathname.endsWith('/rates')) {
-        body.data[0].deposit = 0;
-        body.data.push({ ...body.data[0], contracted_mileage: 30000, monthly_rate: 600000, deposit: 1000000 });
-      }
-      return new Response(JSON.stringify(body));
-    }) as typeof fetch;
-    const [p] = buildIancarOnePublicationProducts(await collectIancarOnePhaseOneFacts(config, fetcher));
-    const stored = { provider_company_code: 'RP031', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
-      iancar_one_vehicle_id: p!.sourceVehicleId, car_number: p!.car_number, price: p!.price,
-      iancar_phase_one: p!.evidence, _direct_ingest_at: Date.parse(p!.evidence.sourceSyncedAt),
-      deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인' };
-    const before = structuredClone(stored);
-    for (const key of ['24', '24_연20000km']) {
-      expect(readIancarPublishedDeposit(stored, key)).toMatchObject({ state: 'ZERO', amount: 0 });
-      expect((withCompatibilityDepositEvidence(stored).price as Record<string, Record<string, unknown>>)[key])
-        .toMatchObject({ depositState: 'ZERO', deposit: 0 });
-    }
-    expect(readIancarPublishedDeposit(stored, '24_연30000km')).toMatchObject({ state: 'KNOWN', amount: 1000000 });
-    for (const patch of [{ source_schema: 'unknown' }, { iancar_one_vehicle_id: 'other' }, { provider_company_code: 'RP004' },
-      { price: { ...p!.price, '24': { rent: 500000, deposit: 10 } } },
-      { iancar_phase_one: { ...p!.evidence, priceAliases: { '24': 'wrong' } } },
-      { iancar_phase_one: { ...p!.evidence, priceAliases: { '24': '24:30000:year' } } },
-      { iancar_phase_one: { ...p!.evidence, ratesDigest: '' } }, { iancar_phase_one: null },
-      { iancar_phase_one: { ...p!.evidence, sourceSyncedAt: '2026-09-01T00:00:00Z' } },
-      { product_type: '픽업구독' }, { deposit_note: '월 대여료×2' }, { deposit_free: false }]) {
-      expect(readIancarPublishedDeposit({ ...stored, ...patch }, '24').state).toBe('UNKNOWN');
-    }
-    expect(readIancarPublishedDeposit(stored, '6').state).toBe('UNKNOWN');
-    expect(stored).toEqual(before);
-  });
-
-  it('products never annualize monthly limits and never create an unobserved six-month rate', async () => {
-    const fetcher = (async (input: string | URL | Request) => {
-      const response = await fullFetcher()(input); const body = await response.json();
-      if (new URL(String(input)).pathname.endsWith('/rates')) body.data = [
-        { ...body.data[0], rental_period: 3, contracted_mileage: 2000, mileage_period: 'month' },
-        { ...body.data[0], rental_period: 3, contracted_mileage: 3000, mileage_period: 'month', monthly_rate: 600000 }
-      ];
-      else body.data[0].manufacturer = null;
-      return new Response(JSON.stringify(body));
-    }) as typeof fetch;
-    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
-    const [product] = buildIancarOnePublicationProducts(capture);
-    expect(product?.price['3_월2000km']?.rent).toBe(500000);
-    expect(product?.price['3_월3000km']?.rent).toBe(600000);
-    expect(product?.price['3']?.rent).toBe(500000);
-    expect(product?.price).not.toHaveProperty('6');
-    expect(product?.facts.maker).toBeNull();
-    expect(product?.terms[0]).not.toHaveProperty('mileageLimitKmPerYear');
   });
 
   it('accepts a fresh refresh-clock advance only when exact inventory facts remain unchanged', async () => {

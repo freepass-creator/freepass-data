@@ -4,7 +4,7 @@ import {
   normalizeErp5CompatibilityInteger,
   parseDepositSourceRawAmount,
   parseErp5CompatibilityPriceKey,
-  readIancarPublishedDeposit,
+  readIancarEngineDeposit,
   resolveDepositWithRuleNote,
 } from '../domain/deposit-evidence.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -24,9 +24,9 @@ export const ZERO_DEPOSIT_QUESTION_TEMPLATES = {
     id: 'conflicting-zero-deposit-evidence',
     question: '0원 근거가 서로 충돌',
   },
-  IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED: {
-    id: 'iancar-published-deposit-evidence-unverified',
-    question: '공시 보증금 근거 미검증 — 현재 공시 금액 확인',
+  IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED: {
+    id: 'iancar-engine-deposit-evidence-unverified',
+    question: '원천 엔진 보증금 근거 미검증 — 이안카 ONE 현재 금액 확인',
   },
   ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: {
     id: 'zero-deposit-forbidden-by-product-policy',
@@ -59,7 +59,7 @@ function rawAmountForTerm(product: Rec, termMonths: unknown) {
 function questionReason(reason: string, sourceAmount: unknown): ZeroDepositQuestionReason | null {
   if (reason === 'ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY') return 'ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY';
   if (reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE') return 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE';
-  if (reason === 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED') return 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED';
+  if (reason === 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED') return 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED';
   if (reason === 'SOURCE_RAW_AMOUNT' || reason.startsWith('SUPPLIER_RULE_NOTE:')) return null;
   if (reason === 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' || reason === 'MISSING_DEPOSIT_AMOUNT') {
     return zeroLike(sourceAmount) ? 'ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE' : null;
@@ -108,7 +108,7 @@ export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
       const parsed = parseErp5CompatibilityPriceKey(termKey);
       const rawDepositAmount = rawAmountForTerm(product, parsed?.months);
       const evidence = product.provider_company_code === 'RP031'
-        ? readIancarPublishedDeposit(product, termKey, readAt)
+        ? readIancarEngineDeposit(product, termKey, readAt)
         : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
           termMonths: parsed?.months,
           monthlyRent: normalizeErp5CompatibilityInteger(row.rent),
