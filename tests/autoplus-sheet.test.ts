@@ -12,11 +12,11 @@ describe('오토플러스 시트 어댑터', () => {
     const read = readAutoplusSheet([
       { title: '공지사항', values: [['안내'], ['차량번호는 여기 없음']] },
       { title: '판매차량리스트', values: [['2026. 10. 14'], ['안내문'], [], [], [], [], [], [], header,
-        car(1, '05수4216', '할인판매'), car(2, '36너2705', '판매중'), car(3, '36너2780', '계약중'), car(4, '07어4389', '보류'), car(5, '01하1234', '상품대기')] },
+        car(1, '05수4216', '할인판매'), car(2, '36너2705', '판매중'), car(3, '36너2780', '계약중'), car(4, '07어4389', '보류'), car(5, '01하1234', '상품대기'), car(6, '02하5678', '상담중')] },
     ], NOW);
     expect(read.complete).toBe(true);
     expect(read.tabsUsed).toEqual(['판매차량리스트']);
-    expect(read.rowCount).toBe(5);
+    expect(read.rowCount).toBe(6);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r]));
     expect(by['4216']!.status).toEqual({ raw: '출고가능', saleAvailable: true });
     expect(by['2705']!.status.saleAvailable).toBe(true);
@@ -24,6 +24,9 @@ describe('오토플러스 시트 어댑터', () => {
     // 계약중은 모든 원천에서 같게: 판매 가능(문서 유지·«계약중» 선점 표시 노출), 출고가능 비교에서는 raw «계약중» 으로 구분
     expect(by['2780']!.status).toEqual({ raw: '계약중', saleAvailable: true });
     expect(by['4389']!.status).toEqual({ raw: '보류', saleAvailable: false });
+    // 대표 2026-10-14 «계약중이라고 되어 있는 거는 연동해서 계약중으로»: 상담중(계약 진행)도 «계약중» 으로 노출, 시트 표기는 sheet_status 에 남는다
+    expect(by['5678']!.status).toEqual({ raw: '계약중', saleAvailable: true });
+    expect(by['5678']!.raw.sheet_status).toBe('상담중');
     expect(by['4216']!.terms.map(t => [t.months, t.mileage, t.monthlyRent.value])).toEqual([[12, '20000km/year', 770000], [24, '20000km/year', 730000], [36, '30000km/year', 700000]]);
     expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: 'EV', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
     expect(by['4216']!.vehicleText).toBe('디 올뉴니로EV 에어');   // 모델명이 차종을 이미 포함하면 앞에 붙이지 않는다
