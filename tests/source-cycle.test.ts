@@ -85,6 +85,29 @@ describe('source cycle planning/application', () => {
     expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
     expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
   });
+  it('enrolls a sellable new car whose price is missing as a non-exposed document (대수 우선), and later exposes it when the price arrives', () => {
+    const noPrice = record('n1'); noPrice.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
+    const first = planSourceCycle(config, evidence([noPrice]), { products: [], complete: true }, now).plan;
+    expect(first.entries.map(e => e.kind)).toEqual(['ENROLL']);
+    expect(first.entries[0]!.after).toMatchObject({ listable: false, publication_withdrawal: { reason: 'INFO_INCOMPLETE', deleteAuthorized: false } });
+    expect(first.warnings).toContain('ENROLLED_INFO_INCOMPLETE:1');
+    expect(first.sourceCount).toBe(1);
+    // 가격이 채워지면 같은 문서가 노출로 승격(REEXPOSE)
+    const stored = first.entries[0]!.after;
+    const later = planSourceCycle(config, evidence([record('n1')]), { products: [stored], complete: true }, now).plan;
+    expect(later.entries.map(e => e.kind)).toEqual(['REEXPOSE']);
+    // 판매 불가이거나 상태를 모르면 편입하지 않는다
+    const stopped = record('n2'); stopped.status.saleAvailable = false; stopped.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
+    expect(planSourceCycle(config, evidence([stopped]), { products: [], complete: true }, now).plan.entries).toHaveLength(0);
+  });
+  it('caps new enrollments per cycle at the source sellable count (min 30) and carries the rest over', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => record(`c${i}`));
+    const capped = planSourceCycle({ ...config, minEnrollPerCycle: 2, maxEnrollPerCycle: 3 }, evidence(rows), { products: [], complete: true }, now).plan;
+    expect(capped.entries).toHaveLength(3);
+    expect(capped.warnings.some(w => w.startsWith('ENROLL_CAP_DEFERRED:2'))).toBe(true);
+    const uncapped = planSourceCycle(config, evidence(rows), { products: [], complete: true }, now).plan;
+    expect(uncapped.entries).toHaveLength(5);
+  });
   it('identical-copy holds (DUPLICATE_UID_SUSPECT) do not hide other cars, unidentified holds still do', () => {
     const snapshot = { products: [product('missing')], complete: true };
     // 동일 복사본 보류만 있으면 부재 판정을 막지 않는다 → 부재 차는 하향

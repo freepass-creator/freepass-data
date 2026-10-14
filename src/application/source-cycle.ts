@@ -38,6 +38,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 계획 단계 보류의 사유 코드별 건수(보고 전용, plan digest 에 넣지 않는다). RP021 보류 3건이 코드 없이 세어져 원인을 못 가리던 문제(B3Q 2026-10-14).
   const heldBy: Record<string, number> = {};
   const hold = (code: string) => { plan.held++; heldBy[code] = (heldBy[code] ?? 0) + 1; };
+  let infoIncomplete = 0;
   if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
@@ -130,8 +131,15 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     let after: CycleProduct = { ...(before ? structuredClone(before) : {}), record: next, listable: sale, locked_by_contract: false,
       publication_withdrawal: null, publication_withdrawal_prior: before?.publication_withdrawal_prior ?? null };
     if (!sale) {
-      if (!before) { if (!errors.includes('TERMS_HOLD')) hold('NOT_SELLABLE_NEW'); continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
-      after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
+      if (!before) {
+        // 대표 2026-10-14 «사진·가격이 없어도 번호라도 가져와 숫자를 맞춘다»: 원천이 판매 가능으로 읽은 새 차가 «가격·기간(TERMS)만» 비어 있으면
+        // 편입하되 노출하지 않는다(listable=false, 사유 INFO_INCOMPLETE). 가격이 채워지면 다음 회차에 REEXPOSE 로 노출된다. 식별자(번호/UID)·상태·신선도는 그대로 필요하다.
+        const infoOnly = r.status.saleAvailable === true && fresh && errors.length > 0 && errors.every(e => e === 'TERMS_HOLD');
+        if (!infoOnly) { if (!errors.includes('TERMS_HOLD')) hold('NOT_SELLABLE_NEW'); continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
+        after = withdraw({ record: next, listable: false, locked_by_contract: false, publication_withdrawal: null,
+          publication_withdrawal_prior: null } as CycleProduct, 'INFO_INCOMPLETE', next);
+        infoIncomplete++;
+      } else after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
     }
     if (!before && Object.hasOwn(snapshot, 'enrollmentSupplier')) {
       if (!snapshot.enrollmentSupplier?.provider_name.trim()) {
@@ -161,6 +169,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
   }
+  if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
@@ -181,7 +190,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   // 신규 편입 회차 상한(독립 검토 BLOCK, 대표 2026-10-14): 한 회차에 min(100, max(30, 원천 판매가능의 25%))대까지만 넣고 나머지는 다음 회차로 이월한다.
   // 키 순서가 고정이라 같은 입력이면 같은 대수가 들어가고, 적용 재계획(replay)도 같은 결과다. 이월분은 보류가 아니라 대기라 held 에 세지 않는다.
-  const enrollCap = Math.min(config.maxEnrollPerCycle ?? 100, Math.max(config.minEnrollPerCycle ?? 30, Math.floor(plan.sourceCount * 0.25)));
+  // 대표 2026-10-14: 상한은 원천 판매 가능 대수의 100%(오매핑 폭주 방지용), 초과분은 다음 회차로 이월한다. 승인 단계는 두지 않는다.
+  const enrollCap = Math.min(config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY, Math.max(config.minEnrollPerCycle ?? 30, plan.sourceCount));
   const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');
   if (enrolls.length > enrollCap) {
     const deferred = new Set(enrolls.slice(enrollCap).map(e => sourceProductKey(e.after.record)));
