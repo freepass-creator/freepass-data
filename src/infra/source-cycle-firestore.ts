@@ -73,6 +73,11 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
   if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
   return priceDigest(price) === priceDigest(salePriceMap(record.terms, false));
 }
+/** 엔진이 «원천이 직접 계약중으로 읽은 값»을 쓴 문서(표시 상태 계약중·선점, 노출 중, 원천 기록의 상태 원문도 계약중)는 계약 잠금이 아니다.
+ * 계약중 노출(선점 표시) 정책 이후 이런 문서는 원천이 출고가능으로 돌아오면 엔진이 갱신해야 한다 — 잠금으로 보면 방금 쓴 문서가 되읽기에서 달라져
+ * APPLY_UNCERTAIN 이 되고(2026-10-14 손오공 첫 APPLY 34/330) 이후 영원히 CONTRACT_LOCKED 로 갇힌다. 상태만 계약중이고 원천 기록이 다른 문서(ERP 가 건 계약)는 계속 잠금이다. */
+const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean =>
+  f.status === '계약중' && f.listable === true && record.status.raw === '계약중' && f.source_cycle_record !== undefined;
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
@@ -105,7 +110,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
-    locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',
+    locked_by_contract: f.locked_by_contract === true || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
     publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
 }

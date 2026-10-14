@@ -143,7 +143,11 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       outcome = applied;
       const counts = (kind: string, exposedOnly = false) => plan!.entries.filter(e => e.kind === kind && (!exposedOnly || e.after.listable)).length;
       summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL', true) + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}(노출 ${counts('ENROLL', true)})·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${applying ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
-      if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
+      if (applied.status === 'APPLY_UNCERTAIN') {
+        const detail = 'uncertainDetail' in applied ? applied.uncertainDetail : '';
+        if (detail) summary += ` · 불확실 ${detail} · 쓰기 ${applied.writes}`;
+        throw new Error('APPLY_UNCERTAIN');
+      }
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
       const readNotes = (read.raw as { notes?: unknown } | null)?.notes;
