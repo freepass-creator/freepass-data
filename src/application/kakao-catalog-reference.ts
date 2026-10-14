@@ -1121,7 +1121,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
     // 이안카(RP031)는 원천 엔진 근거만 쓴다(옛 1차 발행 칸 iancar_phase_one 은 근거가 아님). 엔진 근거가 없으면 미확인.
-    const publishedDeposit = supplierId === 'RP031' ? readIancarEngineDeposit(source, sourceKey, observedAt) : null;
+    const publishedDeposit = supplierId === 'RP031' ? readIancarEngineDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
     const deposit = publishedDeposit ? {
       depositAmount: publishedDeposit.amount,
       depositState: publishedDeposit.state,
