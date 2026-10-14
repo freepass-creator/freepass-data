@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
@@ -255,10 +255,20 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const collected = await collectAutoplusHomepage(
             createAutoplusHomepageClient({ fetcher: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(30_000) }) as never }),
             undefined, { minExpectedProducts: floor });
-          if (stateError && collected.complete) return { ...collected, complete: false, incompleteReason: stateError };
+          // 기준 파일은 임시 파일에 쓴 뒤 rename 으로 원자 교체한다(쓰기 실패가 빈 파일·부분 JSON 을 남겨 영구 불인정이 되지 않게).
+          const saveCount = async () => {
+            const tmp = `${countFile}.${process.pid}.tmp`;
+            try {
+              await writeFile(tmp, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 });
+              await rename(tmp, countFile);
+              return true;
+            } catch { await unlink(tmp).catch(() => undefined); return false; }
+          };
           if (collected.complete) {
-            try { await writeFile(countFile, JSON.stringify({ count: collected.productCount, at: collected.observedAt }), { mode: 0o600 }); }
-            catch { return { ...collected, complete: false, incompleteReason: 'SITEMAP_COUNT_STATE_WRITE_FAILED' }; }
+            const saved = await saveCount();
+            // 기준 파일이 손상이었으면 이번 회차만 불인정(쓰기·하향 차단)하고, 같은 회차에서 확인된 완전 수집으로 파일을 복구해 한 회차 손실로 끝낸다.
+            if (stateError) return { ...collected, complete: false, incompleteReason: stateError };
+            if (!saved) return { ...collected, complete: false, incompleteReason: 'SITEMAP_COUNT_STATE_WRITE_FAILED' };
           }
           return collected;
         })));

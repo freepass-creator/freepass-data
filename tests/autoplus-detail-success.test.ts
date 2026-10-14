@@ -16,14 +16,19 @@ describe('오토플러스 상세 성공 판정(독립 검토 2026-10-14)', () =>
   it('requires HTTP 200, a zero resultCode and a matching product id', async () => {
     expect(await make({ body: { header: { resultCode: '0' }, data } }).detail(product)).toMatchObject({ ok: true });
     expect(await make({ ok: false, status: 500, body: { header: { resultCode: '0' }, data } }).detail(product)).toMatchObject({ ok: false, code: 'DETAIL_HTTP_500' });
-    expect(await make({ body: { header: { resultCode: '1010' }, data } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1010' });
+    expect(await make({ body: { header: { resultCode: '1010' }, data } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1010_WITH_DATA' });
     expect(await make({ body: { header: { resultCode: '0' }, data: { ...data, productId: 'C99999999999' } } }).detail(product)).toMatchObject({ ok: false, code: 'PRODUCT_ID_MISMATCH' });
   });
 
   it('judges the HTTP status first: 500/201 with a 1400 resultCode or data is a failure, never an exclusion or a success', async () => {
     expect(await make({ ok: false, status: 500, body: { header: { resultCode: '1400' } } }).detail(product)).toMatchObject({ ok: false, code: 'DETAIL_HTTP_500' });
     expect(await make({ status: 201, body: { header: { resultCode: '0' }, data } }).detail(product)).toMatchObject({ ok: false, code: 'DETAIL_HTTP_201' });
-    expect(await make({ body: { header: { resultCode: '1400' } } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1400' });   // 200 + 1400 만 제외 후보
+    expect(await make({ body: { header: { resultCode: '1400' } } }).detail(product)).toMatchObject({ ok: false, code: 'RESULT_1400' });   // 200 + 1400 + data 없음 만 제외 후보
+    const withData = await make({ body: { header: { resultCode: '1400' }, data } }).detail(product);
+    expect(withData).toMatchObject({ ok: false, code: 'RESULT_1400_WITH_DATA' });                                                       // data 가 있으면 제외가 아니라 실패
+    const out = await collectAutoplusHomepage({ listProductUrls: async () => [product], detail: async () => withData }, undefined, { maxExcludedRatio: 1 });
+    expect(out.excluded).toEqual([]);
+    expect(out.failures).toEqual([{ productId: product.productId, code: 'RESULT_1400_WITH_DATA' }]);
   });
 
   it('sitemap floor: 0 when nothing is exposed (even with a large previous count), else the larger of 95% exposed and 80% previous', async () => {

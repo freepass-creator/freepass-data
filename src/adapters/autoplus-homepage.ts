@@ -74,7 +74,8 @@ export function createAutoplusHomepageClient(options: {
           if (code === '1020' && typeof body.header?.msg === 'string' && attempt < 4) { token = body.header.msg; await sleep(60); continue; }
           // 성공 판정(독립 검토 2026-10-14): HTTP 200 + 정상 resultCode(0 계열) + 요청한 상품 id 와 응답 productId 일치. 오류 코드에 data 가 실려 와도 성공이 아니다.
           if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
-            if (!/^0+$/.test(code)) return { ok: false, productId: product.productId, code: code ? `RESULT_${code}` : 'RESULT_MISSING' };
+            // data 가 실려 온 비정상 resultCode 는 «폐기 응답 형태(data 없음)» 가 아니다: 제외(RESULT_1400)로 둔갑하지 않게 별도 실패 코드로 돌려준다.
+            if (!/^0+$/.test(code)) return { ok: false, productId: product.productId, code: code ? `RESULT_${code}_WITH_DATA` : 'RESULT_MISSING' };
             if (String((body.data as Record<string, unknown>).productId ?? '').trim() !== product.productId) return { ok: false, productId: product.productId, code: 'PRODUCT_ID_MISMATCH' };
             return { ok: true, productId: product.productId, data: body.data };
           }
