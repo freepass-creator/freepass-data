@@ -125,6 +125,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
+      const readNotes = (read.raw as { notes?: unknown } | null)?.notes;
+      if (Array.isArray(readNotes) && readNotes.length) summary += ` · ${readNotes.filter((n): n is string => typeof n === 'string' && /^[A-Z0-9_:가-힣]{3,60}$/.test(n)).join(',')}`;
       if (plugin.family === 'AICA') {
         const monthly = converted.records.filter(r => r.raw.product_group === 'MONTHLY_RENT' && r.status.saleAvailable === true).length;
         summary += ` · 장기 ${state.observedSellableCount - monthly} · 월렌트 ${monthly}`;

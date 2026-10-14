@@ -430,6 +430,29 @@ describe('native mappings and UID', () => {
     const plugin = aicaNativePlugin(async () => capture, 1), read = await plugin.read();
     return { capture, plugin, read, ...plugin.toRecords(read) };
   }
+  it('a tab whose first header cell is blank but whose other headers equal another tab\'s standard headers is read as 배차상태 (ARIKA_HEADER_INFERRED), anything else stays held', async () => {
+    // 장기특별이벤트 탭 A1 만 공백, 같은 시트의 «신차선출고» 탭은 표준 머리글 → 추론 허용
+    const f = aicaFixture();
+    f.tables[0]!.values[0] = ['', ...aicaHeaders.slice(1)];
+    f.tables[1]!.values = [aicaHeaders];
+    const inferred = await aicaRead(f);
+    expect(inferred.capture.completedScopes).toContain('장기특별이벤트');
+    expect(inferred.capture.notes).toEqual(['ARIKA_HEADER_INFERRED:장기특별이벤트']);
+    expect(inferred.records.filter(r => r.status.saleAvailable === true).length).toBeGreaterThan(0);
+    // 다른 칸이 하나라도 다르면(예: «차량번호» 가 «번호») 추론하지 않고 기존대로 탭 보류
+    const g = aicaFixture();
+    g.tables[0]!.values[0] = ['', ...aicaHeaders.slice(1).map(h => h === '차량번호' ? '번호' : h)];
+    g.tables[1]!.values = [aicaHeaders];
+    const held = await aicaRead(g);
+    expect(held.capture.completedScopes).not.toContain('장기특별이벤트');
+    expect(held.capture.notes).toBeUndefined();
+    // 기준이 될 표준 탭이 없으면 추론하지 않는다
+    const h = aicaFixture();
+    h.tables[0]!.values[0] = ['', ...aicaHeaders.slice(1)];
+    h.tables[1]!.values = [['', ...aicaHeaders.slice(1)]];
+    h.tables[2]!.values = [['', ...aicaHeaders.slice(1)]];
+    expect((await aicaRead(h)).capture.completedScopes).not.toContain('장기특별이벤트');
+  });
   it('SPEC3D monthly numeric offers normalize identity, preserve raw and flag duplicates separately', async () => {
     const f = aicaFixture();
     f.tables[3]!.values = [['차종', '1개월', '비고'], [' Model a ', '345,678', '월렌트 무보증'],
