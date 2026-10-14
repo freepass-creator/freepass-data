@@ -12,8 +12,10 @@ export const SONOGONG_API_POLICY = Object.freeze({
 });
 export const SONOGONG_API_TABS = ['rent', 'sub', 'pick'] as const;
 export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
-/** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
+/** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로 보존하고, 반납형 양수 행이 하나도 없는 차에 한해 인수형 행만 쓴다(아래 BUYOUT_TYPE). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
+/** 같은 탭의 «인수형» 가격 유형 — 반납형 양수 행이 하나도 없는 차에 한해 그 행만 쓴다(대표 2026-10-15). */
+const BUYOUT_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_BUYOUT', sub: 'SUBSCRIBE_BUYOUT', pick: 'SUBSCRIBE_BUYOUT' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
 /** 탭 → 상품 구분(구독·픽업구독을 화면에서 구분). 소비처 어휘: 중고렌트·오공구독·픽업구독. */
 const PRODUCT_TYPE_BY_TAB: Record<SonogongApiTab, string> = { rent: '중고렌트', sub: '오공구독', pick: '픽업구독' };
@@ -155,14 +157,26 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         held.push({ tab, reason: 'IDENTITY_MISMATCH' }); incomplete ??= 'API_IDENTITY_MISMATCH'; continue;
       }
       const prices = object(detail?.prices) ? detail.prices as Record<string, unknown> : object(row.prices) ? row.prices as Record<string, unknown> : {};
-      const priced = object(prices[RETURN_TYPE[tab]]) ? prices[RETURN_TYPE[tab]] as Record<string, unknown> : null;
-      const monthly = object(priced?.monthly) ? priced.monthly as Record<string, unknown> : {};
-      const deposit = detail && object(priced?.deposit) ? priced.deposit as Record<string, unknown> : {};
-      const terms: SourceTerm[] = [];
-      for (const months of MONTHS) {
-        const rent = amount(monthly[String(months)]);
-        if (rent.state === 'KNOWN') terms.push({ months, monthlyRent: rent,
-          deposit: detail ? amount(deposit[String(months)]) : { state: 'UNKNOWN', value: null }, mileage: null, raw: { priceType: RETURN_TYPE[tab] } });
+      // 한 가격 유형(반납형 또는 인수형)의 양수 월 대여료 행만 항으로 만든다. 보증금은 같은 유형의 상세 deposit(상세 없으면 UNKNOWN, 0 은 원천에 0 이 있을 때만).
+      const termsOf = (type: string): SourceTerm[] => {
+        const priced = object(prices[type]) ? prices[type] as Record<string, unknown> : null;
+        const monthly = object(priced?.monthly) ? priced.monthly as Record<string, unknown> : {};
+        const deposit = detail && object(priced?.deposit) ? priced.deposit as Record<string, unknown> : {};
+        const out: SourceTerm[] = [];
+        for (const months of MONTHS) {
+          const rent = amount(monthly[String(months)]);
+          if (rent.state === 'KNOWN') out.push({ months, monthlyRent: rent,
+            deposit: detail ? amount(deposit[String(months)]) : { state: 'UNKNOWN', value: null }, mileage: null, raw: { priceType: type } });
+        }
+        return out;
+      };
+      // 선택 규칙(대표 2026-10-15): 반납형 양수 행이 하나라도 있으면 현행 그대로(인수형은 raw 에만). 반납형 양수 행이 «하나도 없고» 인수형 양수 행이 있으면
+      // 그 인수형 행만 쓴다(반납형 칸은 만들지 않는다 — 0 으로 채우지 않음). 둘 다 없으면 terms 가 비어 지금처럼 TERMS_HOLD.
+      let terms = termsOf(RETURN_TYPE[tab]);
+      let buyoutOnly = false;
+      if (!terms.length) {
+        const alternative = termsOf(BUYOUT_TYPE[tab]);
+        if (alternative.length) { terms = alternative; buyoutOnly = true; }
       }
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
       const spec: Record<string, string> = {};
@@ -181,7 +195,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
         terms, observedAt,
         raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
-          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
+          prices: structuredClone(prices), images, ...(buyoutOnly ? { price_basis: 'BUYOUT_ONLY' } : {}), ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }
   }

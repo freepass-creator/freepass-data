@@ -77,7 +77,11 @@ const annualKm = (mileage: string | null): number => {
   const m = /^(\d+)\s*km(?:\/(month|year))?$/.exec((mileage ?? '').trim());
   return m ? Number(m[1]) * (m[2] === 'month' ? 12 : 1) : Number.POSITIVE_INFINITY;
 };
-export const termIdentity = (t: Pick<SourceTerm, 'months' | 'mileage'>) => `${t.months}|${t.mileage ?? ''}`;
+/** 인수형 항: 원천 가격 유형(term.raw.priceType)이 «…_BUYOUT». 반납형·인수형은 같은 개월에도 서로 다른 항이다. */
+export const isBuyoutTerm = (t: Pick<SourceTerm, 'raw'>): boolean =>
+  typeof t.raw?.priceType === 'string' && t.raw.priceType.endsWith('_BUYOUT');
+export const termIdentity = (t: Pick<SourceTerm, 'months' | 'mileage' | 'raw'>) =>
+  `${t.months}|${t.mileage ?? ''}${isBuyoutTerm(t) ? '|BUYOUT' : ''}`;
 export function representativeTerms<T extends Pick<SourceTerm, 'months' | 'mileage' | 'monthlyRent'>>(terms: readonly T[]): T[] {
   const best = new Map<number, T>();
   for (const t of terms) {
@@ -91,8 +95,14 @@ export function representativeTerms<T extends Pick<SourceTerm, 'months' | 'milea
 /** 판매 가격 칸(`price` 맵). 개월 키 하나에는 대표 항, 같은 개월에 약정거리 옵션이 여럿이면 소비처(ERP5 화면·공개 카탈로그)가 읽는
  * 옵션 키 `{개월}_월{N}km`(월 단위)·`{개월}_연{N}km`(연 단위)도 원천 값으로 함께 쓴다. 옵션 값은 {rent, deposit} 둘이다.
  * 단일 항 원천(공통시트 등)은 옵션 키를 만들지 않아 기존 모양 그대로다. */
-export function salePriceMap(terms: readonly SourceTerm[], includeMileage = true): Record<string, Record<string, unknown>> {
+export function salePriceMap(allTerms: readonly SourceTerm[], includeMileage = true): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
+  // 반납형(기본)과 인수형 항을 가른다. 인수형 항은 소비처가 읽는 «{개월}_인수형» 키(ERP5 maturity=BUYOUT)로 쓰고, 평문 «{개월}» 키는 반납형 몫이다.
+  // (반납형이 있는 차에는 어댑터가 인수형 항을 만들지 않으므로 기존 문서의 가격 칸은 바뀌지 않는다.)
+  const terms = allTerms.filter(t => !isBuyoutTerm(t));
+  const buyout = allTerms.filter(isBuyoutTerm);
+  for (const t of representativeTerms(buyout)) out[`${t.months}_인수형`] =
+    { rent: t.monthlyRent.value, deposit: t.deposit.value, ...(includeMileage ? { mileage: t.mileage } : {}) };
   for (const t of representativeTerms(terms)) out[String(t.months)] =
     { rent: t.monthlyRent.value, deposit: t.deposit.value, ...(includeMileage ? { mileage: t.mileage } : {}) };
   const perMonth = new Map<number, SourceTerm[]>();
