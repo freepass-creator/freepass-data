@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 import { vehiclePhotoKey } from '../../dist/src/domain/consumer-output-contract.js';
+import { folderMatchesPlate } from '../../dist/src/domain/photo-folder-match.js';   // 폴더↔차량번호 일치 검증(Codex 검토)
 
 const csvPath = process.argv[2];
 const apply = process.argv.includes('--apply');
@@ -30,13 +31,17 @@ const enc = v => v === null ? { nullValue: null } : typeof v === 'boolean' ? { b
   : Array.isArray(v) ? { arrayValue: { values: v.map(enc) } } : { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, enc(x)])) } };
 mkdirSync(dir + '/backups-approved-photos', { recursive: true });
 const out = [];
+
 for (const r of rows) {
   const res = await fetch(base + encodeURIComponent(r.plate), { headers: H });
   if (res.status === 404) { out.push(`${r.plate.slice(-4)} 문서 없음`); continue; }
   const doc = await res.json(); const f = dec({ mapValue: { fields: doc.fields } });
   const key = vehiclePhotoKey(f);
   if (!key) { out.push(`${r.plate.slice(-4)} vehicleKey 불가(공급사 코드 없음)`); continue; }
-  const files = (run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200 }).files ?? [])
+  let folderName = '';
+  try { folderName = run(['drive', 'files', 'get'], { fileId: r.folder, fields: 'name', supportsAllDrives: true }).name || ''; } catch { out.push(`${r.plate.slice(-4)} 폴더 이름 조회 실패 — 등록 안 함`); continue; }
+  if (!folderMatchesPlate(folderName, r.plate)) { out.push(`${r.plate.slice(-4)} 폴더 이름이 차량번호와 다름 — 등록 안 함`); continue; }
+  const files = (run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [])
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
     .sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { numeric: true })).slice(0, MAX);
   if (!files.length) { out.push(`${r.plate.slice(-4)} 폴더 이미지 없음/체크섬 없음`); continue; }
