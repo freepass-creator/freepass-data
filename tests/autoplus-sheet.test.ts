@@ -21,7 +21,8 @@ describe('오토플러스 시트 어댑터', () => {
     expect(by['4216']!.status).toEqual({ raw: '출고가능', saleAvailable: true });
     expect(by['2705']!.status.saleAvailable).toBe(true);
     expect(by['1234']!.status.saleAvailable).toBe(true);
-    expect(by['2780']!.status).toEqual({ raw: '계약중', saleAvailable: false });
+    // 계약중은 모든 원천에서 같게: 판매 가능(문서 유지·«계약중» 선점 표시 노출), 출고가능 비교에서는 raw «계약중» 으로 구분
+    expect(by['2780']!.status).toEqual({ raw: '계약중', saleAvailable: true });
     expect(by['4389']!.status).toEqual({ raw: '보류', saleAvailable: false });
     expect(by['4216']!.terms.map(t => [t.months, t.mileage, t.monthlyRent.value])).toEqual([[12, '20000km/year', 770000], [24, '20000km/year', 730000], [36, '30000km/year', 700000]]);
     expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: 'EV', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
