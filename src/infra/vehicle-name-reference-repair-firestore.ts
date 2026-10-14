@@ -500,12 +500,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
-  const lockedUpdateTime = new Map<string, unknown>();
-  const lockedDigest = new Map<string, string>();
+  const lockedUpdateTime: Record<string, unknown> = {};
+  const lockedDigest: Record<string, string> = {};
   for (const snapshot of [...identitySnapshots, ...snapshots.filter((_, i) => PRODUCT_NAME_KINDS.has(targets[i]!.kind))]) {
     const updateTime = (snapshot as { updateTime?: unknown }).updateTime;
-    if (updateTime !== undefined && updateTime !== null) lockedUpdateTime.set(snapshot.ref.path, updateTime);
-    lockedDigest.set(snapshot.ref.path, stableDigest(snapshot.data() ?? null));
+    if (updateTime !== undefined && updateTime !== null) lockedUpdateTime[snapshot.ref.path] = updateTime;
+    lockedDigest[snapshot.ref.path] = stableDigest(snapshot.data() ?? null);
   }
   const sourceCorrectionRefs = sourceCorrectionTargets.map((x) => x.ref);
   const sourceCorrectionSnapshots = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
@@ -905,11 +905,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       };
       if (Object.keys(update).length <= 2) continue;
       // 상품 문서는 백업 때의 updateTime 을 전제로만 쓴다(그 사이 엔진·사람이 고쳤으면 서버가 거절 — 세 칸이 같아 보여도 덮어쓰지 않는다).
-      if (lockedDigest.has(ref.path)) {
+      if (ref.path in lockedDigest) {
         const live = [...identityCurrent, ...current].find((s) => s.ref.path === ref.path);
-        if (live && stableDigest(live.data() ?? null) !== lockedDigest.get(ref.path)) throw new Error(`transaction product changed since backup ${ref.path}`);
+        if (live && stableDigest(live.data() ?? null) !== lockedDigest[ref.path]) throw new Error(`transaction product changed since backup ${ref.path}`);
       }
-      const pinned = lockedUpdateTime.get(ref.path);
+      const pinned = lockedUpdateTime[ref.path];
       if (pinned !== undefined) transaction.update(ref, update, { lastUpdateTime: pinned as never });
       else transaction.update(ref, update);
     }
