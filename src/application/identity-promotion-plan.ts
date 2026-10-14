@@ -3,6 +3,7 @@
  * 규칙(기준 한 장): 지어내지 않는다·별칭은 조건 없이 하나로 이어질 때만·후보가 둘 이상이거나 근거가 비면 보류. 마스터는 읽기만 하고 쓰지 않는다. */
 import { stableDigest } from '../shared/stable-digest.js';
 import type { VehicleIdentityRefinement } from '../ports/source-cycle.js';
+import { aliasCandidates, generationFamilies, generationGuard, type AliasCandidate, type GenerationFamily, type GenerationGuardReason } from './identity-generation-guard.js';
 
 /** 정정 경로(repair:vehicle-name-parity)의 계획서 모양 중 이 생성기가 «내는» 부분만 구조적으로 선언한다. application 층은 infra 에 의존하지 않는다(아키텍처 가드):
  * 출력은 infra 의 VehicleNameRepairPlan 에 그대로 대입 가능한 모양이고, 호환은 시험(구조적 대입)이 지킨다. */
@@ -27,7 +28,7 @@ export type IdentityMaster = {
   /** 세대 생산 시작·끝 연도(없으면 null = 제한 없음). */ yearFrom: number | null; yearTo: number | null;
   trims: IdentityMasterTrim[];
 };
-export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED'; candidates: string[] };
+export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | GenerationGuardReason; candidates: string[] };
 export type IdentityPromotionResult = {
   plan: VehicleNameRepairPlan;
   /** 정체성 정정과 같은 상품의 세부트림 정정. 정정 경로는 한 계획에 같은 상품을 겹쳐 받지 않으므로(one product per plan)
@@ -35,6 +36,8 @@ export type IdentityPromotionResult = {
   trimPlan: VehicleNameRepairPlan | null;
   held: IdentityHold[];
   stats: { products: number; identityRepairs: number; trimRepairs: number; held: number; alreadyMatched: number };
+  /** R3 부록(읽기 전용 제안): 형제 세대가 있는 모델 목록·별칭 후보(규칙 20 — 사람이 승인, 코드에 박지 않음). */
+  appendix: { generationFamilies: GenerationFamily[]; aliasCandidates: AliasCandidate[] };
 };
 
 const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()]/g, '').toUpperCase();
@@ -67,7 +70,7 @@ function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]
  *  - 세부트림: 원문 차명에 통째로 들어 있는 트림 이름(별칭) 중 가장 긴 것이 정확히 하나일 때만(UNIQUE), 둘 이상이면 AMBIGUOUS, 없으면 NONE. */
 export type IdentityMatch =
   | { state: 'MATCH'; master: IdentityMaster; trim: { state: 'UNIQUE'; name: string } | { state: 'AMBIGUOUS'; candidates: string[] } | { state: 'NONE' } }
-  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE'; candidates: string[] };
+  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason; candidates: string[] };
 export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
   let cands = masterCandidates(p, masters);
   if (!cands.length) return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
@@ -81,6 +84,12 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   }
   if (cands.length !== 1) return { state: 'HOLD', reason: 'AMBIGUOUS_MASTER', candidates: cands.map(m => m.id).sort() };
   const master = cands[0]!;
+  // 세대 구분 근거(R1·R2): 원문 부분 일치로 마스터를 고른 경우에만 점검한다(상품의 세부모델 칸을 마스터 이름과 «정확히» 대조한 경우는 해당 없음).
+  const engineRawProduct = !p.maker.trim() && !p.model.trim();
+  if (engineRawProduct || !norm(p.sub_model)) {
+    const guard = generationGuard({ rawName: p.rawName || (engineRawProduct ? p.sub_model : ''), year: p.year, master, masters });
+    if (guard) return { state: 'HOLD', reason: guard, candidates: [master.sub_model] };
+  }
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
   const trimHits = master.trims.map(t => ({ t, len: Math.max(0, ...[t.name, ...t.aliases].map(norm).filter(n => n.length >= 2 && raw.includes(n)).map(n => n.length)) })).filter(x => x.len > 0);
@@ -134,7 +143,42 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
   const trimPlan: VehicleNameRepairPlan | null = laterTrims.length
     ? { sourceDigest: stableDigest({ base: baseDigest, part: 'trim-after-identity' }), masterRepairs: [], productRepairs: [], productTrimRepairs: laterTrims }
     : null;
-  return { plan, trimPlan, held, stats: { products: products.length, identityRepairs: identityRepairs.length, trimRepairs: trimRepairs.length, held: held.length, alreadyMatched } };
+  // R3 부록: 세대 근거 보류 상품을 별칭 후보로 묶는다(어느 마스터로 이을지는 연식으로 좁힌 «후보»일 뿐이다).
+  const byId = new Map(products.map(p => [p.id, p]));
+  const guardHeld = held.filter(h => h.reason === 'GENERATION_QUALIFIER_MISMATCH' || h.reason === 'GENERATION_EVIDENCE_MISSING').flatMap(h => {
+    const p = byId.get(h.id);
+    const master = masters.find(m => m.sub_model === h.candidates[0]);
+    return p && master ? [{ rawName: p.rawName || p.sub_model, year: p.year, reason: h.reason as GenerationGuardReason, master }] : [];
+  });
+  return { plan, trimPlan, held, stats: { products: products.length, identityRepairs: identityRepairs.length, trimRepairs: trimRepairs.length, held: held.length, alreadyMatched },
+    appendix: { generationFamilies: generationFamilies(masters), aliasCandidates: aliasCandidates(guardHeld, masters) } };
+}
+
+/** 이미 확정된 상품(세부모델 칸이 마스터 이름과 정확히 같은 문서)을 R1·R2 로 다시 점검하는 읽기 전용 감사(쓰기 0, 되돌림 없음 — «검토 필요» 후보만 낸다).
+ * 원문 차명이 비어 있거나 마스터 이름·별칭이 원문에 하나도 없으면 UNVERIFIABLE(근거 없음 ≠ 오류). */
+export type ConfirmedAuditRow = { id: string; plate4: string; supplier: string; verdict: 'OK' | 'UNVERIFIABLE' | GenerationGuardReason; sub_model: string };
+export function auditConfirmedIdentities(products: ReadonlyArray<IdentityProduct & { supplier?: string }>, masters: readonly IdentityMaster[]): {
+  rows: ConfirmedAuditRow[]; bySupplier: Record<string, Record<string, number>>; total: number; unmatchedMaster: number } {
+  const rows: ConfirmedAuditRow[] = [];
+  let unmatchedMaster = 0, total = 0;
+  for (const p of products) {
+    if (!p.sub_model.trim() || !p.maker.trim() || !p.model.trim()) continue;
+    const hits = masters.filter(m => norm(m.sub_model) === norm(p.sub_model) && norm(m.maker) === norm(p.maker) && norm(m.model) === norm(p.model));
+    total++;
+    if (hits.length !== 1) { unmatchedMaster++; continue; }
+    const master = hits[0]!;
+    const raw = p.rawName.trim();
+    const supplier = p.supplier?.trim() || '(미상)';
+    const mentioned = raw && [master.sub_model, ...master.sub_model_aliases].map(norm).some(n => n.length >= 3 && norm(raw).includes(n));
+    const verdict = !raw || !mentioned ? 'UNVERIFIABLE' as const : generationGuard({ rawName: raw, year: p.year, master, masters }) ?? 'OK' as const;
+    rows.push({ id: p.id, plate4: p.plate4, supplier, verdict, sub_model: master.sub_model });
+  }
+  const bySupplier: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    const entry = bySupplier[r.supplier] ??= {};
+    entry[r.verdict] = (entry[r.verdict] ?? 0) + 1;
+  }
+  return { rows, bySupplier, total, unmatchedMaster };
 }
 
 /** 엔진 회차의 정체성 정제(대표 2026-10-15 «손오공 새로 API 연동해서 땡겨온 애들은 … 모델명도 정제되어 있지 않고»): 위 matchIdentity 를 그대로 쓴다.
