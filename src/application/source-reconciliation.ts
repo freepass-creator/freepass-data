@@ -22,6 +22,10 @@ export type SourceReconciliation = {
   newCount: number; newHasDoc: number; newLast4: string[];
   /** ERP5 에만 노출된 차(원천에 없거나 판매 불가). */
   missingCount: number; missingLast4: string[];
+  /** MISSING 중 계약 잠금(locked_by_contract·계약중) 문서 수 — 정책상 원천 값으로 내리지 않는 정당 보류(인도완료·취소를 추정하지 않는다). */
+  missingLockedCount: number;
+  /** 잠금 보류를 제외하고 NEW·MISSING·값 불일치가 모두 0 인지. matched 는 잠금도 차이로 센 엄격 판정이다. */
+  matchedExceptLocked: boolean;
   /** 양쪽 판매 가능인데 값(가격·상태·구분)이 다른 차. */
   mismatchCount: number; mismatchLast4: string[];
   /** 일치 = 집합 비교가 0·0 이고 값 불일치도 0 일 때만 true(대수 일치만으로는 일치가 아니다). */
@@ -39,6 +43,8 @@ const withPreservedDeposit = (source: SourceProductRecord, doc: SourceProductRec
   });
   return { ...source, terms };
 };
+
+const isLocked = (p: CycleProduct) => p.locked_by_contract === true || p.record.status.raw === '계약중';
 
 /** 차량 키: 번호가 있으면 번호(같은 차가 다른 UID 로 읽혀도 한 대), 없으면(번호 없는 월렌트) UID. 독립 검토: UID 키만 쓰면 UID 연결 대상이 NEW+MISSING 으로 나온다. */
 const keyOf = (r: SourceProductRecord) => r.plate && isAssignedPlate(r.plate) ? `P:${plateIdentityKey(r.plate)}` : `U:${sourceProductKey(r)}`;
@@ -58,6 +64,8 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     sourceSellable: source.size, erpSellable: erp.size, same: sameKeys.length,
     newCount: newKeys.length, newHasDoc: newKeys.filter(k => docs.has(k)).length, newLast4: cut(newKeys, k => source.get(k)!),
     missingCount: missingKeys.length, missingLast4: cut(missingKeys, k => erp.get(k)!.record),
+    missingLockedCount: missingKeys.filter(k => isLocked(erp.get(k)!)).length,
+    matchedExceptLocked: newKeys.length === 0 && mismatchKeys.length === 0 && missingKeys.every(k => isLocked(erp.get(k)!)),
     mismatchCount: mismatchKeys.length, mismatchLast4: cut(mismatchKeys, k => erp.get(k)!.record),
     matched: newKeys.length === 0 && missingKeys.length === 0 && mismatchKeys.length === 0,
     countEqual: source.size === erp.size,

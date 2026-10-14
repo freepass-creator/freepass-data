@@ -32,7 +32,9 @@ export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngrade
   maxEnrollPerCycle?: number; minEnrollPerCycle?: number;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
-  unassignedPlateCount?: number };
+  unassignedPlateCount?: number;
+  /** 읽기 단계 보류 중 «이미 반영된 행의 동일 복사본»(DUPLICATE_UID_SUSPECT) 수 — 다른 차의 존재를 가리지 않으므로 부재 하향을 막지 않는다(커맨드 센터 승인 2026-10-14). */
+  benignHeldCount?: number };
 export type CycleEntry = { kind: 'DOWNGRADE' | 'ENROLL' | 'REEXPOSE' | 'UPDATE'; before: CycleProduct | null; after: CycleProduct };
 export type CyclePlan = {
   schema: 'source-cycle/v1'; config: CycleConfig; plannedAt: number; evidence: CycleEvidence;

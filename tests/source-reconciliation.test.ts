@@ -38,6 +38,12 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     const changedRent = rec('12가1001', true, 700000); changedRent.terms[0]!.deposit = { state: 'UNKNOWN', value: null } as never;
     expect(reconcileSource([changedRent], [doc(stored, true)]).mismatchCount).toBe(1);   // 대여료가 다르면 여전히 불일치
   });
+  it('separates MISSING documents that are contract-locked (policy hold) from real gaps', () => {
+    const locked = doc(rec('12가1001', true), true); locked.locked_by_contract = true;
+    const r = reconcileSource([rec('12가1001', false)], [locked, doc(rec('12가1002', true), true)]);
+    expect(r).toMatchObject({ missingCount: 2, missingLockedCount: 1, matched: false, matchedExceptLocked: false });
+    expect(reconcileSource([rec('12가1001', false)], [locked])).toMatchObject({ missingLockedCount: 1, matched: false, matchedExceptLocked: true });
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);

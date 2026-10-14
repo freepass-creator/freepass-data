@@ -35,6 +35,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
+  // 계획 단계 보류의 사유 코드별 건수(보고 전용, plan digest 에 넣지 않는다). RP021 보류 3건이 코드 없이 세어져 원인을 못 가리던 문제(B3Q 2026-10-14).
+  const heldBy: Record<string, number> = {};
+  const hold = (code: string) => { plan.held++; heldBy[code] = (heldBy[code] ?? 0) + 1; };
   if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
@@ -86,7 +89,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       } else if (candidates.length > 1) {
         // 같은 번호의 옛 문서가 둘 이상이면 어느 문서가 이 차인지 알 수 없다: 새 문서를 만들고 옛 문서를 내리지 않고 보류한다
         // (보류는 부재 하향도 막아 두 문서 모두 그대로 남는다).
-        identityHolds = true; plan.held++;
+        identityHolds = true; hold('UID_BRIDGE_AMBIGUOUS');
         if (!plan.warnings.includes('UID_BRIDGE_AMBIGUOUS')) plan.warnings.push('UID_BRIDGE_AMBIGUOUS');
         continue;
       }
@@ -94,20 +97,20 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const errors = validateSourceRecord(r);
     if (r.sourceId !== config.sourceId || duplicates.has(key) ||
         errors.some(e => ['RECORD_SHAPE_INVALID', 'IDENTITY_REQUIRED', 'OBSERVATION_INVALID'].includes(e))) {
-      identityHolds = true; plan.held++; continue;
+      identityHolds = true; hold('IDENTITY_OR_DUPLICATE'); continue;
     }
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
-    if (before && locked(before)) { plan.held++; continue; }
+    if (before && locked(before)) { hold('CONTRACT_LOCKED'); continue; }
     if (before && driftHeld.has(before.record.uid)) {
       // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
       if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
       continue;
     }
-    if (errors.includes('STATUS_UNKNOWN')) { plan.held++; continue; }
-    if (errors.includes('TERMS_HOLD')) plan.held++;
+    if (errors.includes('STATUS_UNKNOWN')) { hold('STATUS_UNKNOWN'); continue; }
+    if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
-      plan.held++; continue;
+      hold('OBSERVATION_ORDER'); continue;
     }
     const next = compactRecord(r);   // 문서에 쓰이는 형태. 원천 원문 전체는 계획 evidence·백업에만 있고 문서에는 digest 로 남는다
     if (errors.includes('TERMS_HOLD') && before) next.terms = structuredClone(before.record.terms);
@@ -127,12 +130,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     let after: CycleProduct = { ...(before ? structuredClone(before) : {}), record: next, listable: sale, locked_by_contract: false,
       publication_withdrawal: null, publication_withdrawal_prior: before?.publication_withdrawal_prior ?? null };
     if (!sale) {
-      if (!before) { if (!errors.includes('TERMS_HOLD')) plan.held++; continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
+      if (!before) { if (!errors.includes('TERMS_HOLD')) hold('NOT_SELLABLE_NEW'); continue; }   // TERMS_HOLD 는 위에서 이미 센 행이다(이중 계수 방지, RP004 4524 실측)
       after = withdraw(before, r.status.saleAvailable === false ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_VALIDATION_HOLD', next);
     }
     if (!before && Object.hasOwn(snapshot, 'enrollmentSupplier')) {
       if (!snapshot.enrollmentSupplier?.provider_name.trim()) {
-        plan.held++;
+        hold('SUPPLIER_NAME_REQUIRED');
         if (!plan.warnings.includes('SUPPLIER_NAME_REQUIRED')) plan.warnings.push('SUPPLIER_NAME_REQUIRED');
         continue;
       }
@@ -149,12 +152,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }
   // Missing/unidentified rows may hide any UID: never infer absence from a partial normalization.
-  const absenceUnsafe = evidence.heldCount > 0 || identityHolds || plan.unassignedPlateCount > 0;
+  const absenceUnsafe = evidence.heldCount - (evidence.benignHeldCount ?? 0) > 0 || identityHolds || plan.unassignedPlateCount > 0;
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
       if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before) || driftHeld.has(before.record.uid)) continue;
-      if (Date.parse(before.record.observedAt) > at) { plan.held++; continue; }
+      if (Date.parse(before.record.observedAt) > at) { hold('OBSERVATION_FUTURE'); continue; }
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
   }
@@ -186,7 +189,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     plan.warnings.push(`ENROLL_CAP_DEFERRED:${deferred.size}:cap${enrollCap}`);
   }
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
-  return { plan, digest: stableDigest(plan), writes: 0 as const, reconciliation: reconcileSource(evidence.records, snapshot.products) };
+  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }
 
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,

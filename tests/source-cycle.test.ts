@@ -85,6 +85,17 @@ describe('source cycle planning/application', () => {
     expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
     expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
   });
+  it('identical-copy holds (DUPLICATE_UID_SUSPECT) do not hide other cars, unidentified holds still do', () => {
+    const snapshot = { products: [product('missing')], complete: true };
+    // 동일 복사본 보류만 있으면 부재 판정을 막지 않는다 → 부재 차는 하향
+    const benign = planSourceCycle(config, { ...evidence([]), heldCount: 1, benignHeldCount: 1 }, snapshot, now).plan;
+    expect(benign.entries.map(e => e.kind)).toEqual(['DOWNGRADE']);
+    expect(benign.warnings).not.toContain('ABSENCE_DOWNGRADE_SKIPPED');
+    // 식별되지 않은 보류가 하나라도 섞이면 기존대로 건너뜀
+    const mixed = planSourceCycle(config, { ...evidence([]), heldCount: 2, benignHeldCount: 1 }, snapshot, now).plan;
+    expect(mixed.entries).toHaveLength(0);
+    expect(mixed.warnings).toContain('ABSENCE_DOWNGRADE_SKIPPED');
+  });
   it('SPEC3C incomplete transport blocks apply before backup or product writes', async () => {
     const m = memory([]);
     const built = planSourceCycle(config, evidence([record('new')], false), await m.commands.list(config.sourceId), now);

@@ -96,11 +96,15 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         converted.records = structuredClone(prior.records);
         read.observedAt = prior.observedAt;
       }
+      const benign = converted.held.filter(h => h.reasons.length > 0 && h.reasons.every(r => r === 'DUPLICATE_UID_SUSPECT')).length;
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
         observedAt: read.observedAt, heldCount: converted.held.length,
+        ...(benign ? { benignHeldCount: benign } : {}),
         ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
       state.reconciliation = built.reconciliation;
+      // 읽기 단계 보류 사유에 계획 단계 보류 사유를 합친다(같은 코드는 더한다).
+      for (const [code, n] of Object.entries(built.heldReasons)) state.heldReasons![code] = (state.heldReasons![code] ?? 0) + n;
       state.heldCount = plan.held;
       if (options.approvedPlan && !deepEqual(plan, options.approvedPlan)) throw new Error('CYCLE_REPLAN_REQUIRED');
       if (plan.blockers.length) throw new Error(plan.blockers.join(','));
