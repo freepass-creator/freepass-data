@@ -6,7 +6,7 @@
  *   한도: IANCAR_PHOTO_COPY_MAX_VEHICLES(40)·MAX_PHOTOS(400)·MAX_PER_VEHICLE(10)·TIME_BUDGET_MIN(40)·INTERVAL_MS(1500, 최소 1000)·PILOT_ONLY(10).
  * 출력: 번호는 끝 4자리만. 키·사진 URL·응답 본문은 어디에도 쓰지 않는다. 등록용 CSV(전체 번호)는 --out(비공개 디렉터리)에만 쓴다. */
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -21,8 +21,14 @@ import { DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, runIancarPhotoCopy, type Photo
 /** 사진 복사의 «원천 준비» 판정. 재고를 게시하는 엔진 회차(15분 신선도)와 달리 사진은 id 로 고정된 불변 자료이고 차량별 상세가 stale=false 를 다시 확인하므로,
  * 목록의 «신선도 초과»(동기화 시각이 15분보다 오래됨)만으로는 막지 않는다 — 그 값은 공급사 동기화 주기(20~60분) 때문에 정시 직후 창 밖에서는 늘 걸린다.
  * 막는 것: 공급사가 stale 로 표시, 동기화 시각이 maxAge(기본 3시간)보다 오래됨(상류 정지), 시각 이상·행 수/페이지 정합 이상 등 «신선도 초과 외» 이슈 전부. */
+/** 출력해도 되는 준비 거부 코드(허용 목록). 목록에 없는 이슈는 IANCAR_ONE_OTHER_ISSUE 로만 알린다(원천 문자열을 그대로 내보내지 않는다). */
+export const PHOTO_READY_CODES: ReadonlySet<string> = new Set([
+  'IANCAR_ONE_SOURCE_TIME_IN_FUTURE', 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED', 'IANCAR_ONE_PAGINATION_METADATA_DRIFT', 'IANCAR_ONE_SYNC_TIME_DRIFT',
+  'IANCAR_ONE_SOURCE_STALE', 'IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_EMPTY_INVENTORY_REQUIRES_REVIEW',
+  'IANCAR_ONE_SYNC_TOO_OLD', 'IANCAR_ONE_SYNCED_AT_INVALID', 'IANCAR_ONE_OTHER_ISSUE']);
 export function photoSourceReadiness(capture: { issues: readonly string[]; stale: boolean; syncedAt: string }, nowMs: number, maxAgeMs: number): { ready: boolean; codes: string[] } {
-  const codes = new Set(capture.issues.filter(code => code !== 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'));
+  const codes = new Set(capture.issues.filter(code => code !== 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED')
+    .map(code => (PHOTO_READY_CODES.has(code) ? code : 'IANCAR_ONE_OTHER_ISSUE')));
   if (capture.stale) codes.add('IANCAR_ONE_SOURCE_STALE');
   const synced = Date.parse(capture.syncedAt);
   if (!Number.isFinite(synced)) codes.add('IANCAR_ONE_SYNCED_AT_INVALID');
@@ -108,6 +114,9 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   const bin = resolveGwsBin(env);
   if (!bin) throw new Error('GWS_UNAVAILABLE');
   const limits = photoCopyLimitsFromEnv(env);
+  // 업로드 임시 폴더 = gws 실행의 작업 폴더(gws --upload 는 작업 폴더 안 파일만 받는다). 실행 전에 만들어 둔다.
+  const tempDir = join(env.SOURCE_CYCLE_PRIVATE_DIR || tmpdir(), 'iancar-photo-copy-tmp');
+  mkdirSync(tempDir, { recursive: true });
   // 등록 목록(--out)은 항상 «이번 회차 결과»만 담는다(Codex 재검토 ②): 시작 때 헤더만 있는 CSV 로 덮어써 두어, 회차가 예외로 끝나거나 완료 차량이 0대여도
   // 이전 회차 목록이 남아 등록되는 일이 없다.
   const out = flag('--out');
@@ -115,7 +124,7 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   const result = await runIancarPhotoCopy({
     source: createIancarPhotoSource(env),
     compress: input => renderVehiclePhotoRendition(input, 'detail'),
-    drive: createGwsPhotoDrive({ run: gwsRunner(bin), rootFolderId, tempDir: join(env.SOURCE_CYCLE_PRIVATE_DIR || tmpdir(), 'iancar-photo-copy-tmp') }),
+    drive: createGwsPhotoDrive({ run: gwsRunner(bin, { cwd: tempDir }), rootFolderId, tempDir }),
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
   }, mode, limits);
@@ -136,7 +145,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const code = error instanceof IancarOneApiError ? error.code : error instanceof Error && /^[A-Z0-9_]{3,64}$/.test(error.message) ? error.message : 'PHOTO_COPY_ERROR';
     // 준비 판정 거부는 원인 코드(issues)만 함께 낸다: 값·번호·URL 없음.
     const detail = error && typeof error === 'object' && Array.isArray((error as { detail?: unknown }).detail)
-      ? ((error as { detail: unknown[] }).detail.filter((c): c is string => typeof c === 'string' && /^[A-Z0-9_]{3,64}$/.test(c))) : [];
+      ? ((error as { detail: unknown[] }).detail.filter((c): c is string => typeof c === 'string' && PHOTO_READY_CODES.has(c))) : [];
     console.error(detail.length ? `${code} ${detail.join(',')}` : code); process.exitCode = 2;
   });
 }
