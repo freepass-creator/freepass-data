@@ -25,14 +25,17 @@ const rentOf = (v: unknown): SourceAmount | null => {
   return Number.isSafeInteger(n) && n >= RENT_MIN && n <= RENT_MAX ? { state: 'KNOWN', value: n } : unknownAmount;
 };
 
-/** 보증금 칸(원 단위 정수): 0 = 무보증(ZERO), 1원~1억 = KNOWN, 빈칸·형식 밖 = UNKNOWN(지어내지 않는다). 열이 없으면 전부 UNKNOWN. */
+/** 보증금 칸: 1원~1억 정수 = KNOWN, **명시 문구(«무보증»·«보증금없음»)만 ZERO**. 숫자 0·문자열 «0»·빈칸·형식 밖 = UNKNOWN —
+ * 산출 근거 없는 0 은 확정 0원이 아니다(대표 정산 규칙 «0원 확정 금지», Codex 독립 검토 2026-10-15). 열이 없으면 전부 UNKNOWN. */
 const DEPOSIT_MAX = 100_000_000;
+const EXPLICIT_NO_DEPOSIT = new Set(['무보증', '보증금없음']);
 const depositOf = (v: unknown): SourceAmount => {
   const t = clean(v).replace(/[,\s원]/g, '');
   if (t === '') return unknownAmount;
+  if (EXPLICIT_NO_DEPOSIT.has(t)) return { state: 'ZERO', value: 0 };
   const n = Number(t);
-  if (!Number.isSafeInteger(n) || n < 0 || n > DEPOSIT_MAX) return unknownAmount;
-  return n === 0 ? { state: 'ZERO', value: 0 } : { state: 'KNOWN', value: n };
+  if (!Number.isSafeInteger(n) || n <= 0 || n > DEPOSIT_MAX) return unknownAmount;
+  return { state: 'KNOWN', value: n };
 };
 
 /** 머리글 행을 찾는다: «차량번호»와 «판매상태» 가 같은 행에 있어야 한다(앞 30행 안). */

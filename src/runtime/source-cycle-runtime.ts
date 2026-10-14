@@ -442,11 +442,23 @@ export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonl
   return missing;
 }
 
+/** 폐기된 설정 알림(Codex 독립 검토 2026-10-15): 예전 SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE 는 더 이상 RP023 쓰기를 열지 않는다(쓰기 = 시트 하나, SOURCE_CYCLE_AUTOPLUS_SHEET=1).
+ * 이 변수만 켜진 환경이 «오류·안내 없이» 관측 전용으로 바뀌어 RP023 쓰기가 멈추는 일을 막기 위해, 설정이 있으면 항상 코드로 알리고 쓰기 유지 여부를 명시한다.
+ *  - …_RP023_OBSERVATION_ONLY: 시트 쓰기가 켜져 있지 않아 RP023 은 관측 전용이다(쓰기 중단) — 변수를 지우고 SOURCE_CYCLE_AUTOPLUS_SHEET=1 로 바꿔야 쓴다.
+ *  - …_IGNORED_SHEET_WRITE_KEPT: 시트 쓰기가 켜져 있어 RP023 쓰기는 유지된다 — 폐기 변수는 무시되므로 지우면 된다. */
+export function deprecatedConfigNotices(env: NodeJS.ProcessEnv): Array<{ code: string; blocksWrites: boolean }> {
+  const legacy = (env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_WRITE ?? '').trim();
+  if (!legacy) return [];
+  return env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1'
+    ? [{ code: 'DEPRECATED_AUTOPLUS_HOMEPAGE_WRITE_IGNORED_SHEET_WRITE_KEPT', blocksWrites: false }]
+    : [{ code: 'DEPRECATED_AUTOPLUS_HOMEPAGE_WRITE_RP023_OBSERVATION_ONLY', blocksWrites: true }];
+}
+
 /** 스케줄러가 부르는 한 회차: 사전점검 → 계획·적용(원천별) → 신선도 판정 → 실행 기록 한 줄(unattended-runs.jsonl). 토큰·원문은 기록하지 않는다. */
 export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
-  const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string;
+  const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string; configNotices?: string[];
     reports?: Array<{ source: string; stage: string; status: string; summary: string; digest: string | null;
       /** 공급사별 노출(listable=true) 수 전후: before=이번 회차 시작 전, after=이번 회차 적용 뒤(미적용이면 before 와 같다).
        *  prior=직전 회차 기록의 after. unexplained=before-prior(회차 밖에서 바뀐 수, 0 이면 설명됨). */
@@ -459,6 +471,13 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
   await mkdir(directory, { recursive: true });
   try {
     const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(x => x.trim()).filter(Boolean);
+    // 폐기 설정은 조용히 넘기지 않는다: 코드를 실행 기록·알림에 남기고, 쓰기가 막히는 경우(시트 쓰기 미설정)는 회차를 실패(exit 1)로 눈에 띄게 한다.
+    const notices = deprecatedConfigNotices(env);
+    if (notices.length) {
+      record.configNotices = notices.map(n => n.code);
+      for (const notice of notices) await alert(notice.code);
+      if (notices.some(n => n.blocksWrites)) record.exit = 1;
+    }
     record.preflight = await unattendedPreflight(env, kinds, probes);
     if (record.preflight.length) { record.exit = 1; await alert(record.preflight.join(',')); }
     else {
