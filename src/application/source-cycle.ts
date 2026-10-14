@@ -178,13 +178,24 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
   if (plan.exposedBefore) {
-    // floor 0(기본·옛 동작): 합산 비율. floor>0(런타임 기본 3, Codex 상의): 사유별 분리 — 부재 추론(SOURCE_ABSENT)은 비율 AND 절대 개수 초과일 때만 차단,
-    // 시트가 명시한 불가·계약중 등은 상태 열 오매핑 같은 대량 오작동 방지로 max(상한, 0.5) AND 절대 개수 초과일 때만 차단한다.
-    const over = floor > 0
-      ? (absentDown > floor && absentDown / plan.exposedBefore > config.maxDowngradeRatio) ||
-        (explicitDown > floor && explicitDown / plan.exposedBefore > Math.max(config.maxDowngradeRatio, 0.5))
-      : downs.length / plan.exposedBefore > config.maxDowngradeRatio;
-    if (over) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
+    // floor 0(기본·옛 동작): 합산 비율로 회차 전체를 막는다(호환).
+    // floor>0(런타임 기본 3): 대표 2026-10-14 «걸림돌 해제» — 회차 전체를 멈추지 않고 «허용분까지만 적용, 나머지는 다음 회차로 이월»한다.
+    //   부재 추론(SOURCE_ABSENT) 허용분 = max(절대 하한, 노출의 상한 비율), 원천이 명시한 불가·계약중 등 = max(절대 하한, 노출의 max(상한,0.5)).
+    //   이월분은 노출 유지(키 순서 고정이라 같은 입력이면 같은 대수), 경고 DOWNGRADE_DEFERRED 로 남아 사람이 대량 오작동을 알아챈다.
+    if (floor > 0) {
+      const absentAllow = Math.max(floor, Math.floor(plan.exposedBefore * config.maxDowngradeRatio));
+      const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
+      const dropKeys = new Set<string>();
+      const keyed = (list: typeof downs) => [...list].sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+      const absentList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT'));
+      const explicitList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason !== 'SOURCE_ABSENT'));
+      absentList.slice(absentAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
+      explicitList.slice(explicitAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
+      if (dropKeys.size) {
+        plan.entries = plan.entries.filter(e => e.kind !== 'DOWNGRADE' || !dropKeys.has(sourceProductKey(e.after.record)));
+        plan.warnings.push(`DOWNGRADE_DEFERRED:${dropKeys.size}`);
+      }
+    } else if (downs.length / plan.exposedBefore > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
   }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));

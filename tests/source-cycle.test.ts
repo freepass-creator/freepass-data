@@ -501,15 +501,29 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     expect(floored.plan.blockers).toEqual([]);
     expect(floored.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(3);
   });
-  it('floor still blocks mass absence inference and mass explicit status flips above the floor', () => {
+  it('with a floor, mass absence/explicit flips are applied only up to the allowance and the rest is deferred (no whole-cycle stop)', () => {
     const products = Array.from({ length: 20 }, (_, i) => product('p' + i));
     const floored = { ...config, maxDowngradeRatio: 0.2, downgradeFloor: 3 };
+    // 부재 10대: 허용분 max(3, floor(20*0.2)=4)=4 만 적용, 6 이월, 회차는 막히지 않는다
     const absent = planSourceCycle(floored, evidence(products.slice(0, 10).map(p => p.record)), { complete: true, products }, now);
-    expect(absent.plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    expect(absent.plan.blockers).toEqual([]);
+    expect(absent.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(4);
+    expect(absent.plan.warnings).toContain('DOWNGRADE_DEFERRED:6');
+    // 명시 불가 12대: 허용분 max(3, floor(20*0.5)=10)=10, 2 이월
     const flipped = products.map((p, i) => i < 12 ? { ...p.record, status: { raw: '출고불가', saleAvailable: false } } : p.record);
-    expect(planSourceCycle(floored, evidence(flipped), { complete: true, products }, now).plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');
+    const explicit = planSourceCycle(floored, evidence(flipped), { complete: true, products }, now);
+    expect(explicit.plan.blockers).toEqual([]);
+    expect(explicit.plan.entries.filter(e => e.kind === 'DOWNGRADE')).toHaveLength(10);
+    expect(explicit.plan.warnings).toContain('DOWNGRADE_DEFERRED:2');
+    // 같은 입력이면 같은 대수·같은 키(결정적)
+    const again = planSourceCycle(floored, evidence(products.slice(0, 10).map(p => p.record)), { complete: true, products }, now);
+    expect(again.plan.entries.map(e => e.after.record.uid)).toEqual(absent.plan.entries.map(e => e.after.record.uid));
     const fewAbsent = planSourceCycle(floored, evidence(products.slice(0, 17).map(p => p.record)), { complete: true, products }, now);
     expect(fewAbsent.plan.blockers).toEqual([]);
+    expect(fewAbsent.plan.warnings.some(w => w.startsWith('DOWNGRADE_DEFERRED'))).toBe(false);
+    // floor 0(옛 동작)은 여전히 회차 전체를 막는다
+    expect(planSourceCycle({ ...config, maxDowngradeRatio: 0.2 }, evidence(products.slice(0, 10).map(p => p.record)), { complete: true, products }, now).plan.blockers)
+      .toContain('DOWNGRADE_RATIO_EXCEEDED');
   });
 });
 
