@@ -1,5 +1,5 @@
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import { approvedIancarPhotoCount } from '../domain/consumer-output-contract.js';
+import { approvedPhotoCount, parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
 
 type Rec = Record<string, unknown>;
 
@@ -284,7 +284,8 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
     image_url: images[0] ?? null,
     image_urls: listMode ? [] : images,
     photo_link: cleanUrl(product.photo_link),
-    photo_approved_count: approvedIancarPhotoCount(product),
+    // 공급사 공통(허용표 FREEPASS_DATA_PHOTO_COPY_SUPPLIERS, 기본 이안카): 서빙 reader 와 같은 허용표를 써서 «세어 놓고 못 서빙하는» 일이 없다.
+    photo_approved_count: approvedPhotoCount(product, parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS)),
     _policy: publicPolicy(policyId ? policies[policyId] : undefined),
   };
   for (const field of PUBLIC_TEXT_FIELDS) {
