@@ -7,9 +7,9 @@ import { resolveTargetProject } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
-import { salePriceMap, compactRecord, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
-import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
+import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
+import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 
 type Fields = Record<string, unknown>;
@@ -89,9 +89,45 @@ const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean 
     f.status === '계약중' && f.status_kind === '선점' && f.vehicle_status === '계약중' && f.listable === true &&
     record.status.raw === '계약중' && f.source_cycle_record !== undefined && !isContractLockValue(f.locked_by_contract);
 };
+/** 문서에 사진이 하나라도 있나: 원천 사진(image_urls·image_url), 드라이브 캐시(photo_cache), 승인 사진(photo_original_refs). */
+const nonEmptyList = (v: unknown) => Array.isArray(v) && v.some(x => x !== null && x !== undefined && x !== '');
+const hasHumanPhotos = (f: Fields) => nonEmptyList(f.photo_original_refs) || (f.photo_cache !== undefined && f.photo_cache !== null);
+const hasAnyPhoto = (f: Fields) => hasHumanPhotos(f) || nonEmptyList(f.image_urls) || (typeof f.image_url === 'string' && !!f.image_url.trim());
+/** 저장 기록에 API 사진 주소가 있나: 실제 목록이면 비어 있지 않은지, 옛 digest 형태면 «빈 목록의 digest» 가 아닌지. */
+const EMPTY_LIST_DIGEST = stableDigest([]).slice(0, 32);
+const recordHasPhotoUrls = (record: SourceProductRecord): boolean => {
+  const images = record.raw?.images as unknown;
+  if (Array.isArray(images)) return images.length > 0;
+  const digest = images && typeof images === 'object' ? (images as { __digest?: unknown }).__digest : undefined;
+  return typeof digest === 'string' && digest !== EMPTY_LIST_DIGEST;
+};
+/** 원천 API 사진 → image_urls(소비처 catalog 가 읽는 칸, 첫 장 = image_url). 사람·승인 사진(photo_original_refs·photo_cache)이 있는 문서는 건드리지 않고,
+ * API 가 사진을 주지 않으면(빈 목록·digest) 쓰지 않는다 — 모르는 값으로 기존 사진을 지우지 않는다. 목록이 바뀌면 원천 사실이므로 갱신한다. */
+export function apiPhotoFields(r: SourceProductRecord, original: Fields): Fields {
+  if (!PHOTO_URL_LIST_SOURCES.has(r.sourceId) || hasHumanPhotos(original)) return {};
+  const urls = r.raw?.images;
+  if (!isPhotoUrlList(urls) || !urls.length) return {};
+  return { image_urls: [...urls], image_url: urls[0]! };
+}
+/** 엔진 기록(source_cycle_record)이 없는 옛 문서의 관측 기준 시각. 기본은 source_observed_at, 없으면 문서 updateTime.
+ * 이안카(RP031) 옛 발행 문서는 사진·정책 연결 쓰기가 updateTime 을 원천 갱신 시각보다 늦게 밀어 엔진이 OBSERVATION_ORDER 로 영영 갱신하지 못했다.
+ * 그래서 RP031 은 updateTime 을 쓰지 않고 옛 발행기가 남긴 원천 시각(iancar_phase_one.sourceSyncedAt → _direct_ingest_at)을 쓰고, 둘 다 없으면 «관측 없음»(epoch)으로 본다.
+ * 동시성은 그대로다: 쓰기는 문서 updateTime 조건(CAS)·백업·되읽기로만 한다. */
+export const LEGACY_NO_OBSERVATION = '1970-01-01T00:00:00.000Z';
+export function legacyObservedAt(f: Fields, updateTime: string): string {
+  if (typeof f.source_observed_at === 'string' && Number.isFinite(Date.parse(f.source_observed_at))) return f.source_observed_at;
+  if (f.provider_company_code !== 'RP031') return String(f.source_observed_at ?? updateTime);
+  const phase = f.iancar_phase_one as { sourceSyncedAt?: unknown } | null | undefined;
+  if (phase && typeof phase === 'object' && typeof phase.sourceSyncedAt === 'string' && Number.isFinite(Date.parse(phase.sourceSyncedAt)))
+    return new Date(Date.parse(phase.sourceSyncedAt)).toISOString();
+  const direct = f._direct_ingest_at;
+  const ms = typeof direct === 'number' ? direct : typeof direct === 'string' ? Date.parse(direct) : NaN;
+  if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
+  return LEGACY_NO_OBSERVATION;
+}
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
-  const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
+  const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
   if (f.source_cycle_record) {
     if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate) {
@@ -118,6 +154,12 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (engineOwned && writeMonthlyProductType && f.product_group === 'MONTHLY_RENT' && f.product_type !== MONTHLY_PRODUCT_TYPE) rewriteReasons.push('PRODUCT_TYPE');
   // 오토플러스(RP023)는 상품 구분이 정책으로 «오플구독» 하나다. 구분이 빈 노출 문서는 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP023' && !(typeof f.product_type === 'string' && f.product_type.trim())) rewriteReasons.push('PRODUCT_TYPE');
+  // 손오공 API 사진(대표 10-15): 사진이 하나도 없는 노출 문서인데 저장 기록에 API 사진 주소가 있으면 한 번 다시 써서 image_urls 를 채운다.
+  // 쓰면 image_urls 가 생겨 되풀이되지 않는다. 사진 목록이 같은 문서는 이 사유 없이는 다시 쓰지 않는다(일괄 UPDATE 없음).
+  if (engineOwned && PHOTO_URL_LIST_SOURCES.has(String(f.provider_company_code)) && !hasAnyPhoto(f) && recordHasPhotoUrls(record)) rewriteReasons.push('PHOTO_URLS');
+  // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
+  if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
+    && typeof record.raw?.vehicle_id === 'string' && record.raw.vehicle_id.trim()) rewriteReasons.push('IANCAR_VEHICLE_ID');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -160,6 +202,18 @@ export const calculatedDepositFields = (r: SourceProductRecord): Fields => {
   const any = Object.keys(rules).length > 0;
   return { deposit_source: any ? 'CALCULATED' : null, deposit_rules: any ? rules : null, deposit_rule: null };
 };
+/** 이안카(RP031) 공급사 차량 ID 칸. 사진 경로(isPublicIancarPhotoProduct)·정책 연결이 이 칸으로 원천 차량을 찾는다.
+ * 원천 기록의 vehicle_id 를 쓴다: 문서에 없으면 채우고, 같으면 그대로. 같은 번호 문서에 «다른» ID 가 이미 있으면 덮어쓰지 않는다(공급사 신원 충돌 —
+ * 기존 ID 에 묶인 사진·정책·보증금 근거가 다른 차로 옮겨 가지 않게). 충돌은 iancar_one_vehicle_id_conflict 에 관측 ID 와 시각으로 남겨 사람이 본다. */
+export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields): Fields {
+  if (r.sourceId !== 'RP031') return {};
+  const incoming = typeof r.raw?.vehicle_id === 'string' ? r.raw.vehicle_id.trim() : '';
+  if (!incoming) return {};
+  const stored = typeof original.iancar_one_vehicle_id === 'string' ? original.iancar_one_vehicle_id.trim() : '';
+  const hadConflict = original.iancar_one_vehicle_id_conflict !== undefined && original.iancar_one_vehicle_id_conflict !== null;
+  if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
+  return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
+}
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
   const r = p.record;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
@@ -180,12 +234,16 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT' ? { product_type: MONTHLY_PRODUCT_TYPE } : {}),
     // 손오공 상품 구분(구독·픽업구독 화면 표시, 기존 구독 상품 규칙 재사용): 어댑터가 탭에서 정한 값이 고정 어휘일 때만 쓴다.
     ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
-    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함).
-    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함). 다른 원천처럼 기존 문서에 구분이 «비어 있을 때만» 채운다 — 목록 분류로
+    // 사람이 정한 구분(재렌트 등)을 매 회차 덮어쓰지 않는다(2026-10-14).
+    ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type)
+      && !(typeof original.product_type === 'string' && original.product_type.trim()) ? { product_type: r.raw.product_type } : {}),
     ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),
+    ...iancarVehicleIdFields(r, original),
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
+    ...apiPhotoFields(r, original),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -289,7 +347,10 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
-          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type']) query.append('mask.fieldPaths', fieldPath(field));
+          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type',
+          'image_urls', 'image_url', 'photo_cache', 'photo_original_refs', 'iancar_one_vehicle_id', '_direct_ingest_at']) query.append('mask.fieldPaths', fieldPath(field));
+        // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
+        query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {

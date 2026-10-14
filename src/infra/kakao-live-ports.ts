@@ -7,7 +7,7 @@ import { getTargetFirebaseApp, CENTRAL_FIREBASE_PROJECT_ID } from './firebase-ta
 import { FirestoreSourceStore } from './source-firestore-store.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { KakaoDriveArchive } from './kakao-drive-archive.js';
-import { encodeIancarBackupValue } from './iancar-publication-withdrawal-firestore.js';
+import { encodeIancarBackupValue } from './iancar-backup-value.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { KakaoPhotoPlan, KakaoPhotoWriterPort, KakaoProductSnapshot } from '../ports/kakao-archive.js';
 

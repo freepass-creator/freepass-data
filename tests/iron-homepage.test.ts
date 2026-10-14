@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseIronListingPage, parseIronDetail, readIronHomepage, IRON_HOMEPAGE_POLICY } from '../src/adapters/iron-homepage.js';
+import { parseIronListingPage, parseIronDetail, readIronHomepage, parseIronSitemapIds, ironDeposit, ironMileage, ironOdometer, ironStatusFromBadges, ironFloorRecords,
+  IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY } from '../src/adapters/iron-homepage.js';
+import { sourceCyclePlugin } from '../src/adapters/source-cycle-plugins.js';
+import { judgeSonogongApiRead } from '../src/adapters/sonogong-api-guards.js';
 
 // 값은 전부 가짜(합성). 구조만 실제 홈페이지의 클래스 이름을 따른다.
 const BASE = IRON_HOMEPAGE_POLICY.baseUrl;
@@ -65,9 +68,10 @@ describe('아이언 홈페이지 어댑터', () => {
       { now: () => '2026-10-14T06:00:00.000Z', sleep: async ms => { sleeps.push(ms); } });
     expect(read).toMatchObject({ complete: true, listed: 4, sold: 1 });
     expect(read.records.map(r => r.plate)).toEqual(['12가1001', '12가1002', '12가1003', '12가1004']);
-    expect(calls.length).toBe(7);
+    expect(calls.length).toBe(8);                                                   // 목록 3 + 사이트맵 1(없음 → 기존 기준) + 상세 4
+    expect(read.notes).toContain('IRON_SITEMAP_UNAVAILABLE');
     expect(sleeps.every(ms => ms === IRON_HOMEPAGE_POLICY.minIntervalMs)).toBe(true);
-    expect(sleeps.length).toBe(6);                                                  // 첫 요청만 간격 없음
+    expect(sleeps.length).toBe(7);                                                  // 첫 요청만 간격 없음
     // 상세 하나가 실패하면 읽기 불완전(부재 하향·적용 차단), 나머지는 읽는다
     delete pages[`${BASE}/vehicles/n3`];
     const partial = await readIronHomepage(async url => { const p = pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; }, { sleep: async () => undefined });
@@ -77,5 +81,99 @@ describe('아이언 홈페이지 어댑터', () => {
     // 목록이 비면 불완전
     const empty = await readIronHomepage(async () => listPage(''), { sleep: async () => undefined });
     expect(empty).toMatchObject({ complete: false });
+  });
+
+  it('photos: keeps the supabase photo bucket host (direct and via /_next/image), https only, strict path allow-list', () => {
+    const bucket = `https://${IRON_PHOTO_POLICY.host}${IRON_PHOTO_POLICY.pathPrefix}vehicle-products/x1.webp`;
+    const html = detail('12가3456', { img: `/_next/image?url=${encodeURIComponent(bucket)}&amp;w=640` })
+      .replace('<img src="https://ironrentcar.com/b.jpg"/>', `<img src="${bucket.replace('x1', 'x2')}"/><img src="http://${IRON_PHOTO_POLICY.host}${IRON_PHOTO_POLICY.pathPrefix}x3.webp"/>` +
+        `<img src="https://${IRON_PHOTO_POLICY.host}/storage/v1/object/public/other-bucket/x4.webp"/><img src="https://evil.example/x5.webp"/>`);
+    expect(parseIronDetail(html, listing(), 't').raw.images).toEqual([bucket, bucket.replace('x1', 'x2')]);
+  });
+
+  it('deposit: 0원·없음·무보증 are ZERO (not UNKNOWN); numbers are KNOWN; missing block is UNKNOWN', () => {
+    for (const d of ['0원', '없음', '무보증', '0만원']) {
+      expect(parseIronDetail(detail('12가3456', { deposit: d }), listing(), 't').terms.map(t => t.deposit)).toEqual([{ state: 'ZERO', value: 0 }, { state: 'ZERO', value: 0 }]);
+    }
+    expect(ironDeposit('보증금 150만원')).toEqual({ state: 'KNOWN', value: 1_500_000 });
+    expect(ironDeposit('')).toEqual({ state: 'UNKNOWN', value: null });
+    expect(ironDeposit('보증금 문의')).toEqual({ state: 'UNKNOWN', value: null });
+  });
+
+  it('status: 계약 synonyms → 계약중(sellable, provider spelling kept), sold words → not sellable, unknown/mixed badges hold', () => {
+    const st = (badges: string[], sold = false) => parseIronDetail(detail('12가3456', { badges }), listing('v1', sold), 't');
+    expect(st(['예약중']).status).toEqual({ raw: '계약중', saleAvailable: true });
+    expect(st(['예약중']).raw.provider_status).toBe('예약중');
+    expect(st(['계약중']).status).toEqual({ raw: '계약중', saleAvailable: true });
+    for (const b of ['출고완료', '판매완료', '출고불가']) expect(st([b]).status).toEqual({ raw: '출고불가', saleAvailable: false });
+    expect(st(['출고협의']).status).toEqual({ raw: '출고협의', saleAvailable: true });
+    expect(st(['출고대기']).status.saleAvailable).toBeNull();                          // 모르는 배지 → 판매 가능으로 추정하지 않는다
+    expect(st(['출고대기']).raw.status_hold).toBe('STATUS_UNKNOWN');
+    expect(st(['출고가능', '판매완료']).status.saleAvailable).toBeNull();               // 상태 어휘가 섞이면 보류
+    expect(st(['출고가능', '판매완료']).raw.status_hold).toBe('STATUS_AMBIGUOUS');
+    expect(st(['출고가능'], true).status).toEqual({ raw: '출고불가', saleAvailable: false });   // 목록 카드 판매완료가 우선
+    expect(ironStatusFromBadges([], false)).toEqual({ raw: '출고협의', saleAvailable: true });   // 배지 없음 = ERP4 기준 출고협의
+  });
+
+  it('badge scope: badges outside the product badge group (e.g. similar-vehicle cards) do not change the status', () => {
+    const html = detail('12가3456', { badges: ['출고가능'] }).replace('</main>',
+      '<section class="similar"><article><span class="badge-pill">판매완료</span></article></section></main>');
+    expect(parseIronDetail(html, listing(), 't').status).toEqual({ raw: '출고가능', saleAvailable: true });
+    // 배지 묶음이 없는 페이지에서 본문 배지가 섞이면 보류(STATUS_AMBIGUOUS)
+    const noGroup = html.replace('class="product-detail-badges"', 'class="x"');
+    expect(parseIronDetail(noGroup, listing(), 't').raw.status_hold).toBe('STATUS_AMBIGUOUS');
+  });
+
+  it('terms: months from «N개월» (not the first number), contract mileage parsed, struck original price ignored', () => {
+    const html = detail('12가3456', { rent: [[0, ''], [0, '']] })
+      .replace(/<div class="product-detail-rent-row">[\s\S]*?<\/div>\s*<div class="product-detail-rent-row">[\s\S]*?<\/div>/,
+        '<div class="product-detail-rent-row"><dt>연 2만km · 48개월</dt><dd><del>월 90만원</del> 월 80만원</dd></div>' +
+        '<div class="product-detail-rent-row"><dt>월 2,000km · 36개월</dt><dd><s>950,000원</s>월 850,000원</dd></div>');
+    const r = parseIronDetail(html, listing(), 't');
+    expect(r.terms.map(t => [t.months, t.mileage, t.monthlyRent.value])).toEqual([[48, '20000km/year', 800000], [36, '2000km/month', 850000]]);
+    expect(ironMileage('2만km')).toBe('20000km');
+    expect(ironMileage('48개월')).toBeNull();
+  });
+
+  it('odometer: 1.2만km is 12000, commas are thousands separators', () => {
+    expect(ironOdometer('1.2만km')).toBe('12000');
+    expect(ironOdometer('12,345 km')).toBe('12345');
+    expect(parseIronDetail(detail('12가3456').replace('12,345 km', '1.2만km'), listing(), 't').raw.spec).toMatchObject({ mileage: '12000' });
+  });
+
+  it('completeness: when the sitemap is readable, every sitemap vehicle must be in the listing (otherwise incomplete)', async () => {
+    const sitemap = (ids: string[]) => `<?xml version="1.0"?><urlset>${ids.map(id => `<url><loc>${BASE}/vehicles/${id}</loc></url>`).join('')}<url><loc>${BASE}/about</loc></url></urlset>`;
+    expect(parseIronSitemapIds(sitemap(['n1', 'u1']))).toEqual(['n1', 'u1']);
+    expect(parseIronSitemapIds('<urlset><url><loc>x</loc></url>')).toBeNull();          // 잘린 사이트맵
+    const pages: Record<string, string> = {
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1')), [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
+      [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/u1`]: detail('12가1004'),
+    };
+    const run = (map: string) => readIronHomepage(async url => { const p = url.endsWith('/sitemap.xml') ? map : pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; },
+      { sleep: async () => undefined });
+    expect(await run(sitemap(['n1', 'u1']))).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:2:missing0'] });
+    expect(await run(sitemap(['n1', 'u1', 'n9']))).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP' });
+  });
+
+  it('the IRON plugin keeps a held (null) homepage status as null and keeps 계약중 sellable', async () => {
+    const t = new Date().toISOString();
+    const recs = [parseIronDetail(detail('12가1001', { badges: ['출고대기'] }), listing('a'), t), parseIronDetail(detail('12가1002', { badges: ['예약중'] }), listing('b'), t)];
+    const plugin = sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: 0.2 }, async () => ({ observedAt: t, complete: true,
+      completedScopes: ['homepage'], visibilityComplete: true, heldCount: 0, rows: recs.map(record => ({ scope: 'homepage', record })) }));
+    const out = plugin.toRecords(await plugin.read());
+    expect(out.records.map(r => r.status)).toEqual([{ raw: '상태확인필요', saleAvailable: null }, { raw: '계약중', saleAvailable: true }]);
+  });
+
+  it('shrink floor compares like with like: sellable non-contracted records vs exposed unlocked docs', () => {
+    const t = new Date().toISOString();
+    const sellable = Array.from({ length: 5 }, (_, i) => parseIronDetail(detail(`12가100${i}`), listing(`s${i}`), t));
+    const sold = Array.from({ length: 10 }, (_, i) => parseIronDetail(detail(`12나100${i}`), listing(`d${i}`, true), t));
+    const contracted = parseIronDetail(detail('12다1000', { badges: ['계약중'] }), listing('c'), t);
+    const records = [...sellable, ...sold, contracted];
+    expect(ironFloorRecords(records)).toHaveLength(5);
+    // 노출 10대 → 하한 8. 전체 16건이면 통과했지만, 판매 가능 5대는 축소(API_SHRUNK)로 막힌다.
+    expect(judgeSonogongApiRead({ complete: true, records }, { exposedUnlockedDocs: 10, previousCount: 0, stateError: null }).complete).toBe(true);
+    expect(judgeSonogongApiRead({ complete: true, records: ironFloorRecords(records) }, { exposedUnlockedDocs: 10, previousCount: 0, stateError: null }))
+      .toMatchObject({ complete: false, incompleteReason: 'API_SHRUNK' });
   });
 });

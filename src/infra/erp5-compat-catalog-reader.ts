@@ -5,10 +5,10 @@ import { getFirestore, type QuerySnapshot, type Firestore } from 'firebase-admin
 import { createFirestoreSourceStore } from './source-firestore-store.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarEngineDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { logRouteError } from '../shared/route-error-log.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
-import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
+import { hasVehiclePhotoVerification, parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
 
 import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader, type VehiclePhotoReadFailureObserver } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
@@ -394,7 +394,7 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
     const parsed = parseErp5CompatibilityPriceKey(key);
-    const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
+    const evidence = product.provider_company_code === 'RP031' ? readIancarEngineDeposit(product, key, now)
       : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
       termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid }));
     const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
@@ -437,7 +437,11 @@ export class FirestoreCatalogCompatibilityReader {
       },
     }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
     // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
-    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS));
+    parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS),
+    // 사본 없는 이안카 상품의 ONE 라이브 서빙. 기본 켜짐(종전), IANCAR_LIVE_PHOTO_FALLBACK=off 면 화면 요청이 ONE 을 부르지 않는다(대표 2026-10-15).
+    (process.env.IANCAR_LIVE_PHOTO_FALLBACK ?? '').trim().toLowerCase() !== 'off',
+    // 사본 서빙 허용표(공급사 공통, 2026-10-15). FREEPASS_DATA_PHOTO_COPY_SUPPLIERS=RP031,RP0xx… — 비어 있으면 이안카만(종전 동작). RP031 은 항상 포함.
+    parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS));
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 

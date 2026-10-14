@@ -1,4 +1,5 @@
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
+import { approvedPhotoCount, parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
 
 type Rec = Record<string, unknown>;
 
@@ -60,6 +61,8 @@ export type PublicProduct = {
   image_url: string | null;
   image_urls: string[];
   photo_link: string | null;
+  /** 사본 서빙이 보장된 승인 사진 수(이안카 압축 사본 refs 가 검증됐을 때만 > 0). 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
+  photo_approved_count: number;
   _policy: PublicPolicy | null;
 };
 
@@ -281,6 +284,8 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
     image_url: images[0] ?? null,
     image_urls: listMode ? [] : images,
     photo_link: cleanUrl(product.photo_link),
+    // 공급사 공통(허용표 FREEPASS_DATA_PHOTO_COPY_SUPPLIERS, 기본 이안카): 서빙 reader 와 같은 허용표를 써서 «세어 놓고 못 서빙하는» 일이 없다.
+    photo_approved_count: approvedPhotoCount(product, parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS)),
     _policy: publicPolicy(policyId ? policies[policyId] : undefined),
   };
   for (const field of PUBLIC_TEXT_FIELDS) {

@@ -70,4 +70,6 @@ jobs:
           EANCAR_ONE_API_BASE_URL: ${{ vars.EANCAR_ONE_API_BASE_URL }}
           EANCAR_ONE_API_KEY: ${{ secrets.EANCAR_ONE_API_KEY }}
           SOURCE_CYCLE_IRON_LIST_URL: ${{ vars.SOURCE_CYCLE_IRON_LIST_URL }}
+          # 아이언은 운영과 같은 홈페이지 상세 경로로 계획한다(읽기 모드 선택, 쓰기 스위치 아님). 옛 목록 경로는 변수를 '0' 으로.
+          SOURCE_CYCLE_IRON_HOMEPAGE: ${{ vars.SOURCE_CYCLE_IRON_HOMEPAGE || '1' }}
         run: node scripts/ci/source-cycle-dry-run.mjs

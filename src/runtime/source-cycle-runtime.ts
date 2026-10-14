@@ -20,7 +20,7 @@ import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from 
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
-import { readIronHomepage, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
+import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
@@ -200,14 +200,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
       // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
       // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.
-      const countFile = join(directory, 'iron-homepage-count.json');
+      // 기준 파일은 «판매 가능 고유 번호 수» 기준(2026-10-14 like-with-like). 옛 파일(전체 레코드 수)과 섞지 않도록 이름을 바꿨다.
+      const countFile = join(directory, 'iron-homepage-sellable-count.json');
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const fetchHtml = async (url: string) => {
           const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
           if (!response.ok) throw new Error(`IRON_HTTP_${response.status}`);
           if (new URL(response.url || url).hostname !== IRON_HOMEPAGE_POLICY.host) throw new Error('IRON_HOST_REJECTED');
           const html = await response.text();
-          if (!/<(?:!doctype|html)/i.test(html.slice(0, 300))) throw new Error('IRON_NOT_HTML');
+          // 사이트맵(완전성 대조)만 XML 을 받는다. 그 밖은 HTML 이어야 한다.
+          const sitemap = new URL(url).pathname === '/sitemap.xml';
+          if (!(sitemap ? /<(?:\?xml|urlset)/i : /<(?:!doctype|html)/i).test(html.slice(0, 300))) throw new Error('IRON_NOT_HTML');
           return html;
         };
         const read = await readIronHomepage(fetchHtml);
@@ -223,9 +226,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'IRON_COUNT_STATE_INVALID';
         } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'IRON_COUNT_STATE_INVALID'; }
         // 판정은 손오공 API 와 같은 순수 함수: 축소·불완전 읽기는 기준 파일에 저장하지 않고 하한은 고유 차량번호 수 기준.
-        const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
+        // 같은 것끼리 비교한다: 노출 문서(잠금·계약중 제외)와 «판매 가능·계약중 아닌» 레코드. 판매완료까지 센 전체 레코드 수와 비교하면
+        // 판매 가능 차가 크게 줄어도 하한을 통과했다(2026-10-14).
+        const verdict = judgeSonogongApiRead({ ...read, records: ironFloorRecords(read.records) }, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
         let complete = verdict.complete, reason = verdict.incompleteReason;
-        if (verdict.saveCount !== null && !(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
+        if (verdict.saveCount !== null && verdict.saveCount > 0 && !(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: read.observedAt })) && verdict.complete) {
           complete = false; reason = 'IRON_COUNT_STATE_WRITE_FAILED';
         }
         return { observedAt: read.observedAt, complete, completedScopes: complete ? ['homepage'] : [], visibilityComplete: true,

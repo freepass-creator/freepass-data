@@ -14,7 +14,8 @@ vi.mock('firebase-admin/firestore', async importOriginal => ({ ...(await importO
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: mocks.getApp, CENTRAL_FIREBASE_PROJECT_ID: 'freepasserp5' }));
 vi.mock('node:fs/promises', () => ({ mkdir: mocks.mkdir, writeFile: mocks.writeFile, readFile: mocks.readFile }));
 vi.mock('firebase-admin/storage', () => ({ getStorage: () => ({ bucket: () => ({ file: () => ({ save: mocks.save, download: mocks.download }) }) }) }));
-import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarPhaseOne, restoreIancarPhaseOne, encodeIancarBackupValue, planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { publishIancarPhotoReferences, restoreIancarPhotoReferences, planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../src/infra/iancar-photo-firestore.js';
+import { encodeIancarBackupValue } from '../src/infra/iancar-backup-value.js';
 import { orderedJsonDigest } from '../src/shared/stable-digest.js';
 import { createHash } from 'node:crypto';
 import { createVehiclePhotoReader, iancarReviewedContentSetDigest } from '../src/domain/consumer-output-contract.js';
@@ -230,7 +231,7 @@ it.each(['absent', 'null', 'empty'])('review rollback restores %s approval repre
     getAll: async () => [{ data: () => current }], update: mocks.update,
   }));
   mocks.getAll.mockResolvedValue([{ data: () => ({ ...before, price: 456 }) }]);
-  await expect(restoreIancarPhaseOne({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
+  await expect(restoreIancarPhotoReferences({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
     .resolves.toMatchObject({ status: 'PHOTO_RESTORE_READBACK_VERIFIED' });
   const restoredPatch = mocks.update.mock.calls[0]![1];
   expect(restoredPatch).not.toHaveProperty('price');
@@ -247,7 +248,7 @@ it('review rollback refuses a later owner change to approval', async () => {
   mocks.transaction.mockImplementation(async callback => callback({ getAll: async () => [{ data: () => ({
     ...original, ...patch, photo_original_refs: [],
   }) }], update: mocks.update }));
-  await expect(restoreIancarPhaseOne({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
+  await expect(restoreIancarPhotoReferences({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
     .rejects.toThrow('REVISION_CHANGED');
   expect(mocks.update).not.toHaveBeenCalled();
 });
@@ -325,7 +326,6 @@ const doc = (id: string, extra = {}) => ({ id, ref: { path: `products/${id}` },
   data: () => ({ provider_company_code: 'RP031', vehicle_status: '출고협의', listable: true,
     plate: 'synthetic', monthly_rate: 123, ...extra }) });
 const snapshot = (...docs: ReturnType<typeof doc>[]) => ({ size: docs.length, docs });
-const input = { apply: true, expectedCount: 2, expectedOpen: 1 };
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.getApp.mockReturnValue({ options: { projectId: 'freepasserp5' } });
@@ -334,104 +334,6 @@ beforeEach(() => {
     doc('open', { vehicle_status: '출고불가', listable: false }), original.docs[1]!));
   mocks.readFile.mockImplementation(async () => mocks.writeFile.mock.calls[0]![1]);
   mocks.transaction.mockImplementation(async callback => callback({ get: async () => original, update: mocks.update }));
-});
-
-const syncInput = () => { const now = new Date().toISOString(); return { apply: false, mirrorInventory: true, sourceDigest: 'a'.repeat(64), sourceSyncedAt: now,
-  sourceEvidence: JSON.stringify({ readyForRawIngest: true, stale: false, issues: [], factScope: 'PHASE_ONE_FACTS',
-    sourceDigest: 'a'.repeat(64), syncedAt: now, total: 1, pages: 1,
-    records: [{ vehicleId: 'V1', payload: { plate_number: '123가4567' } }] }),
-  products: [{ sourceVehicleId: 'V1', car_number: '123가4567', price: { '24': { rent: 500000, deposit: 700000 } },
-    vehicle_status: '출고가능', status: '출고가능', status_kind: '가용', listable: true, facts: {}, evidence: { sourceDigest: 'a'.repeat(64) },
-    photo: { count: 1, photoIds: ['PHOTO1'], observedAt: now } }] }; };
-function prepareSyncMock() {
-  mocks.readFile.mockImplementation(async () => mocks.writeFile.mock.calls.at(-1)![1]);
-  const before = snapshot(doc('p1', { car_number: '123가4567', iancar_one_vehicle_id: 'V1', image_url: 'original.jpg' }),
-    doc('gone', { car_number: '123가9999', iancar_one_vehicle_id: 'V2', iancar_phase_one: { sourceDigest: 'old' } }));
-  mocks.get.mockReset().mockResolvedValue(before);
-  mocks.transaction.mockImplementation(async callback => callback({ get: async () => before, update: mocks.update }));
-  mocks.getAll.mockImplementation(async (...refs) => refs.map(ref => ({ data: () => ({ ...before.docs.find(d => d.ref.path === ref.path)!.data(),
-    ...mocks.update.mock.calls.find(call => call[0].path === ref.path)![1] }) })));
-  mocks.download.mockImplementation(async () => [Buffer.from(mocks.save.mock.calls[0]![0])]);
-  return before;
-}
-it('sync atomically updates photo/state/rates and holds absent inventory after durable backup readback', async () => {
-  prepareSyncMock(); const input = { ...syncInput(), privateEvidenceBucket: 'freepasserp5-data-audit-evidence' };
-  const plan = await publishIancarPhaseOne(input);
-  expect(plan).toMatchObject({ sourceCount: 1, matched: 1, absenceHeld: 1, withPhotos: 1, photoCount: 1, deletes: 0 });
-  expect(mocks.transaction).not.toHaveBeenCalled();
-  const result = await publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
-  expect(result.status).toBe('PHASE_ONE_ATOM_READBACK_VERIFIED');
-  expect(mocks.transaction).toHaveBeenCalledTimes(1); expect(mocks.update).toHaveBeenCalledTimes(2);
-  expect(mocks.update.mock.calls[0]![1]).toMatchObject({ iancar_one_photo_ids: ['PHOTO1'], image_kind: 'VEHICLE_PHOTO', price: input.products[0]!.price });
-  expect(mocks.download.mock.invocationCallOrder[0]).toBeLessThan(mocks.transaction.mock.invocationCallOrder[0]!);
-  expect(mocks.save.mock.calls[0]![1].preconditionOpts.ifGenerationMatch).toBe(0);
-});
-it('sync refuses wrong digest, corrupted durable backup, revision race and expired photo before writes', async () => {
-  const before = prepareSyncMock(); const input = { ...syncInput(), privateEvidenceBucket: 'freepasserp5-data-audit-evidence' };
-  const plan = await publishIancarPhaseOne(input);
-  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: 'wrong' })).rejects.toThrow('PLAN_CHANGED');
-  mocks.download.mockResolvedValue([Buffer.from('corrupt')]);
-  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).rejects.toThrow('PRIVATE_BACKUP_READBACK_FAILED');
-  expect(mocks.transaction).not.toHaveBeenCalled();
-  mocks.download.mockImplementation(async () => [Buffer.from(mocks.save.mock.calls.at(-1)![0])]);
-  mocks.transaction.mockImplementation(async cb => cb({ get: async () => ({ ...before, size: before.size + 1 }), update: mocks.update }));
-  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).rejects.toThrow('REVISION_CHANGED');
-  expect(mocks.update).not.toHaveBeenCalled();
-  input.products[0]!.photo.observedAt = new Date(Date.now() - 900_001).toISOString();
-  await expect(publishIancarPhaseOne(input)).rejects.toThrow('PHOTO_CAPTURE_STALE');
-});
-it('mirror requires bound complete source evidence and durable backup in every apply environment', async () => {
-  prepareSyncMock(); const input = syncInput(); const plan = await publishIancarPhaseOne(input);
-  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).rejects.toThrow('MIRROR_DURABLE_BACKUP_REQUIRED');
-  for (const extra of [{ readyForRawIngest: false }, { total: 2 }, { records: [] }, { pages: 2 }, { stale: true }, { sourceDigest: 'b'.repeat(64) }]) {
-    await expect(publishIancarPhaseOne({ ...input, sourceEvidence: JSON.stringify({ ...JSON.parse(input.sourceEvidence), ...extra }) }))
-      .rejects.toThrow('MIRROR_COMPLETE_EVIDENCE_REQUIRED');
-  }
-  expect(mocks.transaction).not.toHaveBeenCalled();
-});
-it('dry run never writes a backup or transaction', async () => {
-  expect(await withdrawIancarPublication({ ...input, apply: false })).toMatchObject({ status: 'DRY_RUN', changedCount: 1 });
-  expect(mocks.transaction).not.toHaveBeenCalled();
-  expect(mocks.writeFile).not.toHaveBeenCalled();
-});
-it('wrong Firebase project aborts before any query or write', async () => {
-  mocks.getApp.mockReturnValue({ options: { projectId: 'other-project' } });
-  await expect(withdrawIancarPublication(input)).rejects.toThrow('WRONG_PROJECT');
-  expect(mocks.get).not.toHaveBeenCalled();
-});
-it('backs up all originals and changes only open RP031 visibility fields', async () => {
-  expect(await withdrawIancarPublication(input)).toMatchObject({ status: 'WITHDRAWN_ATOM_READBACK_VERIFIED', deletes: 0 });
-  expect(JSON.parse(mocks.writeFile.mock.calls[0]![1]).documents).toHaveLength(2);
-  expect(mocks.writeFile.mock.calls[0]![2]).toEqual({ flag: 'wx', mode: 0o600 });
-  expect(mocks.update).toHaveBeenCalledTimes(1);
-  expect(mocks.update.mock.calls[0]![0]).toEqual({ path: 'products/open' });
-  expect(mocks.update.mock.calls[0]![1]).not.toHaveProperty('plate');
-  expect(mocks.update.mock.calls[0]![1]).not.toHaveProperty('monthly_rate');
-});
-it('scope drift aborts before backup or writes', async () => {
-  await expect(withdrawIancarPublication({ ...input, expectedCount: 3 })).rejects.toThrow('SCOPE_CHANGED');
-  expect(mocks.writeFile).not.toHaveBeenCalled();
-});
-it('contract locks abort before backup or writes', async () => {
-  mocks.get.mockReset().mockResolvedValue(snapshot(doc('a', { locked_by_contract: 'contract' })));
-  await expect(withdrawIancarPublication({ apply: true, expectedCount: 1, expectedOpen: 1 })).rejects.toThrow('CONTRACT_LOCK');
-  expect(mocks.transaction).not.toHaveBeenCalled();
-});
-it('backup readback failure prevents transactions', async () => {
-  mocks.readFile.mockResolvedValue('bad');
-  await expect(withdrawIancarPublication(input)).rejects.toThrow('BACKUP_READBACK_FAILED');
-  expect(mocks.transaction).not.toHaveBeenCalled();
-});
-it('revision drift prevents transaction updates', async () => {
-  const changed = doc('open'); changed.updateTime.isEqual = () => false;
-  mocks.transaction.mockImplementation(async callback => callback({ get: async () => snapshot(changed, doc('closed')), update: mocks.update }));
-  await expect(withdrawIancarPublication(input)).rejects.toThrow('REVISION_CHANGED');
-  expect(mocks.update).not.toHaveBeenCalled();
-});
-it('unexpected pricing changes fail readback', async () => {
-  mocks.get.mockReset().mockResolvedValueOnce(snapshot(doc('open'), doc('closed', { vehicle_status: '출고불가', listable: false })))
-    .mockResolvedValueOnce(snapshot(doc('open', { vehicle_status: '출고불가', listable: false, monthly_rate: 999 }), doc('closed', { vehicle_status: '출고불가', listable: false })));
-  await expect(withdrawIancarPublication(input)).rejects.toThrow('UNEXPECTED_FIELD_CHANGE');
 });
 
 it('public photo eligibility rejects withdrawn, non-Iancar, closed, deleted and missing identities', () => {
@@ -469,16 +371,16 @@ it('photo rollback rehearses deletion of added fields while restoring original p
   const backup = { schema: 'iancar-photo-typed-backup/1', projectId: 'freepasserp5', sourceDigest: 'verified-digest', documents: [{ path: 'products/p1', exists: true, data: encodeIancarBackupValue(original), patch: encodeIancarBackupValue(patch) }] };
   mocks.readFile.mockResolvedValue(JSON.stringify(backup));
   mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [{ data: () => ({ ...original, ...patch, price: 456 }) }], update: mocks.update }));
-  expect(await restoreIancarPhaseOne({ backupPath: 'synthetic', apply: false, expectedSourceDigest: 'verified-digest' })).toMatchObject({ status: 'RESTORE_PLAN_VERIFIED' });
+  expect(await restoreIancarPhotoReferences({ backupPath: 'synthetic', apply: false, expectedSourceDigest: 'verified-digest' })).toMatchObject({ status: 'RESTORE_PLAN_VERIFIED' });
   expect(mocks.update).not.toHaveBeenCalled();
   mocks.getAll.mockResolvedValue([{ data: () => ({ ...original, price: 456 }) }]);
-  await restoreIancarPhaseOne({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' });
+  await restoreIancarPhotoReferences({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' });
   expect(mocks.update.mock.calls[0]![1].image_url).toBe('original.jpg');
   expect(mocks.update.mock.calls[0]![1].iancar_one_photo_count).toBeDefined();
   expect(mocks.update.mock.calls[0]![1]).not.toHaveProperty('price');
   backup.documents[0]!.patch = encodeIancarBackupValue({ ...patch, price: 999 });
   mocks.readFile.mockResolvedValue(JSON.stringify(backup));
-  await expect(restoreIancarPhaseOne({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' })).rejects.toThrow('SCOPE_INVALID');
+  await expect(restoreIancarPhotoReferences({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' })).rejects.toThrow('SCOPE_INVALID');
 });
 
 it('a later empty supplier list restores original photos instead of keeping dead API slots', async () => {
@@ -583,144 +485,6 @@ it('ONE source shares byte validation, public errors and concurrency without req
   for (const suffix of ['NOT_FOUND', 'BUSY', 'IDENTITY_MISMATCH']) {
     const failing = new FirestoreCatalogCompatibilityReader(async () => { throw new Error('IANCAR_PHOTO_' + suffix); });
     await expect(failing.readVehiclePhoto('erp-com', 'synthetic-product', 0)).rejects.toThrow('VEHICLE_PHOTO_' + (suffix === 'IDENTITY_MISMATCH' ? 'UNAVAILABLE' : suffix));
-  }
-});
-
-// Synthetic fixtures only; no database, emulator, credentials or network.
-function prepareLockIsolation(lock: Record<string, unknown>, count = 5) {
-  const base = syncInput();
-  const products = Array.from({ length: count }, (_, index) => ({ ...base.products[0]!,
-    sourceVehicleId: `fixture-${index}`, car_number: `123\uac00${1000 + index}` }));
-  const input = { ...base, products, privateEvidenceBucket: 'freepasserp5-data-audit-evidence',
-    sourceEvidence: JSON.stringify({ ...JSON.parse(base.sourceEvidence), total: count,
-      records: products.map(p => ({ vehicleId: p.sourceVehicleId, payload: { plate_number: p.car_number } })) }) };
-  const before = snapshot(...products.map((p, index) => doc(`fixture-${index}`, {
-    car_number: p.car_number, iancar_one_vehicle_id: p.sourceVehicleId,
-    price: { preserved: true }, iancar_phase_one: { old: true }, ...(index === 0 ? lock : {}) })));
-  mocks.get.mockReset().mockResolvedValue(before);
-  mocks.transaction.mockImplementation(async cb => cb({ get: async () => before, update: mocks.update, create: vi.fn() }));
-  mocks.getAll.mockImplementation(async (...refs) => refs.map(ref => ({ data: () => ({
-    ...before.docs.find(d => d.ref.path === ref.path)!.data(),
-    ...mocks.update.mock.calls.find(call => call[0].path === ref.path)?.[1] }) })));
-  mocks.readFile.mockImplementation(async () => mocks.writeFile.mock.calls.at(-1)![1]);
-  mocks.download.mockImplementation(async () => [Buffer.from(mocks.save.mock.calls.at(-1)![0])]);
-  return { input, before };
-}
-it.each([
-  [{ locked_by_contract: true }, 'CONTRACT_LOCK'],
-  [{ _deleted: true }, 'DELETION_LOCK'],
-  [{ deletedAt: 'synthetic-deletion-marker' }, 'DELETION_LOCK'],
-  [{ locked_by_contract: true, _deleted: true }, 'CONTRACT_AND_DELETION_LOCK'],
-] as const)('isolates a locked product and preserves its entire preimage: %j', async (lock, reason) => {
-  const { input, before } = prepareLockIsolation(lock);
-  const preserved = structuredClone(before.docs[0]!.data());
-  const plan = await publishIancarPhaseOne(input);
-  expect(plan).toMatchObject({ matched: 4, open: 4, withPhotos: 4, photoCount: 4, skippedCount: 1, skippedRatio: 0.2,
-    skippedByReason: { [reason]: 1 }, warnings: ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'] });
-  expect(Object.values(plan.skippedByReason).reduce((a, b) => a + b, 0)).toBe(1);
-  const result = await publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
-  expect(result).toMatchObject({ status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', writeExecuted: true, skippedCount: 1 });
-  expect(mocks.update).toHaveBeenCalledTimes(4);
-  expect(mocks.update.mock.calls.every(([ref]) => ref.path !== before.docs[0]!.ref.path)).toBe(true);
-  expect(before.docs[0]!.data()).toEqual(preserved);
-  expect(JSON.parse(mocks.writeFile.mock.calls[0]![1]).documents).toHaveLength(4);
-});
-it('fails before backup or writes when skipped share exceeds the single threshold', async () => {
-  const { input } = prepareLockIsolation({ locked_by_contract: true }, 4);
-  await expect(publishIancarPhaseOne({ ...input, apply: true })).rejects.toMatchObject({
-    message: 'IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED', skippedCount: 1, skippedRatio: 0.25, writeExecuted: false });
-  expect(mocks.writeFile).not.toHaveBeenCalled(); expect(mocks.transaction).not.toHaveBeenCalled();
-});
-it.each(['identity', 'plate', 'source', 'duplicate', 'stale'] as const)(
-  'keeps structural %s failures fatal even for locked products', async kind => {
-    const { input, before } = prepareLockIsolation({ locked_by_contract: true });
-    // Disable only the mirror envelope in this adapter test to reach each publication guard directly.
-    input.mirrorInventory = false;
-    const errors = { identity: 'IDENTITY_INVALID', plate: 'PLATE_COLLISION', source: 'SOURCE_ID_COLLISION',
-      duplicate: 'DUPLICATE_OR_OVERSIZED_INPUT', stale: 'SOURCE_STALE_OR_INVALID' };
-    if (kind === 'identity') input.products[0]!.car_number = 'invalid';
-    if (kind === 'plate') mocks.get.mockResolvedValue(snapshot(...before.docs,
-      doc('collision', { car_number: input.products[0]!.car_number })));
-    if (kind === 'source') mocks.get.mockResolvedValue(snapshot(doc('fixture-0', {
-      ...before.docs[0]!.data(), iancar_one_vehicle_id: 'different-source' }), ...before.docs.slice(1)));
-    if (kind === 'duplicate') input.products[1]!.sourceVehicleId = input.products[0]!.sourceVehicleId;
-    if (kind === 'stale') input.sourceSyncedAt = new Date(Date.now() - 900_001).toISOString();
-    await expect(publishIancarPhaseOne({ ...input, apply: true })).rejects.toThrow(errors[kind]);
-    expect(mocks.writeFile).not.toHaveBeenCalled(); expect(mocks.transaction).not.toHaveBeenCalled();
-  });
-it('fences a newly acquired lock between planning and the transaction', async () => {
-  const { input, before } = prepareLockIsolation({ locked_by_contract: true });
-  const plan = await publishIancarPhaseOne(input);
-  const changed = snapshot(...before.docs.map((d, index) => index === 1
-    ? { ...d, updateTime: { ...d.updateTime, isEqual: () => false } } : d));
-  // The original snapshot compares its revision with the current snapshot.
-  before.docs[1]!.updateTime.isEqual = () => false;
-  mocks.transaction.mockImplementation(async cb => cb({ get: async () => changed, update: mocks.update }));
-  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).rejects.toThrow('REVISION_CHANGED');
-  expect(mocks.update).not.toHaveBeenCalled();
-});
-
-it('collector finishes successfully and reports lock warnings without changing its exit code', async () => {
-  const argv = process.argv; const exitCode = process.exitCode;
-  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-  const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('unexpected exit'); });
-  const warnings = ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'];
-  vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true');
-  vi.stubEnv('IANCAR_SYNC_EXPECT', JSON.stringify({ created: [0, 0], absenceHeld: [0, 0], withdrawalHoldsReleased: [0, 0], open: [0, 0],
-    deletes: [0, 0], contractChanges: [0, 0], policyDocumentChanges: [0, 0], skippedCount: [1, 1] }));
-  vi.doMock('../src/adapters/iancar-one-api.js', () => ({
-    iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
-    collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
-    buildIancarOneSourceBatch: () => ({ source: { sourceId: 'synthetic' } }),
-    projectIancarOnePhaseOne: () => ({ vehicles: [] }),
-  }));
-  vi.doMock('../src/domain/source-intake.js', () => ({ inspectSupplierSourceBatch: () => ({}) }));
-  vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: async () => ({
-    status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 },
-    skippedRatio: 0.2, maxSkippedRatio: 0.2, warnings,
-    created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
-  }) }));
-  try {
-    process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync']; process.exitCode = 0;
-    await import('../src/jobs/collect-iancar-one-api.js');
-    expect(process.exitCode).toBe(0); expect(exit).not.toHaveBeenCalled();
-    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({
-      publication: { skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 }, warnings } });
-  } finally {
-    process.argv = argv; process.exitCode = exitCode;
-    log.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
-    vi.doUnmock('../src/adapters/iancar-one-api.js'); vi.doUnmock('../src/domain/source-intake.js');
-    vi.doUnmock('../src/jobs/data-access-runtime.js');
-  }
-});
-
-it('--apply-sync 는 건수 승인 설정(IANCAR_SYNC_EXPECT)이 없으면 쓰기 없이 종료 코드 3 으로 멈춘다', async () => {
-  const argv = process.argv; const exitCode = process.exitCode;
-  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-  const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code}`); }) as never);
-  const publish = vi.fn(async (_input?: unknown) => ({ status: 'DRY_RUN', skippedCount: 0, created: 0, absenceHeld: 0, withdrawalHoldsReleased: 0, open: 0,
-    deletes: 0, contractChanges: 0, planDigest: 'd' }));
-  vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true'); vi.stubEnv('IANCAR_SYNC_EXPECT', '');
-  vi.doMock('../src/adapters/iancar-one-api.js', () => ({
-    iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
-    collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
-    buildIancarOneSourceBatch: () => ({ source: { sourceId: 'synthetic' } }),
-    projectIancarOnePhaseOne: () => ({ vehicles: [] }),
-  }));
-  vi.doMock('../src/domain/source-intake.js', () => ({ inspectSupplierSourceBatch: () => ({}) }));
-  vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: publish }));
-  try {
-    process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync'];
-    vi.resetModules();
-    await expect(import('../src/jobs/collect-iancar-one-api.js')).rejects.toThrow('exit:3');
-    expect(publish).toHaveBeenCalledTimes(1); // 계획 한 번뿐, 적용 호출 없음
-    expect(publish.mock.calls[0]![0]).toMatchObject({ apply: false });
-    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({ status: 'HOLD_PLAN_OUT_OF_APPROVED_RANGE', writeExecuted: false, reasons: ['EXPECT_MISSING'] });
-  } finally {
-    process.argv = argv; process.exitCode = exitCode;
-    log.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
-    vi.doUnmock('../src/adapters/iancar-one-api.js'); vi.doUnmock('../src/domain/source-intake.js');
-    vi.doUnmock('../src/jobs/data-access-runtime.js'); vi.resetModules();
   }
 });
 
