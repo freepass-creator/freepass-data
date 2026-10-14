@@ -122,6 +122,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   // 탭끼리는 따로 만든 스냅숏일 수 있어 서로 달라도 이상이 아니다(탭 사이 차이는 요약에만 남긴다).
   const generations = new Set<number>();
   const tabNotes: string[] = [];
+  const tabGeneration: Partial<Record<SonogongApiTab, string | null>> = {};
   type TabRead = { rows: Record<string, unknown>[]; total: number | null; done: boolean; overlap: boolean; gens: Set<number>; totals: Set<number>; unique: number };
   const readTab = async (tab: SonogongApiTab): Promise<TabRead> => {
     const rows: Record<string, unknown>[] = [];
@@ -155,15 +156,16 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   };
   for (const tab of SONOGONG_API_TABS) {
     // 읽는 동안 이 탭의 판이 바뀌었으면(생성 시각·총수가 페이지마다 다름) 그 탭만 처음부터 다시 읽는다(최대 2회 — 목록 읽기는 1분 안쪽이라 값싸다).
-    // 그래도 섞여 있으면 «합집합이 정합»할 때만 받는다: 겹침 없음·끝까지 읽음·서로 다른 차 수 = 총수. 아니면 종전처럼 SNAPSHOT_CHANGED_DURING_READ.
+    // 그래도 섞여 있으면 받지 않는다(SNAPSHOT_CHANGED_DURING_READ).
     let read = await readTab(tab);
     for (let retry = 0; retry < 2 && (read.gens.size > 1 || read.totals.size > 1); retry++) read = await readTab(tab);
     const mixed = read.gens.size > 1 || read.totals.size > 1;
     if (!read.done) incomplete ??= 'API_PAGE_LIMIT';
     if (read.overlap) incomplete ??= mixed ? 'SNAPSHOT_CHANGED_DURING_READ' : 'API_PAGE_OVERLAP';
     if (read.total !== null && read.unique !== read.total) incomplete ??= mixed ? 'SNAPSHOT_CHANGED_DURING_READ' : 'API_COUNT_MISMATCH';
-    if (mixed && !read.overlap && read.done && read.total !== null && read.unique === read.total && read.totals.size <= 1) tabNotes.push(`SNAPSHOT_MIXED_PAGES_CONSISTENT:${tab}`);
-    else if (mixed) incomplete ??= 'SNAPSHOT_CHANGED_DURING_READ';
+    // 재시도 뒤에도 쪽마다 판이 다르면 총수·고유 id 수가 맞아도 받지 않는다(한 대가 빠지고 다른 한 대가 들어와도 수는 같다 — Codex #666 ⑶). 다음 회차가 새 판을 읽는다.
+    if (mixed) incomplete ??= 'SNAPSHOT_CHANGED_DURING_READ';
+    tabGeneration[tab] = !mixed && read.gens.size === 1 ? new Date([...read.gens][0]!).toISOString() : null;
     rowsByTab.set(tab, read.rows);
   }
   // 탭 사이 생성 시각 차이는 이상이 아니다(탭별 스냅숏) — 신선도 판정은 가장 오래된 생성 시각(generatedAt)을 쓴다.
@@ -215,16 +217,16 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       if (!id) { held.push({ tab, reason: 'ID_MISSING' }); continue; }
       let detail: Record<string, unknown> | null = null;
       const rowDigest = cacheOn ? stableDigest(row) : '';
-      const cachedDetail = useCache ? cachedDetailFor(opts.detailCache ?? null, id, rowDigest, Date.parse(observedAt)) : null;
+      const cachedDetail = useCache ? cachedDetailFor(opts.detailCache ?? null, id, rowDigest, Date.parse(observedAt), tabGeneration[tab] ?? null) : null;
       if (cachedDetail) {
         detail = cachedDetail; detailsCached++;
         const entry = opts.detailCache!.entries[id]!;
-        cacheNext[id] = { rowDigest, detail: entry.detail, cachedAt: entry.cachedAt };
+        cacheNext[id] = { rowDigest, detail: entry.detail, cachedAt: entry.cachedAt, generatedAt: tabGeneration[tab] ?? null };
       } else if (detailsRead < SONOGONG_API_POLICY.maxDetails) {
         try {
           const got = await client.get(`/vehicles/${encodeURIComponent(id)}`);
           detailsRead++;
-          if (object(got.data)) { detail = got.data; if (cacheOn) cacheNext[id] = { rowDigest, detail: structuredClone(got.data), cachedAt: observedAt }; }
+          if (object(got.data)) { detail = got.data; if (cacheOn) cacheNext[id] = { rowDigest, detail: structuredClone(got.data), cachedAt: observedAt, generatedAt: tabGeneration[tab] ?? null }; }
         } catch (e) {
           // 인증·한도(401/403/429)는 회차 전체를 멈춘다. 그 밖의 상세 실패(404 등)는 이 차만 보증금 «미확인» 으로 두고 읽기를 불완전으로 표시한다.
           if (e instanceof SonogongApiError && [401, 403, 429].includes(e.status ?? 0)) throw e;

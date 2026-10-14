@@ -5,7 +5,9 @@
 export const DETAIL_CACHE_VERSION = 'sonogong-detail-cache/1';
 export const DETAIL_CACHE_POLICY = Object.freeze({ maxAgeMs: 6 * 60 * 60_000, fullRefreshAfterMs: 24 * 60 * 60_000, maxEntries: 2_000 });
 
-export type DetailCacheEntry = { rowDigest: string; detail: Record<string, unknown>; cachedAt: string };
+/** generatedAt = 이 상세를 읽은 «목록 판»의 상류 생성 시각(탭 안에서 하나로 확정된 값, 섞였으면 null = 재사용 불가).
+ * 상세에만 있는 값(보증금·사진·계약 상태)은 목록 행이 같아도 상류가 새 판을 만들면 바뀔 수 있다 — 같은 판(generatedAt 동일)에서만 재사용한다(Codex #666 ⑴). */
+export type DetailCacheEntry = { rowDigest: string; detail: Record<string, unknown>; cachedAt: string; generatedAt: string | null };
 export type DetailCache = {
   version: typeof DETAIL_CACHE_VERSION; writtenAt: string;
   /** 마지막 «전수 읽기(캐시 미사용)»가 끝난 시각. 없으면 전수 갱신 시기가 지난 것으로 본다. */
@@ -29,8 +31,9 @@ export function parseDetailCache(raw: unknown): DetailCache | null {
   for (const key of keys) {
     const entry = raw.entries[key];
     if (!isObject(entry) || typeof entry.rowDigest !== 'string' || !/^[a-f0-9]{16,64}$/.test(entry.rowDigest)
-      || !isObject(entry.detail) || !validTime(entry.cachedAt)) return null;
-    entries[key] = { rowDigest: entry.rowDigest, detail: entry.detail, cachedAt: entry.cachedAt };
+      || !isObject(entry.detail) || !validTime(entry.cachedAt)
+      || (entry.generatedAt !== null && !validTime(entry.generatedAt))) return null;
+    entries[key] = { rowDigest: entry.rowDigest, detail: entry.detail, cachedAt: entry.cachedAt, generatedAt: entry.generatedAt };
   }
   return { version: DETAIL_CACHE_VERSION, writtenAt: raw.writtenAt,
     lastFullAt: typeof raw.lastFullAt === 'string' ? raw.lastFullAt : null,
@@ -40,13 +43,19 @@ export function parseDetailCache(raw: unknown): DetailCache | null {
 /** 이 회차가 전수 갱신 차례인가(캐시 없음·전수 시각 없음·전수 갱신 주기 초과). */
 export function fullRefreshDue(cache: DetailCache | null, nowMs: number, policy = DETAIL_CACHE_POLICY): boolean {
   if (!cache || !cache.lastFullAt) return true;
-  return nowMs - Date.parse(cache.lastFullAt) >= policy.fullRefreshAfterMs;
+  const age = nowMs - Date.parse(cache.lastFullAt);
+  // 미래 값(시계 역행·손상)은 만료로 본다 — 음수 나이가 «영원히 신선»이 되지 않게 한다(Codex #666 ⑷). 5분 이내의 시계 오차만 허용.
+  if (!Number.isFinite(age) || age < -5 * 60_000) return true;
+  return age >= policy.fullRefreshAfterMs;
 }
 
 /** 캐시된 상세를 쓸 수 있는가: 같은 목록 행 digest 이고 유효 상한 안. */
-export function cachedDetailFor(cache: DetailCache | null, id: string, rowDigest: string, nowMs: number, policy = DETAIL_CACHE_POLICY): Record<string, unknown> | null {
+export function cachedDetailFor(cache: DetailCache | null, id: string, rowDigest: string, nowMs: number, generatedAt: string | null,
+  policy = DETAIL_CACHE_POLICY): Record<string, unknown> | null {
   const entry = cache?.entries[id];
   if (!entry || entry.rowDigest !== rowDigest) return null;
+  // 같은 상류 판에서 읽은 상세만: 둘 다 확정된 생성 시각이고 같아야 한다.
+  if (!generatedAt || !entry.generatedAt || Date.parse(entry.generatedAt) !== Date.parse(generatedAt)) return null;
   const age = nowMs - Date.parse(entry.cachedAt);
   if (!Number.isFinite(age) || age < 0 || age > policy.maxAgeMs) return null;
   return structuredClone(entry.detail);

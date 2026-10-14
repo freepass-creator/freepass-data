@@ -31,6 +31,22 @@ function world(rows: () => unknown[]) {
 const T0 = '2026-10-14T06:10:00.000Z';
 const at = (minutes: number) => new Date(Date.parse(T0) + minutes * 60_000).toISOString();
 
+function worldWithGeneration(rows: () => unknown[], generatedAt: string) {
+  const detailCalls: number[] = [];
+  const fakeFetch = vi.fn(async (url: URL | RequestInfo) => {
+    const u = new URL(String(url));
+    if (u.pathname.endsWith('/vehicles')) {
+      const tab = u.searchParams.get('tab'), page = Number(u.searchParams.get('page'));
+      return json(tab === 'sub' && page === 1 ? rows() : [], { generatedAt, totalCount: tab === 'sub' ? rows().length : 0 });
+    }
+    const id = Number(u.pathname.split('/').at(-1));
+    detailCalls.push(id);
+    return json(detail(id, plateOf(id)));
+  }) as unknown as typeof fetch;
+  let clock = Date.parse('2026-10-14T06:00:00Z');
+  return { client: createSonogongApiClient({ base: BASE, key: KEY, fetch: fakeFetch, now: () => clock, sleep: async ms => { clock += ms; } }), detailCalls };
+}
+
 describe('손오공 상세 캐시', () => {
   const rows = () => [row(1, plateOf(1)), row(2, plateOf(2)), row(3, plateOf(3))];
 
@@ -78,17 +94,42 @@ describe('손오공 상세 캐시', () => {
 
   it('상태 파일 손상·형식 불일치는 캐시 없음(전수 읽기)이다', () => {
     const good: DetailCache = { version: DETAIL_CACHE_VERSION, writtenAt: T0, lastFullAt: T0, lastGeneratedAt: T0,
-      entries: { '1': { rowDigest: 'a'.repeat(32), detail: { carNumber: 'x' }, cachedAt: T0 } } };
+      entries: { '1': { rowDigest: 'a'.repeat(32), detail: { carNumber: 'x' }, cachedAt: T0, generatedAt: T0 } } };
     expect(parseDetailCache(good)).not.toBeNull();
     for (const bad of [null, 'x', [], {}, { ...good, version: 'other' }, { ...good, writtenAt: 'nope' }, { ...good, entries: [] },
-      { ...good, entries: { '1': { rowDigest: 'zz', detail: {}, cachedAt: T0 } } },
-      { ...good, entries: { '1': { rowDigest: 'a'.repeat(32), detail: 'str', cachedAt: T0 } } },
-      { ...good, entries: { '1': { rowDigest: 'a'.repeat(32), detail: {}, cachedAt: 'nope' } } },
+      { ...good, entries: { '1': { rowDigest: 'zz', detail: {}, cachedAt: T0, generatedAt: T0 } } },
+      { ...good, entries: { '1': { rowDigest: 'a'.repeat(32), detail: 'str', cachedAt: T0, generatedAt: T0 } } },
+      { ...good, entries: { '1': { rowDigest: 'a'.repeat(32), detail: {}, cachedAt: 'nope', generatedAt: T0 } } },
+      { ...good, entries: { '1': { rowDigest: 'a'.repeat(32), detail: {}, cachedAt: T0, generatedAt: 'nope' } } },
       { ...good, lastFullAt: 'nope' }]) expect(parseDetailCache(bad), JSON.stringify(bad).slice(0, 60)).toBeNull();
     expect(fullRefreshDue(null, Date.parse(T0))).toBe(true);
     expect(fullRefreshDue({ ...good, lastFullAt: null }, Date.parse(T0))).toBe(true);
     expect(fullRefreshDue(good, Date.parse(T0) + DETAIL_CACHE_POLICY.fullRefreshAfterMs - 1)).toBe(false);
-    expect(cachedDetailFor(good, '1', 'b'.repeat(32), Date.parse(T0))).toBeNull();   // digest 불일치
+    expect(cachedDetailFor(good, '1', 'b'.repeat(32), Date.parse(T0), T0)).toBeNull();   // digest 불일치
+    expect(cachedDetailFor(good, '1', 'a'.repeat(32), Date.parse(T0), T0)).not.toBeNull();
+    expect(cachedDetailFor(good, '1', 'a'.repeat(32), Date.parse(T0), at(60))).toBeNull();   // 다른 판(생성 시각 불일치)
+    expect(cachedDetailFor(good, '1', 'a'.repeat(32), Date.parse(T0), null)).toBeNull();     // 현재 판 미확정
+    const unknownGen = { ...good, entries: { '1': { ...good.entries['1']!, generatedAt: null } } };
+    expect(cachedDetailFor(unknownGen, '1', 'a'.repeat(32), Date.parse(T0), T0)).toBeNull();   // 저장 때 판 미확정
+  });
+
+  it('(Codex #666 ⑴) 상류가 새 판을 만들면 목록 행이 같아도 상세를 다시 읽는다 — 상세에만 있는 값의 낡음 방지', async () => {
+    const w1 = world(rows);
+    const first = await readSonogongApi(w1.client, { now: () => T0, detailCache: null });
+    expect(first.detailCacheOut!.entries['1']!.generatedAt).toBe('2026-10-14T06:00:00.000Z');
+    // 같은 목록 행이지만 상류 생성 시각이 다른 판
+    const newer = worldWithGeneration(rows, '2026-10-14T07:00:00.000Z');
+    const second = await readSonogongApi(newer.client, { now: () => at(60), detailCache: first.detailCacheOut! });
+    expect(newer.detailCalls.sort()).toEqual([1, 2, 3]);
+    expect(second.detailsCached).toBe(0);
+    expect(second.detailCacheOut!.entries['1']!.generatedAt).toBe('2026-10-14T07:00:00.000Z');
+  });
+
+  it('(Codex #666 ⑷) 전수 시각이 미래(시계 역행·손상)이면 전수 갱신 차례다', () => {
+    const base: DetailCache = { version: DETAIL_CACHE_VERSION, writtenAt: T0, lastFullAt: at(120), lastGeneratedAt: T0, entries: {} };
+    expect(fullRefreshDue(base, Date.parse(T0))).toBe(true);                 // 2시간 미래
+    expect(fullRefreshDue({ ...base, lastFullAt: at(3) }, Date.parse(T0))).toBe(false);   // 5분 이내 시계 오차는 허용
+    expect(fullRefreshDue({ ...base, lastFullAt: at(-10) }, Date.parse(T0))).toBe(false);
   });
 
   it('캐시를 주지 않으면(undefined) 종전과 같이 전수 읽고 캐시 출력도 없다', async () => {
