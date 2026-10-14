@@ -249,7 +249,8 @@ export function parsePhotoCopySuppliers(text: string | undefined | null): Readon
   const out = new Set<string>(['RP031']);
   for (const part of String(text ?? '').split(',')) {
     const code = part.trim().toUpperCase();
-    if (/^RP\d{3}$/.test(code)) out.add(code);   // 형식이 틀린 항목은 무시(허용표를 넓히지 않는다)
+    // 공급사 코드 형식: RP### 또는 PT-####(예: PT-0001 렌트존). 형식이 틀린 항목은 무시(허용표를 넓히지 않는다). ERP5 쪽도 같은 규칙을 쓴다.
+    if (/^RP\d{3}$/.test(code) || /^PT-\d{4}$/.test(code)) out.add(code);
   }
   return out;
 }
