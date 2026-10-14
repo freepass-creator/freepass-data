@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { firestoreCycleControl } from '../infra/source-cycle-control-firestore.js';
+import { controlStore, firestoreCycleControl, writerGuard, type CycleWriter } from '../infra/source-cycle-control-firestore.js';
 import { fileRunnerFiles, firestoreRunnerFiles } from '../infra/runner-files.js';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
@@ -105,7 +105,13 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     if (text === null) throw Object.assign(new Error('RUNNER_FILE_MISSING'), { code: 'ENOENT' });
     return text;
   };
-  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), files: backupFiles, fetcher,
+  // 쓰기 소유권·fencing(Codex P1-①②): 실행기 정체 = 제어 저장소(파일 = B3Q, Firestore = ACTIONS). 상품 쓰기 직전마다 소유권을 다시 읽고,
+  // Firestore 제어면 잡은 잠금 토큰·세대도 확인한다. 소유권 문서는 넘김 도구(jobs/source-cycle-handover)만 바꾼다.
+  const writer: CycleWriter = firestoreControl ? 'ACTIONS' : 'B3Q';
+  const guardWriter = writerGuard(controlStore({ env, fetcher }), writer);
+  let fence: ((source: string) => Promise<void>) | null = null;
+  const beforeWrite = async (source: string) => { if (fence) await fence(source); else await guardWriter(source); };
+  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), files: backupFiles, fetcher, beforeWrite,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
@@ -117,9 +123,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   };
   // 회차 제어 저장소: 기본은 파일(B3Q). 온라인 실행기(러너 휘발)는 SOURCE_CYCLE_CONTROL=firestore 로 잠금·상태·알림을 Firestore 에 둔다.
   const takeOver = env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER !== '0';   // 인계자는 «전체 정시 예약» 하나: 수동 실행·단독 원천 예약(-Source)은 보류+알림만
-  const control = firestoreControl
-    ? firestoreCycleControl({ env, heartbeat: cycleHeartbeat, takeOverExpired: takeOver, fetcher })
-    : fileCycleControl(directory, cycleHeartbeat, { takeOverDeadLocks: takeOver });
+  // Firestore 제어(온라인)의 만료 잠금 인수는 SOURCE_CYCLE_TAKEOVER=1 을 «명시»한 실행기만(Codex P1-②, 기본 꺼짐). 파일 제어(B3Q)는 기존 규칙 그대로.
+  const onlineControl = firestoreControl
+    ? firestoreCycleControl({ env, heartbeat: cycleHeartbeat, takeOverExpired: env.SOURCE_CYCLE_UNATTENDED === '1' && env.SOURCE_CYCLE_TAKEOVER === '1', fetcher, writer })
+    : null;
+  if (onlineControl) fence = onlineControl.fence;
+  const control = onlineControl ?? fileCycleControl(directory, cycleHeartbeat, { takeOverDeadLocks: takeOver });
   // ERP4 수집(쓰기) 단계의 마지막 성공 시각(SOURCE_CYCLE_ERP4_REPO=owner/repo 일 때만). 한 회차 안에서 두 원천이 같은 조회를 공유한다.
   const erp4Repo = env.SOURCE_CYCLE_ERP4_REPO && /^[\w.-]+\/[\w.-]+$/.test(env.SOURCE_CYCLE_ERP4_REPO) ? env.SOURCE_CYCLE_ERP4_REPO : null;
   let evidenceCache: { at: number; value: Promise<string | null> } | null = null;

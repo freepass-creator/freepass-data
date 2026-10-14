@@ -338,6 +338,14 @@ describe('runner safety and heartbeat', () => {
     expect(alerts).toContain('RAW_STORE_FAILED');
     expect(['STOPPED', 'LOCKED']).not.toContain(after.status);
   });
+  it('stores raw even when the plan is blocked, but never marks source absences from a blocked cycle (Codex P2)', async () => {
+    const { ctrl } = control(), m = memory(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map(u => product(u)));
+    const stored: Array<{ records: number; complete: boolean }> = [];
+    m.commands.storeRaw = async input => { stored.push({ records: input.records.length, complete: input.complete }); return { stored: input.records.length, absentMarked: 0 }; };
+    const r = await runSourceCycle(plugin(async () => capture([record('a')])), m.commands, ctrl, { now: () => now });
+    expect(r.status).toBe('HOLD');
+    expect(stored).toEqual([{ records: 1, complete: false }]);
+  });
   it('persists three failures, alerts and stops before a fourth source read', async () => {
     const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => { throw Error('429'); }), p = plugin(read);
     for (let i = 0; i < 3; i++) await runSourceCycle(p, m.commands, ctrl, { now: () => now });
@@ -567,6 +575,9 @@ describe('Codex 상의 2026-10-13: 보증금 UNKNOWN 보존과 하향 사유별 
     const fewAbsent = planSourceCycle(floored, evidence(products.slice(0, 17).map(p => p.record)), { complete: true, products }, now);
     expect(fewAbsent.plan.blockers).toEqual([]);
     expect(fewAbsent.plan.warnings.some(w => w.startsWith('DOWNGRADE_DEFERRED'))).toBe(false);
+    // 범위 급변(Codex P2): 부재 추론 하향이 노출의 절반을 넘으면 이월이 아니라 회차 전체를 멈춘다(일부 적용 없음)
+    const surge = planSourceCycle(floored, evidence(products.slice(0, 9).map(p => p.record)), { complete: true, products }, now);
+    expect(surge.plan.blockers).toContain('DOWNGRADE_SURGE');
     // floor 0(옛 동작)은 여전히 회차 전체를 막는다
     expect(planSourceCycle({ ...config, maxDowngradeRatio: 0.2 }, evidence(products.slice(0, 10).map(p => p.record)), { complete: true, products }, now).plan.blockers)
       .toContain('DOWNGRADE_RATIO_EXCEEDED');

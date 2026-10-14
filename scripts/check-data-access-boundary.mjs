@@ -8,6 +8,8 @@ const allowedRawInfraConsumers = new Set([
   // SPEC3 explicitly authorizes this legacy-products REST composition. It uses the
   // central target resolver, immutable private backups, updateTime CAS and readback.
   'src/runtime/source-cycle-runtime.ts',
+  // Same source-cycle control-plane composition (owner/lock/state docs only, no product writes): ownership handover B3Q ↔ ACTIONS.
+  'src/jobs/source-cycle-handover.ts',
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',

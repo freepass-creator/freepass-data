@@ -89,13 +89,16 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       state.unassignedPlateCount = unassigned;
       state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
       // 원천 원문 계층: 게이트 0(관측 전용 원천은 문서에서 만든 레코드라 제외). 실패해도 회차를 막지 않는다.
-      if (!plugin.observationOnly && !options.approvedPlan && commands.storeRaw) {
+      // 원문은 계획 판정과 무관하게 저장하되(원문 먼저), «원천에서 사라짐» 표시는 계획이 차단되지 않은 완전 읽기에서만 한다(Codex P2, 2026-10-14):
+      // 범위 급변·불완전으로 막힌 회차가 원문 계층에 부재를 남기면 상품 계층과 어긋난다.
+      const storeRawOnce = async (planBlocked: boolean) => {
+        if (plugin.observationOnly || options.approvedPlan || !commands.storeRaw) return;
         try {
           const stored = await commands.storeRaw({ sourceId: plugin.sourceId, records: converted.records, held: converted.held.map(h => ({ row: h.row, reasons: h.reasons })),
-            observedAt: read.observedAt ?? new Date(clock()).toISOString(), complete: read.complete && !read.error });
+            observedAt: read.observedAt ?? new Date(clock()).toISOString(), complete: read.complete && !read.error && !planBlocked });
           state.rawStored = stored.stored; state.rawAbsentMarked = stored.absentMarked;
         } catch { await control.alert(plugin.sourceId, 'RAW_STORE_FAILED'); }
-      }
+      };
       if (plugin.observationOnly) {
         if (!read.complete || read.error) throw new Error('SOURCE_INCOMPLETE');
         state.failures = 0; state.error = null; state.lastCompleteAt = read.observedAt;
@@ -127,6 +130,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         ...(benign ? { benignHeldCount: benign } : {}),
         ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
+      await storeRawOnce(plan.blockers.length > 0);
       state.reconciliation = built.reconciliation;
       // 읽기 단계 보류 사유에 계획 단계 보류 사유를 합친다(같은 코드는 더한다).
       for (const [code, n] of Object.entries(built.heldReasons)) state.heldReasons![code] = (state.heldReasons![code] ?? 0) + n;

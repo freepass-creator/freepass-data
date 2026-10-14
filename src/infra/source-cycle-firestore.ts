@@ -180,7 +180,9 @@ export const rawTitleBackfillFields = (f: Fields): Fields | null =>
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; files?: RunnerFiles; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean }) {
+  token?: () => Promise<string>; files?: RunnerFiles;
+  /** 상품 쓰기 직전마다 부른다(쓰기 소유권·fencing 확인, Codex P1-①②). 던지면 그 쓰기를 하지 않는다. */
+  beforeWrite?: (sourceId: string) => Promise<void>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
   const monthly = options.writeMonthlyProductType === true;
@@ -309,6 +311,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       return b.before;
     },
     async precheck(afters) {
+      for (const source of new Set(afters.map(a => a.record.sourceId))) await options.beforeWrite?.(source);
       // Firestore 문서 한도 1MiB. 쓰기 뒤 문서 크기 = 기존 문서에서 덮일 필드를 뺀 나머지 + 새 필드. 900,000B 를 넘는 쓰기가 하나라도 있으면
       // 어떤 백업·쓰기도 시작하기 전에 계획 전체를 막는다(일부만 적용되고 멈추는 상태 방지).
       const size = (v: unknown) => Buffer.byteLength(JSON.stringify(v));
@@ -329,6 +332,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
         throw new Error('SUPPLIER_NAME_REQUIRED');
       const fields = nativeCycleFields(after, current ? decodeFields(current.fields) : {}, { writeMonthlyProductType: monthly });
+      await options.beforeWrite?.(after.record.sourceId);
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
       const result = await request(docPath(after.record.uid) + '?' + query, 'PATCH', { fields: encodeFields(fields) });
@@ -350,6 +354,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       // Newly enrolled documents are withdrawn, never deleted.
       const fields = b.document?.fields ?? { ...current.fields, ...encodeFields({ listable: false, status: '출고불가', status_kind: '불가',
         vehicle_status: '출고불가', publication_withdrawal: { reason: 'ROLLBACK_ENROLL', deleteAuthorized: false } }) };
+      await options.beforeWrite?.(envelope(current, accept, undefined, undefined, monthly).record.sourceId);
       await immutable(`${stableDigest(key)}.rollback-before.json`, current);
       const result = await request(docPath(uid) + '?currentDocument.updateTime=' + encodeURIComponent(current.updateTime), 'PATCH', { fields });
       const reread = await getDoc(uid);
