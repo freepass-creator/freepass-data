@@ -122,6 +122,26 @@ describe('Codex #663 재검토 P1 2건 — 영문자 코드·상충 코드 토�
   });
 });
 
+describe('Codex #663 3차 — 괄호형 코드 이름', () => {
+  const g = (id: string, sub: string, from: number | null, to: number | null) => master({ id, sub_model: sub, sub_model_aliases: ['그랜저'], yearFrom: from, yearTo: to });
+  const hg = g('hg', '그랜저(HG)', 2011, 2016), ig = g('ig', '그랜저(IG)', 2017, 2022);
+  const all = [hg, ig];
+  it('괄호·대괄호·슬래시 이름에서도 코드를 뽑는다', () => {
+    expect(generationCode('그랜저(HG)')).toBe('HG');
+    expect(generationCode('그랜저 [IG]')).toBe('IG');
+    expect(generationCode('쏘렌토 / MQ4')).toBe('MQ4');
+    expect(generationCode('그랜저 하이브리드(GN7)')).toBe('GN7');
+    expect(generationCode('아이오닉(EV)')).toBe('');
+  });
+  it('원문에 다른 세대 코드 토큰이 있으면 그 세대의 연식 범위로 구제하지 않고 보류한다', () => {
+    const r = matchIdentity(product({ id: 'x', rawName: '현대 그랜저 2.4 HG', year: '2018' }), all);
+    expect(r).toMatchObject({ state: 'HOLD', reason: 'GENERATION_CODE_CONFLICT' });
+    expect(matchIdentity(product({ id: 'y', rawName: '현대 그랜저 2.4 (IG)', year: '2018' }), all)).toMatchObject({ state: 'MATCH' });
+    const plain = matchIdentity(product({ id: 'z', rawName: '현대 그랜저 2.4', year: '2018' }), all);
+    expect(plain.state === 'MATCH' && plain.master.id).toBe('ig');   // 코드 없음 + 연식 근거는 통과
+  });
+});
+
 describe('Codex #663 결함 3건 — 세대 근거 우회 차단', () => {
   const g = (id: string, sub: string, from: number | null, to: number | null, model = '그랜저') => master({ id, model, sub_model: sub, yearFrom: from, yearTo: to });
   const guard = (rawName: string, year: string, m: IdentityMaster, all: IdentityMaster[]) => generationGuard({ rawName, year, master: m, masters: all });

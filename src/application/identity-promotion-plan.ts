@@ -40,7 +40,7 @@ export type IdentityPromotionResult = {
   appendix: { generationFamilies: GenerationFamily[]; aliasCandidates: AliasCandidate[] };
 };
 
-const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()]/g, '').toUpperCase();
+const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()[\]/]/g, '').toUpperCase();   // 가드 모듈의 norm 과 같아야 한다(괄호·대괄호·슬래시도 구분자)
 const names = (m: IdentityMaster) => [m.sub_model, ...m.sub_model_aliases].map(norm).filter(Boolean);
 const models = (m: IdentityMaster) => [m.model, ...m.model_aliases].map(norm).filter(Boolean);
 
