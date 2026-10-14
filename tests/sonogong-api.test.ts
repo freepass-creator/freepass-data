@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSonogongApiClient, readSonogongApi, sonogongApiRowFloor, SonogongApiError, SONOGONG_API_POLICY } from '../src/adapters/sonogong-api.js';
+import { createSonogongApiClient, parseSonogongAmount, readSonogongApi, sonogongApiRowFloor, SonogongApiError, SONOGONG_API_POLICY } from '../src/adapters/sonogong-api.js';
 
 // 값은 전부 가짜. 키는 시험용 표지(센티널).
 const KEY = 'SYNTHETIC_PARTNER_KEY_SENTINEL';
@@ -15,7 +15,8 @@ const detail = (id: number, plate: string, extra: Record<string, unknown> = {}) 
     deposit: { 12: 1000000, 24: 0, 36: 2000000, 48: null, 60: 3000000 } },
     SUBSCRIBE_BUYOUT: { monthly: { 36: 900000 }, deposit: { 36: 5000000 } } }, ...extra });
 
-function world(handler: (url: URL) => Response | Promise<Response>) {
+/** 목록 2쪽부터는 빈 페이지(총수가 없을 때 어댑터는 빈 페이지까지 읽는다). 페이지별 응답을 직접 시험할 때는 paged=false. */
+function world(handler: (url: URL) => Response | Promise<Response>, paged = true) {
   const calls: string[] = [], sleeps: number[] = [];
   let clock = Date.parse('2026-10-14T06:00:00Z');
   const fakeFetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
@@ -24,6 +25,7 @@ function world(handler: (url: URL) => Response | Promise<Response>) {
     expect((init?.headers as Record<string, string>)['x-partner-key']).toBe(KEY);
     expect(init?.redirect).toBe('error');
     expect(init?.method).toBe('GET');
+    if (paged && u.pathname.endsWith('/vehicles') && Number(u.searchParams.get('page')) > 1) return json([]);
     return handler(u);
   }) as unknown as typeof fetch;
   const client = createSonogongApiClient({ base: BASE, key: KEY, fetch: fakeFetch, now: () => clock,
@@ -69,7 +71,8 @@ describe('손오공 공식 API 어댑터', () => {
       [12, 900000, 'KNOWN', 1000000], [24, 800000, 'ZERO', 0], [36, 700000, 'KNOWN', 2000000], [48, 650000, 'UNKNOWN', null], [60, 600000, 'KNOWN', 3000000]]);
     expect((by['1111']!.raw.prices as Record<string, unknown>).SUBSCRIBE_BUYOUT).toBeDefined();
     expect(by['1111']!.raw.detail).toBeDefined();
-    expect(by['1111']!.raw.spec).toMatchObject({ year: '2023', first_registration_date: '2023-05', mileage: '12345' });
+    expect(by['1111']!.raw.spec).toMatchObject({ year: '2023', manufacture_year_month: '2023-05', mileage: '12345', fuel_type: '가솔린' });
+    expect(by['1111']!.raw.spec).not.toHaveProperty('first_registration_date');   // 제조연월 ≠ 최초등록일
     expect(JSON.stringify(read)).not.toContain(KEY);
   });
   it('같은 번호가 다른 탭에도 있으면 rent > sub > pick 우선순위로 하나만 채택하고 경고만 남긴다(불완전 아님), 같은 탭 안 중복은 불완전', async () => {
@@ -150,6 +153,127 @@ describe('손오공 공식 API 어댑터', () => {
         { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 3 : 0 })
       : json(detail(1, '100하1111'))).client);
     expect(mismatch.incompleteReason).toBe('API_COUNT_MISMATCH');
+  });
+  it('Codex #643 ①: 소수 금액은 반올림하지 않고 읽을 수 없는 값(UNKNOWN)이다 — 0.4 를 ZERO 로, 1000.5 를 1001 로 확정하지 않는다', async () => {
+    for (const fractional of [0.4, 0.5, 1000.5, 512345.5, '0.4' as unknown, '1000.5' as unknown])
+      expect(parseSonogongAmount(fractional)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: true });
+    expect(parseSonogongAmount(0)).toEqual({ amount: { state: 'ZERO', value: 0 }, unparseable: false });
+    expect(parseSonogongAmount(1000)).toEqual({ amount: { state: 'KNOWN', value: 1000 }, unparseable: false });
+    const prices = { SUBSCRIBE_RETURN: { monthly: { 36: 700000 }, deposit: { 36: 0.4 } } };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices })] : [])
+      : json(detail(1, '100하1111', { prices }))).client);
+    expect(read.records[0]!.terms.map(t => [t.months, t.deposit.state, t.deposit.value])).toEqual([[36, 'UNKNOWN', null]]);
+    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:1');
+  });
+  it('Codex #643 ②: 앞선 탭은 출고가능인데 뒤 탭이 계약중이면 계약중이 이긴다(조용히 출고가능으로 두지 않는다), 반대는 계약중 유지', async () => {
+    const list = (tab: string | null) => {
+      if (tab === 'rent') return [row(1, '100하1111', { hasActiveContract: false }), row(2, '100하2222', { hasActiveContract: true })];
+      if (tab === 'sub') return [row(3, '100하1111', { hasActiveContract: true }), row(4, '100하2222', { hasActiveContract: false })];
+      return [];
+    };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(list(u.searchParams.get('tab')))
+      : json((() => { const id = Number(u.pathname.split('/').at(-1)); return detail(id, id % 2 ? '100하1111' : '100하2222'); })())).client);
+    const by =Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.status.raw]));
+    expect(by['1111']).toBe('계약중');
+    expect(by['2222']).toBe('계약중');
+    expect(read.notes).toContain('CROSS_TAB_CONTRACT_CONFLICT:1');
+  });
+  it('Codex #643 ③: 완료는 누적 행 수가 아니라 서로 다른 차 id 수로 판정한다 — 같은 차가 두 쪽에 겹치면 총수에 닿은 것처럼 보여도 불완전', async () => {
+    const pages: Record<number, unknown[]> = { 1: [row(1, '100하1111'), row(2, '100하2222')], 2: [row(2, '100하2222')], 3: [] };
+    const read = await readSonogongApi(world(u => {
+      if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
+      return json(u.searchParams.get('tab') === 'sub' ? pages[Number(u.searchParams.get('page'))] ?? [] : [],
+        { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 3 : 0 });
+    }, false).client);
+    expect(read.complete).toBe(false);
+    expect(read.incompleteReason).toBe('API_PAGE_OVERLAP');
+    expect(read.listed).toBe(2);   // 겹친 행은 한 번만 센다
+  });
+  it('금액: 숫자 문자열(쉼표 허용)은 읽고, 읽을 수 없는 값은 UNKNOWN 이면서 AMOUNT_UNPARSEABLE 로 센다(보증금 0 은 그대로 ZERO)', async () => {
+    expect(parseSonogongAmount('480000')).toEqual({ amount: { state: 'KNOWN', value: 480000 }, unparseable: false });
+    expect(parseSonogongAmount('1,250,000')).toEqual({ amount: { state: 'KNOWN', value: 1250000 }, unparseable: false });
+    expect(parseSonogongAmount(0)).toEqual({ amount: { state: 'ZERO', value: 0 }, unparseable: false });
+    expect(parseSonogongAmount(null)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: false });
+    for (const bad of [Number.NaN, -1, '문의', '12,34', '1.5만', Infinity, {}])
+      expect(parseSonogongAmount(bad)).toEqual({ amount: { state: 'UNKNOWN', value: null }, unparseable: true });
+    const prices = { SUBSCRIBE_RETURN: { monthly: { 12: 512345.5, 24: '480000', 36: '문의', 48: 650000, 60: null },
+      deposit: { 12: '1,000,000', 24: 0, 48: -5, 60: 1 } } };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices })] : [])
+      : json(detail(1, '100하1111', { prices }))).client);
+    expect(read.complete).toBe(true);
+    expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value])).toEqual([
+      [24, 480000, 'ZERO', 0], [48, 650000, 'UNKNOWN', null]]);
+    expect(read.notes).toContain('AMOUNT_UNPARSEABLE:3');   // 12개월 월 대여료 소수 + 36개월 월 대여료 '문의' + 48개월 보증금 -5
+  });
+  it('쪽 나눔: 총수가 없으면 요청 크기보다 작은 쪽에서 멈추지 않고 빈 쪽까지 읽는다, 상한 초과·총수 불일치·읽는 도중 스냅숏 변경은 불완전', async () => {
+    const pages: Record<number, unknown[]> = { 1: [row(1, '100하1111'), row(2, '100하2222')], 2: [row(3, '100하3333')], 3: [] };
+    const short = world(u => {
+      if (!u.pathname.endsWith('/vehicles')) { const id = Number(u.pathname.split('/').at(-1)); return json(detail(id, `100하${String(id).repeat(4)}`)); }
+      return json(u.searchParams.get('tab') === 'sub' ? pages[Number(u.searchParams.get('page'))] ?? [] : []);
+    }, false);
+    const read = await readSonogongApi(short.client);
+    expect(read.complete).toBe(true);
+    expect(read.records.map(r => r.plate!.slice(-4))).toEqual(['1111', '2222', '3333']);   // 전에는 1쪽(2건 < 50)에서 끝나 3333 을 놓쳤다
+    // 끝없이 차 있는 쪽 → 상한(maxPages) 초과 = 불완전
+    let n = 0;
+    const endless = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(++n, `10${String(n % 10)}하${String(1000 + n)}`)] : [])
+      : json(detail(1, 'x')), false).client);
+    expect(endless.complete).toBe(false);
+    expect(endless.incompleteReason).toBe('API_PAGE_LIMIT');
+    // 총수가 있는데 모자라게 오면(뒤 쪽이 비어 있음) 불일치
+    const missing = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' && u.searchParams.get('page') === '1' ? [row(1, '100하1111')] : [],
+        { generatedAt: '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 2 : 0 })
+      : json(detail(1, '100하1111')), false).client);
+    expect(missing.incompleteReason).toBe('API_COUNT_MISMATCH');
+    // 쪽마다 generatedAt 이 다르면 읽는 도중 판이 바뀐 것
+    const changed = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111')] : [],
+        { generatedAt: u.searchParams.get('tab') === 'pick' ? '2026-10-14T07:00:00.000Z' : '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 1 : 0 })
+      : json(detail(1, '100하1111'))).client);
+    expect(changed.complete).toBe(false);
+    expect(changed.incompleteReason).toBe('SNAPSHOT_CHANGED_DURING_READ');
+    // generatedAt 이 없는 쪽은 판정에 쓰지 않는다
+    const none = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111')] : [], {})
+      : json(detail(1, '100하1111'))).client);
+    expect(none.complete).toBe(true);
+  });
+  it('최초등록일은 상세의 실제 칸이 있을 때만, 연료는 공통 별칭으로 바꾸고 모르면 비운다(원문은 raw 에 보존)', async () => {
+    const read = await readSonogongApi(world(u => {
+      if (u.pathname.endsWith('/vehicles')) return json(u.searchParams.get('tab') === 'sub'
+        ? [row(1, '100하1111', { fuel: 'HEV' }), row(2, '100하2222', { fuel: '가솔린+전기' }), row(3, '100하3333', { fuel: '휘발유' })] : []);
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, `100하${String(id).repeat(4)}`, id === 1 ? { firstRegistrationDate: '2023-07-15' } : id === 2 ? { firstRegistrationDate: '2023-02-30' } : {}));
+    }).client);
+    const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.raw.spec as Record<string, string>]));
+    expect(by['1111']).toMatchObject({ fuel_type: '하이브리드', first_registration_date: '2023-07-15', manufacture_year_month: '2023-05', year: '2023' });
+    expect(by['2222']).not.toHaveProperty('fuel_type');                  // 하이브리드/플러그인 구분 불가 → 추정하지 않음
+    expect(by['2222']).not.toHaveProperty('first_registration_date');    // 없는 날짜는 거른다
+    expect((read.records.find(r => r.plate!.endsWith('2222'))!.raw.list as Record<string, unknown>).fuel).toBe('가솔린+전기');
+    expect(by['3333']).toMatchObject({ fuel_type: '가솔린' });
+    expect(read.notes).toContain('FUEL_UNRESOLVED:1');
+  });
+  it('보류된 행(상태 미상·ID 없음)은 다른 탭의 같은 번호 정상 행을 가리지 않는다, 정상 행끼리는 rent > sub > pick', async () => {
+    const read = await readSonogongApi(world(u => {
+      if (u.pathname.endsWith('/vehicles')) {
+        const tab = u.searchParams.get('tab');
+        if (tab === 'rent') return json([row(1, '100하1111', { tab: 'rent', hasActiveContract: null }), row(2, '100하2222', { id: null, tab: 'rent' }),
+          row(3, '100하3333', { tab: 'rent', prices: { RENT_RETURN: { monthly: { 36: 500000 } } } })]);
+        if (tab === 'sub') return json([row(11, '100하1111'), row(12, '100하2222'), row(13, '100하3333')]);
+        return json([row(21, '100하1111', { tab: 'pick' })]);
+      }
+      const id = Number(u.pathname.split('/').at(-1));
+      return json(detail(id, `100하${String(id % 10).repeat(4)}`));
+    }).client);
+    expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['3333', 'rent'], ['1111', 'sub'], ['2222', 'sub']]);
+    expect(read.held.map(h => h.reason)).toEqual(['STATUS_UNKNOWN', 'ID_MISSING']);
+    expect(read.notes).toContain('CROSS_TAB_DUPLICATE:2');   // sub 3333(rent 채택) + pick 1111(sub 채택)
+    expect(read.duplicatePlates).toEqual([]);
   });
   it('행 수 하한과 정책 상수', () => {
     expect(sonogongApiRowFloor(100, 0)).toBe(80);

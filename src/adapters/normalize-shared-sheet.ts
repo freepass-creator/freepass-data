@@ -7,10 +7,14 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, yearRegistrationMismatch, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord, type VehicleIdentitySpecs } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/7';
 export const SHARED_SHEET_COLOR_RULE_VERSION = 'shared-sheet-normalizer/8';
-export type SharedSheetNormalizationOptions = { includeSupplierColors?: boolean };
+export type SharedSheetNormalizationOptions = { includeSupplierColors?: boolean;
+  /** 원천 엔진(source-cycle) 대여료 규칙(대표 2026-10-14 «데이터만큼은 정확하게»): 공용 «가격 없음» 낱말(아이카와 같은 목록, 협의·문의·없음 포함)은 그 기간만 빼고,
+   * 0 은 «그 기간 가격 없음»(건수만 센다), 타당 범위(10만~5천만원) 밖은 RENT_REVIEW_REQUIRED. 옛 정규 파이프라인(canonical)은 켜지 않아 기존 규칙 그대로다. */
+  sourceEngineRentRules?: boolean };
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
@@ -25,8 +29,8 @@ export const SHARED_SHEET_STATUS_POLICY: Record<string, { exposure: 'VISIBLE' | 
   '상품화중': { exposure: 'HIDDEN', assetStatus: 'MAINTENANCE' },
   '출고불가': { exposure: 'HIDDEN', assetStatus: 'RESERVED' },
 };
+const legacyAbsentPrice = (s: string) => ['', '-', '불가'].includes(s);
 const commercial: Record<string, CommercialType> = { '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION' };
-const absentPrice = (s: string) => ['', '-', '불가'].includes(s);
 function number(s: string, unit = '', decimal = false): number | null {
   const body = unit ? s.replace(new RegExp(`\\s*${unit}$`, 'i'), '') : s;
   // 소수 칸의 «0.###» 표시 형식은 정수를 «22.»처럼 끝에 점을 붙여 보인다(2026-10-04 서식 통일) — 같은 값으로 받는다.
@@ -51,7 +55,9 @@ function registration(s: string, raw: unknown): string | null {
   return `${y}-${String(mo).padStart(2, '0')}${d === null ? '' : '-' + String(d).padStart(2, '0')}`;
 }
 /** Does not infer missing F03 cells from names or borrow another supplier's data. */
-export type SharedSheetNormalized = { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[]; suppliedTerms: number };
+export type SharedSheetNormalized = { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[]; suppliedTerms: number;
+  /** 대여료 칸이 0(«0», «0원»)이라 «그 기간 가격 없음» 으로 뺀 기간 수(가격 0원으로 노출하지 않는다, 대표 2026-10-14). */
+  zeroRentTerms: number };
 /** Vehicle identity policy for one row: sheet 4 cells, source text and dates in → DATA/SHEET/HOLD decision out. */
 export type SharedSheetIdentityResolver = (row: { sheet: VehicleIdentity; plate: string; raw: string; firstRegistration: string; modelYear: string; specs?: VehicleIdentitySpecs }) => IdentityChoice;
 export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized => normalizeSharedSheetWith(raw, undefined, master, options);
@@ -142,13 +148,18 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     issues.push(...facts.fields.transmission.reasons);
   }
   const priceTerms: PriceTerm[] = [];
-  let suppliedTerms = 0;
+  const engineRent = options?.sourceEngineRentRules === true;
+  let suppliedTerms = 0, zeroRentTerms = 0;
   for (const months of [1, 6, 12, 24, 36, 48, 60]) {
     const rentText = text(`${months}개월`);
-    if (absentPrice(rentText)) continue;
-    suppliedTerms++;
+    // 원천 엔진: «가격 없음» 낱말(-·불가·없음·x·N/A·협의·문의 …, 아이카와 같은 목록)은 그 기간만 뺀다 — 다른 기간에 가격이 있으면 차는 그대로 판매 가능.
+    if (engineRent ? isNoPriceText(rentText) : legacyAbsentPrice(rentText)) continue;
     const rent = number(rentText, '원');
-    if (rent === null) { issues.push('RENT_REVIEW_REQUIRED'); continue; }
+    // 원천 엔진: 월 대여료 0 은 0원 가격이 아니라 «그 기간 가격 없음» 이다(가격 없음 표시와 같게 빼고 건수만 남긴다).
+    if (engineRent && rent === 0) { zeroRentTerms++; continue; }
+    suppliedTerms++;
+    // 해석 불가, 또는(원천 엔진) 타당 범위(10만~5천만원) 밖(«65» = 65만원을 숫자로 적은 단위 착오 등): 추정하지 않고 확인 필요로 보류한다.
+    if (rent === null || (engineRent && !isPlausibleMonthlyRent(rent))) { issues.push('RENT_REVIEW_REQUIRED'); continue; }
     const depositHeader = depositSourceWaiverFieldForTermMonths(months) === '원문.전체.단기보증' ? '단기보증' : '장기보증';
     const depositText = text(depositHeader);
     const parsedDeposit = depositText === '무보증' ? 0 : number(depositText, '원');
@@ -213,5 +224,5 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
   if (options?.includeSupplierColors) for (const [key, header] of [['exteriorColor', '외부색상'], ['interiorColor', '내부색상']] as const) {
     add(`vehicleFacts.fields.${key}`, facts.fields[key], header);
   }
-  return { record, lineage, suppliedTerms };
+  return { record, lineage, suppliedTerms, zeroRentTerms };
 }
