@@ -165,11 +165,16 @@ describe('source cycle planning/application', () => {
     await expect(apply(m.commands, built)).rejects.toThrow('CYCLE_BLOCKED'); expect(m.order).toEqual([]);
     expect(planSourceCycle(config, evidence([record('a')]), await m.commands.list(config.sourceId), now).plan.blockers).toEqual([]);
   });
-  it.each(['locked_by_contract', 'status'] as const)('contract lock %s preserves every field including price', async kind => {
-    const p = product('a'); if (kind === 'status') p.record.status.raw = '계약중'; else p.locked_by_contract = true;
+  it('contract lock (locked_by_contract) preserves every field including price', async () => {
+    const p = product('a'); p.locked_by_contract = true;
     const r = record('a'); r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
     expect(planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now).plan.entries).toEqual([]);
     expect(planSourceCycle(config, evidence([]), { complete: true, products: [p] }, now).plan.entries).toEqual([]);
+  });
+  it('a stored 계약중 source status alone is not a lock: the repository decides (engine-written 계약중 stays engine-managed, ERP-set contract arrives as locked_by_contract)', async () => {
+    const p = product('a'); p.record.status.raw = '계약중';   // 엔진이 원천 계약중을 쓴 문서(저장소 envelope 가 locked 로 보지 않음)
+    const r = record('a'); r.terms[0]!.monthlyRent = { state: 'KNOWN', value: 200 };
+    expect(planSourceCycle(config, evidence([r]), { complete: true, products: [p] }, now).plan.entries.map(e => e.kind)).toEqual(['UPDATE']);
   });
   it('reactivates solely from current source, retaining prior withdrawal audit', async () => {
     const p = product('a', false); p.record.status.saleAvailable = false;

@@ -8,7 +8,9 @@ import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvid
 export * from '../ports/source-cycle.js';
 
 export const deepEqual = (a: unknown, b: unknown) => stableDigest(a) === stableDigest(b);
-const locked = (p: CycleProduct) => p.locked_by_contract || p.record.status.raw === '계약중';
+// 계약 잠금 = 저장소가 판정한 locked_by_contract(계약 원장·ERP 가 건 잠금, 엔진이 쓴 계약중 상태는 제외 — infra envelope). 원천 원문이 계약중이라는 이유만으로는
+// 잠그지 않는다: 계약중 노출 정책에서 그 문서는 엔진이 계속 갱신(출고가능 복귀·철회)해야 한다.
+const locked = (p: CycleProduct) => p.locked_by_contract;
 // Observation timestamps belong in RAW/heartbeat; unchanged business facts do not churn products.
 const withoutObservationClocks = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutObservationClocks);
@@ -261,14 +263,25 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
   }
   let writes = 0, verified = 0;
   const uncertain: string[] = [];
+  // 불확실 진단(값 없음): 어느 단계에서, 어느 최상위 필드가 달랐는지 코드만 남긴다. 값·번호·원문은 싣지 않는다.
+  let uncertainDetail = '';
   for (const e of plan.entries) {
     const key = sourceProductKey(e.after.record);
+    let stage = 'WRITE';
     try {
       await commands.compareAndApply(stableDigest(e.before), e.after, `${digest}:${key}`);
-      writes++;
-      if (!deepEqual(await commands.read(e.after.record.sourceId, e.after.record.uid), e.after)) { uncertain.push(key); break; }
+      writes++; stage = 'READ';
+      const reread = await commands.read(e.after.record.sourceId, e.after.record.uid);
+      if (!deepEqual(reread, e.after)) {
+        const a = e.after as unknown as Record<string, unknown>, b = (reread ?? {}) as unknown as Record<string, unknown>;
+        const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k], b[k])).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
+        uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
+      }
       verified++;
-    } catch { uncertain.push(key); break; } // May have committed: never auto-rollback or retry blindly.
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : 'ERROR';
+      uncertainDetail = `${stage}_FAILED:${e.kind}:${code}`; uncertain.push(key); break;
+    } // May have committed: never auto-rollback or retry blindly.
   }
-  return { status: uncertain.length ? 'APPLY_UNCERTAIN' : 'APPLIED', writes, verified, uncertain, digest };
+  return { status: uncertain.length ? 'APPLY_UNCERTAIN' : 'APPLIED', writes, verified, uncertain, digest, ...(uncertainDetail ? { uncertainDetail } : {}) };
 }
