@@ -1,5 +1,7 @@
 # 이안카(RP031) 수집 중단 원인과 항목 정확도 실측 (2026-10-12)
 
+> **2026-10-14 폐기(대표 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해»)**: 이안카(RP031) 상품 문서(가격·재고·상태)의 유일한 작성 주체는 원천 엔진(source-engine)이다. 옛 1차 발행(`publishIancarPhaseOne`)·복원(`restoreIancarPhaseOne`)·철회(`withdrawIancarPublication`), 수집기 `--sync`·`--apply-sync`·`--refresh-facts`·`--photos-pending`·`--keep-withdrawn`·`--restore-sync`, 감시 실행기(`scripts/iancar-sync-watch.mjs`), 옛 ERP 직접 수집(`source:iancar:direct`)은 코드에서 지웠다. 남은 이안카 쓰기는 사진 전용(`--photos`/`--apply-photos`/`--restore-photos=`/`--reviewed-plan=`)과 RAW 적재(`--apply-raw`)뿐이다. 보증금 판정은 엔진 근거(`readIancarEngineDeposit`, `source_cycle_record.terms`)만 쓴다. 아래 본문의 해당 명령은 기록이며 실행 경로가 아니다.
+
 상태: 읽기 전용 실측(운영 쓰기·스케줄러 변경·IAM 없음). 차량번호는 마지막 4자리만, 열쇠·시트 ID는 싣지 않는다.
 우선순위(대표 10-12): ① 항목 정확도 ② 편입 범위 ③ 주기. 이 문서의 15분 논의는 ③이다.
 
@@ -64,9 +66,9 @@
 | manufacturer·model·name·trim | maker·model·sub_model·trim_name | 차종 마스터(F03)를 거쳐서만 — ONE 원문은 보존, 우리 4단 값은 기존 보존(차종-기준-한장). ONE 값과 마스터가 충돌하면 확인 필요 표시 |
 | photos | image_urls·photo_cache·iancar_one_photo_ids | §3-2: ONE 사진은 열쇠 필요 → Data 사진 길로만. 별칭 주소 금지 |
 
-**구현(옵트인 `--refresh-facts`, 승인된 단발 A 계획에는 포함하지 않음)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 연식(`year`)은 ONE 연식으로 맞추고 옛 값은 `year_source_original` 에, 사본은 `model_year_source` 에 둔다(최초등록 칸은 그대로). 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
+**구현(옵트인 `--refresh-facts` — 2026-10-14 삭제, 기록만)**: 기존 문서에 주행거리를 ONE 값으로 갱신(기존 문자열/숫자 형식 유지, 첫 변경 때 옛 값을 `mileage_source_original` 에 보존, `iancar_mileage_observed_at` 기록)하고 연식(`year`)은 ONE 연식으로 맞추고 옛 값은 `year_source_original` 에, 사본은 `model_year_source` 에 둔다(최초등록 칸은 그대로). 색상·연료는 매핑표 확정 전이라 제외. 시험 포함(`iancarFactsRefreshPatch`).
 - 백업 버킷 재사용 판정: 새로 만들지 않는다. `freepasserp5-data-audit-evidence`(asia-northeast3)가 이미 있고 코드가 이 버킷만 허용(`IANCAR_BACKUP_WRONG_BUCKET`). 단발 적용 때 `EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET` 으로 지정.
-- 복원: `--restore-sync=<백업> --expected-digest=<원천 digest>`(계획) / `--apply` + `IANCAR_SYNC_RESTORE_APPROVED=true`.
+- 복원: (삭제됨 2026-10-14) 옛 `--restore-sync=` 경로는 없다. 사진 백업만 `--restore-photos=` 로 되돌린다.
 
 ## 4-2. 자동 수집 재개 계획 (대표 승인 항목 — 승인 전 계획)
 **무엇이·왜 멈췄나**: 이안카 15분 Cloud Scheduler 가 10-03 13:01Z 에 PAUSED(호출 주소 `/verify`, 적용 주소 `/schedule` 아님)로 두어졌고 Data 쪽 이안카 전용 예약은 없다. 이후 동기화는 10-08 수동 단발 1회뿐이다. 코드 결함이 아니라 «재개 승인 대기» 상태다.
@@ -95,7 +97,7 @@
 
 ## 4. 복구 순서 (승인 항목은 지휘통제실로)
 1. (이 PR) 원인·실측·관측 도구. 
-2. 승인 필요: 신선한 ONE 응답(`synced_at` 이 수집 15분 안)이 오는 시점에 `--sync` 계획 → 검토 → 단발 `--apply-sync`(`EANCAR_ONE_SYNC_APPROVED=true`). 계획에서 §3 의 9대 처리(미관측 → 공개 보류, 삭제 아님)가 어떻게 나오는지 먼저 본다.
+2. (폐기 2026-10-14 — 엔진이 단일 작성 주체) 옛 계획: 신선한 ONE 응답(`synced_at` 이 수집 15분 안)이 오는 시점에 `--sync` 계획 → 검토 → 단발 `--apply-sync`(`EANCAR_ONE_SYNC_APPROVED=true`). 계획에서 §3 의 9대 처리(미관측 → 공개 보류, 삭제 아님)가 어떻게 나오는지 먼저 본다.
 3. 단발 적용 뒤 같은 대조를 다시 돌려 일치율 상승을 숫자로 확인 → 소비처 재조회.
 4. 스케줄러는 URI 를 `/schedule` 로 바꾸기 전 `docs/deploy/supplier-collect-relay-배포절차.md` 게이트를 모두 통과해야 한다. 정확도가 확인되기 전 재개하지 않는다. 주기는 정확도를 해치지 않는 범위(매시/일 가능, 대표 10-12).
 5. 신선도 기준(900초)은 완화하지 않는다(`IANCAR-ONE-API.md` 83행). 공급사가 15분보다 느리게 갱신하면 HOLD 가 «정체» 로 표시돼야 하며 마지막 정상본이 현재 재고로 오인되지 않게 한다(Codex 상의 지적).
@@ -115,5 +117,5 @@
   - 한 차량 안에서도 휴차료만 행(기간·주행)마다 다르고 나머지는 같아 행 단위 불일치 시에는 추정하지 않고 오류(`ROWS_INCONSISTENT`).
 - 작업: `src/jobs/iancar-policy-link.ts`(순수 계획 `src/domain/iancar-policy-link.ts`). 기본은 읽기 전용 계획(쓰기 0). 적용 `--apply --expected-digest=<digest> --expect-policy-document-changes=<0|1>`(계획의 `counts.policyDocumentChanges` 와 다르면 쓰기 전 중단) + `IANCAR_POLICY_LINK_APPROVED=true`(+ `EANCAR_ONE_API_KEY` 로 원천 재조회), 복원 `--restore=<백업> --expected-digest=<digest> [--apply]` + `IANCAR_POLICY_LINK_RESTORE_APPROVED=true`. 백업은 로컬 비공개 폴더+`freepasserp5-data-audit-evidence`(읽기 확인), 문서 updateTime 일치 조건부 트랜잭션, 되읽기(계획 칸 일치·계획 밖 칸 불변), 삭제 0. fail-closed: 원천 요금 조회가 404(원천에 없음) 아닌 사유(401·429·시간 초과·형식 불일치·행 불일치)로 실패한 노출 차량이 하나라도 있거나 읽은 조건이 0건이면 계획이 막히고(`SOURCE_LOOKUP_FAILED`·`NO_SOURCE_TERMS_READ`; 차량 ID 누락·조회하지 않은 차량도 `ID_MISSING`/`NOT_LOOKED_UP` 으로 같은 차단 — 실제 404 응답만 예외), 공통 필수 조건(연령 상한·최소 연령·면허 기간·대인/대물 면책·자차 포함)이 차량마다 다르면 `COMMON_CONDITION_VARIES` 로 막히고, 공통 정책의 허용 목록 밖 칸 변경도 막는다. 공통 정책 문서에는 근거 칸 `iancar_source_terms`(출처·관측 시각·차량 수·반영값·차량별로 다른 값의 분포)를 남긴다.
 - 연결: 노출 이안카 상품 `policy_code=FP-RP031-RENT`·`policy_reference_state=LINKED`(연결 전 값은 `policy_code_source_original` 에 보존, S01~S04 는 수정·삭제 없음). 원천에서 사라진 차(요금 404)도 연결하되 차량별 조건은 붙이지 않고 사유를 계획에 표시.
-- 동기화 보호: `publishIancarPhaseOne` 이 `LINKED` 상품의 policy_code 를 다시 비우지 않는다(`iancarPolicyFields`).
+- 동기화 보호: (옛 `publishIancarPhaseOne` 은 2026-10-14 삭제) 원천 엔진은 기존 문서의 policy_code 를 쓰지 않는다.
 - 남은 일(소비처): 차량별 면책금·수리 한도·초과 주행 요금을 ERP5 상세에 보이려면 호환 응답의 단일 상품 필드 허용 목록(`SINGLE_PRODUCT_FACT_FIELDS`)에 `iancar_policy_terms` 를 넣고 ERP5 표시를 붙여야 한다(별도 PR·소비처 확인).

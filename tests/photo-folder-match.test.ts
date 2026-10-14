@@ -15,3 +15,17 @@ describe('사진 폴더 ↔ 차량번호 일치', () => {
     expect(folderMatchesPlate('133하4531', '')).toBe(false);
   });
 });
+
+describe('공급사 루트 폴더 → 번호 폴더 행', () => {
+  it('첫 낱말이 번호인 폴더만, 같은 번호 폴더가 둘이면 보류', async () => {
+    const { plateFromFolderName, plateFoldersFromChildren } = await import('../src/domain/photo-folder-match.js');
+    expect(plateFromFolderName('161허1397 쏘나타 DN8')).toBe('161허1397');
+    expect(plateFromFolderName('12가3456')).toBe('12가3456');
+    expect(plateFromFolderName('12가34567')).toBeNull();
+    expect(plateFromFolderName('신차 쏘나타')).toBeNull();
+    const r = plateFoldersFromChildren([{ id: 'A', name: '12가3456 아반떼' }, { id: 'B', name: '34나5678' }, { id: 'C', name: '34나5678 K5' }, { id: 'D', name: '서류' }]);
+    expect(r.rows).toEqual([{ plate: '12가3456', folder: 'A' }]);
+    expect(r.ambiguous).toEqual(['34나5678']);
+    expect(r.skipped).toBe(1);
+  });
+});

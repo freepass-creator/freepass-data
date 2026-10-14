@@ -8,6 +8,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import type { CycleCommands, CycleProduct, SupplierFields } from '../ports/source-cycle.js';
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
+import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 
 type Fields = Record<string, unknown>;
@@ -77,7 +78,7 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
  * 비잠금은 없음(undefined/null)·false·빈 문자열뿐. (runtime 의 노출 대수 판정과 같은 규칙) */
 export const isContractLockValue = (v: unknown): boolean => v !== undefined && v !== null && v !== false && v !== '';
 /** 엔진 작성 표식: 엔진이 문서를 쓸 때마다 «누가·어떤 표시 상태로·어느 관측 시각에» 썼는지 한 칸에 남긴다. 계약중 문서를 엔진 소유로 취급하는 유일한 증거다. */
-export const SOURCE_CYCLE_WRITER = 'source-engine';
+export const SOURCE_CYCLE_WRITER = SOURCE_ENGINE_WRITER;
 /** 엔진이 «원천이 직접 계약중으로 읽은 값»을 쓴 문서만 계약 잠금이 아니다. 증거 = 엔진 작성 표식(by·status 계약중) + 엔진이 쓴 모양(표시 상태 계약중·선점·노출,
  * 원천 기록 상태 원문 계약중) + 어떤 계약 잠금 필드 값도 없음. 표식이 없거나 다른 주체이거나, ERP 가 status_kind 를 계약중으로 바꿨거나 잠금 필드를 걸었으면 잠금이다
  * (원천이 출고가능으로 바뀌어도 장부 잠금 차량은 덮어쓰지 않는다 — Codex 독립 검토 2026-10-14 P1 2건). */
@@ -87,9 +88,25 @@ const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean 
     f.status === '계약중' && f.status_kind === '선점' && f.vehicle_status === '계약중' && f.listable === true &&
     record.status.raw === '계약중' && f.source_cycle_record !== undefined && !isContractLockValue(f.locked_by_contract);
 };
+/** 엔진 기록(source_cycle_record)이 없는 옛 문서의 관측 기준 시각. 기본은 source_observed_at, 없으면 문서 updateTime.
+ * 이안카(RP031) 옛 발행 문서는 사진·정책 연결 쓰기가 updateTime 을 원천 갱신 시각보다 늦게 밀어 엔진이 OBSERVATION_ORDER 로 영영 갱신하지 못했다.
+ * 그래서 RP031 은 updateTime 을 쓰지 않고 옛 발행기가 남긴 원천 시각(iancar_phase_one.sourceSyncedAt → _direct_ingest_at)을 쓰고, 둘 다 없으면 «관측 없음»(epoch)으로 본다.
+ * 동시성은 그대로다: 쓰기는 문서 updateTime 조건(CAS)·백업·되읽기로만 한다. */
+export const LEGACY_NO_OBSERVATION = '1970-01-01T00:00:00.000Z';
+export function legacyObservedAt(f: Fields, updateTime: string): string {
+  if (typeof f.source_observed_at === 'string' && Number.isFinite(Date.parse(f.source_observed_at))) return f.source_observed_at;
+  if (f.provider_company_code !== 'RP031') return String(f.source_observed_at ?? updateTime);
+  const phase = f.iancar_phase_one as { sourceSyncedAt?: unknown } | null | undefined;
+  if (phase && typeof phase === 'object' && typeof phase.sourceSyncedAt === 'string' && Number.isFinite(Date.parse(phase.sourceSyncedAt)))
+    return new Date(Date.parse(phase.sourceSyncedAt)).toISOString();
+  const direct = f._direct_ingest_at;
+  const ms = typeof direct === 'number' ? direct : typeof direct === 'string' ? Date.parse(direct) : NaN;
+  if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
+  return LEGACY_NO_OBSERVATION;
+}
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
-  const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
+  const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
   if (f.source_cycle_record) {
     if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate) {
@@ -116,6 +133,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (engineOwned && writeMonthlyProductType && f.product_group === 'MONTHLY_RENT' && f.product_type !== MONTHLY_PRODUCT_TYPE) rewriteReasons.push('PRODUCT_TYPE');
   // 오토플러스(RP023)는 상품 구분이 정책으로 «오플구독» 하나다. 구분이 빈 노출 문서는 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP023' && !(typeof f.product_type === 'string' && f.product_type.trim())) rewriteReasons.push('PRODUCT_TYPE');
+  // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
+  if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
+    && typeof record.raw?.vehicle_id === 'string' && record.raw.vehicle_id.trim()) rewriteReasons.push('IANCAR_VEHICLE_ID');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -144,6 +164,18 @@ export const sheetSpecFields = (spec: unknown): Fields => {
   }
   return out;
 };
+/** 이안카(RP031) 공급사 차량 ID 칸. 사진 경로(isPublicIancarPhotoProduct)·정책 연결이 이 칸으로 원천 차량을 찾는다.
+ * 원천 기록의 vehicle_id 를 쓴다: 문서에 없으면 채우고, 같으면 그대로. 같은 번호 문서에 «다른» ID 가 이미 있으면 덮어쓰지 않는다(공급사 신원 충돌 —
+ * 기존 ID 에 묶인 사진·정책·보증금 근거가 다른 차로 옮겨 가지 않게). 충돌은 iancar_one_vehicle_id_conflict 에 관측 ID 와 시각으로 남겨 사람이 본다. */
+export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields): Fields {
+  if (r.sourceId !== 'RP031') return {};
+  const incoming = typeof r.raw?.vehicle_id === 'string' ? r.raw.vehicle_id.trim() : '';
+  if (!incoming) return {};
+  const stored = typeof original.iancar_one_vehicle_id === 'string' ? original.iancar_one_vehicle_id.trim() : '';
+  const hadConflict = original.iancar_one_vehicle_id_conflict !== undefined && original.iancar_one_vehicle_id_conflict !== null;
+  if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
+  return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
+}
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
   const r = p.record;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
@@ -170,6 +202,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),
+    ...iancarVehicleIdFields(r, original),
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
@@ -268,18 +301,25 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     },
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
-      const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = []; let page = ''; const pages = new Set<string>();
+      const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = [], foreign: string[] = []; let page = ''; const pages = new Set<string>();
       do {
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
-          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type']) query.append('mask.fieldPaths', fieldPath(field));
+          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type', 'iancar_one_vehicle_id', '_direct_ingest_at']) query.append('mask.fieldPaths', fieldPath(field));
+        // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
+        query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {
           const f = decodeFields(d.fields);
-          if (f.provider_company_code !== source) continue;
+          if (f.provider_company_code !== source) {
+            // 다른 공급사 문서의 ID(= uid): 같은 번호의 편입을 계획 단계에서 보류하는 근거(PLATE_OWNED_BY_OTHER_SUPPLIER).
+            const id = typeof d.name === 'string' ? decodeURIComponent(d.name.split('/').at(-1) ?? '') : '';
+            if (id) foreign.push(id);
+            continue;
+          }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
           const p = envelope(d, accept, drifted, heldDrift, monthly); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
@@ -288,7 +328,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         pages.add(page);
       } while (page);
       return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
-        ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}) };
+        ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}), ...(foreign.length ? { foreignUids: foreign.sort() } : {}) };
     },
     async read(source, uid) {
       const d = await getDoc(uid);

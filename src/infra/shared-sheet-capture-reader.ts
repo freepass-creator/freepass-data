@@ -2,7 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { GoogleAuth } from 'google-auth-library';
 import { resolveGwsBin } from './gws-bin.js';
 
-type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch };
+type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch; env?: NodeJS.ProcessEnv };
+
+export type SheetsTransport = 'gws' | 'adc';
+/** 시트 읽기 전송의 «단일» 판정(원천 엔진 런타임과 이 읽기 모듈이 함께 쓴다): SHEETS_TRANSPORT=gws 일 때만 gws CLI, 그 밖(adc·미설정)은 ADC 토큰.
+ * 전에는 런타임은 «adc 가 아니면 gws», 이 모듈은 «gws 일 때만 gws» 라 미설정이면 한 F05 읽기 안에서 두 전송이 섞였다. 기본값을 ADC 로 둔 이유:
+ * 이 모듈을 쓰는 Actions 작업(shared-sheet-daily)은 SHEETS_TRANSPORT 없이 ADC 로 돈다. 무인 원천 회차는 사전점검이 명시 설정을 요구한다. */
+export const resolveSheetsTransport = (env: NodeJS.ProcessEnv = process.env): SheetsTransport =>
+  env.SHEETS_TRANSPORT?.trim() === 'gws' ? 'gws' : 'adc';
 
 /** Sheets read-only token. An explicit sheets credential file (ERP4 manual step) wins over ADC. No key is created here. */
 async function sheetsAccessToken(): Promise<string> {
@@ -27,15 +34,15 @@ const sheetsUrl = (spreadsheetId: string, suffix = '') => {
 };
 
 /** 운영 PC 전용 읽기 전송: SHEETS_TRANSPORT=gws 이면 이미 인증된 gws CLI(회사 계정 위임)로 읽는다. 비밀은 건드리지 않는다. */
-function sheetsViaGws(url: URL): unknown {
+function sheetsViaGws(url: URL, env: NodeJS.ProcessEnv): unknown {
   const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
   if (!m) throw new Error('SHEETS_URL_UNSUPPORTED');
-  const params: Record<string, unknown> = { spreadsheetId: m[1] };
+  const params: Record<string, unknown> = { spreadsheetId: decodeURIComponent(m[1]!) };
   const ranges: string[] = [];
   for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else params[k] = v === 'true' ? true : v; }
   if (ranges.length) params.ranges = ranges;
   const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
-  const bin = resolveGwsBin(process.env);
+  const bin = resolveGwsBin(env);
   if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
   let out: string;
   try {
@@ -52,7 +59,8 @@ function sheetsViaGws(url: URL): unknown {
   try { return JSON.parse(out.slice(out.indexOf('{'))); } catch { throw new Error('SHARED_SHEET_RESPONSE_INVALID'); }
 }
 async function sheetsGet(url: URL, ports: Ports): Promise<unknown> {
-  if (process.env.SHEETS_TRANSPORT === 'gws' && !ports.fetcher && !ports.accessToken) return sheetsViaGws(url);
+  const env = ports.env ?? process.env;
+  if (resolveSheetsTransport(env) === 'gws' && !ports.fetcher && !ports.accessToken) return sheetsViaGws(url, env);
   const token = await (ports.accessToken ?? sheetsAccessToken)();
   if (!token || /\s/.test(token)) throw new Error('SHEETS_AUTH_UNAVAILABLE');
   let response: Response;

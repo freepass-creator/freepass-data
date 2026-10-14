@@ -35,6 +35,19 @@ describe('손오공 공식 API 런타임 연결', () => {
     expect(partialRead.complete).toBe(false);
   });
 
+  it('passes per-row held reasons to reports (PLATE_INVALID·STATUS_UNKNOWN·ID_MISSING) without making them benign value-class holds', async () => {
+    const plugin = sonogongApiWritePlugin(0.5, async () => read([rec('12가1001')], {
+      held: [{ tab: 'rent', reason: 'PLATE_INVALID' }, { tab: 'sub', reason: 'STATUS_UNKNOWN' }, { tab: 'pick', reason: 'ID_MISSING' }], duplicatePlates: ['12가1009'] }));
+    const converted = plugin.toRecords(await plugin.read());
+    const reasons = converted.held.map(h => h.reasons[0]!);
+    // 보고 코드(jobs/source-cycle 의 앞부분 정규식)는 구체 사유를 센다
+    expect(reasons.map(r => /^[A-Z][A-Z0-9_]{2,48}/.exec(r)?.[0])).toEqual(['PLATE_INVALID', 'STATUS_UNKNOWN', 'ID_MISSING', 'DUPLICATE_PLATE']);
+    // 레코드가 없는 행이라 값 계열 보류(benign)로 세면 안 된다: 원문 그대로의 STATUS_UNKNOWN 과 같지 않아야 부재 하향 건너뛰기가 유지된다
+    const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE']);
+    expect(reasons.some(r => r.split(',').every(s => VALUE_CLASS_HOLDS.has(s.trim())))).toBe(false);
+    expect(converted.held).toHaveLength(4);
+  });
+
   it('writes the Sonogong product type from the tab (rent=중고렌트, sub=오공구독, pick=픽업구독) only for the fixed vocabulary', async () => {
     const { nativeCycleFields } = await import('../src/infra/source-cycle-firestore.js');
     const product = (type: unknown) => ({ record: { ...rec('12가1001'), raw: { source: 'sonogong-partner-api', product_type: type } },
