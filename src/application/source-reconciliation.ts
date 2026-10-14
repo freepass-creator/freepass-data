@@ -30,6 +30,8 @@ export type SourceReconciliation = {
   mismatchCount: number; mismatchLast4: string[];
   /** 일치 = 집합 비교가 0·0 이고 값 불일치도 0 일 때만 true(대수 일치만으로는 일치가 아니다). */
   matched: boolean; countEqual: boolean;
+  /** 등록 기준 지표(커맨드 센터 2026-10-14): 노출 제외로 편입된 차는 NEW 가 아니라 등록으로 센다. registeredMatched = 순수 NEW(문서 없음)가 0. */
+  registeredCount: number; exposedCount: number; infoIncompleteCount: number; pureNewCount: number; registeredMatched: boolean;
 };
 
 /** 계획 단계와 같은 규칙: 원천 보증금이 UNKNOWN 이면 문서의 KNOWN/ZERO 보증금을 보존한다 — 이 경우는 값 불일치가 아니다
@@ -68,6 +70,12 @@ export function reconcileSource(records: readonly SourceProductRecord[], product
     matchedExceptLocked: newKeys.length === 0 && mismatchKeys.length === 0 && missingKeys.every(k => isLocked(erp.get(k)!)),
     mismatchCount: mismatchKeys.length, mismatchLast4: cut(mismatchKeys, k => erp.get(k)!.record),
     matched: newKeys.length === 0 && missingKeys.length === 0 && mismatchKeys.length === 0,
+    // 대표 보고 형식 «등록 N·노출 N·정보 부족 N»: 등록 = 원천 판매 가능 중 문서가 있는 차, 노출 = 그중 노출 중, 정보 부족 = 번호만 편입한 비노출.
+    registeredCount: [...source.keys()].filter(k => docs.has(k)).length,
+    exposedCount: sameKeys.length,
+    infoIncompleteCount: [...source.keys()].filter(k => docs.get(k)?.publication_withdrawal?.reason === 'INFO_INCOMPLETE').length,
+    pureNewCount: newKeys.filter(k => !docs.has(k)).length,
+    registeredMatched: newKeys.every(k => docs.has(k)),
     countEqual: source.size === erp.size,
   };
 }

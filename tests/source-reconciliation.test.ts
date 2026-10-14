@@ -44,6 +44,15 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     expect(r).toMatchObject({ missingCount: 2, missingLockedCount: 1, matched: false, matchedExceptLocked: false });
     expect(reconcileSource([rec('12가1001', false)], [locked])).toMatchObject({ missingLockedCount: 1, matched: false, matchedExceptLocked: true });
   });
+  it('reports registered / exposed / info-incomplete side by side (등록 N·노출 N·정보 부족 N)', () => {
+    const hidden = doc(rec('12가1002', true), false);
+    hidden.publication_withdrawal = { reason: 'INFO_INCOMPLETE', source: 'RP012', observedAt: '2026-10-14T00:00:00.000Z', deleteAuthorized: false };
+    const r = reconcileSource([rec('12가1001', true), rec('12가1002', true), rec('12가1003', true)], [doc(rec('12가1001', true), true), hidden]);
+    expect(r).toMatchObject({ sourceSellable: 3, registeredCount: 2, exposedCount: 1, infoIncompleteCount: 1,
+      newCount: 2, newHasDoc: 1, pureNewCount: 1, registeredMatched: false });
+    const done = reconcileSource([rec('12가1001', true), rec('12가1002', true)], [doc(rec('12가1001', true), true), hidden]);
+    expect(done).toMatchObject({ registeredCount: 2, pureNewCount: 0, registeredMatched: true, matched: false });
+  });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
     expect(r.matched).toBe(true);
