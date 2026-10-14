@@ -28,7 +28,11 @@ export type IdentityMaster = {
 };
 export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED'; candidates: string[] };
 export type IdentityPromotionResult = {
-  plan: VehicleNameRepairPlan; held: IdentityHold[];
+  plan: VehicleNameRepairPlan;
+  /** 정체성 정정과 같은 상품의 세부트림 정정. 정정 경로는 한 계획에 같은 상품을 겹쳐 받지 않으므로(one product per plan)
+   * plan 을 적용·되읽기한 뒤 이 두 번째 계획을 적용한다. 없으면 null. */
+  trimPlan: VehicleNameRepairPlan | null;
+  held: IdentityHold[];
   stats: { products: number; identityRepairs: number; trimRepairs: number; held: number; alreadyMatched: number };
 };
 
@@ -38,7 +42,10 @@ const models = (m: IdentityMaster) => [m.model, ...m.model_aliases].map(norm).fi
 
 /** 상품의 sub_model(없으면 원문 차명)이 가리키는 마스터 후보. 모델 칸이 있으면 모델도 같아야 한다(별칭 포함). */
 function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMaster[] {
-  const sub = norm(p.sub_model), model = norm(p.model), raw = norm(p.rawName);
+  // 엔진 편입 문서(제조사·모델 빈칸)는 마스터로 특정되기 전까지 원문 차명을 sub_model 에 임시로 둔다(source-cycle-firestore nativeCycleFields).
+  // 그 sub_model 은 마스터 이름이 아니므로 원문 차명 대조 경로로 보낸다.
+  const engineRaw = !p.maker.trim() && !p.model.trim();
+  const sub = engineRaw ? '' : norm(p.sub_model), model = norm(p.model), raw = norm(p.rawName || (engineRaw ? p.sub_model : ''));
   const hits = masters.filter(m => {
     if (model && !models(m).includes(model) && !names(m).includes(model)) return false;
     if (sub) return names(m).includes(sub);
@@ -73,7 +80,7 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     if (cands.length !== 1) { held.push({ id: p.id, plate4: p.plate4, reason: 'AMBIGUOUS_MASTER', candidates: cands.map(m => m.id).sort() }); continue; }
     const master = cands[0]!;
     // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
-    const raw = norm(p.rawName);
+    const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
     const trimHits = master.trims.map(t => ({ t, len: Math.max(0, ...[t.name, ...t.aliases].map(norm).filter(n => n.length >= 2 && raw.includes(n)).map(n => n.length)) })).filter(x => x.len > 0);
     const bestLen = Math.max(0, ...trimHits.map(x => x.len));
     const bestTrims = trimHits.filter(x => x.len === bestLen);
@@ -96,13 +103,18 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     }
     if (identityOk && bestTrims.length === 1 && p.trim_name === bestTrims[0]!.t.name) alreadyMatched++;
   }
-  const plan: VehicleNameRepairPlan = {
-    sourceDigest: stableDigest({ label: options.sourceLabel ?? 'identity-promotion',
+  // 정체성 정정을 받는 상품의 세부트림은 두 번째 계획으로(정정 경로 «one product per plan»).
+  const identityIds = new Set(identityRepairs.map(r => r.id));
+  const laterTrims = trimRepairs.filter(r => identityIds.has(r.id)), nowTrims = trimRepairs.filter(r => !identityIds.has(r.id));
+  const baseDigest = stableDigest({ label: options.sourceLabel ?? 'identity-promotion',
       products: [...products].sort((a, b) => a.id.localeCompare(b.id)).map(p => [p.id, p.maker, p.model, p.sub_model, p.trim_name]),
-      masters: [...masters].sort((a, b) => a.id.localeCompare(b.id)).map(m => [m.id, m.sub_model, m.trims.map(t => t.name)]) }),
-    masterRepairs: [], productRepairs: [],
+      masters: [...masters].sort((a, b) => a.id.localeCompare(b.id)).map(m => [m.id, m.sub_model, m.trims.map(t => t.name)]) });
+  const plan: VehicleNameRepairPlan = { sourceDigest: baseDigest, masterRepairs: [], productRepairs: [],
     ...(identityRepairs.length ? { productIdentityRepairs: identityRepairs } : {}),
-    ...(trimRepairs.length ? { productTrimRepairs: trimRepairs } : {}),
+    ...(nowTrims.length ? { productTrimRepairs: nowTrims } : {}),
   };
-  return { plan, held, stats: { products: products.length, identityRepairs: identityRepairs.length, trimRepairs: trimRepairs.length, held: held.length, alreadyMatched } };
+  const trimPlan: VehicleNameRepairPlan | null = laterTrims.length
+    ? { sourceDigest: stableDigest({ base: baseDigest, part: 'trim-after-identity' }), masterRepairs: [], productRepairs: [], productTrimRepairs: laterTrims }
+    : null;
+  return { plan, trimPlan, held, stats: { products: products.length, identityRepairs: identityRepairs.length, trimRepairs: trimRepairs.length, held: held.length, alreadyMatched } };
 }
