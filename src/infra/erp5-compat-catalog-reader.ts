@@ -5,7 +5,7 @@ import { getFirestore, type QuerySnapshot, type Firestore } from 'firebase-admin
 import { createFirestoreSourceStore } from './source-firestore-store.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarEngineDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { logRouteError } from '../shared/route-error-log.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
@@ -394,7 +394,7 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
     const parsed = parseErp5CompatibilityPriceKey(key);
-    const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
+    const evidence = product.provider_company_code === 'RP031' ? readIancarEngineDeposit(product, key, now)
       : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
       termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid }));
     const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
