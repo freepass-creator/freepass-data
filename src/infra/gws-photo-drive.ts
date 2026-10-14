@@ -64,13 +64,14 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
       for (const f of asItems(res)) {
         if (!f.id || !f.name) continue;
         out.push({ fileId: f.id, name: f.name, sha256: f.sha256Checksum ?? null, srcKey: f.appProperties?.srcKey ?? null, image: true,
-          copySha256: f.appProperties?.copySha256 ?? null });
+          copySha256: f.appProperties?.copySha256 ?? null, plateKey: f.appProperties?.plateKey ?? null });
       }
       page = typeof res.nextPageToken === 'string' ? res.nextPageToken : undefined;
     } while (page);
     return out;
   };
-  const folderRow = (item: Item): DriveVehicleFolder => ({ folderId: item.id!, name: item.name!, fingerprint: item.appProperties?.iancarPhotoSet ?? null, files: files(item.id!) });
+  const folderRow = (item: Item): DriveVehicleFolder => ({ folderId: item.id!, name: item.name!, fingerprint: item.appProperties?.iancarPhotoSet ?? null,
+    detailsVersion: item.appProperties?.detailsVersion ?? null, files: files(item.id!) });
 
   // 이안카 폴더 아래 번호 폴더 목록은 회차당 한 번만 읽는다(이름 검색은 토큰 규칙 때문에 믿지 않고 전체 목록에서 첫 토큰이 번호와 정확히 같은 것만 고른다).
   let roster: Item[] | null = null;
@@ -101,7 +102,7 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
       loadRoster().push({ id: res.id, name: res.name ?? name });   // 같은 회차에서 같은 번호를 두 번 만들지 않는다
       return { folderId: res.id, name: res.name ?? name, fingerprint: null, files: [] };
     },
-    async upload(folderId, name, bytes, srcKey) {
+    async upload(folderId, name, bytes, srcKey, plateKey) {
       const local = join(tempDir, `${randomUUID()}.jpg`);
       const local256 = createHash('sha256').update(bytes).digest('hex');
       mkdirSync(tempDir, { recursive: true });
@@ -109,7 +110,7 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
       try {
         // copySha256 = 완료 표식: 드라이브가 계산한 체크섬과 같을 때만 다음 회차가 «완료» 로 인정한다(불일치·부분 파일은 인정하지 않음).
         const res = run(['drive', 'files', 'create', '--params', JSON.stringify({ supportsAllDrives: true, fields: 'id,name,sha256Checksum' }),
-          '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copySha256: local256, copiedBy: 'iancar-photo-copy/1' } }),
+          '--json', JSON.stringify({ name, parents: [folderId], mimeType: 'image/jpeg', appProperties: { srcKey, copySha256: local256, ...(plateKey ? { plateKey } : {}), copiedBy: 'iancar-photo-copy/1' } }),
           // 상대 파일명: 실행기의 cwd(= tempDir) 안의 파일만 gws 가 받는다.
           '--upload', basename(local)]) as Item;
         if (!res.id) throw new Error('DRIVE_UPLOAD_FAILED');
@@ -120,12 +121,13 @@ export function createGwsPhotoDrive(options: { run: GwsRunner; rootFolderId: str
         if (!remote) remote = ((run(['drive', 'files', 'get', '--params', JSON.stringify({ fileId: res.id, supportsAllDrives: true, fields: 'sha256Checksum' })]) as Item).sha256Checksum) ?? null;
         if (!remote) throw new Error('DRIVE_UPLOAD_CHECKSUM_UNVERIFIED');
         if (remote.toLowerCase() !== local256) throw new Error('DRIVE_UPLOAD_CHECKSUM_MISMATCH');
-        return { fileId: res.id, name, sha256: remote.toLowerCase(), srcKey, image: true, copySha256: local256 };
+        return { fileId: res.id, name, sha256: remote.toLowerCase(), srcKey, image: true, copySha256: local256, plateKey: plateKey ?? null };
       } finally { rmSync(local, { force: true }); }
     },
-    async setFingerprint(folderId, fingerprint, copiedAtIso) {
+    async setFingerprint(folderId, fingerprint, copiedAtIso, detailsVersion) {
+      const version = typeof detailsVersion === 'string' && detailsVersion.length <= 64 ? detailsVersion : null;   // 파일 속성 값 길이 제한 안
       run(['drive', 'files', 'update', '--params', JSON.stringify({ fileId: folderId, supportsAllDrives: true, fields: 'id' }),
-        '--json', JSON.stringify({ appProperties: { iancarPhotoSet: fingerprint, copiedAt: copiedAtIso } })]);
+        '--json', JSON.stringify({ appProperties: { iancarPhotoSet: fingerprint, copiedAt: copiedAtIso, ...(version ? { detailsVersion: version } : {}) } })]);
     },
   };
 }
