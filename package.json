@@ -62,6 +62,7 @@
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
     "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
+    "copy:iancar-photos": "tsx src/jobs/copy-iancar-photos-to-drive.ts",
     "source:aica:capture": "tsx src/jobs/collect-aica.ts",
     "source:iron:capture": "tsx src/jobs/collect-iron.ts",
     "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",

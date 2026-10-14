@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fiveColumnRows, fiveColumnLine } from '../src/application/source-five-column-report.js';
+import { fiveColumnRows, fiveColumnLine, verdictRows } from '../src/application/source-five-column-report.js';
 
 const beat = (source: string, reconciliation: Record<string, unknown> | null, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ source, failures: 0, lastCompleteAt: '2026-10-14T09:00:00.000Z', ...(reconciliation ? { reconciliation } : {}), ...extra });
@@ -28,5 +28,26 @@ describe('5칸 지표 보고', () => {
     expect(rows[0]).toMatchObject({ source: 'RP012', sellable: null, matched: null, heldReasons: { CONTRACT_LOCKED: 2 } });
     expect(fiveColumnLine(rows[0]!)).toContain('지표 없음');
     expect(fiveColumnLine(rows[0]!)).toContain('원천 판매가능 -');
+  });
+  it('verdict: one line per source — ✅ match, ⚠ difference with plain reasons, ❌ stopped or 3 cycles in a row', () => {
+    const ok = recon({ dispatchGapReasons: {} });
+    const diff = recon({ sourceDispatchableCount: 29, dispatchableGap: 2, dispatchGapReasons: { SOURCE_ONLY_NO_DOC: 1, SOURCE_ONLY_INFO_INCOMPLETE: 1 } });
+    const lines = [
+      beat('RP012', ok),
+      beat('RP023', diff),
+      beat('RP031', diff), beat('RP031', diff), beat('RP031', diff),
+      beat('RP006', null, { stopped: true, failures: 3, error: 'SOURCE_STALE' }),
+      beat('RP004', null),
+    ];
+    const v = Object.fromEntries(verdictRows(lines).map(r => [r.source, r]));
+    expect(v.RP012!.line).toBe('손오공(RP012) ✅ 원천 출고가능 27 = 노출 27 · 계약중 3');
+    expect(v.RP023!.line).toBe('오토플러스(RP023) ⚠ 원천 출고가능 29 / 노출 27 · 계약중 3 — 편입 대기 1, 정보 부족(가격·상태) 1');
+    expect(v.RP031!.mark).toBe('❌');
+    expect(v.RP031!.line).toContain('(3회 연속)');
+    expect(v.RP006!.line).toBe('아이언(RP006) ❌ 회차 정지(연속 실패 3) — SOURCE_STALE');
+    expect(v.RP004!.mark).toBe('⚠');
+    expect(v.RP004!.line).toContain('지표 없음');
+    // 차이가 풀리면 연속 횟수도 끊긴다
+    expect(verdictRows([beat('RP031', diff), beat('RP031', diff), beat('RP031', diff), beat('RP031', ok)])[0]!.mark).toBe('✅');
   });
 });

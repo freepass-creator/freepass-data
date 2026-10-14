@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 6,
-      "CHANGED": 260,
+      "ADDED": 0,
+      "CHANGED": 96,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1628
+      "UNCHANGED": 2014
     },
     "current": {
-      "count": 1894,
-      "digest": "3daae7b4ab471478a10074e319ef2644c38a4a3b9959ce8261b3c612019a6129",
-      "readTime": "2026-10-14T07:59:10.710843Z"
+      "count": 2110,
+      "digest": "22333f62e6b35c48e4a9cfcc5debd35614440dd9d21347b2ed35167175d33946",
+      "readTime": "2026-10-14T18:50:56.875756Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "f7f4a0a4f95422566f8d2aaf1bdc349f862b36eef83db875230472a79c3be162",
-    "inventoryTransitionCount": 10,
+    "digest": "25f522d00b9d406737b04b46646df9f99b21eb3b7f6542259e1e3e42a0b53ed0",
+    "inventoryTransitionCount": 1,
     "previous": {
-      "count": 1888,
-      "digest": "e3e3b27e3de14281f52b61764e1e3d8efee5a76112cbd35346b508842add0822",
-      "readTime": "2026-10-14T06:05:30.801969Z"
+      "count": 2110,
+      "digest": "2f506796022954741964d91b737964920bc954eebc1787a47c660c1fdb5e6ed5",
+      "readTime": "2026-10-14T17:02:34.092247Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 10,
-    "mappedForReview": 152,
-    "mappingHold": 1742,
-    "productFieldPathCount": 1045
+    "inventoryTransitionCount": 1,
+    "mappedForReview": 155,
+    "mappingHold": 1955,
+    "productFieldPathCount": 1074
   },
-  "runId": "38531880184-1",
+  "runId": "38618548042-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 1894
+      "products": 2110
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "3daae7b4ab471478a10074e319ef2644c38a4a3b9959ce8261b3c612019a6129",
+    "digest": "22333f62e6b35c48e4a9cfcc5debd35614440dd9d21347b2ed35167175d33946",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-14T07:59:10.710843Z"
+    "readTime": "2026-10-14T18:50:56.875756Z"
   },
   "version": "erp5-source-inventory/1"
 }
