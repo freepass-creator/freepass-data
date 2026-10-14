@@ -616,6 +616,7 @@ export async function runtimeCli(args: string[], env = process.env) {
   for (const plugin of selected) {
     const result = await runSourceCycle(plugin, runtime.commands, runtime.control, {
       onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+      ...(planFile && !approvedPlan ? { manualPlan: true } : {}),
       ...(approvedPlan ? { apply: true, approvedPlan, digest: stableDigest(approvedPlan), approval: env.SOURCE_CYCLE_APPROVED_DIGEST ?? '' } : {}) });
     if (!approvedPlan && planFile && 'plan' in result && result.plan) {
       if (selected.length !== 1) throw new Error('ONE_SOURCE_REQUIRED');
