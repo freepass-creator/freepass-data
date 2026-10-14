@@ -24,6 +24,8 @@ export type CycleCapture = {
   heldReasons?: string[];
   /** complete=false 일 때 왜 불완전한지(안전한 대문자 코드). UPSTREAM_STALE 은 상류 원천이 갱신되지 않은 것이라 회차 실패로 세지 않는다. */
   incompleteReason?: string;
+  /** 읽기는 정상이지만 사람이 알아야 할 안전한 대문자 코드(예: ARIKA_HEADER_INFERRED:<탭>). 회차 요약에 붙는다. */
+  notes?: string[];
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   observationOnly?: boolean;

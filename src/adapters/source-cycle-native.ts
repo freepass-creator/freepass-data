@@ -122,6 +122,7 @@ export type AicaTable = { title: string; values: unknown[][] };
 export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
   const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0;
+  const notes: string[] = [];
   const money = (value: unknown): SourceAmount => {
     if (typeof value === 'string') {
       const text = value.trim();
@@ -144,6 +145,13 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     const required = title === '월렌트' ? ['차종', '1개월'] :
       ['배차상태', '구분', '차량번호', '차급', '차종분류', '트림', '연료', '외장', '내장', 'Km', '월렌트', '장기보증',
         '36개월', '48개월', '60개월', '옵션', '최초등록', '소비자가격', '제조사', '배기량', '연주행', '대인', '대물', '자차', '자손'];
+    // 첫 칸(배차상태) 머리글만 비어 있고 나머지 머리글이 같은 시트 다른 탭의 표준 머리글과 «순서·개수까지» 같으면 첫 칸을 «배차상태» 로 간주한다.
+    // 그 밖의 어떤 불일치도 기존대로 탭 전체 보류다. 공급사 시트는 고치지 않으며 경고 코드를 남긴다(2026-10-14 «장기특별이벤트» 탭 A1 공백 31대 실측).
+    if (title !== '월렌트' && headers[0] === '' && headers.length > 1) {
+      const reference = AICA_SCOPES.filter(s => s !== title && s !== '월렌트').map(s => tables.find(t => t.title === s)?.values[0]?.map(v => String(v).trim()))
+        .find(h => h && h[0] === '배차상태' && h.length === headers.length && h.slice(1).every((v, i) => v === headers[i + 1]));
+      if (reference) { headers[0] = '배차상태'; table.values[0]![0] = '배차상태'; notes.push(`ARIKA_HEADER_INFERRED:${title}`); }
+    }
     if (required.some(h => headers.filter(v => v === h).length !== 1)) continue;
     if (title === '월렌트' && (headers[0] !== '차종' || headers[1] !== '1개월')) continue;
     completedScopes.push(title);
@@ -208,7 +216,8 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
     return !drop;
   });
   return { observedAt, complete: visibilityComplete && completedScopes.length === AICA_SCOPES.length,
-    completedScopes, visibilityComplete, rows: keptRows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount };
+    completedScopes, visibilityComplete, rows: keptRows, heldCount: monthlyHolds.length, heldReasons: monthlyHolds, observationOnlyCount,
+    ...(notes.length ? { notes } : {}) };
 }
 export const aicaNativePlugin = (read: () => Promise<CycleCapture>, ratio: number) => plateUidPlugin(sourceCyclePlugin({
   sourceId: 'RP004', kind: 'AICA', scopes: [...AICA_SCOPES], maxDowngradeRatio: ratio }, read));
