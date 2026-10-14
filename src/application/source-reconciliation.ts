@@ -2,15 +2,15 @@
  * 판매 가능 정의: 원천 = 읽은 레코드 중 status.saleAvailable === true(원천별 상태 해석은 어댑터가 이미 끝냄),
  * ERP5 = 노출(listable) 문서. 키 = 차량번호, 번호 없는 월렌트는 UID(sourceProductKey).
  * 번호는 끝 4자리만 내보낸다. 읽기 전용 — 쓰기 0. */
-import { sourceProductKey, compactRecord, termIdentity, type SourceProductRecord } from '../domain/source-engine.js';
+import { sourceProductKey, termIdentity, type SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { CycleProduct } from '../ports/source-cycle.js';
 
-const clocks = ['observedAt', 'captured_at', 'synced_at'];
-const strip = (v: unknown): unknown => Array.isArray(v) ? v.map(strip) : v && typeof v === 'object'
-  ? Object.fromEntries(Object.entries(v).filter(([k]) => !clocks.includes(k)).map(([k, c]) => [k, strip(c)])) : v;
-const facts = (r: SourceProductRecord) => stableDigest(strip(compactRecord(r)));
+/** 비교용 정규화: 차량 키·UID·원문(raw)·관측 시각은 빼고 «업무 값»만 본다(상태, 차명, 상품구분, 기간별 대여료·보증금(타입 값)·약정거리). 독립 검토 2026-10-14. */
+const facts = (r: SourceProductRecord) => stableDigest({ status: { raw: String(r.status.raw ?? "").trim(), sale: r.status.saleAvailable },
+  vehicle: String(r.vehicleText ?? "").replace(/\s+/g, ' ').trim(), group: r.raw?.product_group ?? null,
+  terms: r.terms.map(t => [t.months, t.mileage ?? null, t.monthlyRent.state, t.monthlyRent.value ?? null, t.deposit.state, t.deposit.value ?? null]).sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1) });
 const last4 = (r: SourceProductRecord) => (r.plate ?? r.uid).replace(/\D/g, '').slice(-4) || 'NONE';
 const LIST_LIMIT = 50;
 

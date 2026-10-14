@@ -5,7 +5,7 @@ import type { CycleProduct } from '../src/ports/source-cycle.js';
 
 const rec = (plate: string, sale: boolean, rent = 500000): SourceProductRecord => ({
   sourceId: 'RP012', uid: `U-${plate}`, plate, vehicleText: 'x', status: { raw: sale ? '출고가능' : '출고불가', saleAvailable: sale },
-  terms: [{ months: 36, rent, deposit: { state: 'ZERO' } } as never], observedAt: '2026-10-14T00:00:00.000Z', raw: {}, vehicleHold: [] });
+  terms: [{ months: 36, monthlyRent: { state: 'KNOWN', value: rent }, deposit: { state: 'ZERO', value: 0 }, mileage: null, raw: {} }], observedAt: '2026-10-14T00:00:00.000Z', raw: {}, vehicleHold: [] });
 const doc = (r: SourceProductRecord, listable: boolean): CycleProduct => ({ record: r, listable, locked_by_contract: false,
   publication_withdrawal: null, publication_withdrawal_prior: null } as CycleProduct);
 
@@ -52,6 +52,13 @@ describe('원천 ↔ ERP5 정합 보고', () => {
       newCount: 2, newHasDoc: 1, pureNewCount: 1, registeredMatched: false });
     const done = reconcileSource([rec('12가1001', true), rec('12가1002', true)], [doc(rec('12가1001', true), true), hidden]);
     expect(done).toMatchObject({ registeredCount: 2, pureNewCount: 0, registeredMatched: true, matched: false });
+  });
+  it('compares business values only: raw cell differences and a different UID for the same plate are not mismatches', () => {
+    const source = rec('12가1001', true), stored = rec('12가1001', true);
+    source.raw = { cells: ['a'], source_row: 3 }; stored.raw = { cells: ['b'], source_row: 9 };
+    source.terms[0]!.raw = { shortDeposit: '' }; stored.terms[0]!.raw = { shortDeposit: '없음' };
+    source.uid = 'NEW'; stored.uid = 'iancar_OLD';
+    expect(reconcileSource([source], [doc(stored, true)])).toMatchObject({ same: 1, mismatchCount: 0, matched: true });
   });
   it('is matched only when sets and values are identical', () => {
     const r = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);

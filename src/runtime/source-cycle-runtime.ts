@@ -309,11 +309,13 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {
           const count = (kind: string) => plan.entries.filter(e => e.kind === kind).length;
+          // 비노출 편입(INFO_INCOMPLETE)은 노출 집계에 넣지 않는다 — gap 허위 0 방지(독립 검토 2026-10-14).
+          const exposedEnroll = plan.entries.filter(e => e.kind === 'ENROLL' && e.after.listable).length;
           const applied = result.stage === 'APPLY' && result.status === 'APPLIED';
           const before = plan.exposedBefore;
           // APPLY_UNCERTAIN 은 일부만 쓰였을 수 있어 노출 대수를 알 수 없다 — 추정값 대신 «미확인»(null)으로 기록한다(독립 검토 2026-10-14).
           const uncertain = result.status === 'APPLY_UNCERTAIN';
-          const after = uncertain ? null : applied ? before - count('DOWNGRADE') + count('ENROLL') + count('REEXPOSE') : before;
+          const after = uncertain ? null : applied ? before - count('DOWNGRADE') + exposedEnroll + count('REEXPOSE') : before;
           const prior = priorAfter.get(plugin.sourceId) ?? null;
           const sourceSellable = typeof plan.sourceCount === 'number' ? plan.sourceCount : null;
           exposure = { before, after, applied, prior, unexplained: prior === null ? null : before - prior,

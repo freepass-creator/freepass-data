@@ -85,6 +85,19 @@ describe('source cycle planning/application', () => {
     expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
     expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
   });
+  it('a price-less car A (identified) does not stop the absence downgrade of car B; an unidentified hold still does', () => {
+    const a = record('a'); a.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
+    const snapshot = { products: [product('a'), product('b')], complete: true };
+    // A 는 읽혔지만 가격이 비어 값 보류(TERMS_HOLD)로 세어졌다: 보류 1건 모두 값 계열 → B 는 부재로 하향, A 는 그대로(읽힌 차)
+    const plan = planSourceCycle(config, { ...evidence([a]), heldCount: 1, benignHeldCount: 1 }, snapshot, now).plan;
+    const absent = plan.entries.filter(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT');
+    expect(absent.map(e => e.after.record.uid)).toEqual(['b']);   // A 는 가격이 비어 검증 보류로 내려가는 별개 경로(SOURCE_VALIDATION_HOLD)
+    expect(plan.warnings).not.toContain('ABSENCE_DOWNGRADE_SKIPPED');
+    // 번호 불명 보류(UID_REQUIRED 계열)가 하나 더 있으면 부재 판정을 하지 않는다
+    const unsafe = planSourceCycle(config, { ...evidence([a]), heldCount: 2, benignHeldCount: 1 }, snapshot, now).plan;
+    expect(unsafe.entries.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT')).toHaveLength(0);
+    expect(unsafe.warnings).toContain('ABSENCE_DOWNGRADE_SKIPPED');
+  });
   it('enrolls a sellable new car whose price is missing as a non-exposed document (대수 우선), and later exposes it when the price arrives', () => {
     const noPrice = record('n1'); noPrice.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
     const first = planSourceCycle(config, evidence([noPrice]), { products: [], complete: true }, now).plan;

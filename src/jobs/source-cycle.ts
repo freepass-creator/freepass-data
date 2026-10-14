@@ -96,7 +96,11 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         converted.records = structuredClone(prior.records);
         read.observedAt = prior.observedAt;
       }
-      const benign = converted.held.filter(h => h.reasons.length > 0 && h.reasons.every(r => r === 'DUPLICATE_UID_SUSPECT')).length;
+      // 부재 하향을 막는 보류는 «번호 불명·충돌» 계열뿐이다(독립 검토 2026-10-14). 값·상태 계열(가격·기간 비어 있음, 상태 불명, 동일 복사본)은 그 행의
+      // 레코드가 이미 읽기 결과에 있어(계획의 seen 에 포함) 다른 차의 부재 판정을 가리지 않는다. 보류 사유는 «A,B» 로 이어 붙은 문자열일 수 있어 쉼표로 나눈다.
+      const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE']);
+      const benign = converted.held.filter(h => h.reasons.length > 0 &&
+        h.reasons.every(r => r.split(',').map(s => s.trim()).filter(Boolean).every(s => VALUE_CLASS_HOLDS.has(s)))).length;
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
         observedAt: read.observedAt, heldCount: converted.held.length,
         ...(benign ? { benignHeldCount: benign } : {}),
@@ -116,8 +120,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const applied = await applySourceCycle(commands, plan, inline
         ? { apply: true, digest: built.digest, approval: built.digest, now: clock() } : { ...options, now: clock() });
       outcome = applied;
-      const counts = (kind: string) => plan!.entries.filter(e => e.kind === kind).length;
-      summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL') + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${applying ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
+      const counts = (kind: string, exposedOnly = false) => plan!.entries.filter(e => e.kind === kind && (!exposedOnly || e.after.listable)).length;
+      summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL', true) + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}(노출 ${counts('ENROLL', true)})·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${applying ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
       if (applied.status === 'APPLY_UNCERTAIN') throw new Error('APPLY_UNCERTAIN');
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
