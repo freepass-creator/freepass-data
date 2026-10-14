@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { albumFingerprint, DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, runIancarPhotoCopy, type DriveFileInfo, type DriveVehicleFolder,
+import { albumFingerprint, DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, plateKeyOf, runIancarPhotoCopy, type DriveFileInfo, type DriveVehicleFolder,
   type PhotoCopyDeps, type PhotoCopyLimits, type SourceVehicle } from '../src/application/iancar-photo-drive-copy.js';
 
 const srcKey = (id: string) => createHash('sha256').update(`iancar-one-photo/1\n${id}`).digest('hex').slice(0, 16);
@@ -177,6 +177,39 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
     expect(r.counts.SKIPPED_SAME).toBe(1);
     expect(w.calls.download + w.calls.upload).toBe(0);
     expect(photoCopyCsv(r)).toBe('번호,폴더\n12가1001,F0\n');
+  });
+
+  it('Codex 경미 (a): a finished folder whose files carry ANOTHER vehicle\'s mark is not SAME (intact files of a different car); legacy files without a mark are accepted', async () => {
+    const mk = (i: number, plateKey: string | null): DriveFileInfo => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: `h${i}`, srcKey: srcKey(`x${i}`), image: true, copySha256: `h${i}`, plateKey });
+    const foreign = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b'] }, folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', files: [mk(0, plateKeyOf('34나9999')), mk(1, plateKeyOf('34나9999'))] }] } });
+    const r1 = await runIancarPhotoCopy(foreign.deps, 'FULL', limits());
+    expect(r1.rows[0]!.status).toBe('NEEDS_REPLACEMENT');
+    expect(r1.completed).toEqual([]);
+    const own = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b'] }, folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', files: [mk(0, plateKeyOf('12가1001')), mk(1, plateKeyOf('12가1001'))] }] } });
+    expect((await runIancarPhotoCopy(own.deps, 'FULL', limits())).rows[0]!.status).toBe('SKIPPED_SAME');
+    const legacy = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b'] }, folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', files: [mk(0, null), mk(1, null)] }] } });
+    expect((await runIancarPhotoCopy(legacy.deps, 'FULL', limits())).rows[0]!.status).toBe('SKIPPED_SAME');
+  });
+
+  it('uploads carry the vehicle mark and the completion marker carries the details version; a changed details time is only a signal on a SAME vehicle', async () => {
+    const uploads: Array<{ key: string; plateKey?: string }> = []; let marker: string | null | undefined;
+    const w = world({ vehicles: [veh(1)], photos: {} });
+    w.deps.source.photoIds = async () => ({ ids: ['a', 'b'], version: '2026-10-15T01:00:00.000Z' });
+    const origUpload = w.deps.drive.upload;
+    w.deps.drive.upload = async (folderId, name, bytes, key, plateKey) => { uploads.push({ key, ...(plateKey ? { plateKey } : {}) }); return origUpload(folderId, name, bytes, key, plateKey); };
+    const origSet = w.deps.drive.setFingerprint;
+    w.deps.drive.setFingerprint = async (folderId, fp, at, version) => { marker = version; return origSet(folderId, fp, at, version); };
+    await runIancarPhotoCopy(w.deps, 'FULL', limits());
+    expect(uploads).toHaveLength(2);
+    expect(uploads.every(u => u.plateKey === plateKeyOf('12가1001'))).toBe(true);
+    expect(marker).toBe('2026-10-15T01:00:00.000Z');
+    // 다음 날 같은 차량: 갱신 시각만 바뀜 → SAME + 신호 코드(쓰기·교체 아님)
+    const files: DriveFileInfo[] = ['a', 'b'].map((id, i) => ({ fileId: `f${i}`, name: `0${i + 1}.jpg`, sha256: `h${i}`, srcKey: srcKey(id), image: true, copySha256: `h${i}`, plateKey: plateKeyOf('12가1001') }));
+    const next = world({ vehicles: [veh(1)], folders: { '12가1001': [{ folderId: 'F', name: '12가1001', fingerprint: 'fp', detailsVersion: '2026-10-15T01:00:00.000Z', files }] } });
+    next.deps.source.photoIds = async () => ({ ids: ['x', 'y'], version: '2026-10-16T09:00:00.000Z' });
+    const r = await runIancarPhotoCopy(next.deps, 'FULL', limits());
+    expect(r.rows[0]).toMatchObject({ status: 'SKIPPED_SAME', code: 'DETAILS_UPDATED_AT_CHANGED' });
+    expect(next.calls.download + next.calls.upload).toBe(0);
   });
 
   it('a finished folder whose photo count changed, or whose integrity mark is broken, is held for replacement (no writes)', async () => {
