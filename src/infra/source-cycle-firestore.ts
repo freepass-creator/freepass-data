@@ -146,7 +146,7 @@ export const sheetSpecFields = (spec: unknown): Fields => {
 };
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean } = {}): Fields {
   const r = p.record;
-  const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '상품화중', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
+  const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
   // fail-closed(독립 검토 BLOCK): 검토된 어휘에 없는 상태는 «가용» 으로 추정해 노출하지 않는다. 플러그인이 먼저 보류하므로 여기 오는 일은 드물다.
   const listable = p.listable && (resolveErp5InventoryStatus(display).known || PROVIDER_AVAILABLE_STATUS_LABELS.has(display));

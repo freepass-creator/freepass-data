@@ -241,11 +241,21 @@ describe('source cycle planning/application', () => {
 });
 
 describe('source plugins', () => {
-  it.each([['IANCAR', 'PREPARING', true], ['IANCAR', 'UNAVAILABLE', false], ['IANCAR', 'RESERVED', false],
+  it.each([['IANCAR', 'PREPARING', true], ['IANCAR', 'UNAVAILABLE', false], ['IANCAR', 'RESERVED', true],
     ['AICA', '배차문의', true], ['AICA', '수리중', true], ['IRON', '판매완료', false], ['F05', '출고불가', false], ['F05', '출고협의', true],
-    ['SONOGONG', '출고가능', true], ['AUTOPLUS', '출고가능', true]] as const)('%s %s = %s', async (kind, status, expected) => {
+    ['SONOGONG', '출고가능', true], ['AUTOPLUS', '출고가능', true],
+    // 대표 2026-10-14 «계약중은 연동해서 계약중으로, 출고불가만 안 올린다»: 계약 계열은 판매 가능(선점 표시), 아이언 홈피 상세 판정값은 그대로
+    ['F05', '예약', true], ['AICA', '상담중', true], ['F05', '출고대기', null], ['IRON', '출고가능', true], ['IRON', '출고불가', false], ['IRON', '게시', true]] as const)('%s %s = %s', async (kind, status, expected) => {
     const p = plugin(async () => capture([record('a', status)], kind === 'AICA' ? [...AICA_SCOPES] : ['inventory']), kind);
     const read = await p.read(); expect(read.complete).toBe(true); expect(p.toRecords(read).records[0]!.status.saleAvailable).toBe(expected);
+  });
+  it('every contracted spelling becomes raw «계약중» (engine-written contracted readback) and keeps the supplier spelling', async () => {
+    for (const [kind, provided] of [['IANCAR', 'RESERVED'], ['F05', '선점'], ['AICA', '계약대기']] as const) {
+      const p = plugin(async () => capture([record('a', provided)], kind === 'AICA' ? [...AICA_SCOPES] : ['inventory']), kind);
+      const r = p.toRecords(await p.read()).records[0]!;
+      expect(r.status).toMatchObject({ raw: '계약중', saleAvailable: true });
+      expect(r.raw.provider_status).toBe(provided);
+    }
   });
   it('F05 excludes hidden tabs, hidden rows and filters; missing visibility is incomplete/unknown', async () => {
     const raw = capture([record('a'), record('b'), record('c')]);

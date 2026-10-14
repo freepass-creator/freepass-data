@@ -1,9 +1,11 @@
 /** 오토플러스(RP023) 공급사 시트 어댑터 — 대표 2026-10-14: 오토플러스 정본 = 구글시트, 홈페이지는 보조(교차 확인).
  * 시트 탭 구조(원본 «New 오토플러스 재고 리스트»): 상단 안내 문구 뒤에 머리글 행(No.·차량번호·차종·모델명·색상·연료·최초등록일·예상 주행거리·판매상태·
  * «12개월 2만km» 같은 요금 열…)이 있고 그 아래가 차량 행이다. 탭 이름·머리글 행 위치는 바뀔 수 있어 «차량번호»와 «판매상태» 머리글을 모두 가진 탭만 쓴다.
- * 판매상태: 판매중·할인판매·상품대기 = 출고가능, 계약중 = 판매 가능이되 «계약중»(선점) 표시, 상담중 = 계약 진행(판매 불가), 보류 = 불가. 모르는 값은 보류(STATUS_UNKNOWN)다. */
+ * 판매상태: 판매중·할인판매·상품대기 = 출고가능, 계약중·상담중 등 계약 계열(CONTRACTED_STATUS_SYNONYMS) = 판매 가능이되 «계약중»(선점) 표시
+ * (대표 2026-10-14 «계약중은 연동해서 계약중으로, 출고불가만 안 올린다»), 보류·판매완료 = 불가. 모르는 값은 보류(STATUS_UNKNOWN)다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 
 export type AutoplusSheetTab = { title: string; values: unknown[][] };
 export type AutoplusSheetRead = {
@@ -11,8 +13,8 @@ export type AutoplusSheetRead = {
   records: SourceProductRecord[]; held: Array<{ tab: string; row: number; reason: string }>; duplicatePlates: string[];
 };
 
-const SELLABLE = new Set(['판매중', '할인판매', '상품대기', '계약중']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
-const NOT_SELLABLE = new Set(['상담중', '보류', '판매완료', '출고완료', '판매불가']);
+const SELLABLE = new Set(['판매중', '할인판매', '상품대기']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
+const NOT_SELLABLE = new Set(['보류', '판매완료', '출고완료', '판매불가', '출고불가']);   // 출고불가 = 대표 10-14 «출고불가만 안 올린다»(보류로 빠지면 회차 부재 하향 전체가 멈춘다)
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
 const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
 const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -58,7 +60,8 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       if (seen.has(plate)) { duplicates.add(plate); continue; }
       seen.add(plate);
       const status = clean(row[iStatus]);
-      const sellable = SELLABLE.has(status);
+      const contracted = isContractedStatus(status);
+      const sellable = SELLABLE.has(status) || contracted;
       if (!sellable && !NOT_SELLABLE.has(status)) { held.push({ tab: tab.title, row: i + 1, reason: 'STATUS_UNKNOWN' }); continue; }
       const terms: SourceTerm[] = [];
       for (const col of rateColumns) {
@@ -77,7 +80,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       if (mileage) spec.mileage = mileage;
       records.push({ sourceId: 'RP023', uid: plate, plate, vehicleText,
         // 표시 상태는 «출고가능»(판매 가능) 또는 시트 상태 그대로(계약중 등) — 판매 가능 판정은 saleAvailable 하나가 정한다.
-        status: { raw: sellable && status !== '계약중' ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
+        status: { raw: contracted ? '계약중' : sellable ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
         raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, product_group: 'LONG_TERM', product_type: '오플구독', ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }

@@ -1017,4 +1017,8 @@ describe('status_kind 는 표시 상태가 정한다 (발행 단계 status_kind 
     expect(statusKindOf('배차중', true)).toBe('가용');
     expect(statusKindOf('알 수 없음', true)).toBe('불가');
   });
+  it('이안카 PREPARING 은 «출고가능»(IANCAR-ONE-API 결정 대표 10-12 «출고불가 아니면 판매 가능», 전에는 상품화중으로 써서 문서와 어긋남)', () => {
+    const p = product(); p.record = { ...p.record, status: { raw: 'PREPARING', saleAvailable: true }, raw: {} };
+    expect(nativeCycleFields({ ...p, listable: true })).toMatchObject({ status: '출고가능', vehicle_status: '출고가능', status_kind: '가용' });
+  });
 });
