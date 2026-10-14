@@ -372,6 +372,9 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
         { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId),
           knownFalsePositive: (env.SOURCE_CYCLE_STALE_FALSE_POSITIVE ?? '').split(',').map(v => v.trim()).filter(Boolean) });
       if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
+      // 즉시 실행 요청(처리기가 SOURCE_CYCLE_REQUEST_RUN=1 로 부름)은 «실제로 읽고 계획했는지»가 중요하다: 잠금(LOCKED)·변경 없음 생략(UNCHANGED_SYNC)은
+      // 정시 실행에는 정상이지만 요청에는 «미실행»이므로 종료 코드 3 으로 알려 처리기가 요청을 소비하지 않고 되돌리게 한다(독립 검토 2026-10-14).
+      else if (env.SOURCE_CYCLE_REQUEST_RUN === '1' && record.reports.some(r => ['LOCKED', 'UNCHANGED_SYNC'].includes(r.status))) record.exit = 3;
     }
   } catch (e) {
     const code = e instanceof Error && /^[A-Z_]+$/.test(e.message) ? e.message : 'UNATTENDED_RUN_ERROR';

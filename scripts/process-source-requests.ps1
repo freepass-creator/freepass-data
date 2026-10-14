@@ -9,13 +9,17 @@ param(
 #   { "source": "RP012", "requestedAt": "2026-10-14T01:30:00Z", "by": "free text, no secrets" }
 # For each valid request this script runs scripts/run-source-cycle.ps1 -Source <code> ONCE. It never writes products itself,
 # never changes locks and never takes over a dead lock (-Source runs only report DEAD_LOCK_HELD).
-# Delivery semantics (independent review round 4):
+# Delivery semantics (independent review rounds 4-5):
 #   - a request is CLAIMED (moved to inflight/) BEFORE the run; if this script dies mid-run the claimed file is never re-run
 #     automatically - the next invocation moves it to processed/ as ".unknown" (operator re-requests if needed). No duplicate runs.
-#   - the run result decides the outcome: exit 0 => processed/; non-zero (including a LOCKED/HOLD skip) => the request is put
-#     back and retried on the next invocation, up to MaxAttempts, then rejected/ as EXHAUSTED. A request is never silently consumed.
-#   - last-run.json is written atomically (temp + rename); a damaged file is moved aside, not silently treated as empty history.
-#   - allowed-sources.txt lines: "RP012" or "RP031:15" (per-source minimum minutes). RP031 (Iancar, 429 history) defaults to 15.
+#   - the run result decides the outcome. The engine exits 0 only when it really read and planned; with SOURCE_CYCLE_REQUEST_RUN=1 it
+#     exits 3 for LOCKED / UNCHANGED_SYNC ("not executed") and 1 for HOLD/STOPPED. Only exit 0 consumes the request (-> processed/).
+#   - any other result puts the request back under a UNIQUE name that carries the attempt count ("<id>.r<N>-<stamp>.json"); the rename
+#     itself is the attempt record (no separate state to lose in a crash), a returned file never overwrites a newer request, and after
+#     MaxAttempts the request goes to rejected/ as EXHAUSTED. Attempts are per request, not per source.
+#   - last-run.json is replaced atomically with [IO.File]::Replace; old-schema ({"RP031":"<utc>"}) is read as-is; an unknown or damaged
+#     file is moved aside and every allowed source is delayed for one interval (never "no history = no floor").
+#   - allowed-sources.txt lines: "RP012" or "RP031:15" (per-source minimum minutes). RP031 (Iancar, 429 history) is floored at 15.
 #   - requests older than 2 hours or dated in the future are rejected; at most 6 sources per invocation; a mutex prevents overlap.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -25,12 +29,19 @@ if ($dir.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { thro
 $processed = Join-Path $dir 'processed'; $rejected = Join-Path $dir 'rejected'; $inflight = Join-Path $dir 'inflight'
 New-Item -ItemType Directory -Force -Path $processed, $rejected, $inflight | Out-Null
 
+function Move-Unique([string]$from, [string]$toDir, [string]$name) {
+  # never overwrite: add a numeric suffix when the target name exists
+  $target = Join-Path $toDir $name; $n = 0
+  while (Test-Path -LiteralPath $target) { $n++; $target = Join-Path $toDir ([IO.Path]::GetFileNameWithoutExtension($name) + ".d$n" + [IO.Path]::GetExtension($name)) }
+  Move-Item -LiteralPath $from -Destination $target
+}
+
 $mutex = New-Object System.Threading.Mutex($false, 'Global\FreePassSourceRequests')
 if (-not $mutex.WaitOne(0)) { Write-Output 'SOURCE_REQUESTS_ALREADY_RUNNING'; exit 0 }
 try {
   # A claimed file left over from a crashed run: it may or may not have executed - never re-run it automatically.
   foreach ($stale in @(Get-ChildItem -LiteralPath $inflight -File -ErrorAction SilentlyContinue)) {
-    Move-Item -LiteralPath $stale.FullName -Destination (Join-Path $processed ($stale.BaseName + '.unknown.json')) -Force
+    Move-Unique $stale.FullName $processed ($stale.BaseName + '.unknown.json')
     Write-Output "UNKNOWN_OUTCOME $($stale.Name)"
   }
   $allowedFile = Join-Path $dir 'allowed-sources.txt'
@@ -42,28 +53,34 @@ try {
     }
   }
   if ($allowed.ContainsKey('RP031') -and $allowed['RP031'] -lt 15) { $allowed['RP031'] = 15 }   # enforced floor for Iancar
+  $now = [datetime]::UtcNow
   $stateFile = Join-Path $dir 'last-run.json'
-  $last = @{}; $attempts = @{}
+  $last = @{}
   if (Test-Path -LiteralPath $stateFile) {
+    $ok = $false
     try {
       $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-      if ($state.last) { $state.last.PSObject.Properties | ForEach-Object { $last[$_.Name] = [datetime]$_.Value } }
-      if ($state.attempts) { $state.attempts.PSObject.Properties | ForEach-Object { $attempts[$_.Name] = [int]$_.Value } }
-    } catch {
-      Move-Item -LiteralPath $stateFile -Destination (Join-Path $dir ('last-run.damaged.' + [guid]::NewGuid().ToString('N') + '.json')) -Force
-      Write-Output 'STATE_DAMAGED_MOVED_ASIDE'
+      $props = @($state.PSObject.Properties)
+      if ($props.Count -gt 0 -and ($props | Where-Object { $_.Name -eq 'last' }).Count -eq 1) {                     # current schema {"last":{code:utc}}
+        $state.last.PSObject.Properties | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
+      } elseif ($props.Count -gt 0 -and -not ($props | Where-Object { $_.Name -notmatch '^RP\d{3}$' -or -not ($_.Value -is [datetime] -or "$($_.Value)" -match '^\d{4}-\d{2}-\d{2}T') })) { # legacy {"RP031":"<utc>"}
+        $props | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
+      } elseif ($props.Count -eq 0) { $ok = $true }                                                                # empty object = no history yet
+    } catch { $ok = $false }
+    if (-not $ok) {
+      Move-Unique $stateFile $dir ('last-run.damaged.' + [guid]::NewGuid().ToString('N') + '.json')
+      foreach ($k in $allowed.Keys) { $last[$k] = $now }          # safe side: delay every allowed source one interval
+      Write-Output 'STATE_UNKNOWN_OR_DAMAGED_MOVED_ASIDE'
     }
   }
   $save = {
-    $o = @{ last = @{}; attempts = @{} }
+    $o = @{ last = @{} }
     foreach ($k in $last.Keys) { $o.last[$k] = $last[$k].ToString('o') }
-    foreach ($k in $attempts.Keys) { $o.attempts[$k] = $attempts[$k] }
     $tmp = $stateFile + '.' + $PID + '.tmp'
     ($o | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -LiteralPath $tmp -Destination $stateFile -Force
+    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace($tmp, $stateFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $stateFile) }
   }
   $runner = Join-Path $PSScriptRoot 'run-source-cycle.ps1'
-  $now = [datetime]::UtcNow
   $files = @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File | Where-Object { $_.Name -notlike 'last-run*' } | Sort-Object LastWriteTimeUtc)
   $bySource = @{}
   foreach ($file in $files) {
@@ -79,7 +96,7 @@ try {
       elseif (-not $reason -and ($at - $now).TotalMinutes -gt 5) { $reason = 'REQUESTED_AT_FUTURE' }
     }
     if ($reason) {
-      Move-Item -LiteralPath $file.FullName -Destination (Join-Path $rejected ("{0}.{1}.json" -f $file.BaseName, $reason)) -Force
+      Move-Unique $file.FullName $rejected ("{0}.{1}.json" -f $file.BaseName, $reason)
       Write-Output "REJECTED $($file.Name) $reason"
       continue
     }
@@ -99,34 +116,29 @@ try {
     # Claim BEFORE running so a crash can never cause a duplicate run.
     $claimed = @()
     foreach ($file in $group) {
-      $dest = Join-Path $inflight $file.Name
-      Move-Item -LiteralPath $file.FullName -Destination $dest -Force
-      $claimed += $dest
+      Move-Unique $file.FullName $inflight $file.Name
+      $claimed += (Join-Path $inflight $file.Name)
     }
     $runArgs = @{ Source = $code }          # hashtable splat = named parameters (an array would bind positionally)
     if ($EnvFile) { $runArgs.EnvFile = $EnvFile }
     $exit = 1
-    try { & $runner @runArgs; $exit = $LASTEXITCODE } catch { $exit = 1 }
+    $env:SOURCE_CYCLE_REQUEST_RUN = '1'
+    try { & $runner @runArgs; $exit = $LASTEXITCODE } catch { $exit = 1 } finally { Remove-Item Env:\SOURCE_CYCLE_REQUEST_RUN -ErrorAction SilentlyContinue }
     $last[$code] = $now
-    if ($exit -eq 0) {
-      foreach ($path in $claimed) { Move-Item -LiteralPath $path -Destination (Join-Path $processed ("{0}.exit0.json" -f [IO.Path]::GetFileNameWithoutExtension($path))) -Force }
-      $attempts.Remove($code)
-      Write-Output "RAN $code exit=0 requests=$($group.Count)"
-    } else {
-      $count = 1 + $(if ($attempts.ContainsKey($code)) { $attempts[$code] } else { 0 })
-      $attempts[$code] = $count
-      foreach ($path in $claimed) {
-        $name = [IO.Path]::GetFileName($path)
-        if ($count -ge $MaxAttempts) {
-          Move-Item -LiteralPath $path -Destination (Join-Path $rejected ("{0}.EXHAUSTED.json" -f [IO.Path]::GetFileNameWithoutExtension($path))) -Force
-        } else {
-          Move-Item -LiteralPath $path -Destination (Join-Path $dir $name) -Force   # put back: retried by the next invocation
-        }
-      }
-      if ($count -ge $MaxAttempts) { $attempts.Remove($code) }
-      Write-Output "FAILED $code exit=$exit attempt=$count requests=$($group.Count)"
+    & $save                                  # interval record first: a crash below can only delay, never re-run sooner
+    foreach ($path in $claimed) {
+      if (-not (Test-Path -LiteralPath $path)) { continue }
+      $base = [IO.Path]::GetFileNameWithoutExtension($path)
+      if ($exit -eq 0) { Move-Unique $path $processed ($base + '.exit0.json'); continue }
+      # not executed / failed: put back under a unique name that carries the attempt count
+      $m = [regex]::Match($base, '^(?<id>.*)\.r(?<n>\d+)-\d{14,17}$')
+      $attempt = 1 + $(if ($m.Success) { [int]$m.Groups['n'].Value } else { 0 })
+      $id = if ($m.Success) { $m.Groups['id'].Value } else { $base }
+      if ($attempt -ge $MaxAttempts) { Move-Unique $path $rejected ("{0}.EXHAUSTED.json" -f $id); continue }
+      $stamp = [datetime]::UtcNow.ToString('yyyyMMddHHmmssfff')
+      Move-Unique $path $dir ("{0}.r{1}-{2}.json" -f $id, $attempt, $stamp)
     }
-    & $save
+    Write-Output "RUN $code exit=$exit requests=$($group.Count)"
   }
   & $save
 } finally {
