@@ -25,6 +25,10 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
     reviewedSourceChangeReceipts: 'reviewed_source_change_receipts'
   }),
+  /** 원천 엔진 회차 제어(잠금 임대·회차 상태·알림). 온라인 실행기(러너 휘발)용 — 상품·원천 증거가 아니다. 삭제 없이 상태 표식만 바꾼다. */
+  sourceCycle: Object.freeze({
+    control: 'source_cycle_control'
+  }),
   ownership: Object.freeze({
     writer: 'writer_ownership',
     transferReceipts: 'writer_ownership_transfer_receipts'

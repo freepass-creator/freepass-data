@@ -2,7 +2,7 @@ import { mkdir, open, readdir, readFile, rename, unlink, appendFile, stat, link 
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
-import { emptyCycleState, type CycleControl, type CycleState } from '../ports/source-cycle.js';
+import { assertCycleState, emptyCycleState, type CycleControl, type CycleState } from '../ports/source-cycle.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 
 const processAlive = (pid: number) => {
@@ -122,14 +122,7 @@ export function fileCycleControl(directory: string, heartbeat: CycleControl['hea
     },
     async load(source) {
       try {
-        const value = JSON.parse(await readFile(file(source, 'state.json'), 'utf8')) as CycleState;
-        const nullableTime = (v: unknown) => v === null || (typeof v === 'string' && Number.isFinite(Date.parse(v)));
-        if (!Number.isSafeInteger(value.failures) || value.failures < 0 || typeof value.stopped !== 'boolean' ||
-            (value.failures >= 3 && !value.stopped) || !nullableTime(value.lastSyncedAt) || !nullableTime(value.lastAttemptAt) ||
-            !nullableTime(value.lastCompleteAt) || !Number.isSafeInteger(value.readCount) || value.readCount < 0 ||
-            !Number.isSafeInteger(value.heldCount) || value.heldCount < 0 ||
-            !(value.error === null || typeof value.error === 'string')) throw new Error('CYCLE_STATE_INVALID');
-        return value;
+        return assertCycleState(JSON.parse(await readFile(file(source, 'state.json'), 'utf8')) as CycleState);
       } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return emptyCycleState(); throw e; }
     },
     async save(source, state) {

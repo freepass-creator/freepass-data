@@ -217,7 +217,10 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // floor>0(런타임 기본 3): 대표 2026-10-14 «걸림돌 해제» — 회차 전체를 멈추지 않고 «허용분까지만 적용, 나머지는 다음 회차로 이월»한다.
     //   부재 추론(SOURCE_ABSENT) 허용분 = max(절대 하한, 노출의 상한 비율), 원천이 명시한 불가·계약중 등 = max(절대 하한, 노출의 max(상한,0.5)).
     //   이월분은 노출 유지(키 순서 고정이라 같은 입력이면 같은 대수), 경고 DOWNGRADE_DEFERRED 로 남아 사람이 대량 오작동을 알아챈다.
-    if (floor > 0) {
+    // 범위 급변(Codex P2, 2026-10-14): 부재 추론 하향이 노출의 절반을 넘으면 «허용분 적용·나머지 이월»이 아니라 회차 전체를 멈춘다 —
+    // 원천 읽기·키 오매핑 같은 대량 오작동이 일부라도 반영되지 않게(이월은 정상 범위의 걸림돌 해제용이다).
+    if (floor > 0 && absentDown > Math.max(floor, plan.exposedBefore * DOWNGRADE_SURGE_RATIO)) plan.blockers.push('DOWNGRADE_SURGE');
+    else if (floor > 0) {
       const absentAllow = Math.max(floor, Math.floor(plan.exposedBefore * config.maxDowngradeRatio));
       const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
       const dropKeys = new Set<string>();
@@ -254,6 +257,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }
 
+/** 부재 추론 하향이 노출의 이 비율을 넘으면 범위 급변으로 회차 전체를 멈춘다(일부 적용 없음). */
+export const DOWNGRADE_SURGE_RATIO = 0.5;
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,
   options: { apply?: boolean; digest?: string; approval?: string; now: number }) {
   const plan = structuredClone(input), digest = stableDigest(plan);
