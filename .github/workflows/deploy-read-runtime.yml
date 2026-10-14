@@ -115,6 +115,10 @@ jobs:
       IANCAR_PHOTO_ID_GATE_SUPPLIERS: ${{ vars.FREEPASS_DATA_IANCAR_PHOTO_ID_GATE_SUPPLIERS }}
       # 승인 사진(photo_original_refs) 드라이브 reader 스위치. 비어 있으면(기본) 꺼짐, «drive-public» 만 허용.
       APPROVED_PHOTO_READER: ${{ vars.FREEPASS_DATA_APPROVED_PHOTO_READER }}
+      # 승인 사진 사본 서빙 허용 공급사(쉼표 구분 RPxxx·PT-xxxx). 비어 있으면(기본) 이안카만(종전).
+      PHOTO_COPY_SUPPLIERS: ${{ vars.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS }}
+      # 이안카 사본 없는 차의 ONE 라이브 폴백. 비어 있으면(기본) 켜짐=종전, «off» 만 끔.
+      IANCAR_LIVE_PHOTO_FALLBACK: ${{ vars.FREEPASS_DATA_IANCAR_LIVE_PHOTO_FALLBACK }}
       REQUESTED_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
       EXPECTED_BASELINE_REVISION: ${{ inputs.expected_baseline_revision }}
       EXPECTED_BASELINE_SOURCE_SHA: ${{ inputs.expected_baseline_source_sha }}
@@ -138,6 +142,8 @@ jobs:
           test -n "$RUNTIME_SERVICE_ACCOUNT"
           [[ -z "${IANCAR_PHOTO_ID_GATE_SUPPLIERS:-}" || "${IANCAR_PHOTO_ID_GATE_SUPPLIERS:-}" =~ ^(RP[0-9]{3})(,RP[0-9]{3})*$ ]]
           [[ -z "${APPROVED_PHOTO_READER:-}" || "${APPROVED_PHOTO_READER:-}" =~ ^(drive-public|drive-api)$ ]]
+          [[ -z "${PHOTO_COPY_SUPPLIERS:-}" || "${PHOTO_COPY_SUPPLIERS:-}" =~ ^(RP[0-9]{3}|PT-[0-9]{4})(,(RP[0-9]{3}|PT-[0-9]{4}))*$ ]]
+          [[ -z "${IANCAR_LIVE_PHOTO_FALLBACK:-}" || "${IANCAR_LIVE_PHOTO_FALLBACK:-}" =~ ^(on|off)$ ]]
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             test -n "$CONSUMERS_SECRET_NAME"
             [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
@@ -282,11 +288,11 @@ jobs:
           npm run test:shadow
           npm run test:delivery-owner
           if [ "$EXPECTED_SOURCE_SHA" = 'bd03f33b9bdedfb8f49ad8717062b32784e9a08a' ]; then
-            npm exec -- vitest run tests/vehicle-photo-rendition.test.ts tests/vehicle-photo-size-gateway.test.ts tests/consumer-gateway.test.ts tests/iancar-photo-id-gate.test.ts tests/iancar-photo-id-gate-config.test.ts tests/iancar-photo-id-gate-http.test.ts tests/iancar-photo-runtime-preflight.test.ts tests/iancar-publication-withdrawal.test.ts tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-metadata-diagnostic.test.ts tests/iancar-one-api.test.ts
+            npm exec -- vitest run tests/vehicle-photo-rendition.test.ts tests/vehicle-photo-size-gateway.test.ts tests/consumer-gateway.test.ts tests/iancar-photo-id-gate.test.ts tests/iancar-photo-id-gate-config.test.ts tests/iancar-photo-id-gate-http.test.ts tests/iancar-photo-runtime-preflight.test.ts tests/iancar-photo-firestore.test.ts tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-metadata-diagnostic.test.ts tests/iancar-one-api.test.ts
           elif [ "$EXPECTED_SOURCE_SHA" = 'd42c4f58d939d7899457730cd1a82f419b3eade8' ]; then
-            npm exec -- vitest run tests/vehicle-photo-rendition.test.ts tests/vehicle-photo-size-gateway.test.ts tests/consumer-gateway.test.ts tests/iancar-photo-id-gate.test.ts tests/iancar-photo-id-gate-config.test.ts tests/iancar-photo-id-gate-http.test.ts tests/iancar-photo-runtime-preflight.test.ts tests/iancar-publication-withdrawal.test.ts tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-metadata-diagnostic.test.ts
+            npm exec -- vitest run tests/vehicle-photo-rendition.test.ts tests/vehicle-photo-size-gateway.test.ts tests/consumer-gateway.test.ts tests/iancar-photo-id-gate.test.ts tests/iancar-photo-id-gate-config.test.ts tests/iancar-photo-id-gate-http.test.ts tests/iancar-photo-runtime-preflight.test.ts tests/iancar-photo-firestore.test.ts tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-metadata-diagnostic.test.ts
           else
-            npm exec -- vitest run tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-read-diagnostic.test.ts tests/iancar-publication-withdrawal.test.ts
+            npm exec -- vitest run tests/vehicle-photo-read-observer.test.ts tests/vehicle-photo-read-diagnostic.test.ts tests/iancar-photo-firestore.test.ts
           fi
           local_image="freepass-data-selected-check:$EXPECTED_SOURCE_SHA"
           docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --build-arg "FREEPASS_DATA_SOURCE_SHA=$EXPECTED_SOURCE_SHA" --label "org.opencontainers.image.revision=$EXPECTED_SOURCE_SHA" --tag "$local_image" .
@@ -386,6 +392,12 @@ jobs:
             if [ -n "${APPROVED_PHOTO_READER:-}" ]; then
               runtime_env="$runtime_env@FREEPASS_DATA_APPROVED_PHOTO_READER=$APPROVED_PHOTO_READER"
             fi
+            if [ -n "${PHOTO_COPY_SUPPLIERS:-}" ]; then
+              runtime_env="$runtime_env@FREEPASS_DATA_PHOTO_COPY_SUPPLIERS=$PHOTO_COPY_SUPPLIERS"
+            fi
+            if [ -n "${IANCAR_LIVE_PHOTO_FALLBACK:-}" ]; then
+              runtime_env="$runtime_env@IANCAR_LIVE_PHOTO_FALLBACK=$IANCAR_LIVE_PHOTO_FALLBACK"
+            fi
             if [ "$EXPECTED_SOURCE_SHA" = 'd42c4f58d939d7899457730cd1a82f419b3eade8' ]; then
               runtime_env="$runtime_env@IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031"
               gate_env_exception='IANCAR_PHOTO_ID_GATE_SUPPLIERS'
@@ -443,7 +455,7 @@ jobs:
             expected_secrets="$(jq -cnS --arg consumers "$CONSUMERS_SECRET_NAME" --arg cv "$CONSUMERS_SECRET_VERSION" --arg one "$IANCAR_SECRET_NAME" --arg ov "$IANCAR_SECRET_VERSION" '[{name:"FREEPASS_DATA_CONSUMERS_JSON",valueFrom:{secretKeyRef:{name:$consumers,key:$cv}}},{name:"EANCAR_ONE_API_KEY",valueFrom:{secretKeyRef:{name:$one,key:$ov}}}] | sort_by(.name)')"
             existing_secrets="$(jq -cS '[.spec.template.spec.containers[0].env[]? | select(.valueFrom != null) | {name,valueFrom}] | sort_by(.name)' <<<"$before")"
             test "$existing_secrets" = "$expected_secrets"
-            preserved_before="$(jq -cS --arg gate "$gate_env_exception" '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID" and .name != $gate and .name != "FREEPASS_DATA_APPROVED_PHOTO_READER") | {name,value,valueFrom}] | sort_by(.name)' <<<"$before")"
+            preserved_before="$(jq -cS --arg gate "$gate_env_exception" '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID" and .name != $gate and .name != "FREEPASS_DATA_APPROVED_PHOTO_READER" and .name != "FREEPASS_DATA_PHOTO_COPY_SUPPLIERS" and .name != "IANCAR_LIVE_PHOTO_FALLBACK") | {name,value,valueFrom}] | sort_by(.name)' <<<"$before")"
             secret_args+=(--set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION")
           else
             public_runtime_args+=(--timeout=30s --cpu=1 --memory=512Mi)
@@ -456,7 +468,7 @@ jobs:
             "${secret_args[@]}" "${public_runtime_args[@]}" --quiet
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             after="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
-            preserved_after="$(jq -cS --arg gate "$gate_env_exception" '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID" and .name != $gate and .name != "FREEPASS_DATA_APPROVED_PHOTO_READER") | {name,value,valueFrom}] | sort_by(.name)' <<<"$after")"
+            preserved_after="$(jq -cS --arg gate "$gate_env_exception" '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID" and .name != $gate and .name != "FREEPASS_DATA_APPROVED_PHOTO_READER" and .name != "FREEPASS_DATA_PHOTO_COPY_SUPPLIERS" and .name != "IANCAR_LIVE_PHOTO_FALLBACK") | {name,value,valueFrom}] | sort_by(.name)' <<<"$after")"
             test "$preserved_before" = "$preserved_after"
             if [ "$EXPECTED_SOURCE_SHA" = 'd42c4f58d939d7899457730cd1a82f419b3eade8' ] || [ "$EXPECTED_SOURCE_SHA" = 'bd03f33b9bdedfb8f49ad8717062b32784e9a08a' ]; then
               jq -e '[.spec.template.spec.containers[0].env[]? | select(.name == "IANCAR_PHOTO_ID_GATE_SUPPLIERS")] | length == 1 and all(.[]; .value == "RP031" and .valueFrom == null)' <<<"$after" >/dev/null

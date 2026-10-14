@@ -1,8 +1,9 @@
-import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, SOURCE_EXPIRY_SECONDS,
+import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, comparableRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
+import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
 export * from '../ports/source-cycle.js';
@@ -20,7 +21,8 @@ const withoutObservationClocks = (value: unknown): unknown => {
   return value;
 };
 // 변경 판정은 압축 형태로 한다: 문서에는 압축 레코드만 저장하므로 저장된 값과 새 원천 값을 같은 기준으로 비교한다(원문이 바뀌면 digest 가 바뀐다).
-const facts = (r: SourceProductRecord) => withoutObservationClocks(compactRecord(r));
+// spec 은 문서에 실제 값으로 남지만(새 문서 사실 칸), 비교는 digest 로 한다 — 옛 문서(digest 저장)와 값이 같으면 변경 없음.
+const facts = (r: SourceProductRecord) => withoutObservationClocks(comparableRecord(r));
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
@@ -41,7 +43,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 계획 단계 보류의 사유 코드별 건수(보고 전용, plan digest 에 넣지 않는다). RP021 보류 3건이 코드 없이 세어져 원인을 못 가리던 문제(B3Q 2026-10-14).
   const heldBy: Record<string, number> = {};
   const hold = (code: string) => { plan.held++; heldBy[code] = (heldBy[code] ?? 0) + 1; };
-  let infoIncomplete = 0, notSellableEnrolled = 0;
+  let infoIncomplete = 0, notSellableEnrolled = 0, statusUnknownExposed = 0;
   if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
@@ -59,6 +61,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const mine = new Map(snapshot.products.map(p => [sourceProductKey(p.record), p]));
   const driftHeld = new Set(snapshot.driftHeld ?? []);
+  const foreignUids = new Set(snapshot.foreignUids ?? []);
   if (driftHeld.size) plan.warnings.push(`DRIFT_HELD:${driftHeld.size}:${stableDigest([...driftHeld].sort()).slice(0, 12)}`);
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
@@ -116,6 +119,13 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
+    // 같은 번호(문서 ID)를 다른 공급사 문서가 이미 쓰고 있다: 편입하면 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN)로 공급사 회차 전체가 멈춘다.
+    // 그 행만 보류하고 나머지는 진행한다(어느 공급사 차인지는 사람이 판단 — 남의 문서를 덮어쓰지 않는다).
+    if (!before && foreignUids.has(r.uid)) {
+      hold('PLATE_OWNED_BY_OTHER_SUPPLIER');
+      if (!plan.warnings.includes('PLATE_OWNED_BY_OTHER_SUPPLIER')) plan.warnings.push('PLATE_OWNED_BY_OTHER_SUPPLIER');
+      continue;
+    }
     if (before && locked(before)) { hold('CONTRACT_LOCKED'); continue; }
     if (before && driftHeld.has(before.record.uid)) {
       // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
@@ -124,7 +134,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     }
     // 1차는 무조건 가져온다(대표 2026-10-14): 새 차(문서 없음)는 상태를 몰라도 식별자만 있으면 편입한다(노출 제외). 이미 문서가 있는 차는 이전처럼 보류 —
     // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
-    if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); continue; }
+    // 노출 중인 문서가 모르는 상태값(예: 취소·진행중)으로 보류되면 노출이 그대로 남는다 — 조용히 두지 않고 회차 경고로 센다.
+    if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); if (before.listable) statusUnknownExposed++; continue; }
     if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       hold('OBSERVATION_ORDER'); continue;
@@ -138,8 +149,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         const prior = before.record.terms.find(p => termIdentity(p) === termIdentity(term)) ??
           // 기존 문서가 개월 키 하나(대표 항)만 가진 경우: 같은 개월의 유일한 항과만 짝짓는다
           (before.record.terms.filter(p => p.months === term.months).length === 1 ? before.record.terms.find(p => p.months === term.months) : undefined);
-        if (term.deposit.state === 'UNKNOWN' && prior && (prior.deposit.state === 'KNOWN' || prior.deposit.state === 'ZERO')) {
-          term.deposit = structuredClone(prior.deposit); depositPreserved++;
+        // 공급사 정책 정제(supplier-deposit-policy): 계산값이었으면 규칙 코드도 함께 보존하고, 자리채움 0 공급사(RP012)의 옛 ZERO 는 보존하지 않는다.
+        const kept = term.deposit.state === 'UNKNOWN' && prior ? preservedDepositOf(r.sourceId, prior) : null;
+        if (kept) {
+          term.deposit = kept.deposit; depositPreserved++;
+          const { deposit_rule: _dropped, ...rest } = term.raw ?? {};
+          term.raw = kept.depositRule ? { ...rest, deposit_rule: kept.depositRule } : rest;
         }
       }
     }
@@ -193,6 +208,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
+  if (statusUnknownExposed > 0) plan.warnings.push(`STATUS_UNKNOWN_EXPOSED:${statusUnknownExposed}`);
   if (uidBridged > 0) plan.warnings.push(`UID_BRIDGED:${uidBridged}`);
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
   // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.
@@ -240,6 +256,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     plan.entries = plan.entries.filter(e => e.kind !== 'ENROLL' || !deferred.has(sourceProductKey(e.after.record)));
     plan.warnings.push(`ENROLL_CAP_DEFERRED:${deferred.size}:cap${enrollCap}`);
   }
+  // 엔진 정체성 정제(대표 2026-10-15): 보류 문서 중 이번 마스터로 하나로 특정돼 다시 쓰는 수, 그리고 쓰기가 있는 계획에는 대조에 쓴 마스터 digest 를 남긴다 —
+  // 승인 계획을 나중에 적용할 때 마스터가 바뀌었으면 재계획(replay)이 달라져 CYCLE_REPLAN_REQUIRED 로 멈춘다(계획에 없던 이름을 쓰지 않는다).
+  const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
+  if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
+  if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
   return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
 }

@@ -108,6 +108,28 @@ describe('gws 드라이브 포트(공유 드라이브, 삭제 없음)', () => {
     expect((await ok.upload('F', '01.jpg', Buffer.from('x'), 'k')).sha256).toBe(sha);
   });
 
+  it('persists the vehicle mark on files and the details version on the folder, and reads both back', async () => {
+    const calls: string[][] = [];
+    const bytes = Buffer.from('p');
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    const run: GwsRunner = args => {
+      calls.push(args);
+      if (args.includes('--upload')) return { id: 'F', sha256Checksum: sha };
+      const p = param(args);
+      if (String(p.q ?? '').includes(`'${ROOT}' in parents`)) return { files: [{ id: 'A', name: '12가1001', appProperties: { iancarPhotoSet: 'fp', detailsVersion: '2026-10-15T01:00:00.000Z' } }] };
+      if (String(p.q ?? '').includes("'A' in parents")) return { files: [{ id: 'i1', name: '01.jpg', sha256Checksum: sha, appProperties: { srcKey: 'k', copySha256: sha, plateKey: 'pk' } }] };
+      return {};
+    };
+    const drive = createGwsPhotoDrive({ run, rootFolderId: ROOT, tempDir: tmp() });
+    await drive.upload('A', '01.jpg', bytes, 'k', 'pk');
+    expect(json(calls.find(c => c.includes('--upload'))!).appProperties).toMatchObject({ srcKey: 'k', plateKey: 'pk' });
+    await drive.setFingerprint('A', 'fp', '2026-10-15T02:00:00.000Z', '2026-10-15T01:00:00.000Z');
+    expect(json(calls.find(c => c.includes('update'))!).appProperties).toMatchObject({ iancarPhotoSet: 'fp', detailsVersion: '2026-10-15T01:00:00.000Z' });
+    const [folder] = await drive.findVehicleFolders('12가1001');
+    expect(folder).toMatchObject({ fingerprint: 'fp', detailsVersion: '2026-10-15T01:00:00.000Z' });
+    expect(folder!.files[0]).toMatchObject({ plateKey: 'pk', copySha256: sha });
+  });
+
   it('writes the album fingerprint to the folder properties and rejects an invalid root id', async () => {
     const calls: string[][] = [];
     const drive = createGwsPhotoDrive({ run: a => { calls.push(a); return {}; }, rootFolderId: ROOT, tempDir: tmp() });

@@ -110,14 +110,14 @@ contradicts(asset, ids):                                                        
 | `src/infra/erp5-compat-catalog-reader.ts:104-123` | legacy `car_number`와 이안카 ID로 사진 읽기 | `vehicle_uid`와 externalIds 병행 수용 |
 | `src/domain/consumer-output-contract.ts:43-92` | 번호 문자로 손오공 상품군/렌트 판정 | UID와 별개로 현재 PLATE가 없으면 HOLD 유지 |
 | `src/infra/iancar-policy-sync-firestore.ts:54-130` | `car_number`/`vehicle_number` normalize 매칭 | 공급사 ID 우선, 번호는 보조 |
-| `src/infra/iancar-publication-withdrawal-firestore.ts:200-270` | 번호 set으로 철회/관측 비교 | UID 또는 공급사 ID 기준으로 보강 |
+| (삭제 2026-10-14) 옛 `iancar-publication-withdrawal-firestore.ts` 철회/관측 비교 | 원천 엔진이 단일 작성 주체 | 해당 없음 |
 | `src/application/kakao-catalog-reference.ts:792-827` | `plateNumber` query filter | UID 필터 추가, 번호 필터는 호환 유지 |
 | `src/application/kakao-source-intake.ts:47,216` | 조회/응답 identity를 번호로 비교 | UID가 있으면 UID 우선 비교 |
 | `src/application/settlement-id-link-audit.ts:105-121` | products/contracts를 번호 snapshot으로 연결 | 계약·정산에는 `vehicle_uid` snapshot 추가 |
 | `src/application/vehicle-media-evidence.ts:28-203` | 상품/소비처/원천 사진 증거를 번호로 대조 | 사진 증거 key를 UID 또는 공급사 ID 우선으로 변경 |
 | `src/jobs/query-canonical-by-plate.ts:12` | 번호로 canonical asset 조회 | `query-canonical-by-uid` 추가 후 plate 조회는 보조 |
 | `src/jobs/collect-iancar-one-api.ts:60-62` | 이안카 ID + 번호로 사진 record 생성 | `vehicle_uid` 포함 |
-| `src/jobs/collect-iancar-direct.ts:63-66` | `car_number` 없으면 invalid | 공급사 자체 ID가 있으면 번호 없음 허용 |
+| (삭제 2026-10-14) 옛 `collect-iancar-direct.ts` | — | 해당 없음 |
 
 확인 필요 목록: ERP4 feed, ERP5, 카톡 조회 `프리패스안내.mjs`, 사진 프록시. 특히 사진 프록시 키 `vehiclePhotoKey`는 `supplier_vehicle_id`가 있으면 `(공급사, ID)`, 없으면 `(공급사, 차번 해시)`이므로 UID 이전과 함께 번호 해시 fallback 폐기 시점을 별도 확인한다.
 
@@ -202,10 +202,10 @@ npm.cmd run plan:vehicle-uid-migration
 | `src/infra/autoplus-policy-repair-firestore.ts:66`, `:86` | `transaction.update(snapshot.ref, {...})` 필드 단위 정정 | 보존. 지정 필드만 갱신한다. |
 | `src/infra/billincar-policy-repair-firestore.ts:65` | `transaction.update(snapshot.ref, {...})` 필드 단위 policy link | 보존. 지정 필드만 갱신한다. |
 | `src/infra/iancar-policy-sync-firestore.ts:111` | `transaction.update(snap.ref, {...})` 필드 단위 policy link | 보존. 지정 필드만 갱신한다. |
-| `src/infra/iancar-publication-withdrawal-firestore.ts:128` | `tx.update(ref, p.patch)` photo/status patch | 보존. patch가 `vehicle_uid`를 포함하지 않는 한 기존 필드는 유지된다. 적용 전 patch allowlist에 `vehicle_uid` 금지 확인 권장. |
-| `src/infra/iancar-publication-withdrawal-firestore.ts:321` | 기존 문서는 `tx.update(ref, row.fields)`, 신규 문서는 `tx.create(ref, row.fields)` | 기존 문서 보존. 신규 문서는 `vehicle_uid`가 없을 수 있으므로 UID 적용 뒤 같은 writer를 다시 쓰려면 생성 경로에 UID resolver 연결 필요. |
-| `src/infra/iancar-publication-withdrawal-firestore.ts:377` | `tx.update(ref, patch)` restore patch | 보존. 지정 필드만 갱신한다. |
-| `src/infra/iancar-publication-withdrawal-firestore.ts:432` | `transaction.update(doc.ref, {...})` withdrawal status patch | 보존. 지정 필드만 갱신한다. |
+| `src/infra/iancar-photo-firestore.ts` (`publishIancarPhotoReferences`) | `tx.update(ref, p.patch)` photo patch | 보존. patch가 `vehicle_uid`를 포함하지 않는 한 기존 필드는 유지된다. 적용 전 patch allowlist에 `vehicle_uid` 금지 확인 권장. |
+| (삭제 2026-10-14) 옛 1차 발행 create/update 경로 | — | 원천 엔진이 단일 작성 주체 |
+| `src/infra/iancar-photo-firestore.ts` (`restoreIancarPhotoReferences`) | 사진 칸만 restore patch | 보존. 사진 칸만 갱신한다. |
+| (삭제 2026-10-14) 옛 철회 경로 | — | 해당 없음 |
 | `src/infra/vehicle-name-reference-repair-firestore.ts:860` | `transaction.update(ref, update)` products name/source repair | 보존. update 객체는 이름/원문 정정 계열 필드 단위다. 적용 전 `vehicle_uid`가 update에 포함되지 않는 회귀 확인 필요. |
 | `src/infra/erp5-compat-catalog-reader.ts:120`, `:135`, `:195` | 읽기 전용 | 보존. 쓰기 없음. |
 | `src/adapters/legacy-freepasserp3.ts:40` | 읽기 전용 source adapter | 보존. 쓰기 없음. |
@@ -215,8 +215,8 @@ npm.cmd run plan:vehicle-uid-migration
 
 적용 전에 고칠 것:
 
-- `src/infra/iancar-publication-withdrawal-firestore.ts:321`의 신규 create 경로는 `vehicle_uid`를 모르는 legacy `products` 생성이 가능하므로, UID 적용 전 또는 같은 적용 PR에서 UID resolver/plan digest 연동이 필요하다.
-- `src/infra/iancar-publication-withdrawal-firestore.ts:128` 및 `src/infra/vehicle-name-reference-repair-firestore.ts:860`은 현재 필드 단위라 보존되지만, `vehicle_uid`를 patch/update에 넣지 않는 회귀 테스트를 적용 PR에 추가한다.
+- (2026-10-14) 옛 이안카 1차 발행 create 경로는 삭제됐다. 이안카 신규 문서는 원천 엔진만 만든다.
+- `src/infra/iancar-photo-firestore.ts`(사진 patch) 및 `src/infra/vehicle-name-reference-repair-firestore.ts:860`은 현재 필드 단위라 보존되지만, `vehicle_uid`를 patch/update에 넣지 않는 회귀 테스트를 적용 PR에 추가한다.
 - source ingest/data-owned refresh가 legacy `products`를 직접 덮어쓰는 새 경로가 생기면 `set`/replace 금지 또는 `merge/update` 보존 검사를 먼저 추가한다.
 
 ### PLANNED_NEW_UID 자산 문서 결정

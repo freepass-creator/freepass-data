@@ -4,14 +4,33 @@
  * `price` 에 함께 둔다(`iancar_phase_one.priceAliases`: "60" → "60:20000:year"). «최저 구간 추정»이 아니라 대표가 정한 기본 조건 기준이다.
  * 이 별칭은 조건이 아니라 같은 조건의 복사본이라 «조건 목록»을 만드는 곳(참고 출력·정리값 조건)에서는 빼야 중복 행·빈 주행 칸이 생기지 않는다.
  * 안전: 별칭이 가리키는 원본 키가 있고 월 대여료·보증금이 같을 때만 별칭으로 본다(값이 다르면 별칭이 아니라 별개 조건으로 남긴다). */
+import { SOURCE_ENGINE_WRITER } from './deposit-evidence.js';
+import { representativeTerms, type SourceAmount } from './source-engine.js';
+
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** 원천 엔진이 쓴 이안카 문서: 개월 키는 엔진 판매 가격 칸의 대표 항(representativeTerms)이 가리키는 옵션 키의 별칭이다.
+ * 엔진 문서가 아니면 undefined(옛 iancar_phase_one.priceAliases 로 내려간다). */
+function engineAliasTargets(product: Rec): Record<string, string> | undefined {
+  const mark = product.source_cycle_write, record = product.source_cycle_record;
+  if (product.provider_company_code !== 'RP031' || !isRec(mark) || mark.by !== SOURCE_ENGINE_WRITER
+    || !isRec(record) || !Array.isArray(record.terms)) return undefined;
+  const terms = record.terms.filter((t): t is { months: number; mileage: string | null; monthlyRent: SourceAmount } =>
+    isRec(t) && Number.isSafeInteger(t.months) && (t.mileage === null || typeof t.mileage === 'string') && isRec(t.monthlyRent));
+  const out: Record<string, string> = {};
+  for (const t of representativeTerms(terms)) {
+    const m = /^(\d+)km\/(month|year)$/.exec(t.mileage ?? '');
+    if (m) out[String(t.months)] = `${t.months}_${m[2] === 'month' ? '월' : '연'}${m[1]}km`;
+  }
+  return out;
+}
 
 export function iancarPriceAliasKeys(product: Rec | undefined): Set<string> {
   const result = new Set<string>();
   const price = product?.price;
   const phase = product?.iancar_phase_one;
-  const aliases = isRec(phase) ? phase.priceAliases : undefined;
+  const aliases = (product ? engineAliasTargets(product) : undefined) ?? (isRec(phase) ? phase.priceAliases : undefined);
   if (!isRec(price) || !isRec(aliases)) return result;
   for (const [alias, target] of Object.entries(aliases)) {
     if (typeof target !== 'string' || alias === target) continue;

@@ -36,7 +36,8 @@ const int = (value: unknown) => normalizeErp5CompatibilityInteger(value);
 /** 전기차 배기량 0·차량가격 0 은 «값 없음» 표시다 — 알려진 값도, 보류 사유도 아니다(내부 정합 대조에서 확인). */
 /** 공통 시트와 같은 연료 허용 목록·별칭. «가솔린+전기» 는 하이브리드/플러그인을 뜻으로 가를 수 없어 추정하지 않는다(보류). */
 const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
-const fuelName = (value: unknown): string | null => {
+/** 손오공 공식 API 어댑터(sonogong-api.ts)도 같은 표를 쓴다 — 별칭·허용 목록을 두 벌 두지 않는다. 모르면 null(추정하지 않음). */
+export const fuelName = (value: unknown): string | null => {
   const t = text(value);
   if (!t) return null;
   if ((spec.dropdowns['연료'] as string[]).includes(t)) return t;

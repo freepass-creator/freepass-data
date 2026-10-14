@@ -72,5 +72,5 @@
 
 ## 이안카 사진 반영 경로 상태 기록 (2026-10-14)
 
-- 엔진은 사진 참조(iancar_one_photo_ids·iancarPhotoPatch)를 쓰지 않는다. 사진은 ERP4 이안카 단계(publishIancarPhaseOne)만 반영한다.
+- 엔진은 사진 참조(iancar_one_photo_ids·iancarPhotoPatch)를 쓰지 않는다. 옛 ERP4 이안카 단계가 부르던 `publishIancarPhaseOne` 은 2026-10-14 삭제됐다(대표 «과감하게 폐기») — 엔진이 이안카 상품 문서의 단일 작성 주체이고, 사진은 사진 전용 경로(`source:iancar:one -- --photos [--apply-photos]`)로만 반영한다. ERP4 이안카 단계는 이 저장소 밖이라 ERP4 쪽에서 먼저 제거해야 한다.
 - ERP4 이안카 단계는 고정 pin 이 수정(050e382, #438)보다 앞서 잠금 문서 1건으로 전량 throw 하는 상태라 사진 반영이 사실상 막혀 있다. #569(pin 갱신)는 엔진과의 이중 쓰기 때문에 보류. 10-12 부터 이안카 노출 중단 상태라 별도 후속으로 분리(사진 반영 담당 경로 결정 필요).

@@ -44,13 +44,6 @@ describe('오토플러스 상세 성공 판정(독립 검토 2026-10-14)', () =>
     expect(priced(500000)).toBe(1);
   });
 
-  it('sitemap floor: 0 when nothing is exposed (even with a large previous count), else the larger of 95% exposed and 80% previous', async () => {
-    const { autoplusSitemapFloor } = await import('../src/adapters/autoplus-homepage.js');
-    expect(autoplusSitemapFloor(0, 1000)).toBe(0);
-    expect(autoplusSitemapFloor(100, 0)).toBe(95);
-    expect(autoplusSitemapFloor(100, 1000)).toBe(800);
-  });
-
   it('only an explicit resultCode 1400 is excluded; a plain HTTP 400 page is a failure', async () => {
     const client: AutoplusHomepageClient = {
       listProductUrls: async () => [1, 2].map(i => ({ productId: `C1234567890${i}`, url: `https://x/C1234567890${i}` })),

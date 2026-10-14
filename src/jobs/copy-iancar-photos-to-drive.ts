@@ -95,7 +95,10 @@ export function createIancarPhotoSource(env: NodeJS.ProcessEnv = process.env): P
       const detail = await client.getVehicle(vehicle.vehicleId);
       const raw = ((detail as { data?: unknown })?.data ?? detail) as Record<string, unknown>;
       if (raw && Array.isArray(raw.photos) && raw.photos.length === 0 && raw.stale === false) return [];   // 원천에 사진 없음 = «대상 없음»
-      return iancarOnePhotoIds(detail, vehicle.vehicleId, plates.get(vehicle.vehicleId) ?? vehicle.plate);
+      const ids = iancarOnePhotoIds(detail, vehicle.vehicleId, plates.get(vehicle.vehicleId) ?? vehicle.plate);
+      // 상세 갱신 시각(details_updated_at): 폴더 완료 표식에 함께 남기는 «바뀐 차량» 신호(문자열 ISO 만, 아니면 없음).
+      const updated = typeof raw?.details_updated_at === 'string' && Number.isFinite(Date.parse(raw.details_updated_at)) ? raw.details_updated_at : null;
+      return { ids, version: updated };
     },
     async download(vehicle, photoId) {
       return readIancarOnePhotoBytes(await client.getPhoto(vehicle.vehicleId, photoId));
@@ -145,7 +148,11 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
   }, mode, limits);
   if (out) writeFileSync(resolve(out), photoCopyCsv(result), { mode: 0o600 });
   // 보고: 번호는 끝 4자리, 코드·건수만. completed(전체 번호)는 출력하지 않는다.
+  // 요약 구분: stale 로 건너뛴 차량이 남았으면 «미완(incomplete)» — 실패는 아니지만 다음 회차에 마저 처리해야 한다(종료 코드 3). 갱신 시각이 바뀐 완료 차량 수도 알린다.
+  const skippedStale = result.counts.SKIPPED_STALE;
+  const detailsUpdated = result.rows.filter(r => r.code === 'DETAILS_UPDATED_AT_CHANGED').length;
   log(JSON.stringify({ mode, stop: result.stop, vehicles: result.vehicles, counts: result.counts, photosWritten: result.photosWritten,
+    skippedStale, incomplete: skippedStale > 0 || result.stop === 'SOURCE_STALE', detailsUpdatedSinceCopy: detailsUpdated,
     // 확인 값은 명시 요청(--print-full-token)이 있을 때만 DRY_RUN 결과에 싣는다(파일럿 합격 뒤 사람이 의도적으로 꺼내 환경에 넣는 값).
     ...(mode === 'DRY_RUN' && argv.includes('--print-full-token') ? { fullApprovalToken: fullApprovalToken(rootFolderId) } : {}),
     bytesWritten: result.bytesWritten, limits: { maxVehicles: limits.maxVehicles, maxPhotos: limits.maxPhotos, maxPerVehicle: limits.maxPerVehicle,
@@ -155,7 +162,9 @@ export async function iancarPhotoCopyCli(argv: string[], env: NodeJS.ProcessEnv 
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   iancarPhotoCopyCli(process.argv.slice(2)).then(result => {
+    // 종료 코드: 0 정상 · 1 실패·한도·상류 정지로 중단 · 2 설정 오류 · 3 미완(stale 로 건너뛴 차량이 남음, 실패 아님).
     if (['RATE_LIMITED', 'CONSECUTIVE_FAILURES', 'SOURCE_STALE'].includes(result.stop) || result.counts.FAILED > 0) process.exitCode = 1;
+    else if (result.counts.SKIPPED_STALE > 0) process.exitCode = 3;
   }).catch(error => {
     const code = error instanceof IancarOneApiError ? error.code : error instanceof Error && /^[A-Z0-9_]{3,64}$/.test(error.message) ? error.message : 'PHOTO_COPY_ERROR';
     // 준비 판정 거부는 원인 코드(issues)만 함께 낸다: 값·번호·URL 없음.

@@ -1,5 +1,7 @@
 # RP031 이안카 ONE API — FreePass Data 연동 계약
 
+> **2026-10-14 폐기(대표 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해»)**: 이안카(RP031) 상품 문서(가격·재고·상태)의 유일한 작성 주체는 원천 엔진(source-engine)이다. 옛 1차 발행(`publishIancarPhaseOne`)·복원(`restoreIancarPhaseOne`)·철회(`withdrawIancarPublication`), 수집기 `--sync`·`--apply-sync`·`--refresh-facts`·`--photos-pending`·`--keep-withdrawn`·`--restore-sync`, 감시 실행기(`scripts/iancar-sync-watch.mjs`), 옛 ERP 직접 수집(`source:iancar:direct`)은 코드에서 지웠다. 남은 이안카 쓰기는 사진 전용(`--photos`/`--apply-photos`/`--restore-photos=`/`--reviewed-plan=`)과 RAW 적재(`--apply-raw`)뿐이다. 보증금 판정은 엔진 근거(`readIancarEngineDeposit`, `source_cycle_record.terms`)만 쓴다. 아래 본문의 해당 명령은 기록이며 실행 경로가 아니다.
+
 Status (2026-10-01): **1차 Data 상품/ERP/F01/F86 실제 발행 및 readback 완료 · 정책/15분 자동 writer/Catalog cutover는 미완료**
 
 최신 적용 회차: source `2026-10-01T08:13:03.756Z`, 117대/2,808개 요금에서 공개109대(출고가능108·계약중1). Data apply `b6a8ac1e-a86a-49c8-a53a-9037a760303a`, 운영 시트 apply `36837674105` SUCCESS. F01/F86 새 원문 조회로109대 차량번호·상태·기준금액·24개 기간/월연거리/보증금·정책 확인중 표시 mismatch0. 별도 공급사 원천표 없이 Data 소유 RP031 compatibility bridge를 기존 소비처에 적용했다. Catalog V1 ACTIVE release/cutover나 현재 API 실시간 신선도를 주장하지 않는다. 아래 미실행/111대 문구는 이전 관측 이력이며 최신 적용 증거는 [handoff](NEXT-START-HERE.md)에 있다.
@@ -174,9 +176,30 @@ EANCAR_ONE_RAW_INGEST_APPROVED=true npm run source:iancar:one -- --apply-raw
 
 RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 
-### 동기화 잠금 상품 격리 — 2026-10-10
+### 원천 엔진 경로 정확도 — 2026-10-14 (대표 «데이터만큼은 정확하게 갖고 와야 된다»)
 
-`--sync --apply-sync`는 계약 잠금 또는 삭제 표시가 있는 관측 상품만 반영 대상에서 제외한다. 제외 상품에는 쓰기를 하지 않으며 기존 상태·가격·사진·증거·잠금을 그대로 보존한다. 신원 불일치, 번호판/소스 식별자 충돌, 중복, 신선도 오류는 여전히 전체 실패다. 동시 변경 감지와 백업·되읽기 검증도 유지한다.
+RP031 상품 문서의 유일한 작성 주체는 원천 엔진(`collectIancarOneFullFacts` → `iancarCyclePlugin` → `plateUidPlugin` → `nativeCycleFields`)이다.
+
+- **차 한 대 보류**: 한 대의 문제로 회차 전체를 멈추지 않는다. `records[].hold = { code, identity }`.
+  - 식별 보류(`identity: true`) — `IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW`(번호 없음·`^\d{2,3}[가-힣]\d{4}$` 불일치), `IANCAR_ONE_DUPLICATE_PLATE`(두 차가 같은 번호). 상세를 읽지 않고 행을 내지 않는다. 어느 문서인지 특정할 수 없으므로 **그 회차의 부재 하향은 유보**된다(경고 `ABSENCE_DOWNGRADE_SKIPPED`). 다른 차의 갱신·편입은 진행한다.
+  - 요금 사실 보류(`identity: false`) — `IANCAR_ONE_RATES_EMPTY`, `IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW`(기간·대여료 100,000~20,000,000·보증금·약정거리·통화·VAT·`contract_conditions.version`), `IANCAR_ONE_DUPLICATE_RATE`. 행은 내되 요금 항은 비우고 판매 가능 여부를 «모름»으로 둔다: 기존 문서는 그대로(STATUS_UNKNOWN 보류 — 가격·노출 유지, 부재 하향 안 됨), 새 차는 노출 없이 번호·차명만 편입. 값 계열 보류라 **다른 차의 부재 하향은 막지 않는다**(`jobs/source-cycle.ts` VALUE_CLASS_HOLDS).
+  - 응답 봉투 깨짐(`INVALID_IANCAR_ONE_RATES_RESPONSE`)·상세 신원/가용 드리프트·HTTP 오류는 여전히 회차 전체 실패다.
+- **불완전한 읽기는 원문 계층에 쓰지 않는다**: 목록 단계 실패(`PAGINATION_TOTAL_MISMATCH`·`SYNC_TIME_DRIFT`·`PAGINATION_METADATA_DRIFT` 등)나 끝 목록 불일치면 플러그인이 행을 내지 않는다(이전에는 요금 없이 `source_raw` 에 `terms=[]` 가 전 차량에 덮였다).
+- **번호 정규화**: `car_number`·기록 번호는 공백을 뺀 번호다.
+- **공급사 차량 ID**: `iancar_one_vehicle_id` 를 원천 `vehicle_id` 로 쓴다(새 문서·없는 문서는 채움, 노출 엔진 문서에 없으면 `IANCAR_VEHICLE_ID` 재쓰기 사유로 한 번 채움). 같은 번호 문서에 **다른** ID 가 이미 있으면 덮어쓰지 않고 `iancar_one_vehicle_id_conflict: { observed, at }` 로 남긴다(기존 ID 에 묶인 사진·정책·보증금 근거가 다른 차로 옮겨 가지 않게 — 사람 확인 대상).
+- **차 한 대 사실**: 옛 발행기와 같은 원천 칸(year·fuel·color·mileage, 있으면 first_registration_date)을 시트 원천과 같은 키(`raw.spec`: year·fuel_type·ext_color·mileage·first_registration_date)로 둔다. 제조사·모델은 식별 칸에 쓰지 않고 원문(`raw.manufacturer`·`raw.model`·`raw.name`)으로만 남는다.
+- **옛 문서 관측 기준**: 엔진 기록이 없는 옛 RP031 문서는 updateTime(사진·정책 쓰기가 밀어 올림) 대신 `iancar_phase_one.sourceSyncedAt` → `_direct_ingest_at` → 없으면 «관측 없음»(epoch)을 기준으로 삼아 엔진이 소유를 넘겨받는다. 쓰기 동시성(updateTime CAS·백업·되읽기)은 그대로다.
+
+#### 알려진 위험 — 신선도 창(고치지 않음, 운영 조건으로 관리)
+
+- 상류 신선도 창은 15분(`IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS`), 전량 상세 읽기는 약 5분이 걸린다. 그래서 `--only-when-synced` 회차는 **공급사 `synced_at` 갱신 후 약 10분 안에 시작한 경우에만** 성공할 수 있다(그 뒤엔 `UNCHANGED_SYNC` 로 다음 갱신을 기다린다, `jobs/source-cycle.ts`).
+- 공급사 갱신이 멈추거나(stale) 그 창을 계속 놓치면 엔진은 쓰지 않으므로 **마지막으로 쓴 가격·상태가 그대로 노출된 채 남는다**(부재 하향도 일어나지 않는다). 신선도 오류는 heartbeat·알림(`UPSTREAM_STALE`, `IANCAR_ONE_DETAIL_SOURCE_DRIFT`)으로만 보인다.
+- 운영 조건(B3Q): RP031 전용 예약을 **5분 간격 `-OnlyWhenSynced -Source RP031`** 로 둔다 — `scripts/register-source-cycle.ps1 -Unattended -OnlyWhenSynced -Source RP031 -IntervalMinutes 5 -TaskName FreePass-Source-Cycle-RP031 -Register`. 60분 기본 예약만으로는 갱신 직후 10분 창을 대부분 놓친다.
+- 장기 개선 후보(미구현): 마지막 완전 읽기가 일정 시간 이상 지나면 RP031 노출을 «확인중»으로 내리는 만료 정책 — 대표 결정 필요.
+
+### 동기화 잠금 상품 격리 — 2026-10-10 (폐기 2026-10-14: `--sync`/`--apply-sync`·`IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO` 삭제, 아래는 기록)
+
+옛 `--sync --apply-sync`는 계약 잠금 또는 삭제 표시가 있는 관측 상품만 반영 대상에서 제외한다. 제외 상품에는 쓰기를 하지 않으며 기존 상태·가격·사진·증거·잠금을 그대로 보존한다. 신원 불일치, 번호판/소스 식별자 충돌, 중복, 신선도 오류는 여전히 전체 실패다. 동시 변경 감지와 백업·되읽기 검증도 유지한다.
 
 - 영수증/collector `publication`: `skippedCount`, `skippedByReason`, `skippedRatio`, `maxSkippedRatio`, `warnings`. 사유는 `CONTRACT_LOCK`, `DELETION_LOCK`, `CONTRACT_AND_DELETION_LOCK` 중 하나이며 중복 집계하지 않는다. 새 공개 필드는 건수·코드만 포함한다.
 - 분모는 이번 원천의 전체 관측 상품 수다. `IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO` 한 상수에서 0.20을 정의한다. 정확히 20%까지 경고와 성공 종료(0), 초과하면 `IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED`로 백업·쓰기 전에 전체 실패한다.
