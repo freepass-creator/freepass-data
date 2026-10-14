@@ -18,4 +18,9 @@ describe('상품 구분(product_type) 채움 — 원천 자기 칸·고정 정�
     expect(nativeCycleFields(record('RP023', { product_type: '오플구독' }), { product_type: '신차렌트' }).product_type).toBeUndefined();
     expect(nativeCycleFields(record('RP004', { product_type: '임의값' }), {}).product_type).toBeUndefined();
   });
+  it('RP006(아이언 홈페이지) also fills only an empty product_type — the list condition never overwrites a stored one', () => {
+    expect(nativeCycleFields(record('RP006', { product_type: '중고렌트' }), {}).product_type).toBe('중고렌트');
+    expect(nativeCycleFields(record('RP006', { product_type: '중고렌트' }), { product_type: '재렌트' }).product_type).toBeUndefined();
+    expect(nativeCycleFields(record('RP006', { product_type: '중고렌트' }), { product_type: ' ' }).product_type).toBe('중고렌트');
+  });
 });

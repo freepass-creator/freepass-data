@@ -1,4 +1,4 @@
-import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, SOURCE_EXPIRY_SECONDS,
+import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, comparableRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -20,7 +20,8 @@ const withoutObservationClocks = (value: unknown): unknown => {
   return value;
 };
 // 변경 판정은 압축 형태로 한다: 문서에는 압축 레코드만 저장하므로 저장된 값과 새 원천 값을 같은 기준으로 비교한다(원문이 바뀌면 digest 가 바뀐다).
-const facts = (r: SourceProductRecord) => withoutObservationClocks(compactRecord(r));
+// spec 은 문서에 실제 값으로 남지만(새 문서 사실 칸), 비교는 digest 로 한다 — 옛 문서(digest 저장)와 값이 같으면 변경 없음.
+const facts = (r: SourceProductRecord) => withoutObservationClocks(comparableRecord(r));
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');

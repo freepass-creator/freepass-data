@@ -94,7 +94,9 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           case 'IANCAR': r.status.saleAvailable = ['AVAILABLE', 'PREPARING', '계약중'].includes(status); break;
           // 옛 사이트맵 캡처는 게시/비게시, 홈피 상세 어댑터(SOURCE_CYCLE_IRON_HOMEPAGE=1)는 즉시출고·출고가능·출고협의·출고불가 를 이미 판정해 넘긴다
           // (전에는 «게시» 만 판매 가능이라 홈피 모드의 출고가능 차까지 전부 판매 불가로 내려갔다).
-          case 'IRON': r.status.saleAvailable = status === '게시' ? true : ['비게시', '출고불가', '판매완료', '출고완료'].includes(status) ? false : r.status.saleAvailable === true; break;
+          // 어댑터가 모르는/섞인 배지로 보류(null)한 상태는 그대로 null(STATUS_UNKNOWN) — 판매 불가로 바꿔 기존 노출을 내리지도, 판매 가능으로 추정하지도 않는다.
+          case 'IRON': r.status.saleAvailable = status === '게시' ? true : ['비게시', '출고불가', '판매완료', '출고완료'].includes(status) ? false :
+            r.status.saleAvailable === true ? true : r.status.saleAvailable === false ? false : null; break;
           // These collectors already provide normalized status, never infer it from old catalog values.
           case 'AUTOPLUS': case 'SONOGONG': break;
         }

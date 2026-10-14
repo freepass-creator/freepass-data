@@ -67,9 +67,25 @@ export function compactRaw(raw: Record<string, unknown>): Record<string, unknown
   }
   return out;
 }
+/** 차 한 대 사실(raw.spec: 연식·연료·색상·주행거리 등)은 작은 평면 맵이면 압축하지 않고 그대로 둔다 — 새 문서 쓰기(sheetSpecFields)가 실제 값을
+ * 읽어야 한다(전에는 digest 로 바뀌어 모든 엔진 원천의 새 문서에 연식·연료·색상·주행거리가 한 번도 안 쓰였다, 2026-10-14). 변경 판정은
+ * comparableRecord 가 spec 을 같은 digest 로 바꿔 비교하므로, 저장된 digest 형태와 값이 같은 새 spec 은 «변경 없음» 이다(일괄 UPDATE 없음). */
+const SPEC_MAX_KEYS = 32;
+const smallSpec = (v: unknown): v is Record<string, string | number | boolean | null> =>
+  !!v && typeof v === 'object' && !Array.isArray(v) && !rawDigestMark(v) && Object.keys(v).length <= SPEC_MAX_KEYS &&
+  Object.values(v).every(x => x === null || typeof x === 'number' || typeof x === 'boolean' || (typeof x === 'string' && x.length <= SMALL_STRING));
+const specDigest = (spec: unknown) => ({ __digest: stableDigest(spec).slice(0, 32) });
 export function compactRecord(record: SourceProductRecord): SourceProductRecord {
-  return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw: compactRaw(record.raw ?? {}),
+  const raw = compactRaw(record.raw ?? {});
+  if (smallSpec(record.raw?.spec)) raw.spec = structuredClone(record.raw.spec);
+  return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw,
     terms: (record.terms ?? []).map(t => ({ ...structuredClone({ ...t, raw: {} }), raw: compactRaw(t.raw ?? {}) })) };
+}
+/** 변경 판정용 형태: compactRecord 에 더해 raw.spec 을 compactRaw 와 같은 digest 로 바꾼다(옛 문서의 digest 형태 spec 과 같은 기준). */
+export function comparableRecord(record: SourceProductRecord): SourceProductRecord {
+  const compact = compactRecord(record);
+  if (smallSpec(compact.raw.spec)) compact.raw.spec = specDigest(compact.raw.spec);
+  return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,
  * 개월 키 하나만 갖는 판매 가격 칸에는 대표 항 하나(연 환산 약정거리가 가장 작은 기본 옵션)를 쓴다. 대여료 최저가 선택이 아니다. */
