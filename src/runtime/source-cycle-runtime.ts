@@ -17,8 +17,8 @@ import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage, autoplusSitemapFloor, type AutoplusHomepageCollection } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
-import { createSonogongApiClient, readSonogongApi, sonogongApiRowFloor, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
-import { existsSync } from 'node:fs';
+import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
@@ -291,18 +291,27 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
             if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'API_COUNT_STATE_INVALID';
           } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'API_COUNT_STATE_INVALID'; }
-          const floor = sonogongApiRowFloor(exposedDocs, previous);
-          let complete = read.complete, reason = read.incompleteReason;
-          if (complete && read.listed < floor) { complete = false; reason = 'API_SHRUNK'; }
-          if (read.listed > 0 && read.complete) {
-            const saved = (await writeJsonAtomic(countFile, { count: read.listed, at: observedAt })) && (await writeJsonAtomic(passFile, { at: observedAt }));
-            if (complete && stateError) { complete = false; reason = stateError; }          // 손상: 이번 회차만 불인정(위에서 복구 저장)
-            else if (complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
+          // 판정은 순수 함수(시험 가능): 축소·불완전 읽기는 기준 파일에 저장하지 않고, 하한은 고유 차량번호 수 기준이다(#601 독립 검토).
+          const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
+          let complete = verdict.complete, reason = verdict.incompleteReason;
+          if (verdict.saveCount !== null) {
+            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
+              (!verdict.complete || await writeJsonAtomic(passFile, { at: observedAt }));
+            if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
+          }
+          // 한 회차 한정 편입 상한: 이 읽기 콜백은 원천 잠금 «안»에서 실행된다. 적용 «전에» 표식을 원자적으로 기록하고,
+          // 기록 실패·읽기 불가·소진이면 상한을 올리지 않는다(보수적으로 확정 상한).
+          delete apiPlugin.enrollCapOnce;
+          if (complete && Number.isSafeInteger(onceCap) && onceCap > 100 && env.SOURCE_CYCLE_UNATTENDED === '1') {
+            const claim = await claimEnrollCapOnce({
+              read: async () => readFile(oncePath, 'utf8').catch(e => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e; }),
+              write: async text => { const tmp = `${oncePath}.${process.pid}.tmp`;
+                try { await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, oncePath); return true; } catch { await unlink(tmp).catch(() => undefined); return false; } },
+            }, onceCap, observedAt);
+            if (claim.granted) apiPlugin.enrollCapOnce = onceCap;
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
-        // 최초 대량 편입(201대+)을 «이번 한 회차에 한해» 허용: 변수에 상한을 주면 표식 파일이 없을 때만 적용되고 회차 직후 표식으로 자동 원복.
-        if (Number.isSafeInteger(onceCap) && onceCap > 100 && !existsSync(oncePath)) { apiPlugin.enrollCapOnce = onceCap; apiPlugin.enrollCapOnceMarker = oncePath; }
         plugins.push(apiPlugin);
       } else
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1') {
@@ -464,11 +473,6 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
           { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
-        // «이번 한 회차 한정» 상한 상향: 적용이 끝난 회차 직후 표식 파일을 남겨 다음 회차부터 확정 상한으로 자동 원복한다(표식 쓰기 실패여도 다음 회차에
-        // 같은 상향이 반복되지 않도록 쓰기 전 이미 적용된 문서는 «기존 문서»가 되어 편입 대상에서 빠진다).
-        if (plugin.enrollCapOnce && plugin.enrollCapOnceMarker && (result.status === 'APPLIED' || (result.status === 'DRY_RUN' && result.stage === 'APPLY'))) {
-          await writeFile(plugin.enrollCapOnceMarker, JSON.stringify({ at: new Date().toISOString(), cap: plugin.enrollCapOnce }), { mode: 0o600 }).catch(() => undefined);
-        }
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {
