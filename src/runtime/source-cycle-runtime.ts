@@ -15,6 +15,8 @@ import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCaptur
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
+import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
+import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -164,8 +166,28 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       const homepageReport = kind === 'AUTOPLUS' ? env.SOURCE_CYCLE_AUTOPLUS_HOMEPAGE_REPORT?.trim() : '';
       // 홈피 전수 읽기가 불완전 없이 끝난 시각 — 오토플러스 신선도 근거(대표: 홈피가 정본). ERP4 수집 단계 성공 시각과 더 최근 쪽을 쓴다.
       let homepageFreshAt: string | null = null;
+      // 손오공 원천↔ERP5 문서 차이표 관측(사용자 대조: 화면 331 vs 반영 135): SOURCE_CYCLE_SONOGONG_REPORT=<보고 파일 경로> + SONOGONG_ACCOUNT_JSON 이
+      // 있을 때만 버킷 3개를 직렬(250ms)로 읽어 번호 기준 NEW/MISSING/SAME 요약(건수·끝4·상태 분포)을 쓴다. 쓰기 0, 실패는 회차에 영향 없음.
+      const sonogongReport = kind === 'SONOGONG' ? env.SOURCE_CYCLE_SONOGONG_REPORT?.trim() : '';
+      const observeSonogong = async (docs: Array<{ fields: Record<string, unknown> }>) => {
+        try {
+          if (!env.SONOGONG_ACCOUNT_JSON) throw new Error('SONOGONG_ACCOUNT_REQUIRED');
+          const reader = createSonogongErpReader({ accountJson: () => env.SONOGONG_ACCOUNT_JSON! });
+          const observations = [];
+          for (const bucket of ['LOW_SONOKONG_DAILY', 'LOW_SONOKONG', 'LOW_TCAR'] as const) observations.push(await reader.readBucket(bucket));
+          const summary = summarizeSonogong(observations, docs.map(d => {
+            const f = decodeFields(d.fields as never) as Record<string, unknown>;
+            return { plate: typeof f.car_number === 'string' ? f.car_number : null, listable: f.listable === true, status: typeof f.status === 'string' ? f.status : null };
+          }));
+          await writeFile(sonogongReport!, JSON.stringify({ at: new Date().toISOString(), ...summary }, null, 1), { mode: 0o600 });
+        } catch (e) {
+          const code = e instanceof Error && /^[A-Z][A-Z0-9_]{2,40}$/.test(e.message) ? e.message : 'SONOGONG_OBSERVE_FAILED';
+          await writeFile(sonogongReport!, JSON.stringify({ at: new Date().toISOString(), error: code }), { mode: 0o600 }).catch(() => undefined);
+        }
+      };
       const documents = async (sourceId: string) => {
         const docs = await commands.documents(sourceId);
+        if (sonogongReport) await observeSonogong(docs as never);
         homepageFreshAt = null;
         if (homepageReport) {
           try {
