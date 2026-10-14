@@ -231,6 +231,58 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-13 원천 엔진 무인 회차 — ERP5 1시간 간격 자동 반영 (PLN)
+
+- 목적/정본: 대표 10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔 해」(ai-ops 결정 장부 10-13 «원천 엔진 실행 기반»). 가지 `work/freepass-data/plate-mask-20261013`(PR #567 head `9ca4308` 기반), 설계·절차 [SOURCE-ENGINE-UNATTENDED-20261013](SOURCE-ENGINE-UNATTENDED-20261013.md).
+- 변경: `runUnattendedSourceCycle`(계획→변경 있으면 같은 회차에 기존 승인 경로로 적용, 변경 0 이면 생략), runtime CLI `--unattended`(env `SOURCE_CYCLE_UNATTENDED=1` 옵트인 필수, `--apply`/`--plan` 혼용 거부), `scripts/run-source-cycle.ps1` 실행기(비공개 EnvFile·결과 jsonl), `register-source-cycle.ps1 -Unattended -IntervalMinutes 60`. 기존 blockers·백업·CAS·되읽기·3회 정지·수동 승인 경로 유지.
+- 검증: 관련 3파일 137 PASS(신규 4건 포함), build/arch/boundary PASS, ps1 5.1 구문 0오류·등록 DRY_RUN 확인. 운영 등록·실제 적용은 미실행.
+- 남음/next_start_here: B3Q(DEV)가 문서 절차대로 env 파일 준비 → 1회 수동 실행 → 60분 등록 → 두 회차 jsonl·ERP5 되읽기 보고. PR 은 gh 연결 PC 에서 생성.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3D + 3E 오프라인 구현
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3D-20261012.md`; 시작 revision `a044f43f60bc9172ef343154ab9fc93f2324d955`, 기존 WIP 보정 보존. SPEC 영수증으로 사전점검 갈음, 외부 도구 미사용.
+- 변경: 아이카 MONTHLY_RENT 1개월 상품·차종 기반 UID·중복 보류 표시·장기/월렌트 별도 요약. 신규 편입 provider_name/policy_code 최빈값 및 기존 이름 설정 fallback, 이름 없으면 SUPPLIER_NAME_REQUIRED. UPDATE 두 필드 보존.
+- 검증: 관련 5파일 260 PASS, build/architecture/data-access/diff-check PASS. 코드·시험·문서만 변경, 미커밋, 운영 쓰기0. 전체 시험/라이브/외부 독립 검토 미실행.
+- 남음/next_start_here: [RESULT3D](SOURCE-ENGINE-RESULT3D-20261012.md) → SPEC3D → diff. 새 digest 계획 필요. 라이브 담당이 실제 월렌트 수·공급사 메타데이터·ERP5 출력을 확인한다. 정책코드 근거 없으면 null이며 운영 완료로 세지 않는다.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3C 빈 기간·번호미배정 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3C-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`. SPEC 사전점검 영수증 사용, 기존 미커밋 변경 보존, 커밋 없음.
+- 변경: 빈 기간 제외 회귀 고정. 아이카/F05 공통 계획에 번호미배정 수와 비차단 `ABSENCE_DOWNGRADE_SKIPPED`; 정상 UID 동작 유지·SOURCE_ABSENT만 생략. 실제 읽기 불완전은 적용 전 차단.
+- 검증: 관련 254 PASS, build/architecture/data boundary PASS. 전체 3276 PASS/18 FAIL/18 SKIP; CLI 권한·홈 경로·로컬 서버 실행 실패로 전체 통과 HOLD. 네트워크·운영 쓰기 없음.
+- 남음/next_start_here: `SOURCE-ENGINE-RESULT3C-20261012.md` → 관련 cycle 시험. 허용 환경에서 전체 잔여 시험과 새 라이브 읽기 계획 확인. 과거 계획/digest 재사용 금지.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3B 아이카 실제 형식 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3B-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`, 미커밋 작업 트리. 사용자 규칙대로 SPEC 사전점검 영수증 사용, 네트워크/외부 도구 생략.
+- 변경: 장기보증 공통값, 36/48/60개월 값 있는 기간, E+F 차명/원문 보존, 출고불가만 판매 불가, 숨김 제외, 월렌트 관측 전용 및 기존 월렌트 문서 하향 제외. 기존 runtime gws/Firestore 백틱 미커밋 수정 보존.
+- 검증: 관련 9파일 281 PASS, build/architecture/data-access/diff-check PASS. 라이브 읽기·운영 쓰기·커밋 0.
+- 남음/next_start_here: [RESULT3B](SOURCE-ENGINE-RESULT3B-20261012.md)에서 파일·시험·HOLD 확인 후 연결 담당이 새 라이브 읽기 계획으로 기존 UID 대조. 아이언 실 envelope 적합성 HOLD, 운영 적용 미실행.
+
+### 2026-10-13 원천 엔진 3단계 — REST runtime 코드·시험 / 라이브 적합성 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3-20261012.md`; 시작 HEAD `3ac8cb283209eb9ae8c12bb55c49956b8359e9ee`, `work/freepass-data/source-engine-core-20261012`. SPEC 영수증으로 사전점검 대체, 커밋 없음.
+- 변경: 기존 2단계 계획/제어를 재사용한 REST commands·전체 원본 백업/CAS/깊은 되읽기·receipt/복구, 차량번호 UID 및 미배정 HOLD, 여섯 원천 runtime 조합과 관측 전용 무쓰기. [결과·실행 한 장](SOURCE-ENGINE-RESULT3-20261012.md).
+- 검증: 신규37/37, 관련265/265 PASS. 확장 ONE97/99: 기존 tsx `uv_os_get_passwd ENOMEM` CLI 실패2 재현. build/architecture/data-access PASS. Claude UNAVAILABLE. 라이브/운영 쓰기·외부 스크립트 실행·예약 등록·push0.
+- 남음: 아이카 금액 헤더/아이언 listing 형식의 실제 적합성, F05/ONE private capture, 기존 UID 이행 및 전체 소비처 대조 미검증. 코드 시험을 운영 완료로 확대하지 않는다.
+- next_start_here: RESULT3 → runtime 합성 시험 → 연결 담당의 비공개 live dry-run. 승인 digest는 외부 입력이며 예약 자동 적용은 아직 연결하지 않았다.
+
+### 2026-10-13 원천 엔진 2단계 — 반복 사이클 코드·시험 / 운영 연결 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC2-20261012.md`. 대상 HEAD `91eff5ee57799e6d88d0638245bd00d5c259884d`, `work/freepass-data/source-engine-core-20261012`; 이번 커밋 없음. SPEC 영수증으로 오프라인 사전점검 대체.
+- 변경: UID 기반 하향/편입/재노출/조건갱신 계획, digest 승인·전체 백업/CAS·키순서 무관 되읽기, 계약잠금/불완전 누락 방어/하향 비율 상한, 파일 잠금·3회 실패 정지·heartbeat, 설정형 원천 플러그인·F05/ONE 변환 연결, 15분 Windows 등록/제거 스크립트(실행 안 함).
+- 검증: 신규41/41 및 관련7파일211/211 PASS, build/architecture/data-access/PowerShell 구문 PASS. 확장 ONE97/99: tsx 초기화 `uv_os_get_passwd ENOMEM` CLI 실패2. 전체 PASS 아님. Claude UNAVAILABLE.
+- 남음: 실제 source mapping·UID live binding·CatalogStore command runtime·소비처 되읽기 미연결/미검증. 운영 쓰기·네트워크·배포·push·예약 등록0. [결과·실행 경로·정확한 HOLD](SOURCE-ENGINE-RESULT2-20261012.md).
+- next_start_here: 결과 문서와 `tests/source-cycle.test.ts` → native 캡처 mapping/CatalogStore adapter → private dry-run UID 집합·digest 검증. 지휘통제실이 코드 검토/커밋하며 운영 연결은 별도다.
+
+### 2026-10-12 원천 엔진 골격 — 오프라인 작업
+
+- 정본/목적: `SOURCE-ENGINE-SPEC-20261012.md` 및 설계 사본, source-engine-core 작업선. 시작 revision `62906b2f2cc997aaba7dde2f1c6cdce2d08b1d93`.
+- 변경: UID 기반 공통 계약·원천별 만료·source_runs heartbeat 투영·F05 기존 수집/정제 adapter·행별 반영 계획/백업/CAS/되읽기 골격·CLI HOLD JSON. [결과와 정확한 적용 경계](SOURCE-ENGINE-RESULT-20261012.md).
+- 검증: 최종 관련 170/170 PASS, build/architecture/data-access/diff PASS. 전체는 3171 PASS/20 FAIL/18 SKIP(후속 시험1개 추가 전). 환경 제약 실패를 PASS로 세지 않음.
+- 남음: BLOCKED_NETWORK — 실제 F05/Firestore 103건 대조; UID live 열·binding 이행·실제 CatalogStore command adapter 및 소비처 연결 미완료. Claude UNAVAILABLE. 운영 쓰기/push0.
+- 커밋 BLOCKED_FILESYSTEM: Git metadata가 허용 범위 밖 `C:/dev/freepass-data/.git/worktrees/fd-engine`이라 index.lock 권한 거부. 새 커밋 없음, 작업 트리 보존. next_start_here: 결과 문서의 9파일 diff를 검토하고 Git metadata 쓰기가 허용된 환경에서 커밋 후 명시된 연결·실측 순서로 진행.
+
 ### 2026-10-13 공통 시트 15분 예약 적용 연속 실패 원인·완화 (shared-sheet-refresh-fence)
 - 원인(비공개 증거 apply.json 으로 확정): 10-11 22:03Z `ec840d36` 가 넣은 operationalRefresh 울타리 `maxObservationAgeSeconds=900` 을 적용 단계 자체 소요(사전 재계획+RAW 적재+listOffers, 실측 17분)가 넘겨 첫 CHANGE 명령부터 `CANONICAL_COMMAND_REJECTED`(held 1·remaining 174). 10-11 22:15Z 이후 예약 적용 전부 실패, 마지막 성공은 10-11 16:42Z 수동.
 - 완화: 울타리 상수 `OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS=3600`. Codex(gpt-6-astra) 검토: 원인 동의, 단 «임시 완화» — 라이브 재캡처 대조가 긴 전처리 «전»이라 첫 명령 시점 신선도 보장이 아님. 정식 해결 = 전처리 후 재캡처·검증시각 결합 또는 적용 단계 지연 축소(중복 preflight·반복 listOffers·직렬 저장 계측). 01:32Z~23:47Z 회차의 출력 없는 `SHARED_SHEET_JOB_HOLD` 는 별도 예외(원인 미확정) — PR #571 의 사유 코드 노출로 확정.

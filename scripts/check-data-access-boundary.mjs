@@ -5,6 +5,9 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const src = path.join(root, 'src');
 const allowedRawInfraConsumers = new Set([
+  // SPEC3 explicitly authorizes this legacy-products REST composition. It uses the
+  // central target resolver, immutable private backups, updateTime CAS and readback.
+  'src/runtime/source-cycle-runtime.ts',
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',

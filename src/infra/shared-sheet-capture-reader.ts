@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { GoogleAuth } from 'google-auth-library';
+import { resolveGwsBin } from './gws-bin.js';
 
 type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch };
 
@@ -24,7 +26,33 @@ const sheetsUrl = (spreadsheetId: string, suffix = '') => {
   return new URL(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${suffix}`);
 };
 
+/** 운영 PC 전용 읽기 전송: SHEETS_TRANSPORT=gws 이면 이미 인증된 gws CLI(회사 계정 위임)로 읽는다. 비밀은 건드리지 않는다. */
+function sheetsViaGws(url: URL): unknown {
+  const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
+  if (!m) throw new Error('SHEETS_URL_UNSUPPORTED');
+  const params: Record<string, unknown> = { spreadsheetId: m[1] };
+  const ranges: string[] = [];
+  for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else params[k] = v === 'true' ? true : v; }
+  if (ranges.length) params.ranges = ranges;
+  const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
+  const bin = resolveGwsBin(process.env);
+  if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
+  let out: string;
+  try {
+    out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    // gws 실패는 «Command failed» 한 줄뿐이라 원인을 알 수 없었다(2026-10-13 RP017 READ_FAILED). 표준 오류에서 상태만 뽑아 코드로 남기고 본문은 남기지 않는다.
+    const err = e as NodeJS.ErrnoException & { stderr?: string | Buffer; status?: number | null; signal?: string | null };
+    const text = String(err.stderr ?? '');
+    if (err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM') throw new Error('SHARED_SHEET_GWS_TIMEOUT');
+    const http = /\b(429|401|403|5\d\d)\b/.exec(text)?.[1];
+    if (http) throw new Error(`SHARED_SHEET_HTTP_${http}`);
+    throw new Error(`SHARED_SHEET_GWS_EXIT_${typeof err.status === 'number' ? err.status : 'UNKNOWN'}`);
+  }
+  try { return JSON.parse(out.slice(out.indexOf('{'))); } catch { throw new Error('SHARED_SHEET_RESPONSE_INVALID'); }
+}
 async function sheetsGet(url: URL, ports: Ports): Promise<unknown> {
+  if (process.env.SHEETS_TRANSPORT === 'gws' && !ports.fetcher && !ports.accessToken) return sheetsViaGws(url);
   const token = await (ports.accessToken ?? sheetsAccessToken)();
   if (!token || /\s/.test(token)) throw new Error('SHEETS_AUTH_UNAVAILABLE');
   let response: Response;

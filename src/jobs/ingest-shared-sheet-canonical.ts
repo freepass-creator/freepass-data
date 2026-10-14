@@ -467,6 +467,16 @@ export async function main(args = process.argv.slice(2)) {
   console.log(JSON.stringify(result.report, null, 2));
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
+export async function runSharedSheetCli(args = process.argv.slice(2)) {
+  await main(args).catch(error => {
+    // CI redirects stdout to apply.json and reads it even after a nonzero exit.
+    // A business/system HOLD must never produce an empty JSON artifact.
+    console.log(JSON.stringify({ mode: args.includes('--apply') ? 'APPLY' : 'DRY_RUN',
+      status: 'HOLD', reason: 'SHARED_SHEET_JOB_HOLD' }));
+    // main 의 안전 오류 코드(safeErrorCode)를 그대로 남긴다 — 원문 메시지·비밀은 싣지 않는다.
+    console.error(`SHARED_SHEET_JOB_HOLD ${safeErrorCode(error)}`); process.exitCode = 1;
+  });
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => { console.error(`SHARED_SHEET_JOB_HOLD ${safeErrorCode(error)}`); process.exitCode = 1; });
+  void runSharedSheetCli();
 }

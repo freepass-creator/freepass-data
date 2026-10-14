@@ -8,7 +8,7 @@ describe('vehicle-name reference repair gate', () => {
     expect(validateVehicleNameRepairPlan({
       sourceDigest: 'digest',
       masterRepairs: [{ id: 'master-1', from: 'G80 DH', to: 'G80' }],
-      productRepairs: [{ id: '24저4970', from: 'G80 DH', to: 'G80' }],
+      productRepairs: [{ id: '11가4970', from: 'G80 DH', to: 'G80' }],
     })).toEqual({ masterCount: 1, productCount: 1 });
   });
 
