@@ -11,7 +11,7 @@ import type { SourceRun } from '../src/domain/source.js';
 
 const time = '2026-10-12T00:00:00.000Z', now = Date.parse(time);
 function record(uid = 'synthetic-6774'): SourceProductRecord {
-  return { sourceId: 'SYNTHETIC', uid, plate: null, vehicleText: '합성 G90',
+  return { sourceId: 'SYNTHETIC', uid, plate: '12가3456', vehicleText: '합성 G90',
     status: { raw: '출고가능', saleAvailable: true }, observedAt: time, raw: {}, vehicleHold: [],
     terms: [{ months: 12, monthlyRent: { state: 'KNOWN', value: 100 }, deposit: { state: 'ZERO', value: 0 }, mileage: '연 20000km', raw: { deposit: '무보증' } }] };
 }
@@ -220,5 +220,23 @@ describe('읽기 오류 분류', () => {
     expect(classifyReadError(Object.assign(new Error('x'), { name: 'TimeoutError' }))).toEqual({ error: 'READ_FAILED', detail: 'TIMEOUT' });
     expect(classifyReadError(new Error('IANCAR_ONE_DETAIL_SOURCE_DRIFT'))).toEqual({ error: 'READ_FAILED', detail: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' });
     expect(classifyReadError(new Error('secret body text'))).toEqual({ error: 'READ_FAILED', detail: null });
+  });
+});
+
+describe('번호 미배정 신차는 번호 공란 문서로 만들지 않는다', () => {
+  it('새 차 + 번호 없음 → 보류(UID 대기), 번호 있는 새 차는 그대로 편입', async () => {
+    const f = fakeCommands();
+    const noPlate = record('va-unassigned'); noPlate.plate = null;
+    const p = await planSourceRecords(f.commands, [noPlate, record('va-with-plate')], 'SHARED_SHEET', now);
+    expect(p.plan.held).toEqual([{ key: sourceProductKey(noPlate), reasons: ['NEW_VEHICLE_PLATE_UNASSIGNED_UID_PENDING'] }]);
+    expect(p.plan.entries.map(e => e.after.uid)).toEqual(['va-with-plate']);
+    await applySourceRecords(f.commands, p.plan, { apply: true, now, digest: p.report.planDigest, approval: p.report.planDigest });
+    expect(f.data.has(sourceProductKey(noPlate))).toBe(false);
+  });
+  it('이미 있는 번호 공란 문서의 갱신은 막지 않는다(삭제·하향 없음)', async () => {
+    const existing = record('va-existing'); existing.plate = null; existing.observedAt = new Date(now - 1000).toISOString();
+    const f = fakeCommands([existing]), incoming = record('va-existing'); incoming.plate = null;
+    const p = await planSourceRecords(f.commands, [incoming], 'SHARED_SHEET', now);
+    expect(p.plan.held).toEqual([]); expect(p.plan.entries).toHaveLength(1);
   });
 });
