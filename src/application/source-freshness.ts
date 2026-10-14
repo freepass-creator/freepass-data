@@ -11,6 +11,8 @@ export type FreshnessReport = {
   escalate: string[];
   /** 임시 오탐 표기(ERP4 가 «바뀐 문서만 쓰기» 라 문서 갱신 시각이 수집 성공 시각이 아닌 원천). 24시간 안에서만 적용하며 unhealthy·escalate 에서 뺀다. */
   knownFalsePositive: string[];
+  /** 원천별 임계값 초과 정체(원천:라벨:경과분). 경보 전용 — 노출은 자동으로 내리지 않는다. */
+  stagnant: string[];
   /** 알려진 예외로 감시에서 뺀 원천(원천:사유:상태[:경과분]). 만료 조건 충족 시 목록에서 사라지고 다시 감시된다. */
   exempt: string[];
   sources: SourceFreshness[];
@@ -30,8 +32,21 @@ export function parseFreshnessExempt(value: string | undefined): Array<{ source:
     return m ? [{ source: m[1]!, reason: m[2]!, ...(m[3] ? { liftWhenCompleted: m[3] } : {}) }] : [];
   });
 }
+export type FreshnessSourceThreshold = { source: string; maxAgeMinutes: number; escalateAfterMinutes?: number; label?: string };
+/** 환경 값 파서: «RP012=90:180:SONOGONG_API_STAGNANT» = 원천=정체 분:에스컬레이션 분:라벨. 형식이 틀린 항목은 무시한다(설정 오류가 감시를 넓히지 않게). */
+export function parseFreshnessThresholds(value: string | undefined): FreshnessSourceThreshold[] {
+  return (value ?? '').split(',').map(v => v.trim()).flatMap(item => {
+    const m = /^((?:RP\d{3}|PT-\d{4}))=(\d{1,4})(?::(\d{1,4}))?(?::([A-Z][A-Z0-9_]{2,40}))?$/.exec(item);
+    if (!m) return [];
+    const max = Number(m[2]), esc = m[3] === undefined ? undefined : Number(m[3]);
+    if (max < 10 || (esc !== undefined && esc < max)) return [];
+    return [{ source: m[1]!, maxAgeMinutes: max, ...(esc !== undefined ? { escalateAfterMinutes: esc } : {}), ...(m[4] ? { label: m[4] } : {}) }];
+  });
+}
 export function assessFreshness(heartbeatLines: readonly string[], alertLines: readonly string[],
   options: { now?: number; maxAgeMinutes?: number; escalateAfterMinutes?: number; knownFalsePositive?: readonly string[]; expect?: readonly string[]; only?: readonly string[];
+    /** 원천별 임계값(커맨드 센터 2026-10-14: 손오공 API 90분 정체 경보·180분 에스컬레이션). 있으면 그 원천만 전역 값 대신 이 값으로 판정한다. */
+    sourceThresholds?: readonly FreshnessSourceThreshold[];
     /** 알려진 예외(대표/커맨드 센터 결정): 기간 제한(24h) 없이 unhealthy·escalate 에서 빼되 «만료 조건»을 코드로 박는다 —
      * liftWhenCompleted 원천(대체 어댑터의 새 원천 코드)이 실패 없이 한 번이라도 완료하면 예외가 풀리고 다시 감시한다. */
     exempt?: ReadonlyArray<{ source: string; reason: string; liftWhenCompleted?: string }> } = {}): FreshnessReport {
@@ -41,12 +56,14 @@ export function assessFreshness(heartbeatLines: readonly string[], alertLines: r
   const alerts = parseLines(alertLines).filter(a => iso(a.at) && now - Date.parse(a.at as string) <= maxAgeMinutes * 60_000);
   // only: 이번 회차가 실제로 읽는 원천만 판정한다(제외한 원천의 옛 heartbeat 가 영원히 UNHEALTHY 로 남는 것을 막는다).
   const scope = options.only ? [...options.only] : [...latest.keys()];
+  const thresholds = new Map((options.sourceThresholds ?? []).map(t => [t.source, t]));
   const sources: SourceFreshness[] = [...new Set([...expect, ...scope])].sort().map(source => {
     const beat = latest.get(source), completeAt = iso(beat?.lastCompleteAt);
     const ageMinutes = completeAt === null ? null : Math.round((now - Date.parse(completeAt)) / 60_000);
     const error = typeof beat?.error === 'string' ? beat.error : null;
+    const sourceMax = thresholds.get(source)?.maxAgeMinutes ?? maxAgeMinutes;
     const status: FreshnessStatus = !beat ? 'MISSING' : beat.stopped === true ? 'STOPPED' : completeAt === null ? 'NEVER_COMPLETED' :
-      ageMinutes! > maxAgeMinutes ? 'STALE' : error ? 'ERROR' : 'FRESH';
+      ageMinutes! > sourceMax ? 'STALE' : error ? 'ERROR' : 'FRESH';
     return { source, status, ageMinutes, lastCompleteAt: completeAt, lastAttemptAt: iso(beat?.lastAttemptAt), failures: num(beat?.failures),
       error, readCount: num(beat?.readCount), sourceCount: num(beat?.sourceCount),
       alerts: alerts.filter(a => a.source === source).map(a => String(a.reason)) };
@@ -67,6 +84,9 @@ export function assessFreshness(heartbeatLines: readonly string[], alertLines: r
     unhealthy: unhealthy.map(s => `${s.source}:${s.status}`),
     knownFalsePositive: sources.filter(isFalsePositive).map(s => `${s.source}:${s.ageMinutes}m`),
     exempt: sources.filter(isExempt).map(s => `${s.source}:${exempt.get(s.source)}:${s.status}${s.ageMinutes === null ? '' : `:${s.ageMinutes}m`}`),
-    escalate: unhealthy.filter(s => s.ageMinutes !== null && s.ageMinutes >= (options.escalateAfterMinutes ?? 360))
-      .map(s => `${s.source}:${s.status}:${s.ageMinutes}m`), sources };
+    escalate: unhealthy.filter(s => s.ageMinutes !== null && s.ageMinutes >= (thresholds.get(s.source)?.escalateAfterMinutes ?? options.escalateAfterMinutes ?? 360))
+      .map(s => `${s.source}:${s.status}:${s.ageMinutes}m`),
+    // 원천별 임계값을 넘겨 «정체» 로 판정된 원천(라벨 있는 것만). 노출을 내리지 않는 경보 전용이다(공백 방지).
+    stagnant: unhealthy.filter(s => s.status === 'STALE' && thresholds.get(s.source)?.label).map(s => `${s.source}:${thresholds.get(s.source)!.label}:${s.ageMinutes}m`),
+    sources };
 }

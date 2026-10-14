@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/
 import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
-import { assessFreshness, parseFreshnessExempt } from '../application/source-freshness.js';
+import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
@@ -554,7 +554,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
         { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId),
           knownFalsePositive: (env.SOURCE_CYCLE_STALE_FALSE_POSITIVE ?? '').split(',').map(v => v.trim()).filter(Boolean),
-          exempt: parseFreshnessExempt(env.SOURCE_CYCLE_FRESHNESS_EXEMPT) });
+          exempt: parseFreshnessExempt(env.SOURCE_CYCLE_FRESHNESS_EXEMPT),
+          // 원천별 임계값: 설정(SOURCE_CYCLE_FRESHNESS_THRESHOLDS)이 우선, 없으면 손오공 API 모드에서만 기본 90분 정체·180분 에스컬레이션(커맨드 센터 10-14).
+          sourceThresholds: env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS !== undefined ? parseFreshnessThresholds(env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS)
+            : sonogongApiEnabled(env) ? parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT') : [] });
       if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
       // 즉시 실행 요청(처리기가 SOURCE_CYCLE_REQUEST_RUN=1 로 부름)은 «실제로 읽고 계획했는지»가 중요하다: 잠금(LOCKED)·변경 없음 생략(UNCHANGED_SYNC)은
       // 정시 실행에는 정상이지만 요청에는 «미실행»이므로 종료 코드 3 으로 알려 처리기가 요청을 소비하지 않고 되돌리게 한다(독립 검토 2026-10-14).
