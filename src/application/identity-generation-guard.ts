@@ -10,14 +10,32 @@ export type GuardMaster = { id: string; maker: string; model: string; sub_model:
 
 const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()]/g, '').toUpperCase();
 const QUALIFIER_TAIL = /(?:신형|THE|ALL|NEW|디|올|더|뉴)+$/;
-const CODE_TAIL = /[A-Z]{1,3}\d[A-Z0-9]*$/;
+/** 개발코드: 이름 «마지막 낱말»이 영문 1~3자+숫자…(GN7·LX2·MQ4) 또는 영문 2~3자(HG·IG·TG·DG)일 때. 파워트레인·등급 약어(EV·HEV·LPI·GDI·GT …)는 코드가 아니다.
+ * 원래 표기(공백 유지)의 낱말 경계로 판정한다 — 공백을 지운 문자열에서는 «K5 LPI» 가 «K5LPI» 라는 하나의 코드처럼 보인다. */
+const DIGIT_CODE = /^[A-Z]{1,3}\d[A-Z0-9]*$/;
+const LETTER_CODE = /^[A-Z]{2,3}$/;
+const NON_CODE_WORDS: ReadonlySet<string> = new Set(['EV', 'HEV', 'PHEV', 'MHEV', 'FHEV', 'LPG', 'LPI', 'GDI', 'TDI', 'TSI', 'TFSI', 'TGDI', 'GT', 'AMG', 'RS', 'SE', 'XL', 'LE', 'ST']);
+const splitCode = (original: string): { base: string; code: string } => {
+  const whole = norm(original);
+  const tokens = original.normalize('NFKC').trim().toUpperCase().split(/\s+/).filter(Boolean);
+  const last = (tokens[tokens.length - 1] ?? '').replace(/^[([-]+|[)\]\-.,]+$/g, '');
+  let code = '';
+  if (DIGIT_CODE.test(last)) code = last;
+  else if (tokens.length > 1 && LETTER_CODE.test(last) && !NON_CODE_WORDS.has(last)) code = last;
+  else if (/[가-힣]/.test(last)) {   // 한글에 붙어 쓴 코드(«그랜저GN7»)
+    const m = /[A-Z]{1,3}\d[A-Z0-9]*$/.exec(last);
+    if (m) code = m[0];
+  }
+  if (!code || !whole.endsWith(code)) return { base: whole, code: '' };
+  return { base: whole.slice(0, whole.length - code.length), code };
+};
 const LEADING_QUALIFIER = /^(?:신형|THE|ALL|NEW|디|올|더|뉴)+/;
 /** 수식어를 뗀 «기본 이름»(개발코드도 뗌): 변형(하이브리드 등)은 기본 이름이 다르고, 부분변경은 기본 이름이 같고 앞 수식어만 다르다. */
-const baseOf = (subModel: string) => norm(subModel).replace(LEADING_QUALIFIER, '').replace(CODE_TAIL, '');
+const baseOf = (subModel: string) => splitCode(subModel).base.replace(LEADING_QUALIFIER, '');
 /** 이름 후보: 이름·별칭, 그리고 개발코드를 뗀 변형(원문에 코드가 없어도 «더 뉴 팰리세이드» 처럼 수식어째로 걸리게). */
-const nameList = (m: GuardMaster) => [...new Set([m.sub_model, ...m.sub_model_aliases].map(norm).flatMap(n => [n, n.replace(CODE_TAIL, '')]).filter(n => n.length >= 3))];
+const nameList = (m: GuardMaster) => [...new Set([m.sub_model, ...m.sub_model_aliases].flatMap(n => [norm(n), splitCode(n).base]).filter(n => n.length >= 3))];
 /** 마스터 세부모델 이름 끝의 개발코드(예: «그랜저 GN7» → GN7). 없으면 ''. */
-export const generationCode = (subModel: string): string => CODE_TAIL.exec(norm(subModel))?.[0] ?? '';
+export const generationCode = (subModel: string): string => splitCode(subModel).code;
 
 /** 원문(구분자 유지)에서 영숫자 토큰 경계로 코드가 있는가: 앞뒤가 영문·숫자가 아니어야 한다(GN7 은 «GN70»·«XGN7» 이 아니다). */
 function containsToken(rawName: string, token: string): boolean {
@@ -29,7 +47,7 @@ function containsToken(rawName: string, token: string): boolean {
   return false;
 }
 
-export type GenerationGuardReason ='GENERATION_QUALIFIER_MISMATCH' | 'GENERATION_EVIDENCE_MISSING';
+export type GenerationGuardReason = 'GENERATION_QUALIFIER_MISMATCH' | 'GENERATION_EVIDENCE_MISSING' | 'GENERATION_CODE_CONFLICT';
 const inRange = (m: GuardMaster, year: number) => (m.yearFrom === null || year >= m.yearFrom) && (m.yearTo === null || year <= m.yearTo);
 
 /** 마스터 하나가 원문 차명의 근거로 충분한가. null = 통과, 아니면 보류 사유. rawPath = 원문 부분 일치로 고른 경우(이름을 정확히 대조한 경우는 점검 대상이 아니다). */
@@ -57,11 +75,20 @@ export function generationGuard(input: { rawName: string; year: string; master: 
   // 세대 근거는 «하나»면 된다(Codex #663): ① 형제와 겹치지 않는 개발코드가 원문에 «토큰 경계로» 있다(그랜저 GN7 근거가 «그랜저 GN70» 이면 안 됨)
   // ② 이 세대만의 앞 수식어가 이름째로 원문에 있다(«더 뉴 …», 형제 이름에는 없음) ③ 연식이 이 세대 범위 안에만 있고 형제 범위와 겹치지 않는다.
   // 마스터 이름이 원문에 «포함»된다는 것만으로는 근거가 아니다(코드 없는 이름 «그랜저»는 형제 세대에도 들어맞는다). 코드를 형제와 공유하면 코드만으로는 구분되지 않는다.
+  // 상충·유사 코드(Codex #663 재검토 B): 원문에 형제 세대의 코드(자기 코드와 다른 것)가 있거나, 어떤 코드와 «접두 관계»인 다른 토큰(GN70 ↔ GN7)이 있으면
+  // 연식으로 구제하지 않고 보류한다.
+  const siblingCodes = [...new Set(siblings.map(s => generationCode(s.sub_model)).filter(c => c !== ''))];
+  const knownCodes = [...new Set([code, ...siblingCodes].filter(c => c !== ''))];
+  for (const token of new Set(input.rawName.normalize('NFKC').toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 2))) {
+    if (token === code) continue;
+    if (siblingCodes.includes(token)) return 'GENERATION_CODE_CONFLICT';
+    if (knownCodes.some(c => token.startsWith(c) || c.startsWith(token))) return 'GENERATION_CODE_CONFLICT';
+  }
   const codeShared = code !== '' && siblings.some(s => generationCode(s.sub_model) === code);
   if (code !== '' && !codeShared && containsToken(input.rawName, code)) return null;
   const leading = LEADING_QUALIFIER.exec(norm(master.sub_model))?.[0] ?? '';
   const siblingLeadings = siblings.map(s => LEADING_QUALIFIER.exec(norm(s.sub_model))?.[0] ?? '');
-  if (leading !== '' && siblingLeadings.every(l => l !== leading) && raw.includes(norm(master.sub_model).replace(CODE_TAIL, ''))) return null;
+  if (leading !== '' && siblingLeadings.every(l => l !== leading) && raw.includes(splitCode(master.sub_model).base)) return null;
   const year = /^\d{4}$/.test(input.year) ? Number(input.year) : null;
   if (year !== null && inRange(master, year) && siblings.every(s => !inRange(s, year))) return null;
   return 'GENERATION_EVIDENCE_MISSING';
