@@ -25,6 +25,19 @@ describe('사본 서빙 허용표', () => {
     expect([...parsePhotoCopySuppliers('rp005, RP012 ,bogus,RP12,RP0051,*')].sort()).toEqual(['RP005', 'RP012', 'RP031']);
   });
 
+  it('공급사 코드 형식은 RP### 또는 PT-#### — 렌트존(PT-0001)이 허용표에서 빠지지 않고, 잘못된 PT 형식은 무시', () => {
+    expect([...parsePhotoCopySuppliers('PT-0001, pt-0026, RP005')].sort()).toEqual(['PT-0001', 'PT-0026', 'RP005', 'RP031']);
+    expect([...parsePhotoCopySuppliers('PT-1,PT0001,PT-00011,XX-0001,PT-000a')]).toEqual(['RP031']);
+    const doc = withRefs('PT-0001', 'SUPPLIER_FOLDER_COPY');
+    const pt = parsePhotoCopySuppliers('PT-0001');
+    expect(isSupplierCopyPhotoProduct(doc, pt)).toBe(true);
+    expect(approvedPhotoCount(doc, pt)).toBe(2);
+    expect(approvedPhotoCount(doc)).toBe(0);                       // 허용표 밖이면 0(기본 = 이안카만)
+    // 이안카 불변: PT 코드를 넣어도 RP031 규칙·방법은 그대로
+    expect(isSupplierCopyPhotoProduct(withRefs('RP031', 'IANCAR_COMPRESSED_COPY'), pt)).toBe(true);
+    expect(isSupplierCopyPhotoProduct(withRefs('RP031', 'SUPPLIER_FOLDER_COPY'), pt)).toBe(false);
+  });
+
   it('표 안의 공급사만 사본 상품이다 — 공급사별 허용 방법(이안카=압축 사본만, 그 밖=폴더 사본·카톡 등록)', () => {
     expect(isSupplierCopyPhotoProduct(withRefs('RP005', 'SUPPLIER_FOLDER_COPY'), allow)).toBe(true);
     expect(isSupplierCopyPhotoProduct(withRefs('RP005', 'AUTO_KAKAO_COLLECT'), allow)).toBe(true);
