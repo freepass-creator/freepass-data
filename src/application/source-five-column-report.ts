@@ -45,3 +45,49 @@ export function fiveColumnLine(row: FiveColumnRow): string {
     + `순수 NEW ${f(row.pureNew)} · MISSING ${f(row.missing)}(잠금 ${f(row.missingLocked)}) · 값 불일치 ${f(row.mismatch)} · 중복 ${f(row.duplicateDocs)}`
     + `${held ? ` · 보류 ${held}` : ''} · ${status}`;
 }
+
+/** 대표가 보는 «한 줄 판정»(대표 2026-10-14 «검증이 너무 어렵다»): ✅ 일치 / ⚠ 차이 N대와 이유 / ❌ 회차 정지·연속 차이.
+ * 이유는 회차 기록의 gap 사유 코드(dispatchGapReasons, #619)를 우리말로 바꾼 것이다 — 추정하지 않고, 기록에 없으면 «사유 기록 없음». */
+export const SOURCE_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  RP012: '손오공', RP031: '이안카', RP023: '오토플러스', RP004: '아이카', RP006: '아이언',
+});
+export const GAP_REASON_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  SOURCE_ONLY_NO_DOC: '편입 대기', SOURCE_ONLY_INFO_INCOMPLETE: '정보 부족(가격·상태)', SOURCE_ONLY_NOT_SELLABLE_STALE: '재노출 대기',
+  SOURCE_ONLY_WITHDRAWN_OTHER: '기타 비노출', SOURCE_ONLY_NOT_LISTABLE: '비노출', SOURCE_ONLY_LOCKED_EXPOSED: '정산 잠금(계약중 표시)',
+  ERP_ONLY_NOT_IN_SOURCE: '원천에 없음(하향 대기)', ERP_ONLY_SOURCE_CONTRACT: '원천은 계약중',
+});
+/** 같은 원천이 이 회차 수 이상 연속으로 차이면 ❌(사람 확인). */
+export const VERDICT_PERSIST_CYCLES = 3;
+export type VerdictRow = { source: string; mark: '✅' | '⚠' | '❌'; line: string };
+
+export function verdictRows(heartbeatLines: readonly string[]): VerdictRow[] {
+  const bySource = new Map<string, Record<string, unknown>[]>();
+  for (const line of heartbeatLines) {
+    const t = line.trim();
+    if (!t) continue;
+    try { const v = JSON.parse(t); if (obj(v) && typeof v.source === 'string') (bySource.get(v.source) ?? bySource.set(v.source, []).get(v.source)!).push(v); } catch { /* 손상 줄은 건너뛴다 */ }
+  }
+  return [...bySource.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([source, beats]): VerdictRow => {
+    const name = SOURCE_DISPLAY_NAMES[source] ? `${SOURCE_DISPLAY_NAMES[source]}(${source})` : source;
+    const last = beats[beats.length - 1]!;
+    const r = obj(last.reconciliation) ? last.reconciliation : null;
+    if (last.stopped === true) return { source, mark: '❌', line: `${name} ❌ 회차 정지(연속 실패 ${num(last.failures) ?? '-'}) — ${typeof last.error === 'string' ? last.error : '원인 기록 없음'}` };
+    if (!r || num(r.dispatchableGap) === null) return { source, mark: '⚠', line: `${name} ⚠ 지표 없음 — 이번 회차 대조 기록이 없다${typeof last.error === 'string' ? ` (${last.error})` : ''}` };
+    const src = num(r.sourceDispatchableCount), exposed = num(r.dispatchableExposedCount), contracted = num(r.contractMarkedExposedCount) ?? 0;
+    const gap = num(r.dispatchableGap)!;
+    const reasons = obj(r.dispatchGapReasons) ? Object.entries(r.dispatchGapReasons).filter(([, n]) => typeof n === 'number' && n > 0) : [];
+    const why = reasons.length ? reasons.map(([k, n]) => `${GAP_REASON_LABELS[k] ?? k} ${n}`).join(', ') : '사유 기록 없음';
+    const contract = contracted ? ` · 계약중 ${contracted}` : '';
+    if (gap === 0 && reasons.length === 0) return { source, mark: '✅', line: `${name} ✅ 원천 출고가능 ${src} = 노출 ${exposed}${contract}` };
+    // 연속 차이: 마지막 회차부터 거꾸로 차이(gap≠0 또는 사유 있음)인 회차 수
+    let streak = 0;
+    for (const b of [...beats].reverse()) {
+      const rr = obj(b.reconciliation) ? b.reconciliation : null;
+      const differs = rr && (num(rr.dispatchableGap) !== 0 || (obj(rr.dispatchGapReasons) && Object.values(rr.dispatchGapReasons).some(n => typeof n === 'number' && n > 0)));
+      if (!differs) break;
+      streak++;
+    }
+    const mark = streak >= VERDICT_PERSIST_CYCLES ? '❌' : '⚠';
+    return { source, mark, line: `${name} ${mark} 원천 출고가능 ${src} / 노출 ${exposed}${contract} — ${why}${mark === '❌' ? ` (${streak}회 연속)` : ''}` };
+  });
+}
