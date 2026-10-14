@@ -18,6 +18,19 @@ import { resolveGwsBin } from '../infra/gws-bin.js';
 import { DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, runIancarPhotoCopy, type PhotoCopyLimits, type PhotoCopyMode,
   type PhotoCopySource, type SourceVehicle } from '../application/iancar-photo-drive-copy.js';
 
+/** 사진 복사의 «원천 준비» 판정. 재고를 게시하는 엔진 회차(15분 신선도)와 달리 사진은 id 로 고정된 불변 자료이고 차량별 상세가 stale=false 를 다시 확인하므로,
+ * 목록의 «신선도 초과»(동기화 시각이 15분보다 오래됨)만으로는 막지 않는다 — 그 값은 공급사 동기화 주기(20~60분) 때문에 정시 직후 창 밖에서는 늘 걸린다.
+ * 막는 것: 공급사가 stale 로 표시, 동기화 시각이 maxAge(기본 3시간)보다 오래됨(상류 정지), 시각 이상·행 수/페이지 정합 이상 등 «신선도 초과 외» 이슈 전부. */
+export function photoSourceReadiness(capture: { issues: readonly string[]; stale: boolean; syncedAt: string }, nowMs: number, maxAgeMs: number): { ready: boolean; codes: string[] } {
+  const codes = new Set(capture.issues.filter(code => code !== 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'));
+  if (capture.stale) codes.add('IANCAR_ONE_SOURCE_STALE');
+  const synced = Date.parse(capture.syncedAt);
+  if (!Number.isFinite(synced)) codes.add('IANCAR_ONE_SYNCED_AT_INVALID');
+  else if (nowMs - synced > maxAgeMs) codes.add('IANCAR_ONE_SYNC_TOO_OLD');
+  return { ready: codes.size === 0, codes: [...codes].sort() };
+}
+const photoSourceMaxAgeMs = (env: NodeJS.ProcessEnv) => int(env.IANCAR_PHOTO_COPY_MAX_SOURCE_AGE_MIN, 180, 15, 24 * 60) * 60_000;
+
 /** FULL 모드 승인 확인 값: 대상 «이안카» 폴더 id 에 묶인 해시(다른 폴더·실수로 복사한 값은 통하지 않는다). 파일럿 합격 뒤 사람이 이 값을 환경에 넣는다. */
 export const fullApprovalToken = (rootFolderId: string): string =>
   createHash('sha256').update(`iancar-photo-copy-full/1\n${rootFolderId}`).digest('hex').slice(0, 16);
@@ -57,7 +70,8 @@ export function createIancarPhotoSource(env: NodeJS.ProcessEnv = process.env): P
   return {
     async listVehicles() {
       const capture = await collectIancarOneVehicleList(config, noTransientRetry);
-      if (!capture.readyForRawIngest || capture.stale) throw new Error('IANCAR_SOURCE_NOT_READY');   // 상류 정지·신선도 초과 중에는 복사하지 않는다
+      const readiness = photoSourceReadiness(capture, Date.now(), photoSourceMaxAgeMs(env));
+      if (!readiness.ready) throw Object.assign(new Error('IANCAR_SOURCE_NOT_READY'), { detail: readiness.codes });   // 상류 정지(공급사 stale·동기화 수 시간 초과)·정합 이상 중에는 복사하지 않는다
       const out: SourceVehicle[] = [];
       for (const record of capture.records) {
         const payload = record.payload as Record<string, unknown>;
@@ -120,6 +134,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (['RATE_LIMITED', 'CONSECUTIVE_FAILURES'].includes(result.stop) || result.counts.FAILED > 0) process.exitCode = 1;
   }).catch(error => {
     const code = error instanceof IancarOneApiError ? error.code : error instanceof Error && /^[A-Z0-9_]{3,64}$/.test(error.message) ? error.message : 'PHOTO_COPY_ERROR';
-    console.error(code); process.exitCode = 2;
+    // 준비 판정 거부는 원인 코드(issues)만 함께 낸다: 값·번호·URL 없음.
+    const detail = error && typeof error === 'object' && Array.isArray((error as { detail?: unknown }).detail)
+      ? ((error as { detail: unknown[] }).detail.filter((c): c is string => typeof c === 'string' && /^[A-Z0-9_]{3,64}$/.test(c))) : [];
+    console.error(detail.length ? `${code} ${detail.join(',')}` : code); process.exitCode = 2;
   });
 }

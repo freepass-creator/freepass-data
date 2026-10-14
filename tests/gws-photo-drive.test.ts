@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGwsPhotoDrive, isDriveRateLimitSignal, type GwsRunner } from '../src/infra/gws-photo-drive.js';
-import { fullApprovalToken, iancarPhotoCopyCli, photoCopyLimitsFromEnv } from '../src/jobs/copy-iancar-photos-to-drive.js';
+import { fullApprovalToken, iancarPhotoCopyCli, photoCopyLimitsFromEnv, photoSourceReadiness } from '../src/jobs/copy-iancar-photos-to-drive.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -110,6 +110,21 @@ describe('복사 잡 설정·승인', () => {
     expect(photoCopyLimitsFromEnv({})).toMatchObject({ maxVehicles: 40, maxPhotos: 400, maxPerVehicle: 10, intervalMs: 1500, pilotOnly: 10 });
     expect(() => photoCopyLimitsFromEnv({ IANCAR_PHOTO_COPY_INTERVAL_MS: '200' })).toThrow('PHOTO_COPY_LIMIT_INVALID');
     expect(() => photoCopyLimitsFromEnv({ IANCAR_PHOTO_COPY_MAX_PER_VEHICLE: '11' })).toThrow('PHOTO_COPY_LIMIT_INVALID');
+  });
+
+  it('source readiness for photos: only the 15-minute freshness issue is tolerated (up to the max sync age); upstream stop and integrity issues still block, with codes', () => {
+    const now = Date.parse('2026-10-14T18:00:00.000Z');
+    const synced = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const h = 60 * 60_000;
+    // 동기화 40분 전: 엔진 기준(15분)으로는 FRESHNESS_EXCEEDED 이지만 사진 복사는 통과
+    expect(photoSourceReadiness({ issues: ['IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'], stale: false, syncedAt: synced(40) }, now, 3 * h)).toEqual({ ready: true, codes: [] });
+    // 상류 정지: 동기화가 3시간보다 오래됨
+    expect(photoSourceReadiness({ issues: ['IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'], stale: false, syncedAt: synced(7 * 60) }, now, 3 * h))
+      .toEqual({ ready: false, codes: ['IANCAR_ONE_SYNC_TOO_OLD'] });
+    // 공급사 stale 표시·정합 이슈는 그대로 막고 코드를 알린다
+    expect(photoSourceReadiness({ issues: ['IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_SOURCE_STALE'], stale: true, syncedAt: synced(5) }, now, 3 * h))
+      .toEqual({ ready: false, codes: ['IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_SOURCE_STALE'] });
+    expect(photoSourceReadiness({ issues: [], stale: false, syncedAt: 'nope' }, now, 3 * h).codes).toEqual(['IANCAR_ONE_SYNCED_AT_INVALID']);
   });
 
   it('refuses to write without explicit approval, and requires the drive root id', async () => {
