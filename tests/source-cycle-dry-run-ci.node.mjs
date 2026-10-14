@@ -12,9 +12,10 @@ test('child env never carries write, approval or takeover switches', () => {
   assert.equal(env.PATH, '/bin');
 });
 
-test('only online-readable sources are accepted (sheet sources stay on the ops PC for now)', () => {
-  assert.deepEqual(parseSources('IANCAR, IRON,IRON'), ['IANCAR', 'IRON']);
-  assert.throws(() => parseSources('F05'), /DRY_RUN_SOURCES_INVALID/);
+test('only online-readable sources are accepted; sheet sources read over ADC', () => {
+  assert.deepEqual(parseSources('IANCAR, IRON,IRON,F05'), ['IANCAR', 'IRON', 'F05']);
+  assert.throws(() => parseSources('SONOGONG'), /DRY_RUN_SOURCES_INVALID/);
+  assert.equal(dryRunEnv({}, 'F05', '/tmp/x').SHEETS_TRANSPORT, 'adc');
   assert.throws(() => parseSources(''), /DRY_RUN_SOURCES_INVALID/);
 });
 

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       sources:
-        description: '계획만 세울 원천 종류(쉼표). 시트 원천(F05·AICA)은 gws 의존이라 아직 불가'
+        description: '계획만 세울 원천 종류(쉼표). 시트 원천(F05·AICA)은 실행기 서비스 계정 «보기» 공유 필요'
         type: string
         default: 'IANCAR,IRON,AUTOPLUS'
   schedule:
@@ -70,4 +70,6 @@ jobs:
           EANCAR_ONE_API_BASE_URL: ${{ vars.EANCAR_ONE_API_BASE_URL }}
           EANCAR_ONE_API_KEY: ${{ secrets.EANCAR_ONE_API_KEY }}
           SOURCE_CYCLE_IRON_LIST_URL: ${{ vars.SOURCE_CYCLE_IRON_LIST_URL }}
+          SOURCE_CYCLE_F05_SHEET_ID: ${{ secrets.SOURCE_CYCLE_F05_SHEET_ID }}
+          SOURCE_CYCLE_AICA_SHEET_ID: ${{ secrets.SOURCE_CYCLE_AICA_SHEET_ID }}
         run: node scripts/ci/source-cycle-dry-run.mjs

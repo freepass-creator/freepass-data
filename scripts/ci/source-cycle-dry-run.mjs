@@ -6,8 +6,10 @@ import { appendFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** 온라인에서 읽을 수 있는 원천과 필요한 변수. 시트 원천(F05·AICA)은 gws(회사 계정 위임) 의존이라 아직 넣지 않는다. */
+/** 온라인에서 읽을 수 있는 원천과 필요한 변수. 시트 원천(F05·AICA)은 SHEETS_TRANSPORT=adc(#618)로 실행기 서비스 계정이 읽는다(시트 «보기» 공유 필요). */
 export const ONLINE_DRY_RUN_SOURCES = Object.freeze({
+  F05: ['SOURCE_CYCLE_F05_SHEET_ID'],
+  AICA: ['SOURCE_CYCLE_AICA_SHEET_ID'],
   IANCAR: ['EANCAR_ONE_API_BASE_URL', 'EANCAR_ONE_API_KEY'],
   IRON: ['SOURCE_CYCLE_IRON_LIST_URL'],
   AUTOPLUS: [],
@@ -21,7 +23,7 @@ export const WRITE_SWITCHES = Object.freeze(['SOURCE_CYCLE_UNATTENDED', 'SOURCE_
 export function dryRunEnv(base, kind, privateDir) {
   const env = { ...base };
   for (const key of WRITE_SWITCHES) delete env[key];
-  return { ...env, SOURCE_CYCLE_SOURCES: kind, SOURCE_CYCLE_PRIVATE_DIR: privateDir };
+  return { ...env, SOURCE_CYCLE_SOURCES: kind, SOURCE_CYCLE_PRIVATE_DIR: privateDir, SHEETS_TRANSPORT: 'adc' };
 }
 
 export function parseSources(value) {
