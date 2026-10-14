@@ -14,7 +14,14 @@ export type ApiReadVerdict = {
 /** 고유 차량번호 수 = 어댑터가 채택한 레코드 수(탭 간 중복은 이미 하나로 합쳐졌고, 번호 형식 오류·같은 탭 중복은 레코드가 아니다). */
 export const uniquePlateCount = (read: Pick<SonogongApiRead, 'records'>): number => new Set(read.records.map(r => r.plate)).size;
 
-export function judgeSonogongApiRead(read: Pick<SonogongApiRead, 'complete' | 'records'> & { incompleteReason?: string | undefined }, input: { exposedUnlockedDocs: number; previousCount: number; stateError: string | null }): ApiReadVerdict {
+/** 상류 데이터 생성 시각이 이보다 오래되면 «상류 정지»(소프트 보류, 우리 쪽 실패 아님). 손오공 데이터는 1시간 단위 갱신이라 여유를 둔다. */
+export const SONOGONG_UPSTREAM_MAX_AGE_MINUTES = 150;
+
+export function judgeSonogongApiRead(read: Pick<SonogongApiRead, 'complete' | 'records'> & { incompleteReason?: string | undefined; generatedAt?: string | null | undefined },
+  input: { exposedUnlockedDocs: number; previousCount: number; stateError: string | null; nowMs?: number }): ApiReadVerdict {
+  if (read.complete && read.generatedAt && Number.isFinite(Date.parse(read.generatedAt)) &&
+      (input.nowMs ?? Date.now()) - Date.parse(read.generatedAt) > SONOGONG_UPSTREAM_MAX_AGE_MINUTES * 60_000)
+    return { complete: false, incompleteReason: 'UPSTREAM_STALE', saveCount: null };
   if (!read.complete) return { complete: false, ...(read.incompleteReason ? { incompleteReason: read.incompleteReason } : {}), saveCount: null };
   const unique = uniquePlateCount(read);
   const floor = sonogongApiRowFloor(input.exposedUnlockedDocs, input.previousCount);

@@ -75,7 +75,8 @@ const totalOf = (data: unknown, attrs: Record<string, unknown>): number | null =
 };
 
 export type SonogongApiRead = {
-  observedAt: string; complete: boolean; incompleteReason?: string; tabsRead: SonogongApiTab[];
+  /** 읽기를 마친 시각(엔진 신선도 창의 기준). 상류 데이터 생성 시각은 generatedAt 에 따로 둔다(1시간 단위 갱신이라 읽기 시각과 다르다). */
+  observedAt: string; generatedAt?: string | null; complete: boolean; incompleteReason?: string; tabsRead: SonogongApiTab[];
   records: SourceProductRecord[]; held: Array<{ tab: SonogongApiTab; reason: string }>; duplicatePlates: string[];
   listed: number; detailsRead: number;
   /** 읽기는 정상이지만 사람이 알아야 할 안전한 코드: CROSS_TAB_DUPLICATE:n(탭 우선순위 rent>sub>pick 로 하나만 채택), CROSS_TAB_GENERATION_DIFFERENCE:n(같은 번호의 탭 간 제조연월 차이). */
@@ -103,7 +104,10 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
     if (total !== null && rows.length !== total) incomplete ??= 'API_COUNT_MISMATCH';
     rowsByTab.set(tab, rows);
   }
-  const observedAt = generatedAt ?? clock();
+  // 신선도 창(엔진 OTHER 30분)의 기준은 «읽은 시각»이다. 상류 generatedAt 은 최대 1시간 묵을 수 있어 그대로 observedAt 으로 쓰면 항상 SOURCE_STALE 이 된다
+  // (2026-10-14 첫 DRY_RUN: SOURCE_INCOMPLETE,SOURCE_STALE). 상류 정지 여부는 generatedAt 으로 따로 판정한다(guards).
+  const observedAt = clock();
+  const failureCodes = new Map<string, number>();
   const records: SourceProductRecord[] = [], held: SonogongApiRead['held'] = [], duplicates = new Set<string>();
   // 탭 우선순위(명세서): rent > sub > pick. 같은 번호가 다른 탭에도 있으면 앞선 탭 하나만 채택하고 경고로 센다(불완전 아님).
   // 같은 탭 안에서 같은 번호가 두 번이면 원천 오류라 읽기를 불완전으로 둔다.
@@ -135,6 +139,9 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         } catch (e) {
           // 인증·한도(401/403/429)는 회차 전체를 멈춘다. 그 밖의 상세 실패(404 등)는 이 차만 보증금 «미확인» 으로 두고 읽기를 불완전으로 표시한다.
           if (e instanceof SonogongApiError && [401, 403, 429].includes(e.status ?? 0)) throw e;
+          // 진단(2026-10-14): 상태 코드·건수만 남긴다(키·URL·본문 없음) — 429/한도/권한/없는 id 를 가린다.
+          const code = (e instanceof SonogongApiError ? e.code : 'UNKNOWN').replace(/^SONOGONG_API_/, '');
+          failureCodes.set(code, (failureCodes.get(code) ?? 0) + 1);
           incomplete ??= 'API_DETAIL_FAILED';
         }
       } else incomplete ??= 'API_DETAIL_LIMIT';
@@ -175,9 +182,15 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (duplicates.size) incomplete ??= 'DUPLICATE_PLATES';
   if (!records.length) incomplete ??= 'API_EMPTY';
   const notes: string[] = [];
+  // 상세 실패 사유가 하나라도 있으면 가장 많은 코드와 건수를 불완전 사유에 합친다(알림·요약에 그대로 남는다, 최대 63자).
+  if (incomplete === 'API_DETAIL_FAILED' && failureCodes.size) {
+    const [code, n] = [...failureCodes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]!;
+    incomplete = `API_DETAIL_FAILED_${code}_${n}of${listed}`.replace(/[^A-Z0-9_a-z]/g, '').toUpperCase().slice(0, 63);
+  }
+  for (const [code, n] of failureCodes) notes.push(`DETAIL_FAIL:${code}:${n}`.slice(0, 60));
   if (crossTabDuplicates) notes.push(`CROSS_TAB_DUPLICATE:${crossTabDuplicates}`);
   if (generationDifferences) notes.push(`CROSS_TAB_GENERATION_DIFFERENCE:${generationDifferences}`);
-  return { observedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
+  return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
     records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes };
 }
 
