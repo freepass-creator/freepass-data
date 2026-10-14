@@ -3,6 +3,7 @@
  * «12개월 2만km» 같은 요금 열…)이 있고 그 아래가 차량 행이다. 탭 이름·머리글 행 위치는 바뀔 수 있어 «차량번호»와 «판매상태» 머리글을 모두 가진 탭만 쓴다.
  * 판매상태: 판매중·할인판매·상품대기 = 출고가능, 계약중·상담중 등 계약 계열(CONTRACTED_STATUS_SYNONYMS) = 판매 가능이되 «계약중»(선점) 표시
  * (대표 2026-10-14 «계약중은 연동해서 계약중으로, 출고불가만 안 올린다»), 보류·판매완료 = 불가. 모르는 값은 보류(STATUS_UNKNOWN)다. */
+import { MONTHLY_RENT_MIN, MONTHLY_RENT_MAX } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isContractedStatus } from '../domain/erp5-inventory-status.js';
@@ -16,7 +17,7 @@ export type AutoplusSheetRead = {
 const SELLABLE = new Set(['판매중', '할인판매', '상품대기']);   // 계약중 = 모든 원천에서 같게: 문서 유지 + «계약중» 표시 노출(선점), 출고가능 비교에서는 제외(커맨드 센터 2026-10-14)
 const NOT_SELLABLE = new Set(['보류', '판매완료', '출고완료', '판매불가', '출고불가']);   // 출고불가 = 대표 10-14 «출고불가만 안 올린다»(보류로 빠지면 회차 부재 하향 전체가 멈춘다)
 const unknownAmount: SourceAmount = { state: 'UNKNOWN', value: null };
-const RENT_MIN = 100_000, RENT_MAX = 50_000_000;
+const RENT_MIN = MONTHLY_RENT_MIN, RENT_MAX = MONTHLY_RENT_MAX;   // 공용 월 대여료 타당 범위(공통 시트·아이카와 같은 값)
 const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
 const rentOf = (v: unknown): SourceAmount | null => {
   const t = clean(v).replace(/[,\s원]/g, '');

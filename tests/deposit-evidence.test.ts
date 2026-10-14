@@ -603,5 +603,21 @@ describe('이안카(RP031) 보증금은 원천 엔진 근거만 읽는다', () =
     expect(readIancarEngineDeposit({ ...legacy, source_cycle_write: { by: 'erp4' } }, '24_연20000km', now).state).toBe('UNKNOWN');
     // 근거가 없는 문서는 여전히 UNKNOWN
     expect(readIancarEngineDeposit({ provider_company_code: 'RP031', car_number: '1', price: { '24': { rent: 1, deposit: 5 } } }, '24', now).state).toBe('UNKNOWN');
+    // null 은 «없음»이라 레거시 보존이 유지된다
+    expect(readIancarEngineDeposit({ ...legacy, source_cycle_write: null, source_cycle_record: null }, '24_연20000km', now)).toMatchObject({ state: 'KNOWN', amount: 1000000 });
+  });
+
+  it('Codex #639 재검토: a corrupted (non-object) engine mark or record never falls back to the legacy evidence', () => {
+    const base: Record<string, any> = { provider_company_code: 'RP031', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
+      iancar_one_vehicle_id: 'V-1', car_number: '000가0000', product_type: '중고렌트', _direct_ingest_at: Date.parse('2026-10-14T00:00:00Z'),
+      price: { '24_연20000km': { rent: 500000, deposit: 1000000 } },
+      iancar_phase_one: { stage: 'PHASE_ONE', publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE', sourceVehicleId: 'V-1', sourceSyncedAt: '2026-10-14T00:00:00Z',
+        sourceDigest: 'a'.repeat(64), ratesDigest: 'b'.repeat(64), priceAliases: {},
+        terms: [{ key: '24:20000:year', termMonths: 24, contractedMileage: { km: 20000, period: 'year' }, monthlyRent: { currency: 'KRW', amount: 500000 },
+          vatIncluded: true, deposit: { currency: 'KRW', amount: 1000000 }, depositState: 'KNOWN', compatibilityPriceKey: '24_연20000km' }] } };
+    for (const bad of ['broken', 7, true, [], ['x'], '']) {
+      expect(readIancarEngineDeposit({ ...base, source_cycle_write: bad }, '24_연20000km', now).state, `mark ${JSON.stringify(bad)}`).toBe('UNKNOWN');
+      expect(readIancarEngineDeposit({ ...base, source_cycle_record: bad }, '24_연20000km', now).state, `record ${JSON.stringify(bad)}`).toBe('UNKNOWN');
+    }
   });
 });

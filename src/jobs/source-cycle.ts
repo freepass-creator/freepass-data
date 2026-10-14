@@ -121,7 +121,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       // 레코드가 이미 읽기 결과에 있어(계획의 seen 에 포함) 다른 차의 부재 판정을 가리지 않는다. 보류 사유는 «A,B» 로 이어 붙은 문자열일 수 있어 쉼표로 나눈다.
       // 이안카 요금 사실 보류(요금 없음·기준 밖 값·중복 요금 행)도 값 계열이다: 그 차의 행(번호·상태)은 읽기 결과에 그대로 있어 그 차만 보호되고
       // 다른 차의 부재 하향은 막지 않는다. 번호 계열 보류(번호 없음·형식·중복 번호)는 여기에 넣지 않는다 — 어느 문서인지 몰라 부재 하향을 유보한다.
-      const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE',
+      // RENT_REVIEW_REQUIRED(대여료 해석 불가·타당 범위 밖)도 행 레코드가 TERMS_HOLD 로 읽기 결과에 남아 있어 값 계열이다.
+      const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE', 'RENT_REVIEW_REQUIRED',
         'IANCAR_ONE_RATES_EMPTY', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW', 'IANCAR_ONE_DUPLICATE_RATE']);
       const benign = converted.held.filter(h => h.reasons.length > 0 &&
         h.reasons.every(r => r.split(',').map(s => s.trim()).filter(Boolean).every(s => VALUE_CLASS_HOLDS.has(s)))).length;
@@ -210,7 +211,8 @@ export async function sourceCycleCli(argv: string[]) {
     const noWrite = async (): Promise<never> => { throw new Error('OFFLINE_PRODUCT_WRITE_FORBIDDEN'); };
     runtime = { plugins: snapshot.sources.map(s => sourceCyclePlugin(s.definition, async () => s.capture)),
       commands: { async list(source) { return { complete: snapshot.catalogComplete === true,
-        products: snapshot.products.filter(p => p.record.sourceId === source) }; },
+        products: snapshot.products.filter(p => p.record.sourceId === source),
+        foreignUids: snapshot.products.filter(p => p.record.sourceId !== source).map(p => p.record.uid).sort() }; },
       async read(source, uid) { return snapshot.products.find(p => p.record.sourceId === source && p.record.uid === uid) ?? null; },
       backup: noWrite, readBackup: noWrite, compareAndApply: noWrite },
       control: fileCycleControl(directory, async (source, state) => {
