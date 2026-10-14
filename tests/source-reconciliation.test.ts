@@ -91,4 +91,22 @@ describe('원천 ↔ ERP5 정합 보고', () => {
     const r = reconcileSource([rec('12가1001', false)], [doc(rec('12가1001', true), true)]);
     expect(r).toMatchObject({ sourceSellable: 0, erpSellable: 1, missingCount: 1, matched: false });
   });
+  it('explains a non-zero dispatch gap by reason code, and the reasons always add up to the gap', () => {
+    const contract = (p: string) => { const r = rec(p, true); r.status = { raw: '계약중', saleAvailable: true }; return r; };
+    const withdrawn = (r: SourceProductRecord, reason: string) => ({ ...doc(r, false), publication_withdrawal: { reason } } as unknown as CycleProduct);
+    const locked = { ...doc(rec('12가1005', true), true), locked_by_contract: true } as CycleProduct;
+    const source = ['12가1001', '12가1002', '12가1003', '12가1004', '12가1005', '12가1006'].map(p => rec(p, true));
+    source.push(contract('12가1007'));
+    const erp = [doc(rec('12가1001', true), true), withdrawn(rec('12가1002', true), 'INFO_INCOMPLETE'),
+      withdrawn(rec('12가1003', false), 'SOURCE_NOT_SELLABLE'), doc(rec('12가1004', true), false), locked,
+      doc(rec('12가1007', true), true), doc(rec('12가1008', true), true)];
+    const r = reconcileSource(source, erp);
+    // 원천 출고가능 6(1001~1006) − 출고가능 노출 3(1001·1007·1008) = 3
+    expect(r.dispatchableGap).toBe(3);
+    expect(r.dispatchGapReasons).toEqual({ SOURCE_ONLY_NO_DOC: 1, SOURCE_ONLY_INFO_INCOMPLETE: 1, SOURCE_ONLY_NOT_SELLABLE_STALE: 1,
+      SOURCE_ONLY_NOT_LISTABLE: 1, SOURCE_ONLY_LOCKED_EXPOSED: 1, ERP_ONLY_NOT_IN_SOURCE: 1, ERP_ONLY_SOURCE_CONTRACT: 1 });
+    expect(r.dispatchGapExplained).toBe(true);
+    const clean = reconcileSource([rec('12가1001', true)], [doc(rec('12가1001', true), true)]);
+    expect(clean).toMatchObject({ dispatchableGap: 0, dispatchGapReasons: {}, dispatchGapExplained: true });
+  });
 });
