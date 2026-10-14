@@ -414,7 +414,8 @@ export function readIancarEngineDeposit(product: Record<string, unknown>, priceK
   // 이관 중 보존(Codex #639 ①): 엔진 작성 표식(source_cycle_write)도 원천 기록(source_cycle_record)도 «둘 다 없는» 기존 문서는 엔진이 아직 쓰지 않은 문서다.
   // 이런 문서의 기존 KNOWN/ZERO 값을 일괄 UNKNOWN 으로 바꾸지 않고 옛 1차 발행 근거(iancar_phase_one) 판정을 그대로 쓴다. 엔진이 그 문서를 새로 확인해
   // 표식·기록을 남기면 아래 엔진 근거가 이긴다. 표식이나 기록이 «하나라도 있는데» 맞지 않는 문서(다른 주체가 덮음 등)는 아래에서 UNKNOWN 이다.
-  if (product.provider_company_code === 'RP031' && !depositRecord(mark) && !depositRecord(record)) {
+  // 값이 «실제로 없을 때(undefined/null)»만 레거시. 문자열·배열 등 손상된 값이 있으면 레거시로 우회하지 않고 아래에서 UNKNOWN 이다(Codex #639 재검토).
+  if (product.provider_company_code === 'RP031' && (mark === undefined || mark === null) && (record === undefined || record === null)) {
     const legacy = readIancarLegacyPublishedDeposit(product, priceKey, now, opts.preserveStalePositiveReference === true ? { preserveStalePositiveReference: true } : {});
     return legacy.state === 'UNKNOWN' ? unknown() : legacy;   // 미확인 사유 코드는 한 가지(엔진 근거 미확인)로 통일
   }
