@@ -1,4 +1,8 @@
 import { AUTOPLUS_DEPOSIT_RULES, autoplusRuleDeposit, isAutoplusDepositRuleCode, type AutoplusDepositRuleCode } from './autoplus-deposit-rule.js';
+import { representativeTerms, type SourceAmount } from './source-engine.js';
+
+/** 원천 엔진 작성 표식(source_cycle_write.by). infra 의 SOURCE_CYCLE_WRITER 와 같은 값. */
+export const SOURCE_ENGINE_WRITER = 'source-engine';
 
 /** Deposit evidence, not a pricing engine. A numeric placeholder is never proof of waiver. */
 export function assessDepositEvidence(input: {
@@ -56,7 +60,7 @@ export function assessDepositEvidence(input: {
   return unknown('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
 }
 
-export type DepositEvidenceBasis = { field: 'deposit_note' | '원문.전체.장기보증' | '원문.전체.단기보증' | 'deposit_free_confirmation'; text: '무보증'; source?: string; at?: string };
+export type DepositEvidenceBasis = { field: 'deposit_note' | '원문.전체.장기보증' | '원문.전체.단기보증' | 'deposit_free_confirmation' | 'source_cycle_record.terms'; text: '무보증'; source?: string; at?: string };
 export const DEPOSIT_SOURCE_WAIVER_FIELDS = ['원문.전체.장기보증', '원문.전체.단기보증'] as const;
 export type DepositFreeConfirmation = { source?: unknown; at?: unknown; text?: unknown };
 
@@ -164,8 +168,6 @@ export function depositEvidenceInputFromProduct(
   };
 }
 
-/** 원천 엔진 작성 표식(infra SOURCE_CYCLE_WRITER 와 같은 값). */
-export const SOURCE_ENGINE_WRITER = 'source-engine';
 /** 계산 보증금 근거(오토플러스 RP023 만, 대표 2026-10-14): 원천 엔진이 쓴 문서이고 deposit_source=CALCULATED·deposit_rule 이 알려진 규칙일 때만 규칙 코드를 돌려준다.
  * 다른 공급사·다른 쓰기 주체의 같은 필드는 근거가 아니다. */
 export function calculatedDepositRuleFromProduct(product: Record<string, unknown>): AutoplusDepositRuleCode | undefined {
@@ -403,15 +405,84 @@ export function auditDepositEvidence(products: Record<string, Record<string, unk
     findings, writeAuthorized: false as const };
 }
 
-// Shared with the existing approved supplier adapter; keep its 15-minute policy unchanged.
-export const IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS = 15 * 60;
 const depositRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const depositInteger = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 const depositText = (v: unknown) => typeof v === 'string' ? v.trim() : '';
 const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
 
+export type IancarEngineDepositResult =
+  | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' }
+  | { state: 'KNOWN'; amount: number; reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE' }
+  | { state: 'ZERO'; amount: 0; reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE'; depositEvidenceBasis: DepositEvidenceBasis };
+
+type EngineTerm = { months: number; mileage: string | null; monthlyRent: SourceAmount; deposit: SourceAmount };
+const engineAmount = (v: unknown): v is SourceAmount => depositRecord(v)
+  && ((v.state === 'ZERO' && v.value === 0) || (v.state === 'KNOWN' && typeof v.value === 'number' && Number.isSafeInteger(v.value) && v.value > 0)
+    || (v.state === 'UNKNOWN' && v.value === null));
+const engineTerm = (v: unknown): v is EngineTerm => depositRecord(v) && Number.isSafeInteger(v.months) && (v.months as number) > 0
+  && (v.mileage === null || typeof v.mileage === 'string') && engineAmount(v.monthlyRent) && engineAmount(v.deposit);
+
+/**
+ * 이안카(RP031) 보증금 판정 — 원천 엔진(source-engine)이 쓴 문서의 원천 기록(source_cycle_record.terms)만 근거로 쓴다.
+ * 엔진이 이안카 상품 문서의 유일한 작성 주체다(대표 2026-10-14 «옛날 구버전 거는 과감하게 폐기»). 옛 1차 발행 칸(iancar_phase_one)은 근거가 아니다.
+ * - 옵션 키 `{개월}_연{N}km`·`{개월}_월{N}km` 은 (개월, 약정거리)가 같은 항, 개월 키는 엔진 판매 가격 칸과 같은 대표 항(representativeTerms).
+ * - 그 항의 보증금이 ZERO|KNOWN 이고 price[키].deposit 과 같을 때만 확정. ZERO 는 원천이 0원으로 준 무보증이다.
+ * - 짧은 신선도 창을 따로 두지 않는다(엔진 주기·철회가 신선도를 맡는다; 기존 «오래된 양수 금액 유지»와 같은 쪽). 미래 시각 관측만 거절한다.
+ *   필요한 호출자는 opts.maxAgeSeconds 로 명시적으로 창을 걸 수 있다.
+ */
+export function readIancarEngineDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
+  opts: { maxAgeSeconds?: number; preserveStalePositiveReference?: boolean } = {}): IancarEngineDepositResult | ReturnType<typeof readIancarLegacyPublishedDeposit> {
+  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' as const });
+  const mark = product.source_cycle_write, record = product.source_cycle_record;
+  // 이관 중 보존(Codex #639 ①): 엔진 작성 표식(source_cycle_write)도 원천 기록(source_cycle_record)도 «둘 다 없는» 기존 문서는 엔진이 아직 쓰지 않은 문서다.
+  // 이런 문서의 기존 KNOWN/ZERO 값을 일괄 UNKNOWN 으로 바꾸지 않고 옛 1차 발행 근거(iancar_phase_one) 판정을 그대로 쓴다. 엔진이 그 문서를 새로 확인해
+  // 표식·기록을 남기면 아래 엔진 근거가 이긴다. 표식이나 기록이 «하나라도 있는데» 맞지 않는 문서(다른 주체가 덮음 등)는 아래에서 UNKNOWN 이다.
+  // 값이 «실제로 없을 때(undefined/null)»만 레거시. 문자열·배열 등 손상된 값이 있으면 레거시로 우회하지 않고 아래에서 UNKNOWN 이다(Codex #639 재검토).
+  if (product.provider_company_code === 'RP031' && (mark === undefined || mark === null) && (record === undefined || record === null)) {
+    const legacy = readIancarLegacyPublishedDeposit(product, priceKey, now, opts.preserveStalePositiveReference === true ? { preserveStalePositiveReference: true } : {});
+    return legacy.state === 'UNKNOWN' ? unknown() : legacy;   // 미확인 사유 코드는 한 가지(엔진 근거 미확인)로 통일
+  }
+  if (product.provider_company_code !== 'RP031' || !depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER
+    || product._deleted || product.deletedAt || product.publication_withdrawal
+    || !depositRecord(record) || record.sourceId !== 'RP031' || !Array.isArray(record.terms) || !record.terms.length
+    || (record.plate ?? null) !== (product.car_number ?? null)
+    || !depositRecord(product.price) || !depositInstant(now)) return unknown();
+  const observedAt = depositInstant(record.observedAt) ? record.observedAt : null;
+  if (!observedAt || Date.parse(observedAt) - Date.parse(now) > 60_000) return unknown();
+  if (opts.maxAgeSeconds !== undefined && Date.parse(now) - Date.parse(observedAt) > opts.maxAgeSeconds * 1000) return unknown();
+  const terms = record.terms;
+  if (!terms.every(engineTerm)) return unknown();
+  const option = /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(priceKey);
+  let term: EngineTerm | undefined;
+  if (option) {
+    const mileage = `${option[3]}km/${option[2] === '월' ? 'month' : 'year'}`;
+    const matching = terms.filter(t => t.months === Number(option[1]) && t.mileage === mileage);
+    term = matching.length === 1 ? matching[0] : undefined;
+  } else if (/^[1-9]\d*$/.test(priceKey)) {
+    term = representativeTerms(terms).find(t => t.months === Number(priceKey));
+  }
+  const row = product.price[priceKey];
+  // 월 대여료 일치(Codex #639 ②): 가격 칸의 월 대여료가 원천 기록 항의 월 대여료와 다르면(월요금이 바뀐 뒤 원천 조건과 달라진 칸) 보증금도 확인하지 않는다.
+  if (!term || !depositRecord(row) || (term.deposit.state !== 'ZERO' && term.deposit.state !== 'KNOWN')
+    || row.deposit !== term.deposit.value || term.monthlyRent.state === 'UNKNOWN' || row.rent !== term.monthlyRent.value) return unknown();
+  const amount = term.deposit.value as number;
+  // 0원 확정 금지(Codex #639 ③): 유상 보증금 안내(deposit_note)가 남아 있으면(무보증·기간별 상이 안내만 예외) 원천 ZERO 라도 확정하지 않는다.
+  const note = depositText(product.deposit_note);
+  if (amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
+    || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
+    || (note && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(note)))) return unknown();
+  // ONE 이 0원으로 준 항은 원천이 직접 준 무보증이다(자리표시 0 이 아니라 엔진이 ZERO 로 판정해 기록한 값).
+  if (amount === 0) return { state: 'ZERO', amount: 0, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE',
+    depositEvidenceBasis: { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: observedAt } };
+  return { state: 'KNOWN', amount, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE' };
+}
+
+
+// ── 옛 1차 발행 근거(iancar_phase_one) 읽기: 엔진 작성 표식이 «없는» 기존 문서의 값을 보존하기 위한 이관용 경로(Codex #639 ①).
+// 엔진이 그 문서를 새로 확인해 표식을 남기면 엔진 근거가 이긴다. 이관이 끝나면 이 함수와 호출을 지운다.
+const LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS = 15 * 60;
+const depositInteger = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 /** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
-export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
+export function readIancarLegacyPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
   options: { preserveStalePositiveReference?: boolean } = {}):
   | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' }
   | { state: 'KNOWN' | 'ZERO'; amount: number; reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' }
@@ -462,7 +533,7 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
   // Freshness cannot erase a structurally verified positive source amount. This is a
   // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
   if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000) return unknown();
-  if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
+  if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
     // Public/compat callers keep their previous fail-closed result. Only authenticated
     // REFERENCE_ONLY/HOLD output can opt in to retaining a stale source amount.
     if (!options.preserveStalePositiveReference || term.deposit.amount === 0) return unknown();

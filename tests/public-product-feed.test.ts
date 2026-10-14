@@ -497,4 +497,24 @@ describe('public product feed v1', () => {
     ajv.addSchema(publicSchema);
     expect(ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed')).toBeTruthy();
   });
+
+  it('photo_approved_count: 사본 서빙이 보장된 이안카 상품만 > 0 이고 나머지는 0 — 계약 스키마와 맞는다', async () => {
+    const { createHash } = await import('node:crypto');
+    const { vehiclePhotoKey } = await import('../src/domain/consumer-output-contract.js');
+    const base = product({ provider_company_code: 'RP031', partner_code: 'RP031', car_number: '12가3456', supplier_vehicle_id: 'V-1' });
+    const ref = (over: Record<string, unknown> = {}) => ({ driveFileId: 'drive_file_1', sha256: createHash('sha256').update('x').digest('hex'),
+      mediaType: 'image/jpeg', role: 'VEHICLE_PHOTO', zone: '차량사진', approvedAt: '2026-10-15T00:00:00.000Z', vehicleKey: vehiclePhotoKey(base)!,
+      vehiclePhotoVerifiedBy: 'tester', vehiclePhotoVerificationMethod: 'IANCAR_COMPRESSED_COPY', vehiclePhotoVerifiedAt: '2026-10-15T00:00:00.000Z', ...over });
+    const snap = snapshot({
+      copy: { ...base, _key: 'copy', publicProductKey: 'copy', product_code: 'copy', photo_original_refs: [ref(), ref({ driveFileId: 'drive_file_2' })] },
+      none: { ...base, _key: 'none', publicProductKey: 'none', product_code: 'none' },
+      legacy: { ...base, _key: 'legacy', publicProductKey: 'legacy', product_code: 'legacy', photo_original_refs: [ref({ sourceKind: 'IANCAR_ONE' })] },
+    });
+    const feed = buildPublicProductFeed(snap, {});
+    const by = Object.fromEntries(feed.products.map(p => [p.publicProductKey, p.photo_approved_count]));
+    expect(by).toEqual({ copy: 2, none: 0, legacy: 0 });
+    const ajv = new Ajv2020({ strict: false });
+    ajv.addSchema(publicSchema);
+    expect(ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed')!(feed)).toBe(true);
+  });
 });
