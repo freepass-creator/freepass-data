@@ -95,7 +95,9 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
             // Preserve the provider spelling in status.raw; expose its common label as evidence.
             r.raw = { ...r.raw, sourceCycleDisplayStatus: status === '배차문의' ? '출고협의' : status === '수리중' ? '상품화중' : status };
             break;
-          case 'IANCAR': r.status.saleAvailable = ['AVAILABLE', 'PREPARING', '계약중'].includes(status); break;
+          // 요금 사실 보류 차(raw.iancar_fact_hold)는 판매 가능 여부를 모른다(null): 기존 문서는 계획이 STATUS_UNKNOWN 으로 그대로 두고(부재 하향도 안 됨),
+          // 새 차는 노출 없이 번호·차명만 편입된다. 틀린 요금은 쓰지 않는다(요금 항은 플러그인이 비운다).
+          case 'IANCAR': r.status.saleAvailable = typeof r.raw.iancar_fact_hold === 'string' ? null : ['AVAILABLE', 'PREPARING', '계약중'].includes(status); break;
           // 옛 사이트맵 캡처는 게시/비게시, 홈피 상세 어댑터(SOURCE_CYCLE_IRON_HOMEPAGE=1)는 즉시출고·출고가능·출고협의·출고불가 를 이미 판정해 넘긴다
           // (전에는 «게시» 만 판매 가능이라 홈피 모드의 출고가능 차까지 전부 판매 불가로 내려갔다).
           // 어댑터가 모르는/섞인 배지로 보류(null)한 상태는 그대로 null(STATUS_UNKNOWN) — 판매 불가로 바꿔 기존 노출을 내리지도, 판매 가능으로 추정하지도 않는다.
@@ -156,6 +158,20 @@ export function decisionWithdrawnPlugin(sourceId: string, clock: () => string = 
   return plugin;
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+/** 실제 달력 검증(윤년 포함): «YYYY-MM» 또는 «YYYY-MM-DD». 2026-99-99·2026-02-31·2025-02-29 는 최초등록일로 확정하지 않는다(Codex #644 ②). */
+export function validCalendarDate(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(text);
+  if (!m) return false;
+  const year = Number(m[1]), month = Number(m[2]);
+  if (year < 1900 || year > 2100 || month < 1 || month > 12) return false;
+  if (m[3] === undefined) return true;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  const day = Number(m[3]);
+  return day >= 1 && day <= days;
+}
+
 /** Read an existing ONE full-facts result. No second API client; PREPARING is a sellable source
  * state by SPEC2 even when provider `available` is false. Missing rates remain UNKNOWN/HOLD. */
 export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise<IancarOneListCapture>,
@@ -167,13 +183,36 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
     const full = capture.factScope === 'FULL_FACTS' && capture.readyForRawIngest && !capture.stale &&
       capture.issues.length === 0 && capture.records.length === capture.total;
-    const rows = capture.records.map(item => {
-      const raw = item.payload, rates = object(raw.rates).data, detail = object(object(raw.detail).data);
-      const record: SourceProductRecord = { sourceId: 'RP031', uid: item.vehicleId,
-        plate: typeof raw.plate_number === 'string' ? raw.plate_number : null,
+    // 불완전한 읽기(목록 단계 실패 PAGINATION_TOTAL_MISMATCH·SYNC_TIME_DRIFT·PAGINATION_METADATA_DRIFT, 끝 목록 불일치 등)는 행을 내지 않는다.
+    // 목록 단계에서 멈춘 수집은 요금을 읽지 않아 행을 내면 원천 원문 계층(source_raw)에 «요금 없음(terms=[])»이 전 차량에 덮인다.
+    const heldReasons: string[] = [];
+    const rows = !full ? [] : capture.records.flatMap(item => {
+      const raw = item.payload, detail = object(object(raw.detail).data);
+      // 번호로 문서를 특정할 수 없는 차(식별 보류)는 행을 내지 않고 보류로만 센다 — 어느 문서인지 모르므로 이 회차의 부재 하향은 유보된다.
+      if (item.hold?.identity) { heldReasons.push(item.hold.code); return []; }
+      // 요금 사실 보류 차는 행(번호·상태·차명)은 내되 요금 항은 비운다. 보류 사유는 값 계열이라 다른 차의 부재 하향을 막지 않는다(jobs VALUE_CLASS_HOLDS).
+      const factHold = item.hold && !item.hold.identity ? item.hold.code : null;
+      if (factHold) heldReasons.push(factHold);
+      const rates = factHold ? [] : object(raw.rates).data;
+      const pick = (key: string): unknown => raw[key] ?? detail[key];
+      // 차 한 대 사실(옛 발행기와 같은 원천 칸: year·fuel·color·mileage). 시트 원천과 같은 키(raw.spec)로 둔다 — 제조사·모델은 식별 칸에 쓰지 않고
+      // 원문(raw.manufacturer·raw.model·raw.name)으로만 남는다(식별 승격이 정한다).
+      const spec: Record<string, string> = {};
+      const year = pick('year');
+      if ((typeof year === 'number' && Number.isSafeInteger(year) && year >= 1900 && year <= 2100) || (typeof year === 'string' && /^(19|20)\d{2}$/.test(year.trim()))) spec.year = String(year).trim();
+      const fuel = pick('fuel'), color = pick('color'), mileage = pick('mileage'), registered = pick('first_registration_date');
+      if (typeof fuel === 'string' && fuel.trim()) spec.fuel_type = fuel.trim();
+      if (typeof color === 'string' && color.trim()) spec.ext_color = color.trim();
+      if (typeof mileage === 'number' && Number.isSafeInteger(mileage) && mileage >= 0) spec.mileage = String(mileage);
+      if (typeof registered === 'string' && validCalendarDate(registered.trim())) spec.first_registration_date = registered.trim();
+      const plate = typeof raw.plate_number === 'string' && raw.plate_number.trim() ? raw.plate_number.replace(/\s/g, '') : null;
+      const record: SourceProductRecord = { sourceId: 'RP031', uid: item.vehicleId, plate,
         vehicleText: typeof detail.name === 'string' ? detail.name : '',
         status: { raw: String(raw.inventory_status ?? ''), saleAvailable: null },
-        observedAt: capture.syncedAt, raw: structuredClone(raw), vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'],
+        // 원문에 이미 spec 이 있으면 파생값으로 덮지 않는다(Codex #644 ①): 파생값은 원문에 «없는 칸만» 채우고 원문 값·추가 필드는 그대로 남긴다.
+        observedAt: capture.syncedAt, raw: { ...structuredClone(raw), ...(Object.keys(spec).length || isPlainObject(raw.spec)
+          ? { spec: { ...spec, ...(isPlainObject(raw.spec) ? structuredClone(raw.spec) : {}) } } : {}),
+          ...(factHold ? { iancar_fact_hold: factHold } : {}) }, vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'],
         terms: (Array.isArray(rates) ? rates : []).map(value => {
           const rate = object(value);
           return { months: typeof rate.rental_period === 'number' ? rate.rental_period : 0,
@@ -182,14 +221,14 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
             mileage: typeof rate.contracted_mileage === 'number' && ['month', 'year'].includes(String(rate.mileage_period))
               ? `${rate.contracted_mileage}km/${rate.mileage_period}` : null, raw: structuredClone(rate) };
         }) };
-      return { scope: 'ONE_FULL_FACTS', record };
+      return [{ scope: 'ONE_FULL_FACTS', record }];
     });
     // 불완전한 이유: 상류 목록이 오래됐으면(공급사 갱신 정지) 우리 쪽 실패가 아니다. 그 밖은 첫 이슈 코드를 그대로 남긴다.
     const stale = capture.stale || capture.issues.some(i => /SOURCE_STALE|FRESHNESS_EXCEEDED/.test(i));
     const incompleteReason = full ? undefined : stale ? 'UPSTREAM_STALE' :
       capture.issues.find(i => /^[A-Z][A-Z0-9_]{2,63}$/.test(i)) ?? (capture.factScope !== 'FULL_FACTS' ? 'NOT_FULL_FACTS' : 'RECORD_COUNT_MISMATCH');
     return { observedAt: capture.syncedAt, synced_at: capture.syncedAt, complete: full,
-      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: 0,
-      ...(incompleteReason ? { incompleteReason } : {}) };
+      completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: heldReasons.length,
+      ...(heldReasons.length ? { heldReasons } : {}), ...(incompleteReason ? { incompleteReason } : {}) };
   }, clock, syncedAt);
 }

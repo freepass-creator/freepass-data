@@ -41,7 +41,7 @@ Source는 기존 `FirestoreSourceStore` 그대로다. `KakaoProductReader`는 `p
 | `scripts/ingest-supplier-to-firestore.mts:507-544`, `:622`, `:773`, `:910-912` | 전체 atom/변동 목록에 photo_link가 없다. 전체·변동 모두 merge=true이므로 기존 photo_link를 덮지 않는다. |
 | `lib/domain/photo-atom.ts:24-34` | 공급사 사진은 image_urls/photo_source_hash/photo_collected_at으로 쓴다. photo_link가 아니다. |
 | `scripts/ingest-reborncar-to-firestore.mts:112`, `:231-232`, `:254` | 공급사 mainImage를 photo_link 후보로 가져오지만 기존 x[k]가 비었을 때만 patch 후 merge한다. 기존 비어 있지 않은 링크는 유지한다. |
-| Data `src/infra/iancar-publication-withdrawal-firestore.ts:19-38`, `:54-66` | RP031 사진 writer는 image_urls/image_url과 원본 보존 칸을 사용한다. 일반 카톡에 전용 공급사 writer를 전용하지 않는다. |
+| Data `src/infra/iancar-photo-firestore.ts` (`iancarPhotoPatch`) | RP031 사진 writer는 image_urls/image_url과 원본 보존 칸을 사용한다. 일반 카톡에 전용 공급사 writer를 전용하지 않는다. |
 
 선택: **확인한 고정 코드에는 매시 photo_link 덮어쓰기가 없어** 별도 승인된 빈칸 채우기 `KakaoPhotoWriter`를 구현했다. 상품 전체 digest + Firestore updateTime(초/나노초)을 dry-run digest에 고정, typed before/expectedAfter 백업의 디스크 되읽기 → transaction CAS(maxAttempts=1) → photo_link만 update → 실제 after 백업/전체 문서 대조 순서다. 기존 값·표시 HOLD·승인 미충족은 거부하고 source CLI는 photoWriter를 호출하지 않는다. 응답 유실은 UNKNOWN 대사이며 자동 재실행/롤백하지 않는다. CAS/되읽기가 실패해도 before 백업은 보존한다.
 
@@ -129,7 +129,7 @@ ADC 인증/Drive scope/Firestore IAM이 부족하면 그 지점에서 HOLD하며
 | 기존 칸 | 형식/소유자/소비 근거 |
 |---|---|
 | `products.photo_link` | 외부 사진 링크 문자열, 복수 링크는 줄바꿈. 이번 계획의 대상이다. Data `src/application/kakao-catalog-reference.ts:36`은 원천 링크로 구분한다. ERP4 `lib/domain/product-photos.ts:138`/`:174`에서 줄바꿈·쉼표를 분리해 직접 이미지/서버 해석 대상으로 나눈다. |
-| `products.image_urls`, `image_url` | 이미지 URL 배열과 대표 이미지 문자열. Data `src/infra/iancar-publication-withdrawal-firestore.ts:35`에서 이안카의 기존 검토된 발행 경로가 쓴다. 일반 카톡 수집이 해당 이안카 writer를 다른 공급사에 사용하지 않는다. |
+| `products.image_urls`, `image_url` | 이미지 URL 배열과 대표 이미지 문자열. Data `src/infra/iancar-photo-firestore.ts`(`iancarPhotoPatch`)에서 이안카의 기존 검토된 발행 경로가 쓴다. 일반 카톡 수집이 해당 이안카 writer를 다른 공급사에 사용하지 않는다. |
 | `images`, `photos`, `photo` | 기존 호환 reader가 허용하는 별칭. Data `src/application/kakao-catalog-reference.ts:30`. 신규 표준 칸을 만들지 않는다. |
 | `doc_images` | 문서 사진, 차량 대표사진으로 승격 금지. Data reader `src/application/kakao-catalog-reference.ts:32`에서 제외한다. 카톡 연결안도 VEHICLE_PHOTO만 선택한다. |
 
@@ -605,6 +605,8 @@ See [IANCAR-ONE-API.md](IANCAR-ONE-API.md). After exact Base URL/auth/endpoint/s
 
 ## RP031 / 이안카 direct pilot
 
+> **Removed 2026-10-14** (대표 «옛날 구버전 거는 과감하게 폐기해»): `src/adapters/iancar-direct-source.ts`, `src/jobs/collect-iancar-direct.ts` and `npm run source:iancar:direct` no longer exist. RP031 product documents are written only by the source engine (`iancarCyclePlugin`, ONE API). The text below is history, not a runnable path.
+
 `src/adapters/iancar-direct-source.ts` logs into the supplier's **original ERP** at the
 single allowlisted host, holds the session only in process memory, and requests the
 documented original `/api/inventory`. It has no ERP4 import or Firebase writer.
@@ -632,7 +634,7 @@ plate **both directions and state**. Output contains counts/digests only, not pl
 IDs, supplier content or credentials. Even zero inventory differences is NOT proof
 of price or F01/F86/customer consumer parity.
 
-## Manual commands — default read-only
+## Manual commands — default read-only (removed 2026-10-14, history only)
 
 ```sh
 # With dedicated authorized Data runtime credentials injected securely:

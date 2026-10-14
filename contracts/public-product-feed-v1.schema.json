@@ -292,6 +292,12 @@
           }
         },
         "photo_link": { "$ref": "#/$defs/url" },
+        "photo_approved_count": {
+          "description": "사본 서빙이 보장된 승인 사진 수(이안카 압축 사본 refs 가 검증됐을 때만 > 0). 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. 없으면(구버전 응답) 0 으로 본다.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        },
         "_policy": { "$ref": "#/$defs/policy" }
       }
     },
