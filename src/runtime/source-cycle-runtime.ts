@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
@@ -6,11 +5,12 @@ import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
+import { judgeSheetCount, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
 import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
-import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin } from '../adapters/source-cycle-plugins.js';
+import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin, type CycleCapture } from '../adapters/source-cycle-plugins.js';
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
@@ -110,33 +110,42 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     }
     return evidenceCache.value;
   } : undefined;
-  // 시트 읽기는 이미 인증된 gws(회사 계정 위임)로 한다 — gcloud 사용자 토큰에는 Sheets 권한이 없다. 비밀은 건드리지 않는다.
-  // 온라인 실행기(Actions)는 gws 가 없으므로 SHEETS_TRANSPORT=adc 일 때만 ADC 읽기 전용 토큰(WIF 서비스 계정, 시트 «보기» 공유)으로 읽는다.
-  const sheetsAdc = env.SHEETS_TRANSPORT === 'adc';
-  const gwsBin = () => {
-    const bin = resolveGwsBin(env);
-    if (!bin) throw new Error('SHEETS_TRANSPORT_UNAVAILABLE');
-    return bin;
-  };
-  const sheetsViaGws = (url: URL): Response => {
-    const m = url.pathname.match(/^\/v4\/spreadsheets\/([^/:]+)(\/values:batchGet)?$/);
-    if (!m) throw new Error('SHEETS_URL_UNSUPPORTED');
-    const params: Record<string, unknown> = { spreadsheetId: decodeURIComponent(m[1]!) };
-    const ranges: string[] = [];
-    for (const [k, v] of url.searchParams) { if (k === 'ranges') ranges.push(v); else if (v === 'true') params[k] = true; else params[k] = v; }
-    if (ranges.length) params.ranges = ranges;
-    const args = m[2] ? ['sheets', 'spreadsheets', 'values', 'batchGet'] : ['sheets', 'spreadsheets', 'get'];
-    const out = execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    return new Response(out.slice(out.indexOf('{')), { status: 200 });
-  };
+  // 시트 읽기 전송은 읽기 모듈의 단일 판정(resolveSheetsTransport)을 쓴다: SHEETS_TRANSPORT=gws 면 이미 인증된 gws(회사 계정 위임, 시간 제한 120초·
+  // 실패 코드 분류), 그 밖은 ADC 읽기 전용 토큰(온라인 실행기: WIF 서비스 계정, 시트 «보기» 공유). 같은 F05 읽기 안의 캡처(capture-shared-sheet)도 같은 판정이다.
+  const sheetsRead = (url: URL) => readSheetsUrl(url, { env });
   const get = async (url: URL, authenticated: boolean) => {
-    if (authenticated && url.hostname === 'sheets.googleapis.com') return sheetsAdc ? new Response(JSON.stringify(await readSheetsUrl(url)), { status: 200 }) : sheetsViaGws(url);
+    if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };
   const required = (key: string) => { const v = env[key]?.trim(); if (!v) throw new Error('SOURCE_CONFIGURATION_REQUIRED'); return v; };
+  // 시트 원천(F05 공급사별·아이카) 급감 하한: 읽힌 행이 직전 정상 수·잠금 제외 노출 문서 수의 80% 를 둘 다 밑돌면 불완전(SOURCE_SHRUNK).
+  // 기준 수는 오토플러스 시트와 같은 방식(비공개 폴더, 임시 파일 + 이름 바꾸기)으로 공급사마다 따로 둔다. 노출 문서 수는 필요할 때만 센다.
+  const sheetCountGuard = async (sourceId: string, capture: CycleCapture): Promise<CycleCapture> => {
+    const countFile = join(directory, `sheet-count-${sourceId}.json`);
+    let previous = 0, stateError: string | null = null;
+    try {
+      const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
+      if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
+    } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+    const rows = capture.rows.length + capture.heldCount;
+    const needExposed = capture.complete && (stateError !== null || previous === 0 || rows < previous * SHEET_SHRINK_RATIO);
+    const exposed = needExposed ? (await commands.documents(sourceId)).filter(d => {
+      const f = decodeFields(d.fields as never) as Record<string, unknown>;
+      const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+        || f.status === '계약중' || f.status_kind === '계약중';
+      return f.listable === true && !locked;
+    }).length : 0;
+    const verdict = judgeSheetCount({ complete: capture.complete, rows, previousCount: previous, exposedUnlockedDocs: exposed, stateError });
+    let complete = verdict.complete, reason = verdict.incompleteReason;
+    if (verdict.saveCount !== null) {
+      await mkdir(directory, { recursive: true, mode: 0o700 }).catch(() => undefined);
+      if (!(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: capture.observedAt })) && complete) { complete = false; reason = 'SHEET_COUNT_STATE_WRITE_FAILED'; }
+    }
+    return complete || !capture.complete ? capture : { ...capture, complete: false, ...(reason ? { incompleteReason: reason } : {}) };
+  };
   const visibility = async (id: string): Promise<Visibility> => {
     const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`);
     url.searchParams.set('includeGridData', 'true');
@@ -168,7 +177,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             }
           }
           capture.digest = sharedSheetCaptureDigest(capture);
-          return f05NativeCapture(code, capture, after);
+          return sheetCountGuard(code, f05NativeCapture(code, capture, after));
         }));
       }
     } else if (kind === 'AICA') {
@@ -183,7 +192,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         const visibilityAfter = await visibility(id);
         if (stableDigest(visibilityBefore) !== stableDigest(visibilityAfter)) throw new Error('SOURCE_VISIBILITY_CHANGED');
         if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== AICA_SCOPES.length) throw new Error('AICA_CAPTURE_CHANGED');
-        return aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter);
+        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter));
       }, ratio));
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
@@ -366,14 +375,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP023', kind: 'AUTOPLUS', scopes: ['sheet'], maxDowngradeRatio: ratio }, async () => {
           const observedAt = new Date().toISOString();
           const gws = async (args: string[], params: Record<string, unknown>): Promise<Record<string, unknown>> => {
-            if (sheetsAdc) {
-              const batch = args.includes('batchGet');
-              const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(String(params.spreadsheetId))}${batch ? '/values:batchGet' : ''}`);
-              for (const [k, v] of Object.entries(params)) if (k !== 'spreadsheetId') for (const one of Array.isArray(v) ? v : [v]) url.searchParams.append(k, String(one));
-              return await readSheetsUrl(url) as Record<string, unknown>;
-            }
-            return JSON.parse(execFileSync(gwsBin(), [...args, '--params', JSON.stringify(params)],
-              { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).replace(/^[^{]*/, '')) as Record<string, unknown>;
+            const batch = args.includes('batchGet');
+            const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(String(params.spreadsheetId))}${batch ? '/values:batchGet' : ''}`);
+            for (const [k, v] of Object.entries(params)) if (k !== 'spreadsheetId') for (const one of Array.isArray(v) ? v : [v]) url.searchParams.append(k, String(one));
+            return await sheetsRead(url) as Record<string, unknown>;
           };
           const incomplete = (reason: string) => ({ observedAt, complete: false, completedScopes: [] as string[], visibilityComplete: false, incompleteReason: reason, heldCount: 0, rows: [] });
           let tabs: AutoplusSheetTab[];
@@ -436,10 +441,11 @@ export type UnattendedProbes = { gwsBin(env: NodeJS.ProcessEnv): string | null; 
 const defaultProbes: UnattendedProbes = { gwsBin: resolveGwsBin, gcloudToken: gcloudUserToken };
 export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonly string[], probes: UnattendedProbes = defaultProbes) {
   const missing: string[] = [];
-  const sheets = kinds.includes('F05') || kinds.includes('AICA');
+  const sheets = kinds.includes('F05') || kinds.includes('AICA') || (kinds.includes('AUTOPLUS') && env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1');
   // SHEETS_TRANSPORT=adc(온라인 실행기)는 gws 가 필요 없다. 그 외에는 기존대로 gws 필수.
   if (sheets && env.SHEETS_TRANSPORT !== 'adc' && !probes.gwsBin(env)) missing.push('PREFLIGHT_GWS_MISSING');
-  if (kinds.includes('F05') && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
+  // 시트 원천은 전송을 명시해야 한다(미설정 기본값은 ADC — 운영 PC 에서 조용히 다른 전송으로 읽지 않게, F05 뿐 아니라 아이카·오토플러스 시트도).
+  if (sheets && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
   return missing;
