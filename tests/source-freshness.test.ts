@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessFreshness, parseFreshnessExempt } from '../src/application/source-freshness.js';
+import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../src/application/source-freshness.js';
 import { runUnattended, unattendedPreflight, runtimeCli, type UnattendedProbes } from '../src/runtime/source-cycle-runtime.js';
 
 const now = Date.parse('2026-10-13T12:00:00.000Z');
@@ -85,6 +85,17 @@ describe('unattended run record and preflight (사고: 예약 환경에 시트 �
     // 대체 원천이 실패 중이면 해제되지 않는다
     const failing = assessFreshness([...stale, beat('RP040', 5, { failures: 1 })], [], { now, exempt });
     expect(failing.exempt).toHaveLength(1);
+  });
+  it('per-source thresholds: a 90-minute stagnation alert and a 180-minute escalation apply only to the listed source and never touch exposure', () => {
+    const lines = [beat('RP012', 95), beat('RP031', 95), beat('RP004', 200)];
+    const sourceThresholds = parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT');
+    const r = assessFreshness(lines, [], { now, maxAgeMinutes: 120, sourceThresholds });
+    expect(r.unhealthy).toEqual(['RP004:STALE', 'RP012:STALE']);          // RP031 95분은 전역 120분 안이라 정상
+    expect(r.stagnant).toEqual(['RP012:SONOGONG_API_STAGNANT:95m']);
+    expect(r.escalate).toEqual([]);                                         // RP004 는 전역 6시간 미만, RP012 는 180분 미만
+    const late = assessFreshness([beat('RP012', 181)], [], { now, sourceThresholds });
+    expect(late.escalate).toEqual(['RP012:STALE:181m']);
+    expect(parseFreshnessThresholds('RP012=5,RP012=90:60,x=90,RP012=90:180:bad')).toEqual([]);   // 10분 미만·에스컬레이션이 더 이름·형식 오류는 무시
   });
   it('the exemption setting is parsed strictly: malformed entries are ignored and never widen what is excluded', () => {
     expect(parseFreshnessExempt('RP012=SONOGONG_LOCKED>RP040, RP034=EXCLUDED_BY_DECISION')).toEqual([

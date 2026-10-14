@@ -8,7 +8,9 @@ import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvid
 export * from '../ports/source-cycle.js';
 
 export const deepEqual = (a: unknown, b: unknown) => stableDigest(a) === stableDigest(b);
-const locked = (p: CycleProduct) => p.locked_by_contract || p.record.status.raw === '계약중';
+// 계약 잠금 = 저장소가 판정한 locked_by_contract(계약 원장·ERP 가 건 잠금, 엔진이 쓴 계약중 상태는 제외 — infra envelope). 원천 원문이 계약중이라는 이유만으로는
+// 잠그지 않는다: 계약중 노출 정책에서 그 문서는 엔진이 계속 갱신(출고가능 복귀·철회)해야 한다.
+const locked = (p: CycleProduct) => p.locked_by_contract;
 // Observation timestamps belong in RAW/heartbeat; unchanged business facts do not churn products.
 const withoutObservationClocks = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutObservationClocks);
@@ -180,7 +182,10 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
-      if (!before.listable || seen.has(sourceProductKey(before.record)) || locked(before) || driftHeld.has(before.record.uid)) continue;
+      // 계약 잠금 문서는 부재 하향에서 보호된다. 단 «API 교체 철회»(REPLACED_BY_API, 대표 «API 연동 아닌 건 다 내려라»)는 한 번만(표식) 허용된 결정이라
+      // 잠금 문서도 «노출만» 내린다(하드 삭제 아님, 정산 원장·잠금 기록은 건드리지 않는다 — withdraw 는 listable·사유만 바꾼다).
+      const lockProtected = locked(before) && config.absenceReason !== 'REPLACED_BY_API';
+      if (!before.listable || seen.has(sourceProductKey(before.record)) || lockProtected || driftHeld.has(before.record.uid)) continue;
       if (Date.parse(before.record.observedAt) > at) { hold('OBSERVATION_FUTURE'); continue; }
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
@@ -192,7 +197,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 대표 지시 하향(DECISION_WITHDRAWN)은 추론이 아니라 결정이고 공급사 코드로 범위가 정해져 있어 비율 가드 대상이 아니다.
   // API 교체 철회(REPLACED_BY_API, 대표 «손오공 기존 거 지우고 API 로»)도 비율 가드 대상이 아니다: 한 번만(표식) 허용된 결정이며 완전 읽기에서만 계획된다.
   const downs = plan.entries.filter(e => e.kind === 'DOWNGRADE' && !['DECISION_WITHDRAWN', 'REPLACED_BY_API'].includes(e.after.publication_withdrawal?.reason ?? ''));
-  const absentDown = downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT').length;
+  // NOT_IN_API = 손오공 API 모드의 일반 부재 하향 라벨(SOURCE_ABSENT 와 같은 추론이므로 같은 비율 가드를 받는다).
+  const isAbsent = (e: { after: { publication_withdrawal?: { reason?: string } | null } }) => ['SOURCE_ABSENT', 'NOT_IN_API'].includes(e.after.publication_withdrawal?.reason ?? '');
+  const absentDown = downs.filter(isAbsent).length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
   if (plan.exposedBefore) {
@@ -205,8 +212,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
       const dropKeys = new Set<string>();
       const keyed = (list: typeof downs) => [...list].sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
-      const absentList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason === 'SOURCE_ABSENT'));
-      const explicitList = keyed(downs.filter(e => e.after.publication_withdrawal?.reason !== 'SOURCE_ABSENT'));
+      const absentList = keyed(downs.filter(isAbsent));
+      const explicitList = keyed(downs.filter(e => !isAbsent(e)));
       absentList.slice(absentAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
       explicitList.slice(explicitAllow).forEach(e => dropKeys.add(sourceProductKey(e.after.record)));
       if (dropKeys.size) {
@@ -256,14 +263,25 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
   }
   let writes = 0, verified = 0;
   const uncertain: string[] = [];
+  // 불확실 진단(값 없음): 어느 단계에서, 어느 최상위 필드가 달랐는지 코드만 남긴다. 값·번호·원문은 싣지 않는다.
+  let uncertainDetail = '';
   for (const e of plan.entries) {
     const key = sourceProductKey(e.after.record);
+    let stage = 'WRITE';
     try {
       await commands.compareAndApply(stableDigest(e.before), e.after, `${digest}:${key}`);
-      writes++;
-      if (!deepEqual(await commands.read(e.after.record.sourceId, e.after.record.uid), e.after)) { uncertain.push(key); break; }
+      writes++; stage = 'READ';
+      const reread = await commands.read(e.after.record.sourceId, e.after.record.uid);
+      if (!deepEqual(reread, e.after)) {
+        const a = e.after as unknown as Record<string, unknown>, b = (reread ?? {}) as unknown as Record<string, unknown>;
+        const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k], b[k])).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
+        uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
+      }
       verified++;
-    } catch { uncertain.push(key); break; } // May have committed: never auto-rollback or retry blindly.
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : 'ERROR';
+      uncertainDetail = `${stage}_FAILED:${e.kind}:${code}`; uncertain.push(key); break;
+    } // May have committed: never auto-rollback or retry blindly.
   }
-  return { status: uncertain.length ? 'APPLY_UNCERTAIN' : 'APPLIED', writes, verified, uncertain, digest };
+  return { status: uncertain.length ? 'APPLY_UNCERTAIN' : 'APPLIED', writes, verified, uncertain, digest, ...(uncertainDetail ? { uncertainDetail } : {}) };
 }

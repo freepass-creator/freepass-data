@@ -29,10 +29,24 @@ describe('손오공 API 교체 철회(REPLACED_BY_API)', () => {
     expect(replace.config.absenceReason).toBe('REPLACED_BY_API');                          // replay 가 같은 결과를 내도록 plan.config 에 기록
   });
 
-  it('keeps contract-locked documents untouched', () => {
+  it('대표 10-14: the one-time replacement also takes a contract-locked document off exposure (exposure only, never deleted)', () => {
     const locked = doc('12가2000', { locked_by_contract: true });
     const plan = planSourceCycle({ ...cfg, absenceReason: 'REPLACED_BY_API' }, evidence([rec('12가1000')]), { products: [...existing.slice(0, 2), locked], complete: true }, now).plan;
+    const entry = plan.entries.find(e => e.after.record.plate === '12가2000');
+    expect(entry?.kind).toBe('DOWNGRADE');
+    expect(entry?.after.listable).toBe(false);
+    expect(entry?.after.publication_withdrawal).toMatchObject({ reason: 'REPLACED_BY_API', deleteAuthorized: false });
+    expect(entry?.after.locked_by_contract).toBe(true);                                       // 잠금 기록은 그대로
+  });
+
+  it('a normal NOT_IN_API absence downgrade still protects contract-locked documents and shares the ratio guard', () => {
+    const locked = doc('12가2000', { locked_by_contract: true });
+    const plan = planSourceCycle({ ...cfg, absenceReason: 'NOT_IN_API' }, evidence([rec('12가1000'), rec('12가1001'), rec('12가1002'), rec('12가1003'), rec('12가1004'), rec('12가1005'), rec('12가1006'), rec('12가1007'), rec('12가1008')]),
+      { products: [...existing, locked], complete: true }, now).plan;
     expect(plan.entries.map(e => e.after.record.plate)).not.toContain('12가2000');
+    const bulk = planSourceCycle({ ...cfg, absenceReason: 'NOT_IN_API' }, evidence([rec('12가1000'), rec('12가1001')]), { products: existing, complete: true }, now).plan;
+    expect(bulk.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');                              // 일반 부재 하향은 라벨이 달라도 비율 가드
+    expect(bulk.entries.filter(e => e.kind === 'DOWNGRADE')[0]?.after.publication_withdrawal?.reason).toBe('NOT_IN_API');
   });
 
   it('does nothing when the read is incomplete (read failure / shrunk): the existing documents stay exposed', () => {

@@ -73,6 +73,11 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
   if (stableDigest(derived) !== storedDigest && priceDigest(derived) !== storedDigest) return false;
   return priceDigest(price) === priceDigest(salePriceMap(record.terms, false));
 }
+/** 엔진이 «원천이 직접 계약중으로 읽은 값»을 쓴 문서(표시 상태 계약중·선점, 노출 중, 원천 기록의 상태 원문도 계약중)는 계약 잠금이 아니다.
+ * 계약중 노출(선점 표시) 정책 이후 이런 문서는 원천이 출고가능으로 돌아오면 엔진이 갱신해야 한다 — 잠금으로 보면 방금 쓴 문서가 되읽기에서 달라져
+ * APPLY_UNCERTAIN 이 되고(2026-10-14 손오공 첫 APPLY 34/330) 이후 영원히 CONTRACT_LOCKED 로 갇힌다. 상태만 계약중이고 원천 기록이 다른 문서(ERP 가 건 계약)는 계속 잠금이다. */
+const engineWroteContracted = (f: Fields, record: SourceProductRecord): boolean =>
+  f.status === '계약중' && f.listable === true && record.status.raw === '계약중' && f.source_cycle_record !== undefined;
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
@@ -100,10 +105,12 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (engineOwned && storedKind.known && f.status_kind !== storedKind.statusKind) rewriteReasons.push('STATUS_KIND');
   // 월렌트 모델 문서의 상품 구분(product_type «월렌트»): 중앙 어휘 확장이 합쳐진 뒤 SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE=1 일 때만 켠다.
   if (engineOwned && writeMonthlyProductType && f.product_group === 'MONTHLY_RENT' && f.product_type !== MONTHLY_PRODUCT_TYPE) rewriteReasons.push('PRODUCT_TYPE');
+  // 오토플러스(RP023)는 상품 구분이 정책으로 «오플구독» 하나다. 구분이 빈 노출 문서는 한 번 다시 써서 채운다(되풀이되지 않음).
+  if (engineOwned && f.provider_company_code === 'RP023' && !(typeof f.product_type === 'string' && f.product_type.trim())) rewriteReasons.push('PRODUCT_TYPE');
   return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
-    locked_by_contract: f.locked_by_contract === true || f.status === '계약중' || f.status_kind === '계약중',
+    locked_by_contract: f.locked_by_contract === true || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
     publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
 }
@@ -113,7 +120,9 @@ export const MONTHLY_PRODUCT_TYPE = '월렌트';
 /** 손오공 공식 API 탭 → 상품 구분: rent=중고렌트, sub=오공구독, pick=픽업구독(소비처 구독 표시 규칙의 고정 어휘). */
 export const SONOGONG_PRODUCT_TYPES: ReadonlySet<string> = new Set(['중고렌트', '오공구독', '픽업구독']);
 export const IRON_PRODUCT_TYPES: ReadonlySet<string> = new Set(['신차렌트', '중고렌트']);
-export const statusKindOf = (display: string, listable: boolean) =>
+/** 그 밖의 원천(F05 계열·아이카·오토플러스 등)의 상품 구분: 어댑터가 원천 자기 칸(상품구분/구분)이나 고정 정책에서 읽어 raw.product_type 에 둔 값이
+ * 중앙 어휘(erp5-product-mapping 의 상품 구분)일 때만, 그리고 기존 문서에 구분이 «비어 있을 때만» 채운다. 기존 값은 덮어쓰지 않는다. */
+export const COMMON_PRODUCT_TYPES: ReadonlySet<string> = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);export const statusKindOf = (display: string, listable: boolean) =>
   !listable ? '불가' : (() => { const r = resolveErp5InventoryStatus(display); return r.known ? r.statusKind : PROVIDER_AVAILABLE_STATUS_LABELS.has(display) ? '가용' : '불가'; })();
 /** 공급사 시트가 주는 차 한 대 사실(색상·연료·최초등록·연식·주행거리)을 «새 문서»에만 싣는다. 허용 키·짧은 문자열만 통과한다(기존 문서는 건드리지 않는다). */
 const SHEET_SPEC_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage'] as const;
@@ -147,6 +156,9 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(r.sourceId === 'RP012' && typeof r.raw.product_type === 'string' && SONOGONG_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
     // 아이언 홈페이지: 신차렌트·중고렌트(목록 condition 에서 정함).
     ...(r.sourceId === 'RP006' && typeof r.raw.product_type === 'string' && IRON_PRODUCT_TYPES.has(r.raw.product_type) ? { product_type: r.raw.product_type } : {}),
+    ...(r.sourceId !== 'RP012' && r.sourceId !== 'RP006' && typeof r.raw.product_type === 'string' && COMMON_PRODUCT_TYPES.has(r.raw.product_type)
+      && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
+      ? { product_type: r.raw.product_type } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }

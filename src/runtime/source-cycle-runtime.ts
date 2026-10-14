@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
-import { assessFreshness, parseFreshnessExempt } from '../application/source-freshness.js';
+import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
@@ -312,7 +312,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const soft = (reason: string): SonogongApiRead => ({ observedAt, complete: false, incompleteReason: reason, tabsRead: [], listed: 0, detailsRead: 0,
             notes: [], records: [], held: [], duplicatePlates: [] });
           // 부하 방어: 마지막 완전 읽기 후 55분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
-          try {
+          // 간격 기록은 «무인 정시 회차»만 남기고 지킨다: 수동 계획(DRY_RUN) 읽기가 간격을 소비해 같은 시간대 무인 APPLY 를 막지 않게 한다(B3Q 10-14).
+          const unattended = env.SOURCE_CYCLE_UNATTENDED === '1';
+          if (unattended) try {
             const pass = JSON.parse(await readFile(passFile, 'utf8')) as { at?: unknown };
             if (typeof pass.at === 'string' && Date.now() - Date.parse(pass.at) < SONOGONG_API_POLICY.minPassIntervalMinutes * 60_000) return soft('SONOGONG_API_PASS_INTERVAL');
           } catch { /* 최초·읽기 불가는 허용 — 아래 읽기 안전장치가 막는다 */ }
@@ -335,7 +337,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           let complete = verdict.complete, reason = verdict.incompleteReason;
           if (verdict.saveCount !== null) {
             const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
-              (!verdict.complete || await writeJsonAtomic(passFile, { at: observedAt }));
+              (!verdict.complete || !unattended || await writeJsonAtomic(passFile, { at: observedAt }));
             if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
           }
           // 한 회차 한정 편입 상한: 이 읽기 콜백은 원천 잠금 «안»에서 실행된다. 적용 «전에» 표식을 원자적으로 기록하고,
@@ -352,7 +354,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           // API 교체 철회(대표 «손오공 기존 거 지우고 API 로»): 첫 «완전 읽기» 회차 한 번만, API 에 없는 기존 노출 문서를 부재 하향 대신 REPLACED_BY_API 로
           // 철회한다(삭제 아님, 계약 잠금은 건드리지 않음, 비율 가드 제외). 표식을 잠금 안에서 적용 전에 원자적으로 기록하고, 기록 실패·소진이면 철회하지 않는다.
           // 읽기 실패·API_SHRUNK 등 불완전이면 이 블록에 오지 않아 기존 문서는 그대로 남는다(공백 방지).
-          delete apiPlugin.absenceReason;
+          // 일반 부재 하향의 사유 라벨은 NOT_IN_API(API 에 없음, 같은 비율 가드). 교체 철회 회차에만 REPLACED_BY_API(잠금 문서 노출도 내림).
+          apiPlugin.absenceReason = 'NOT_IN_API';
           if (complete && env.SOURCE_CYCLE_SONOGONG_REPLACE_ONCE === '1' && env.SOURCE_CYCLE_UNATTENDED === '1') {
             const replacePath = join(directory, 'sonogong-replace-once.done');
             const claim = await claimEnrollCapOnce({
@@ -563,7 +566,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
         { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId),
           knownFalsePositive: (env.SOURCE_CYCLE_STALE_FALSE_POSITIVE ?? '').split(',').map(v => v.trim()).filter(Boolean),
-          exempt: parseFreshnessExempt(env.SOURCE_CYCLE_FRESHNESS_EXEMPT) });
+          exempt: parseFreshnessExempt(env.SOURCE_CYCLE_FRESHNESS_EXEMPT),
+          // 원천별 임계값: 설정(SOURCE_CYCLE_FRESHNESS_THRESHOLDS)이 우선, 없으면 손오공 API 모드에서만 기본 90분 정체·180분 에스컬레이션(커맨드 센터 10-14).
+          sourceThresholds: env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS !== undefined ? parseFreshnessThresholds(env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS)
+            : sonogongApiEnabled(env) ? parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT') : [] });
       if (record.reports.some(r => ['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(r.status)) || record.freshness.status !== 'HEALTHY') record.exit = 1;
       // 즉시 실행 요청(처리기가 SOURCE_CYCLE_REQUEST_RUN=1 로 부름)은 «실제로 읽고 계획했는지»가 중요하다: 잠금(LOCKED)·변경 없음 생략(UNCHANGED_SYNC)은
       // 정시 실행에는 정상이지만 요청에는 «미실행»이므로 종료 코드 3 으로 알려 처리기가 요청을 소비하지 않고 되돌리게 한다(독립 검토 2026-10-14).
