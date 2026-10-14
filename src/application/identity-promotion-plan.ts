@@ -2,7 +2,15 @@
  * 입력은 운영 문서·차종 마스터의 «스냅샷»(이 PC 는 운영 Firestore 를 읽지 못하므로 B3Q 가 만든 JSON)이고, 출력은 VehicleNameRepairPlan 후보와 보류 목록이다.
  * 규칙(기준 한 장): 지어내지 않는다·별칭은 조건 없이 하나로 이어질 때만·후보가 둘 이상이거나 근거가 비면 보류. 마스터는 읽기만 하고 쓰지 않는다. */
 import { stableDigest } from '../shared/stable-digest.js';
-import type { VehicleNameRepairPlan } from '../infra/vehicle-name-reference-repair-firestore.js';
+
+/** 정정 경로(repair:vehicle-name-parity)의 계획서 모양 중 이 생성기가 «내는» 부분만 구조적으로 선언한다. application 층은 infra 에 의존하지 않는다(아키텍처 가드):
+ * 출력은 infra 의 VehicleNameRepairPlan 에 그대로 대입 가능한 모양이고, 호환은 시험(구조적 대입)이 지킨다. */
+export type IdentityRepairItem = { id: string; from: { maker: string; model: string; sub_model: string }; to: { maker: string; model: string; sub_model: string }; evidence: string };
+export type TrimRepairItem = { id: string; from: string; to: string; evidence?: string };
+export type VehicleNameRepairPlan = {
+  sourceDigest: string; masterRepairs: Array<{ id: string; from: string; to: string; evidence?: string }>; productRepairs: Array<{ id: string; from: string; to: string; evidence?: string }>;
+  productIdentityRepairs?: IdentityRepairItem[]; productTrimRepairs?: TrimRepairItem[];
+};
 
 export type IdentityProduct = {
   /** 상품 문서 id(정정 경로가 쓰는 그대로). */ id: string;
@@ -47,8 +55,8 @@ function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]
 }
 
 export function buildIdentityPromotionPlan(products: readonly IdentityProduct[], masters: readonly IdentityMaster[], options: { sourceLabel?: string } = {}): IdentityPromotionResult {
-  const identityRepairs: NonNullable<VehicleNameRepairPlan['productIdentityRepairs']> = [];
-  const trimRepairs: NonNullable<VehicleNameRepairPlan['productTrimRepairs']> = [];
+  const identityRepairs: IdentityRepairItem[] = [];
+  const trimRepairs: TrimRepairItem[] = [];
   const held: IdentityHold[] = [];
   let alreadyMatched = 0;
   for (const p of [...products].sort((a, b) => a.id.localeCompare(b.id))) {
