@@ -62,11 +62,14 @@ try {
       $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
       $props = @($state.PSObject.Properties)
       $names = @($props | ForEach-Object { $_.Name })
-      $versionOk = (-not ($names -contains 'version')) -or ($state.version -eq 1)
-      # current schema: EXACTLY the known keys {version?, last}; any extra key or an unknown version is an unknown schema.
-      if ($names -contains 'last' -and -not ($names | Where-Object { $_ -notin @('version', 'last') }) -and $versionOk) {
+      # Strict, case-SENSITIVE schema check (PowerShell -eq / -contains / -notin are case-insensitive and coerce types):
+      # keys must be exactly {version?, last}; version must be a JSON integer (int/long) equal to 1 - not true, not "1".
+      $versionPresent = $names -ccontains 'version'
+      $versionOk = (-not $versionPresent) -or (($state.version -is [int] -or $state.version -is [long]) -and ($state.version -ceq 1))
+      $knownKeys = @($names | Where-Object { $_ -ceq 'version' -or $_ -ceq 'last' })
+      if (($names -ccontains 'last') -and $knownKeys.Count -eq $names.Count -and $versionOk -and $state.last -is [pscustomobject]) {
         $state.last.PSObject.Properties | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
-      } elseif ($props.Count -gt 0 -and -not ($props | Where-Object { $_.Name -notmatch '^RP\d{3}$' -or -not ($_.Value -is [datetime] -or "$($_.Value)" -match '^\d{4}-\d{2}-\d{2}T') })) { # legacy {"RP031":"<utc>"}
+      } elseif ($props.Count -gt 0 -and -not ($props | Where-Object { $_.Name -cnotmatch '^RP\d{3}$' -or -not ($_.Value -is [datetime] -or "$($_.Value)" -match '^\d{4}-\d{2}-\d{2}T') })) { # legacy {"RP031":"<utc>"}
         $props | ForEach-Object { $last[$_.Name] = [datetime]$_.Value }; $ok = $true
       } elseif ($props.Count -eq 0) { $ok = $true }                                                                # empty object = no history yet
     } catch { $ok = $false }
