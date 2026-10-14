@@ -64,6 +64,15 @@ async function sheetsGet(url: URL, ports: Ports): Promise<unknown> {
   try { return await response.json(); } catch { throw new Error('SHARED_SHEET_RESPONSE_INVALID'); }
 }
 
+/** 원천 엔진용 읽기 한 번(spreadsheets.get 또는 values:batchGet). SHEETS_TRANSPORT=gws 면 gws, 아니면 ADC 읽기 전용 토큰
+ * (온라인 실행기: WIF 서비스 계정 + 시트 «보기» 공유). sheets.googleapis.com 의 GET 만 허용한다. */
+export async function readSheetsUrl(url: URL, ports: Ports = {}): Promise<unknown> {
+  if (url.protocol !== 'https:' || url.hostname !== 'sheets.googleapis.com' || !/^\/v4\/spreadsheets\/[^/:]+(\/values:batchGet)?$/.test(url.pathname)) {
+    throw new Error('SHEETS_URL_UNSUPPORTED');
+  }
+  return sheetsGet(url, ports);
+}
+
 /** spreadsheets.get limited to the given metadata fields (grid sizes), no cell data. */
 export async function readSheetsMetadata(spreadsheetId: string, fields: string, ports: Ports = {}): Promise<unknown> {
   const url = sheetsUrl(spreadsheetId);

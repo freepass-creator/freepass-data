@@ -64,6 +64,11 @@ describe('unattended run record and preflight (사고: 예약 환경에 시트 �
     expect(await unattendedPreflight({ SHEETS_TRANSPORT: 'gws' }, ['F05'], probes())).toEqual([]);
     expect(await unattendedPreflight({}, ['IANCAR'], probes())).toEqual([]);      // 시트 원천이 없으면 gws·전송 설정은 요구하지 않음
   });
+  it('online runner (SHEETS_TRANSPORT=adc) needs no gws, other settings keep requiring it', async () => {
+    const noGws = probes({ gwsBin: () => null });
+    expect(await unattendedPreflight({ SHEETS_TRANSPORT: 'adc' }, ['F05', 'AICA'], noGws)).toEqual([]);
+    expect(await unattendedPreflight({ SHEETS_TRANSPORT: 'other' }, ['F05'], noGws)).toEqual(['PREFLIGHT_GWS_MISSING', 'PREFLIGHT_SHEETS_TRANSPORT_UNSET']);
+  });
   it('a known exemption removes a stale source from unhealthy/escalate without a time cap, and lifts when the replacement source completes cleanly', () => {
     const stale = [beat('RP012', 600), beat('RP013', 10)];                              // RP012 10시간 전 = escalate 대상이지만 알려진 예외
     const exempt = [{ source: 'RP012', reason: 'SONOGONG_LOCKED', liftWhenCompleted: 'RP040' }];
