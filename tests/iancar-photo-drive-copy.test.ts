@@ -270,3 +270,13 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
     expect(text).not.toContain('V1-a');
   });
 });
+
+describe('이안카 사진 사본 압축 값', () => {
+  it('기본 800px·72, 환경 값으로 바꾸고, 범위 밖은 거부한다', async () => {
+    const { iancarPhotoCompression } = await import('../src/jobs/copy-iancar-photos-to-drive.js');
+    expect(iancarPhotoCompression({})).toEqual({ maxEdge: 800, quality: 72 });
+    expect(iancarPhotoCompression({ IANCAR_PHOTO_MAX_EDGE: '640', IANCAR_PHOTO_QUALITY: '65' })).toEqual({ maxEdge: 640, quality: 65 });
+    expect(() => iancarPhotoCompression({ IANCAR_PHOTO_MAX_EDGE: '200' })).toThrow('IANCAR_PHOTO_MAX_EDGE_INVALID');
+    expect(() => iancarPhotoCompression({ IANCAR_PHOTO_QUALITY: 'x' })).toThrow('IANCAR_PHOTO_QUALITY_INVALID');
+  });
+});
