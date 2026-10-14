@@ -78,7 +78,7 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       records.push({ sourceId: 'RP023', uid: plate, plate, vehicleText,
         // 표시 상태는 «출고가능»(판매 가능) 또는 시트 상태 그대로(계약중 등) — 판매 가능 판정은 saleAvailable 하나가 정한다.
         status: { raw: sellable && status !== '계약중' ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
-        raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, product_group: 'LONG_TERM', ...(Object.keys(spec).length ? { spec } : {}) },
+        raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, product_group: 'LONG_TERM', product_type: '오플구독', ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }
   }

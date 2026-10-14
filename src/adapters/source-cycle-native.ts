@@ -140,7 +140,19 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     rows: converted.records.map(record => { const pos = positions.get(record.uid)!;
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
+        ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
+}
+/** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
+const PRODUCT_TYPE_VOCABULARY = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);
+/** 변환표(대표 승인 2026-10-14 «변환표만 추가, 중앙 어휘는 변경 안 함»): 공급사 칸의 «표기 변형» → 중앙 어휘. 어휘를 늘리지 않고, 의미가 하나로 정해진 변형만 둔다.
+ * 공백 제거 후 비교한다(«신차 렌트»). «장기렌트»→«재렌트» 는 수수료 규칙(kakao-catalog-reference)이 이미 쓰는 같은 대응이다. 모호한 표기(«신차», «중고»)는 넣지 않는다. */
+export const PRODUCT_TYPE_VARIANTS: Readonly<Record<string, string>> = { '장기렌트': '재렌트' };
+export function productTypeFromCell(headers: readonly unknown[], cells: readonly unknown[], header: string): { product_type?: string } {
+  const at = headers.findIndex(h => String(h ?? '').trim() === header);
+  const value = at >= 0 && typeof cells[at] === 'string' ? (cells[at] as string).normalize('NFKC').replace(/\s+/g, '') : '';
+  const mapped = Object.hasOwn(PRODUCT_TYPE_VARIANTS, value) ? PRODUCT_TYPE_VARIANTS[value]! : value;
+  return PRODUCT_TYPE_VOCABULARY.has(mapped) ? { product_type: mapped } : {};
 }
 export type AicaTable = { title: string; values: unknown[][] };
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
@@ -229,7 +241,7 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
-          source_row: index + 2, product_group: 'LONG_TERM',
+          source_row: index + 2, product_group: 'LONG_TERM', ...productTypeFromCell(headers, cells, '구분'),
           original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
