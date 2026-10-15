@@ -23,6 +23,8 @@ export type IdentityProduct = {
   listable: boolean;
   /** 엔진 임시 표식 문서(vehicle_review_required·RAW_VEHICLE_TEXT): 칸 값이 «원문 덩어리» 임시 값이라 근거가 유일하면 덮어써도 된다. 없으면 false. */
   engineTemp?: boolean;
+  /** 문서 연료 칸(제원, «차 한 대 사실» — 기준 한 장 3절). 원문이 파워트레인을 안 적어도 하이브리드·전기 변형 근거가 된다. 없으면 ''. */
+  fuel?: string;
 };
 export type IdentityMasterTrim = { name: string; aliases: string[] };
 export type IdentityMaster = {
@@ -75,6 +77,15 @@ export type IdentityMatch =
   | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
 /** 변형 낱말 집합(규칙 15·16): HYBRID(하이브리드·HEV), PHEV(플러그인·PHEV), EV(일렉트릭·단독 EV). 영숫자 단어 경계로만 본다(CHEVROLET 의 HEV·EV6 의 EV 는 변형이 아니다).
  * LPG 는 연료 사양이라 변형으로 보지 않는다. */
+/** 연료 칸 → 변형 낱말(변형 점검 입력). 가솔린·디젤·LPG 는 변형이 아니다. */
+export function fuelVariantWord(fuel: string): string {
+  const f = fuel.normalize('NFKC').replace(/\s+/g, '');
+  if (!f) return '';
+  if (/플러그인|PHEV/i.test(f)) return '플러그인 하이브리드';
+  if (/하이브리드|HEV|HYBRID/i.test(f) || (/(가솔린|디젤|휘발유|경유)/.test(f) && /전기/.test(f))) return '하이브리드';
+  if (/^(전기|일렉트릭|EV|ELECTRIC)$/i.test(f)) return 'EV';
+  return '';
+}
 const BOUNDED = (word: string) => new RegExp(`(?<![A-Z0-9])${word}(?![A-Z0-9])`);
 const variantsOf = (text: string): Set<string> => {
   const t = text.normalize('NFKC').toUpperCase();
@@ -126,8 +137,11 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   }
   // 변형 낱말(규칙 15·16: 하이브리드·플러그인 하이브리드·EV 는 세부모델을 따로 둔다): 원문에 있는데 고른 마스터 이름에 없으면 일반 세대를 잘못 고른 것 — 보류(R4).
   // 이미 세부모델이 채워진 상품도 원문 차명이 있으면 같은 검사를 받는다(빈칸 조건문 안에 두면 채워진 상품이 우회한다).
-  const variantText = p.rawName || (engineRawProduct ? p.sub_model : '');
-  if (variantText && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
+  // 변형 근거는 원문 낱말 + (르노 계열) E-TECH + 문서 연료 칸(하이브리드·플러그인·전기). 연료는 차 한 대 사실이라 원문이 침묵해도 쓴다.
+  const baseVariantText = p.rawName || (engineRawProduct ? p.sub_model : '');
+  const etech = /E[-\s]?TECH/i.test(baseVariantText) && ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
+  const variantText = [baseVariantText, fuelVariantWord(p.fuel ?? ''), etech ? '하이브리드' : ''].filter(Boolean).join(' ');
+  if (variantText.trim() && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
   const trimHits = master.trims.map(t => ({ t, len: Math.max(0, ...[t.name, ...t.aliases].map(norm).filter(n => n.length >= 2 && raw.includes(n)).map(n => n.length)) })).filter(x => x.len > 0);
