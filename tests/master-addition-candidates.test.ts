@@ -152,4 +152,17 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect((await readFile(csv, 'utf8')).charCodeAt(0)).toBe(0xFEFF);
     await expect(runMasterCandidatesCli({ input, csv: undefined })).rejects.toThrow('MASTER_CANDIDATES_ARGS_REQUIRED');
   });
+
+  it('CLI --listable-only: 노출 문서만 대상으로 하고(기본은 전체 유지), 요약에 범위를 남긴다', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cand-'));
+    const input = join(dir, 'snap.json'), csv = join(dir, 'out.csv');
+    const mixed = [...products, product('12가9001', '제네시스_G80 (RG3)_가솔린 2.5', { listable: false }), product('12가9002', '기아_모하비 (HM)_디젤 3.0', { listable: false })];
+    await writeFile(input, JSON.stringify({ products: mixed, masters: [master] }));
+    const all = await runMasterCandidatesCli({ input, csv });
+    const only = await runMasterCandidatesCli({ input, csv, listableOnly: true });
+    expect(all.scope).toEqual({ listableOnly: false, inputProducts: 5, listableProducts: 3 });
+    expect(only.scope).toEqual({ listableOnly: true, inputProducts: 5, listableProducts: 3 });
+    expect(all.heldTotal).toBe(only.heldTotal + 2);
+    expect(only.products).toBe(3);
+  });
 });
