@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, sourceIdentityFields, engineIdentityHold } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, sourceIdentityFields, sourceSpecFillFields, engineIdentityHold } from '../src/infra/source-cycle-firestore.js';
 import { planSourceCycle, applySourceCycle, OPTIONS_REWRITE_CAP } from '../src/application/source-cycle.js';
 import { compactRaw, compactRecord, type SourceProductRecord } from '../src/domain/source-engine.js';
 import type { VehicleIdentityRefiner } from '../src/ports/source-cycle.js';
@@ -109,11 +109,12 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     expect((await run(commands, [rec('12가2002'), rec('12가2003')])).kinds).toEqual([]);
   });
 
-  it('사람이 채운 제조사·모델·마스터 확정 문서는 사유도 쓰기도 없다', async () => {
+  it('사람이 채운 제조사·모델·마스터 확정 문서는 제조사·모델·세부모델을 건드리지 않는다(제원 확인 표식만 한 번)', async () => {
     const { commands, fake } = await setup();
     fake.put('12가2004', legacyDoc(rec('12가2004'), { maker: '기아', model: 'K5', sub_model: '더 뉴 K5 DL3', vehicle_review_required: false, vehicle_title_source: 'MASTER_MATCH' }));
+    expect((await run(commands, [rec('12가2004')])).kinds).toEqual(['UPDATE']);   // 제원 빈 칸 확인 표식(vehicle_spec_source_checked) 한 번
+    expect(decodeFields(fake.docs.get('12가2004').fields)).toMatchObject({ maker: '기아', model: 'K5', sub_model: '더 뉴 K5 DL3', vehicle_title_source: 'MASTER_MATCH', vehicle_spec_source_checked: true });
     expect((await run(commands, [rec('12가2004')])).kinds).toEqual([]);
-    expect(decodeFields(fake.docs.get('12가2004').fields)).toMatchObject({ maker: '기아', model: 'K5' });
   });
 
   it('이번 회차에 마스터로 확정되면 마스터 이름이 이긴다(원천 값으로 먼저 채우지 않음)', async () => {
@@ -151,5 +152,34 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     fake.put('78라9001', legacyDoc(rec('78라9001', '르노삼성', 'QM6')));
     await run(commands, [rec('78라9001', '르노삼성', 'QM6')]);
     expect(decodeFields(fake.docs.get('78라9001').fields)).toMatchObject({ maker: '', model: '', vehicle_maker_model_source: 'UNMAPPED' });
+  });
+});
+
+describe('제원 입구 매핑(기존 문서의 빈 칸에만)', () => {
+  const specRec = (plate: string, spec: Record<string, unknown>): SourceProductRecord => ({ ...rec(plate), raw: { ...rec(plate).raw, spec } });
+  it('빈 칸에만 채우고, 기존 값·긴 문자열·문자열이 아닌 값은 건드리지 않는다', () => {
+    expect(sourceSpecFillFields({ ext_color: '흰색', fuel_type: '가솔린', year: '2023', mileage: '12000', engine_cc: '1598', first_registration_date: '2023-05' }, {}))
+      .toEqual({ ext_color: '흰색', fuel_type: '가솔린', year: '2023', mileage: '12000', engine_cc: '1598', first_registration_date: '2023-05' });
+    expect(sourceSpecFillFields({ ext_color: '흰색', fuel_type: '가솔린' }, { ext_color: '검정', fuel_type: '' })).toEqual({ fuel_type: '가솔린' });
+    expect(sourceSpecFillFields({ ext_color: 'x'.repeat(41), mileage: 5 }, {})).toEqual({});
+    expect(sourceSpecFillFields(null, {})).toEqual({});
+    expect(sourceSpecFillFields({ year: '2023' }, { year: 2022 })).toEqual({});   // 숫자 기존 값도 값이다
+  });
+
+  it('제조사·모델이 이미 있는 기존 문서도 제원 빈 칸을 한 번 채우고 되풀이하지 않으며 기존 값은 그대로', async () => {
+    const { commands, fake } = await setup();
+    const r = specRec('12가3001', { ext_color: '흰색', fuel_type: '가솔린', mileage: '12000' });
+    fake.put('12가3001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_title_source: 'MASTER_MATCH', ext_color: '검정' }));
+    const first = await run(commands, [r]);
+    expect(first.kinds).toEqual(['UPDATE']);
+    expect(decodeFields(fake.docs.get('12가3001').fields)).toMatchObject({ ext_color: '검정', fuel_type: '가솔린', mileage: '12000', maker: '현대', model: '아반떼' });
+    expect((await run(commands, [r])).kinds).toEqual([]);
+  });
+
+  it('허용 공급사가 없으면 제원 사유도 쓰기도 없다', async () => {
+    const { commands, fake } = await setup([]);
+    const r = specRec('12가3002', { ext_color: '흰색' });
+    fake.put('12가3002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false }));
+    expect((await run(commands, [r])).kinds).toEqual([]);
   });
 });

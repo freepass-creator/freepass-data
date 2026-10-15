@@ -11,7 +11,7 @@ export type CycleProduct = {
    * PHOTO_URLS 사진 없는 문서에 원천 API 사진 주소가 있음(손오공).
    * IANCAR_VEHICLE_ID 이안카 노출 문서의 공급사 차량 ID(iancar_one_vehicle_id) 누락.
    * VEHICLE_IDENTITY 엔진 편입 후 정체성 보류(제조사·모델 빈칸·검토 필요) 문서가 이번 회차 차종 마스터로 «하나로» 특정됨(쓰면 보류가 풀려 되풀이되지 않는다). */
-  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY' | 'API_OPTIONS' | 'SOURCE_IDENTITY'>;
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY' | 'API_OPTIONS' | 'SOURCE_IDENTITY' | 'SOURCE_SPEC'>;
   /** 계획이 정한 «이 회차에는 입구 매핑(제조사·모델 채움)을 하지 않음»(회차 상한 초과분). 쓰기 자체는 다른 변경 때문에 일어나도 채움만 미룬다. */
   deferSourceIdentity?: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;

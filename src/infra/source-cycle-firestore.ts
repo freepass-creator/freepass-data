@@ -156,6 +156,19 @@ const filledByUs = (f: Fields): boolean => {
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
   && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
+/** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
+ * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
+export const SPEC_FILL_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc'] as const;
+const specBlank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return {};
+  const out: Fields = {};
+  for (const key of SPEC_FILL_KEYS) {
+    const v = (spec as Record<string, unknown>)[key];
+    if (specBlank(original[key]) && typeof v === 'string' && v.trim() && v.length <= 40) out[key] = v.trim();
+  }
+  return out;
+}
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
 export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null): Fields {
@@ -230,6 +243,11 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 입구 매핑: 제조사·모델이 비어 있고 표식이 없는 노출 문서는 한 번 다시 써서 원천 brand·model 을 채운다(쓰면 표식이 생겨 되풀이되지 않음). 기본 꺼짐·공급사별 허용.
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_review_required === true
     && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)) rewriteReasons.push('SOURCE_IDENTITY');
+  // 제원 입구 매핑: 제원 칸이 비어 있고 확인 표식(vehicle_spec_source_checked)이 없는 노출 문서는 한 번 다시 써서 원천 제원을 채운다. 옛 저장 기록은 제원이 digest 라
+  // 기록만으로는 알 수 없으므로 문서 상태와 표식으로 정한다 — 표식을 항상 쓰므로(채울 값이 없어도) 되풀이되지 않는다. 같은 허용 공급사·회차 상한을 쓴다.
+  if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
+    && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
+    && SPEC_FILL_KEYS.some(k => specBlank(f[k]))) rewriteReasons.push('SOURCE_SPEC');
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -329,6 +347,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.deferSourceIdentity !== true ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null) : {}),
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.deferSourceIdentity !== true ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -449,7 +468,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 정체성 정제 판정(engineIdentityHold·identityYear)이 읽는 칸 — 목록과 전체 문서의 envelope 가 같아야 백업 대조가 맞는다.
           'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date',
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
-          'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled']) query.append('mask.fieldPaths', fieldPath(field));
+          'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
+          // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
+          'ext_color', 'fuel_type', 'mileage', 'engine_cc', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
