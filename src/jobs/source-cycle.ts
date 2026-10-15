@@ -59,25 +59,34 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         if (watch) {
           // 감시: 확인 요청 오류(503 등)는 넘기고 다음 간격에 다시 본다. 갱신(마지막 반영과 다른 synced_at)이 신선도 12분 안에 보이면 즉시 읽는다.
           // 조회 성공(값)과 조회 장애(null)를 구분한다: 마지막 «성공» 조회 값만 정지 판정에 쓰고, 조회가 전부 실패한 회차는 정지로 단정하지 않는다.
-          let probeOk = false;
-          const probe = async (): Promise<string | null> => {
-            try {
-              const v = await plugin.syncedAt!();
-              if (!v || !Number.isFinite(Date.parse(v)) || Date.parse(v) > clock()) return null;   // 값이 깨졌거나 미래면 조회 실패로 본다
-              probeOk = true; return v;
-            } catch { return null; }
-          };
           const pollMs = watch.pollMs ?? 120_000, attempts = Math.max(1, Math.ceil(watch.windowMs / pollMs));
           const deadline = clock() + watch.windowMs;   // 절대 종료 시각: 조회 소요 시간도 창에 포함
+          // 마지막 «성공» 조회의 값과 시각. 조회가 실패해도 이 값을 «지금 본 값»처럼 쓰지 않도록 시각을 함께 추적한다.
+          const ok = { value: null as string | null, at: -1 };
+          const probe = async (): Promise<void> => {
+            const left = deadline - clock();
+            if (left <= 0) return;   // 종료 시각 뒤에는 조회하지 않는다
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              // 진행 중 조회도 남은 시간까지만 기다린다(응답을 못 받으면 조회 장애로 본다).
+              const v = await Promise.race([plugin.syncedAt!(), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), left); })]);
+              if (!v || !Number.isFinite(Date.parse(v)) || Date.parse(v) > clock()) return;   // 값이 깨졌거나 미래면 조회 실패로 본다
+              ok.value = v; ok.at = clock();
+            } catch { /* 조회 장애: 다음 간격에 다시 본다 */ } finally { if (timer) clearTimeout(timer); }
+          };
           // 신선도 10분·역행 검사는 감시 여부와 무관하게 아래 공통 경로에서 그대로 적용한다. 여기서는 «읽기를 시작할 만한 새 갱신인가»만 본다.
           const fresh = (v: string | null) => !!v && v !== state.lastSyncedAt && clock() - Date.parse(v) <= 10 * 60_000
             && !(state.lastSyncedAt && Date.parse(v) < Date.parse(state.lastSyncedAt));
-          let seen = await probe();
-          for (let i = 0; i < attempts && !fresh(seen) && clock() < deadline; i++) {
+          await probe();
+          for (let i = 0; i < attempts && !fresh(ok.value) && clock() < deadline; i++) {
             await sleepWatch(Math.max(0, Math.min(pollMs, deadline - clock())));
-            seen = (await probe()) ?? seen;
+            if (clock() >= deadline) break;   // 대기로 종료 시각에 닿았으면 더 조회·읽기하지 않는다
+            await probe();
           }
+          const seen = ok.value;
           if (seen && state.lastSyncedAt && Date.parse(seen) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
+          // 정지 판정은 종료 직전(조회 간격의 2배, 최소 5분) 안에 «성공» 관측이 있을 때만 한다. 그 뒤 계속 실패했으면 판정을 보류한다.
+          const probeOk = ok.at >= 0 && clock() - ok.at <= Math.max(5 * 60_000, 2 * pollMs);
           if (!fresh(seen)) {
             const stalled = probeOk && !!seen && clock() - Date.parse(seen) >= (watch.stallMs ?? 2 * 60 * 60_000);
             state.error = stalled ? 'UPSTREAM_STALLED' : null;

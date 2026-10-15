@@ -509,6 +509,27 @@ describe('runner safety and heartbeat', () => {
     expect(calls).toBe(1);
     expect(r.status).not.toBe('DRY_RUN');
   });
+  it('sync watch: success followed by failures through the end of the window does not raise UPSTREAM_STALLED from the remembered old value', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 3 * 60 * 60_000).toISOString();
+    let clockMs = Date.parse(time), probes = 0;
+    const r = await runSourceCycle(watchPlugin(read, async () => { probes++; if (probes === 1) return old; throw new Error('IANCAR_ONE_API_HTTP_503'); }), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => clockMs, sleepMs: async ms => { clockMs += ms; }, syncWatch: { windowMs: 20 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(alerts).not.toContain('UPSTREAM_STALLED');
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('sync watch: no probe or read happens once the absolute end time is reached', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 30 * 60_000).toISOString();
+    let clockMs = Date.parse(time), probes = 0;
+    const p = watchPlugin(read, async () => { probes++; return probes >= 3 ? new Date(clockMs).toISOString() : old; });
+    const r = await runSourceCycle(p, m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => clockMs, sleepMs: async ms => { clockMs += ms; }, syncWatch: { windowMs: 4 * 60_000, pollMs: 120_000 } });
+    expect(probes).toBe(2);   // 시작 + 2분 뒤 1회. 4분(종료 시각)에 닿은 대기 뒤에는 조회하지 않는다
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(read).not.toHaveBeenCalled();
+  });
   it('sync watch rejects invalid options before taking the lock', async () => {
     const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([]), synced_at: time }));
     for (const bad of [{ windowMs: 0 }, { windowMs: 20 * 60_000, pollMs: 0 }, { windowMs: 20 * 60_000, readRetries: 99 }, { windowMs: 9 * 60 * 60_000 }])
