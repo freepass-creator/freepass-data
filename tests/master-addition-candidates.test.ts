@@ -61,7 +61,8 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(rows.find(r => r.rawName.includes('하이브리드'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['VARIANT_WORD_RULE_15_16_18']) });
     expect(rows.find(r => r.rawName.includes('더 뉴'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['QUALIFIER_WORD_RULE_2_3_14']) });
     expect(rows.find(r => r.rawName.includes('모하비'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['MAKER_OR_MODEL_NOT_IN_MASTER']) });
-    expect(rows.find(r => r.rawName === '현대_그랜저_가솔린 3.5')).toMatchObject({ verdict: 'REVIEW', verdictReasons: ['NO_DEVELOPMENT_CODE'] });
+    // 코드 없는 원문은 마스터에 있는 모델(그랜저 GN7 하나)로 «정규화 후보»가 서므로 NO_MASTER_MATCH 가 아니라 NORMALIZED_CANDIDATE 보류 — 추가 후보 표에서 빠진다.
+    expect(rows.find(r => r.rawName === '현대_그랜저_가솔린 3.5')).toBeUndefined();
     void by;
   });
 
@@ -109,8 +110,9 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
 
   it('Codex #684: 같은 원문명이라도 연료가 다르면 다른 묶음 — 입력 순서에 따라 판정이 바뀌지 않는다', () => {
     const santafe: IdentityMaster = { ...master, id: 'S', maker: '현대', model: '싼타페', sub_model: '더 뉴 싼타페 TM', trims: [] };
-    const hev = { ...product('12가7001', '현대_더 뉴 싼타페_가솔린 1.6'), fuel: '하이브리드' };
-    const phev = { ...product('12가7002', '현대_더 뉴 싼타페_가솔린 1.6'), fuel: '플러그인 하이브리드' };
+    // 새 개발코드(TM2)가 있어야 정규화 후보로 흡수되지 않고 마스터 추가 후보 표에 남는다.
+    const hev = { ...product('12가7001', '현대_더 뉴 싼타페 (TM2)_가솔린 1.6'), fuel: '하이브리드' };
+    const phev = { ...product('12가7002', '현대_더 뉴 싼타페 (TM2)_가솔린 1.6'), fuel: '플러그인 하이브리드' };
     const verdicts = (ps: typeof hev[]) => buildMasterAdditionCandidates(ps, [santafe]).rows.map(r => `${r.verdict}:${r.count}`).sort();
     expect(verdicts([hev, phev])).toEqual(verdicts([phev, hev]));
     expect(buildMasterAdditionCandidates([hev, phev], [santafe]).rows.length).toBeGreaterThanOrEqual(1);
@@ -124,7 +126,7 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
   });
 
   it('원문에 섞인 전체 차량번호·전화번호·긴 숫자열은 마스킹한다(끝 4자리만 남음)', () => {
-    const r = buildMasterAdditionCandidates([product('12가3001', '현대_그랜저_12가3456 연락 010-1234-5678 번호 12345678901')], [master]);
+    const r = buildMasterAdditionCandidates([product('12가3001', '현대_그랜저 (GN9)_12가3456 연락 010-1234-5678 번호 12345678901')], [master]);
     const text = JSON.stringify(r.rows) + candidatesToCsv(r.rows);
     expect(text).not.toMatch(/\d{2,3}[가-힣]\s?\d{4}/);
     expect(text).not.toContain('010-1234-5678');

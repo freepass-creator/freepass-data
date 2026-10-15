@@ -59,6 +59,14 @@ export function normalizedMasterCandidate(input: { rawName: string; year: string
   }
   if (pool.length !== 1) return null;
   const hit = pool[0]!;
+  // 원문에 개발코드(괄호 코드·영문 2~4자+숫자)가 있는데 후보 이름에 그 코드가 없으면 후보로 내지 않는다: «아반떼(CN8)» 처럼 마스터에 없는 새 세대를
+  // 기존 세대로 잘못 묶어 «마스터 추가 후보» 목록에서 가리지 않게 한다(NO_MASTER_MATCH 유지). 코드가 이름의 일부(GV70·K5)면 통과한다.
+  const nameTokens = new Set([hit.m.sub_model, ...hit.m.sub_model_aliases].flatMap(n => n.normalize('NFKC').toUpperCase().split(/[^0-9A-Z]+/u).filter(Boolean)));
+  const rawUpper = raw.normalize('NFKC').toUpperCase();
+  for (const m of rawUpper.matchAll(/\(([A-Z]{1,4}\d{0,2}[A-Z]?)\)|(?<![0-9A-Z])([A-Z]{2,4}\d{1,2}[A-Z]?)(?![0-9A-Z])/gu)) {
+    const code = m[1] ?? m[2];
+    if (code && !nameTokens.has(code)) return null;
+  }
   via = hits.length > 1 || year !== null ? (hit.short ? '짧은 이름 낱말+연식' : '핵심어+연식') : (hit.short ? '짧은 이름 낱말' : '핵심어');
   return { master: hit.m, via };
 }

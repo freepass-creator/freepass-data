@@ -21,6 +21,12 @@ describe('정규화 후보(확정 아님)', () => {
     expect(normalizedMasterCandidate({ rawName: '기아_카니발_가솔린 3.5', year: '2016' }, masters)?.master.id).toBe('yp');
   });
 
+  it('원문에 마스터에 없는 개발코드가 있으면 후보로 내지 않는다(새 세대를 기존 세대로 묶지 않음), 코드가 이름의 일부면 통과', () => {
+    expect(normalizedMasterCandidate({ rawName: '기아_카니발 (KA5)_가솔린', year: '2024' }, masters)).toBeNull();
+    expect(normalizedMasterCandidate({ rawName: '기아_카니발 (KA4)_가솔린', year: '2024' }, masters)?.master.id).toBe('ka4');
+    expect(normalizedMasterCandidate({ rawName: '신형K5 2.0 가솔린', year: '2022' }, masters)?.master.id).toBe('k5dl3');
+  });
+
   it('짧은 모델 이름(K5)은 낱말 경계로만 — 신형K5·K5 K5 는 후보, K50 과 섞이지 않는다', () => {
     expect(normalizedMasterCandidate({ rawName: '신형K5 2.0 가솔린', year: '2022' }, masters)?.master.id).toBe('k5dl3');
     expect(normalizedMasterCandidate({ rawName: '기아_K5_K5 2.0', year: '2021' }, masters)?.master.id).toBe('k5dl3');
