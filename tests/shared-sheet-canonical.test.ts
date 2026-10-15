@@ -285,6 +285,23 @@ describe('shared sheet local source to Canonical', () => {
       expect(r1.report).toMatchObject({ committed: 1, held: 0 });
     } finally { vi.useRealTimers(); }
   });
+  it('readback compares an unchanged-rent term with its pre-run economics, not a recompute under a newer fee policy', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = structuredClone((await s.store.listOffers())[0]!) as any;
+      const older = structuredClone(offer.internalEconomicsTerms);
+      for (const t of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee', 'channelPayoutFee']) {
+        if (t[side]?.sourceRefs) t[side].sourceRefs = [...t[side].sourceRefs, 'older-policy-evidence'];
+      }
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect((r.report as any).reconciliation?.readbackMismatches ?? 0).toBe(0);
+      expect(older).toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {

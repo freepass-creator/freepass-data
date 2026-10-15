@@ -430,8 +430,14 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         !auditOfferEconomicsTerms(offer).invalidFacts.length) {
       for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
         const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
-        if (previous?.state === 'UNKNOWN' || previous?.state === 'NOT_APPLICABLE' ||
-            (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE'))
+        // The operational refresh owns status and changed rent only. A term whose rent did not change keeps its stored
+        // economics exactly (a later fee-policy version is applied by the separate economics recompute, not by this run),
+        // so the readback must compare it with the pre-run value, never with a fresh recompute under a newer policy.
+        const rentBefore = before.priceTerms.find(x => x.termKey === term.termKey)?.monthlyRent;
+        const rentNow = c.priceTerms.find(x => x.termKey === term.termKey)?.monthlyRent;
+        const rentUnchanged = rentBefore !== undefined && rentNow !== undefined && stableDigest(rentBefore) === stableDigest(rentNow);
+        if (previous && (rentUnchanged || previous.state === 'UNKNOWN' || previous.state === 'NOT_APPLICABLE' ||
+            (previous.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')))
           term[side] = structuredClone(previous);
       }
     }
