@@ -163,9 +163,14 @@ const engineOwnedIdentity = (original: Fields, isNew: boolean, r: SourceProductR
   const rawText = textOf((original.원문 as Fields | undefined)?.차명) || textOf(original.car_name) || textOf(r.vehicleText);
   return textOf(original.trim_name) === '' && (textOf(original.sub_model) === '' || (rawText !== '' && textOf(original.sub_model) === rawText));
 };
+/** 빈 제조사·모델 문서도 세부모델·트림을 사람이 입력했으면 엔진 보류가 아니다(Codex #704 (b)): 트림이 비어 있고 세부모델이 비었거나 엔진이 복사한 원문 차명 그대로일 때만. */
+const engineCopiedIdentity = (f: Fields): boolean => {
+  const rawText = textOf((f.원문 as Fields | undefined)?.차명) || textOf(f.car_name);
+  return textOf(f.trim_name) === '' && (textOf(f.sub_model) === '' || (rawText !== '' && textOf(f.sub_model) === rawText));
+};
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
-  && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
+  && ((!textOf(f.maker) && !textOf(f.model) && engineCopiedIdentity(f)) || filledByUs(f));
 /** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
  * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
 export const SPEC_FILL_KEYS = ['ext_color', 'int_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
@@ -368,7 +373,10 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const r = p.record;
   const isNew = !Object.keys(original).length;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
-  const identity = opts.identity && (isNew || engineIdentityHold(original))
+  // 기존 문서의 하향·철회(after 가 노출 안 함·철회 표식)에는 정체성 정제를 섞지 않는다(Codex #704 (c)): 철회 작업이 이름까지 바꾸지 않게.
+  const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
+  // 기존 문서는 계획이 양성 표식(refineIdentity)을 준 항목만 정제한다 — 이미 쓰는 문서(가격 변경·재노출)가 회차 상한을 우회하지 못한다(Codex #704 잔여). 신규 편입은 편입 상한이 건다.
+  const identity = opts.identity && !withdrawing && (isNew || (p.refineIdentity === true && engineIdentityHold(original)))
     ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
@@ -421,6 +429,8 @@ const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
+  /** 정체성 정제(마스터 이름 채움)를 켤 공급사 코드 목록(IDENTITY-SAME-CYCLE-DESIGN 2단계). 값이 있으면 그 공급사만, 없으면(undefined) identityRefine 이 전체를 정한다. */
+  identityRefineSources?: readonly string[];
   /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
   identity?: () => Promise<VehicleIdentityRefiner | null> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
@@ -431,9 +441,12 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   let refiner: VehicleIdentityRefiner | null = null;
   const ready = async () => { refiner = options.identity ? await options.identity().catch(() => null) : null; };
   // 정체성 정제(마스터 이름 덮어쓰기)는 identityRefine=false 면 끈다(입구 매핑용 제조사 목록만 읽은 경우).
-  const refineWith = () => (options.identityRefine === false ? null : refiner);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineWith(), apiOptions, srcIdentity);
-  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineWith(), writeApiOptions: apiOptions,
+  const refineSources: ReadonlySet<string> | null = options.identityRefineSources ? new Set(options.identityRefineSources) : null;
+  // 공급사 허용 목록이 있으면 그 공급사 문서·레코드에만 정제기를 건넨다(없으면 종전: identityRefine 이 전체를 정한다).
+  const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
+  const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity);
+  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
     sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
@@ -544,7 +557,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineWith(), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');

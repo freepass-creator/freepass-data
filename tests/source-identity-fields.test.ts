@@ -39,11 +39,12 @@ function fakeFirestore() {
   return { docs, fetcher, put: (uid: string, f: Record<string, unknown>) => docs.set(uid, doc(uid, encodeFields(f as never))) };
 }
 const knownMakers: VehicleIdentityRefiner = { digest: 't', match: () => null, makers: ['현대', '기아'] };
-async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers) {
+async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers, extra: { identityRefineSources?: string[] } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'source-identity-')); dirs.push(dir);
   const fake = fakeFirestore();
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
     supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } }, sourceIdentitySources,
+    ...(extra.identityRefineSources ? { identityRefineSources: extra.identityRefineSources } : {}),
     identity: async () => identity });
   return { commands, fake };
 }
@@ -126,6 +127,80 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     await run(commands, [rec('12가2005', '현대자동차', '아반떼')]);
     expect(decodeFields(fake.docs.get('12가2005').fields)).toMatchObject({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', vehicle_title_source: 'MASTER_MATCH', vehicle_review_required: false });
     expect(decodeFields(fake.docs.get('12가2005').fields).vehicle_maker_model_source).toBeUndefined();
+  });
+
+  it('정체성 정제 공급사 허용 목록: 목록 밖 공급사는 마스터로 확정되어도 정제하지 않고(입구 매핑만), 목록 안이면 마스터 이름이 이긴다', async () => {
+    const refiner: VehicleIdentityRefiner = { digest: 'd', makers: ['현대', '기아'],
+      match: () => ({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', trim_name: null, master_id: 'm1' }) };
+    const outside = await setup(['RP012'], refiner, { identityRefineSources: ['RP031'] });
+    await run(outside.commands, [rec('12가2105', '현대', '아반떼')]);
+    const o = decodeFields(outside.fake.docs.get('12가2105').fields);
+    expect(o.vehicle_title_source).not.toBe('MASTER_MATCH');           // 정제 안 함
+    expect(o).toMatchObject({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' });
+    const inside = await setup(['RP012'], refiner, { identityRefineSources: ['RP012'] });
+    await run(inside.commands, [rec('12가2106', '현대', '아반떼')]);
+    expect(decodeFields(inside.fake.docs.get('12가2106').fields)).toMatchObject({ sub_model: '아반떼 CN7', vehicle_title_source: 'MASTER_MATCH' });
+  });
+
+  describe('Codex #704 결함 3건(정체성 정제 쓰기 경로)', () => {
+    const refiner: VehicleIdentityRefiner = { digest: 'd', makers: ['현대'],
+      match: () => ({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', trim_name: null, master_id: 'm1' }) };
+
+    it('(a) 회차 쓰기 상한(100)을 옵션·입구 매핑과 합산해 적용한다 — 초과분은 이월', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const total = OPTIONS_REWRITE_CAP + 20, plates = Array.from({ length: total }, (_, i) => `56다${String(1000 + i)}`);
+      for (const p of plates) fake.put(p, legacyDoc(rec(p)));
+      const first = await run(commands, plates.map(p => rec(p)));
+      expect(first.kinds).toHaveLength(OPTIONS_REWRITE_CAP);
+      expect(first.warnings.some(w => /_DEFERRED:20:/.test(w))).toBe(true);
+      expect((await run(commands, plates.map(p => rec(p)))).kinds).toHaveLength(20);   // 다음 회차에 나머지
+    }, 60_000);
+
+    it('(a-2) 가격 변경처럼 이미 쓰는 문서도 양성 표식이 있는 항목만 정제한다(상한 우회 불가)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const total = OPTIONS_REWRITE_CAP + 20, plates = Array.from({ length: total }, (_, i) => `57라${String(1000 + i)}`);
+      for (const p of plates) fake.put(p, legacyDoc(rec(p, '현대', '아반떼', 500000)));
+      const changed = plates.map(p => rec(p, '현대', '아반떼', 600000));   // 가격이 바뀌어 전부 쓰는 회차
+      const result = await run(commands, changed);
+      expect(result.kinds).toHaveLength(total);                                // 가격 변경은 상한 없이 쓴다
+      const refined = plates.filter(p => decodeFields(fake.docs.get(p).fields).vehicle_title_source === 'MASTER_MATCH').length;
+      expect(refined).toBe(OPTIONS_REWRITE_CAP);                               // 정제는 상한 안에서만
+      expect(result.warnings.some(w => /^VEHICLE_IDENTITY_DEFERRED:20:/.test(w))).toBe(true);
+    }, 60_000);
+
+    it('(a-3) 하향되는 문서가 정제 상한을 소모해 뒤쪽 정상 문서를 굶기지 않는다(선정은 공개 문서만)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const down = Array.from({ length: OPTIONS_REWRITE_CAP }, (_, i) => `58마${String(1000 + i)}`);   // 키 순서가 앞섬, 원천에서 판매 불가 → 하향
+      const live = Array.from({ length: 5 }, (_, i) => `58마${String(5000 + i)}`);                        // 키 순서가 뒤, 가격이 바뀌는 정상 문서
+      for (const p of down) fake.put(p, legacyDoc(rec(p)));
+      for (const p of live) fake.put(p, legacyDoc(rec(p, '현대', '아반떼', 500000)));
+      const records = [...down.map(p => ({ ...rec(p), status: { raw: '출고불가', saleAvailable: false } } as SourceProductRecord)), ...live.map(p => rec(p, '현대', '아반떼', 600000))];
+      await run(commands, records);
+      for (const p of live) expect(decodeFields(fake.docs.get(p).fields).vehicle_title_source, p).toBe('MASTER_MATCH');
+      for (const p of down) expect(decodeFields(fake.docs.get(p).fields).vehicle_title_source, p).not.toBe('MASTER_MATCH');
+    }, 60_000);
+
+    it('(b) 제조사·모델이 비어도 사람이 입력한 세부모델·트림은 덮어쓰지 않고 검토 필요도 풀지 않는다', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      fake.put('56다2001', legacyDoc(rec('56다2001'), { sub_model: '내가 고른 세부모델' }));
+      fake.put('56다2002', legacyDoc(rec('56다2002'), { trim_name: '내가 고른 트림' }));
+      const r = await run(commands, [rec('56다2001'), rec('56다2002')]);
+      expect(r.kinds).toEqual([]);
+      expect(decodeFields(fake.docs.get('56다2001').fields)).toMatchObject({ sub_model: '내가 고른 세부모델', vehicle_review_required: true, maker: '' });
+      expect(decodeFields(fake.docs.get('56다2002').fields)).toMatchObject({ trim_name: '내가 고른 트림', vehicle_review_required: true, maker: '' });
+    });
+
+    it('(c) 하향·철회 쓰기에는 정체성 정제를 섞지 않는다(이름·MASTER_MATCH 변경 없음)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const stale = { ...rec('56다3001'), status: { raw: '출고불가', saleAvailable: false } } as SourceProductRecord;
+      fake.put('56다3001', legacyDoc(rec('56다3001')));
+      const r = await run(commands, [stale]);
+      expect(r.kinds).toEqual(['DOWNGRADE']);
+      const doc = decodeFields(fake.docs.get('56다3001').fields);
+      expect(doc.listable).toBe(false);
+      expect(doc).toMatchObject({ maker: '', model: '', vehicle_review_required: true });
+      expect(doc.vehicle_title_source).not.toBe('MASTER_MATCH');
+    });
   });
 
   it('입구 매핑만 채우는 다시 쓰기는 옵션 쓰기와 같은 회차 상한 안에서 이월된다', async () => {
