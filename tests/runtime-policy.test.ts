@@ -58,7 +58,8 @@ describe('API runtime boundary', () => {
       expect(result.stderr).toContain(message);
       expect(result.stderr).not.toContain('Could not load the default credentials');
     }
-  });
+    // 시작 프로세스를 세 번 띄우는 시험이라 vitest 기본 5초로는 러너 부하에서 시간 초과가 반복된다(spawn 한 번당 최대 10초 → 전체 상한 45초).
+  }, 45_000);
   it('deployment evidence binds Ready by type, immutable image identity, IAM denial and authenticated readback', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8')
       .replace(/\r\n/g, '\n');
