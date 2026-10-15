@@ -226,8 +226,25 @@ export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
 }
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
-export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = ''): Fields {
+/** 모델 키: 공백·대소문자·전각 차이만 무시(괄호·세대·수식어는 지우지 않는다 — 일치하지 않으면 마스터에 없는 이름이다). */
+const modelKey = (v: unknown): string => textOf(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+/** 마스터 모델 목록(제조사 → 모델·별칭 키 집합). */
+export type SourceModels = ReadonlyMap<string, ReadonlySet<string>>;
+export const sourceModelsOf = (models: Readonly<Record<string, readonly string[]>> | undefined): SourceModels | null =>
+  models ? new Map(Object.entries(models).map(([maker, names]) => [maker.trim(), new Set(names.map(modelKey).filter(Boolean))])) : null;
+const knownModel = (models: SourceModels | null, maker: unknown, model: unknown): boolean => !!models && !!modelKey(model) && !!models.get(textOf(maker))?.has(modelKey(model));
+/** 입구 매핑이 이미 쓴 모델이 마스터 모델 이름이 아니면(괄호·세대·«신형/더 뉴» 수식어 등) 되돌려야 하는가(대표 2026-10-16 «마스터가 작동을 안 한다»):
+ * 채움 그대로(표식·세 값 일치·트림 빈칸)이고 마스터 목록을 읽었고 모델이 목록에 없을 때만. 사람 입력·마스터 정제로 확정된 값은 해당 없음. */
+export const sourceModelRevertDue = (f: Fields, models: SourceModels | null): boolean =>
+  !!models && f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && filledByUs(f) && !!textOf(f.model) && !knownModel(models, f.maker, f.model);
+export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = '',
+  models: SourceModels | null = null): Fields {
   if (refinedThisCycle) return {};
+  // 이미 쓴 모델이 마스터 이름이 아니면 모델만 비운다(제조사·세부모델·표식은 그대로, 정제 대기).
+  if (sourceModelRevertDue(original, models)) {
+    const filled = original.vehicle_maker_model_filled as { maker?: unknown; sub_model?: unknown };
+    return { model: '', vehicle_maker_model_filled: { maker: textOf(filled.maker), model: '', sub_model: textOf(filled.sub_model) } };
+  }
   if (textOf(original.maker) || textOf(original.model)) return {};
   if (original.vehicle_maker_model_source !== undefined && original.vehicle_maker_model_source !== null) {
     // 이미 시도했다. 원천 값이 바뀌었으면 표식이 SOURCE_FIELDS 인 문서에 한해 갱신(사람·마스터가 채운 문서는 위에서 걸러짐).
@@ -238,7 +255,9 @@ export function sourceIdentityFields(r: SourceProductRecord, original: Fields, r
   // 제조사는 활성 차종 마스터에 «있는 표기»일 때만 채운다(옛 표기 르노삼성 등이 maker 에 들어가 교정 대상에서 빠지는 것을 막는다, Codex #685 (c)).
   // 마스터를 못 읽었거나(목록 없음) 마스터에 없는 표기면 채우지 않고 표식(UNMAPPED)만 남긴다 — 마스터에 제조사가 생긴 뒤의 재시도는 별도 승인(표식 초기화).
   if (!makers || !maker || !makers.has(maker)) return original.vehicle_maker_model_source === undefined || original.vehicle_maker_model_source === null ? { vehicle_maker_model_source: 'UNMAPPED' } : {};
-  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model, sub_model: subModelAtFill } };
+  // 모델은 마스터 모델 이름(별칭 포함)과 일치할 때만 쓴다 — 괄호·세대·«신형/더 뉴/디 올뉴» 수식어가 든 원천 표기는 쓰지 않고 정제 대기로 둔다(마스터 목록이 없으면 쓰지 않음).
+  const writeModel = knownModel(models, maker, model) ? model : '';
+  return { maker, model: writeModel, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model: writeModel, sub_model: subModelAtFill } };
 }
 const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
 const specOf = (r: SourceProductRecord | undefined): Fields => {
@@ -260,7 +279,7 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
     ...(!isNew && !yearOf(original.year) && sourceYear ? { year: sourceYear } : {}) };
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
-  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null): CycleProduct {
+  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -299,6 +318,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_review_required === true
     && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)
     && engineOwnedIdentity(f, false, record)) rewriteReasons.push('SOURCE_IDENTITY');   // 선정에도 같은 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유 자체를 주지 않는다(되풀이 쓰기 방지)
+  // 이미 쓴 모델이 마스터 모델 이름이 아니면(괄호·세대·수식어) 모델만 비우는 되돌리기: 채움 그대로인 문서에만, 같은 사유·같은 회차 상한(되풀이 없음: 비우면 조건이 거짓).
+  else if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && sourceModelRevertDue(f, sourceModels)) rewriteReasons.push('SOURCE_IDENTITY');
   // 제원 입구 매핑: 제원 칸이 비어 있고 확인 표식(vehicle_spec_source_checked)이 없는 노출 문서는 한 번 다시 써서 원천 제원을 채운다. 옛 저장 기록은 제원이 digest 라
   // 기록만으로는 알 수 없으므로 문서 상태와 표식으로 정한다 — 표식을 항상 쓰므로(채울 값이 없어도) 되풀이되지 않는다. 같은 허용 공급사·회차 상한을 쓴다.
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
@@ -369,7 +390,7 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
-export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null } = {}): Fields {
+export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null } = {}): Fields {
   const r = p.record;
   const isNew = !Object.keys(original).length;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
@@ -409,7 +430,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
-      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
+      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model), opts.sourceModels ?? null) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
       ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
@@ -445,9 +466,10 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   // 공급사 허용 목록이 있으면 그 공급사 문서·레코드에만 정제기를 건넨다(없으면 종전: identityRefine 이 전체를 정한다).
   const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
   const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity);
+  const srcModels = () => sourceModelsOf(refiner?.models);
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels());
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
-    sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null });
+    sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models) });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
@@ -557,7 +579,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels()); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');

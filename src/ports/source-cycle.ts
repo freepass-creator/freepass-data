@@ -34,7 +34,9 @@ export type VehicleIdentityRefinement = { maker: string; model: string; sub_mode
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
 export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
   /** 활성 차종 마스터에 있는 제조사 이름 목록(입구 매핑이 마스터에 없는 원천 표기를 maker 에 넣지 않게 하는 근거). 없으면 입구 매핑은 채우지 않는다. */
-  makers?: readonly string[] };
+  makers?: readonly string[];
+  /** 제조사별 마스터 «모델 이름 + 별칭» 목록(입구 매핑이 모델을 마스터에 있는 이름일 때만 쓰게 하는 근거, 차종 기준 한 장: 이름은 마스터에 있는 이름만, 괄호·세대·수식어 안 씀). 없으면 입구 매핑은 모델을 쓰지 않는다(fail-closed). */
+  models?: Readonly<Record<string, readonly string[]>> };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

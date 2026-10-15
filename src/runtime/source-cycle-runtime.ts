@@ -119,7 +119,17 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort() } };
+    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      models: (() => {
+        const out: Record<string, Set<string>> = {};
+        for (const m of masters) {
+          const maker = m.maker.trim();
+          if (!maker) continue;
+          const set = out[maker] ??= new Set<string>();
+          for (const name of [m.model, ...m.model_aliases]) if (name.trim()) set.add(name.trim());
+        }
+        return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v].sort()]));
+      })() } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
