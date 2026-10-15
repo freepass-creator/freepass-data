@@ -108,3 +108,36 @@ describe('RP031 읽는 동안 상태가 바뀐 차는 그 차만 보류한다', 
     expect(ok.records.filter(r => r.hold)).toHaveLength(2);
   });
 });
+
+// 2026-10-16 16:00 회차: 한 대의 상세 갱신 시각이 목록·신선도 창 밖이라 IANCAR_ONE_DETAIL_SOURCE_DRIFT 로 회차 전체가 멈췄다(노출 89대 STALE). 그 차만 보류한다.
+describe('RP031 상세 갱신 시각이 어긋난 차는 그 차만 보류한다', () => {
+  const withDetailClock = (ids: number[], syncedAt: string, extra: Record<string, unknown> = {}) => {
+    const inner = fetcher();
+    return (async (input: string | URL | Request) => {
+      const response = await inner(input);
+      const path = new URL(String(input)).pathname;
+      const id = /\/v1\/vehicles\/veh(\d+)$/.exec(path)?.[1] ?? /\/v1\/vehicles\/veh(\d+)\/availability$/.exec(path)?.[1];
+      if (id !== undefined && ids.includes(Number(id))) {
+        const body = await response.json(); body.data.synced_at = syncedAt; Object.assign(body.data, extra); return Response.json(body);
+      }
+      return response;
+    }) as typeof fetch;
+  };
+
+  it('상세 시각이 목록보다 오래된 차 1대(또는 stale:true): 회차는 완전하고 그 차만 SOURCE_DRIFT 보류', async () => {
+    for (const make of [() => withDetailClock([4], '2026-09-30T23:30:00.000Z'), () => withDetailClock([4], '2026-10-01T00:00:00.000Z', { stale: true })]) {
+      const capture = await collectIancarOneFullFacts(config, make());
+      expect(capture.readyForRawIngest).toBe(true);
+      expect(capture.issues).toEqual([]);
+      expect(capture.records.filter(r => r.hold).map(r => [r.vehicleId, r.hold!.code, r.hold!.identity]))
+        .toEqual([['veh4', 'IANCAR_ONE_DETAIL_SOURCE_DRIFT', false]]);
+    }
+  });
+
+  it('한도(전체의 20%)를 넘으면 예전처럼 회차 전체 실패, 형식이 깨진 갱신 시각은 즉시 실패', async () => {
+    await expect(collectIancarOneFullFacts(config, withDetailClock([1, 2, 3], '2026-09-30T23:30:00.000Z'))).rejects.toThrow('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    await expect(collectIancarOneFullFacts(config, withDetailClock([4], 'invalid'))).rejects.toThrow('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    const two = await collectIancarOneFullFacts(config, withDetailClock([1, 2], '2026-09-30T23:30:00.000Z'));
+    expect(two.records.filter(r => r.hold)).toHaveLength(2);   // 한도 안(2대)
+  });
+});
