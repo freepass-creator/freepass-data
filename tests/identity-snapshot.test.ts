@@ -22,7 +22,7 @@ describe('정체성 계획서 입력 내보내기(읽기 전용)', () => {
   it('takes only engine-raw products by default (all with --all), keeps only the last 4 plate digits, and drops retired masters/trims', () => {
     const products = identityProductsFromCapture(cap);
     expect(products).toEqual([{ id: 'RP012_A', plate4: '3456', maker: '', model: '', sub_model: '아이오닉5 프레스티지', trim_name: '',
-      rawName: '아이오닉5 프레스티지', year: '2022', listable: true }]);
+      rawName: '아이오닉5 프레스티지', year: '2022', listable: true, engineTemp: true }]);
     expect(identityProductsFromCapture(cap, { includeAll: true }).map(p => p.id)).toEqual(['RP001_B', 'RP012_A']);
     expect(JSON.stringify(products)).not.toMatch(/\d{2,3}[가-힣]\d{4}/);
     const masters = identityMastersFromSnapshot(master as never);
