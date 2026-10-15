@@ -823,3 +823,82 @@ describe('audit readback', () => {
     await expect(readbackAuditEvents(fakeDb([{ reason: 'x' }]), [0], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/readback audit mismatch/);
   });
 });
+
+// 제조사명 정정(기준 한 장 규칙 7 «짧게»: 르노코리아→르노, KG모빌리티→KGM): 마스터·세부트림 행·표시명·상품이 같은 제조사명으로 함께 옮겨 간다. 옛 이름은 별칭으로 남는다.
+describe('maker rename repair (masterMaker / trimMaker / productMaker)', () => {
+  beforeEach(() => {
+    store.clear();
+    store.set('vehicle_master/m-arkana', { id: 'm-arkana', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', title: '르노코리아 아르카나 LJL' });
+    store.set('vehicle_trim_master/t-a1', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', master_id: 'm-arkana', trim: '이스타일' });
+    store.set('vehicle_trim_master/t-a2', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', master_id: 'm-arkana', trim: '아이코닉' });
+    store.set('products/p-arkana', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', car_number: '12가1234' });
+  });
+  const masterPlan = {
+    sourceDigest: 'maker-v1', masterRepairs: [], productRepairs: [],
+    masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: '르노' }],
+    trimMakerRepairs: [{ id: 't-a1', from: '르노코리아', to: '르노' }, { id: 't-a2', from: '르노코리아', to: '르노' }],
+    masterTitleRepairs: [{ id: 'm-arkana', from: '르노코리아 아르카나 LJL', to: '르노 아르카나 LJL' }],
+  };
+  it('renames the master, its trim rows and its title together and keeps the old name as maker_aliases', async () => {
+    const result = await applyApproved(masterPlan);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노', title: '르노 아르카나 LJL', maker_aliases: ['르노코리아'] });
+    expect(store.get('vehicle_trim_master/t-a1')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+    expect(store.get('vehicle_trim_master/t-a2')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+    expect(result).toMatchObject({ masterMakerCount: 1, trimMakerCount: 2, masterTitleCount: 1 });
+  });
+  it('refuses a master maker rename that leaves a linked trim row on the old maker', async () => {
+    await expect(applyApproved({ ...masterPlan, trimMakerRepairs: [{ id: 't-a1', from: '르노코리아', to: '르노' }] }))
+      .rejects.toThrow(/maker would differ between vehicle_master\/m-arkana/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+  });
+  it('refuses a rename onto an existing identical master identity (값 하나)', async () => {
+    store.set('vehicle_master/m-dup', { id: 'm-dup', maker: '르노', model: '아르카나', sub_model: '아르카나 LJL' });
+    await expect(applyApproved(masterPlan)).rejects.toThrow(/master sub-model would be stored twice/);
+  });
+  it('refuses a stale from (precondition) and a retired master', async () => {
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: 'KG모빌리티', to: '르노' }] })).rejects.toThrow(/precondition changed/);
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, retired: true });
+    await expect(applyApproved(masterPlan)).rejects.toThrow(/retired master/);
+  });
+  it('renames a product maker only when it lands on exactly one active master and the product is not locked', async () => {
+    await applyApproved(masterPlan);
+    const productPlan = { sourceDigest: 'maker-v1-products', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] };
+    await applyApproved(productPlan);
+    expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', model: '아르카나', sub_model: '아르카나 LJL' });
+    store.set('products/p-locked', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', locked_by_contract: true });
+    await expect(applyApproved({ ...productPlan, productMakerRepairs: [{ id: 'p-locked', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+  });
+  it('refuses a product maker repair when no active master carries the target identity', async () => {
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/does not match exactly one active vehicle_master/);
+  });
+  it('validates: product maker repairs must not overlap other product repairs; no-op and non-normalized names refused', async () => {
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [{ id: 'p-arkana', from: 'a', to: 'b' }],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/one product per plan/);
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: '르노코리아' }] })).rejects.toThrow(/no-op/);
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: ' 르노' }] })).rejects.toThrow(/normalized/);
+  });
+  it('(c) approved plan digest is mandatory for maker repairs, and must match', async () => {
+    await expect(applyVehicleNameReferenceRepair(masterPlan)).rejects.toThrow(/approved plan digest required for maker repairs/);
+    await expect(applyVehicleNameReferenceRepair(masterPlan, { approvedPlanDigest: 'wrong' })).rejects.toThrow(/approved plan digest mismatch/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'p', masterRepairs: [], productRepairs: [],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/approved plan digest required for maker repairs/);
+  });
+  it('(a) a non-standard master title aborts the whole plan; a standard one must be repaired together; a blank one is left as is', async () => {
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, title: '르노 아르카나(구형 표기)' });
+    await expect(applyApproved({ ...masterPlan, masterTitleRepairs: [] })).rejects.toThrow(/not the standard maker \+ sub_model form/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, title: '르노코리아 아르카나 LJL' });
+    await expect(applyApproved({ ...masterPlan, masterTitleRepairs: [] })).rejects.toThrow(/requires a masterTitle repair in the same plan/);
+    store.set('vehicle_master/m-arkana', { id: 'm-arkana', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL' });   // 표시명 없음
+    { const { masterTitleRepairs: _omit, ...noTitle } = masterPlan; await applyApproved(noTitle); }
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노' });
+    expect(store.get('vehicle_master/m-arkana')!.title).toBeUndefined();
+  });
+  it('(b) a product maker rename keeps the old name in maker_aliases and checks it on readback', async () => {
+    await applyApproved(masterPlan);
+    await applyApproved({ sourceDigest: 'p', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] });
+    expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+  });
+});

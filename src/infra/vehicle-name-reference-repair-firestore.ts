@@ -66,6 +66,12 @@ export type VehicleNameRepairPlan = {
   masterGenCodeRepairs?: VehicleNameRepairItem[];
   /** vehicle_master.title display name. Old title is kept only in backup/audit; no alias field is written. */
   masterTitleRepairs?: VehicleNameRepairItem[];
+  /** vehicle_master.maker → 제조사 이름(기준 한 장 규칙 7 «짧게»: 르노코리아→르노, KG모빌리티→KGM). Old name kept in maker_aliases (never deleted). */
+  masterMakerRepairs?: VehicleNameRepairItem[];
+  /** vehicle_trim_master.maker, same rename as its master. Old name kept in maker_aliases. */
+  trimMakerRepairs?: VehicleNameRepairItem[];
+  /** products.maker only (model and sub_model unchanged): the stored maker must equal `from`; locked/withdrawn products are refused. */
+  productMakerRepairs?: VehicleNameRepairItem[];
   /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
   masterCreates?: VehicleMasterDocCreate[];
   /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
@@ -99,11 +105,11 @@ export const normalizeName = (value: unknown) => String(value ?? '')
   .trim().replace(/\s+/g, ' ');
 const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
-const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode', 'masterTitle']);
+const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode', 'masterTitle', 'masterMaker', 'trimMaker', 'productMaker']);
 const PRODUCT_IDENTITY_FIELDS = ['maker', 'model', 'sub_model'] as const;
 const PRODUCT_SOURCE_CORRECTION_KEYS = ['차명', '연식', '최초등록', '연료', '배기량', '출처', '조회일', '비고'] as const;
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
-const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode', 'masterTitle']);
+const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode', 'masterTitle', 'masterMaker']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
 /** A Firestore document id inside one collection: no path separator, not «.»/«..», not reserved «__…__», no surrounding spaces. */
 export const isDocId = (value: unknown): value is string => typeof value === 'string' && value !== '' && value === value.trim()
@@ -230,9 +236,12 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.masterModelRepairs ?? []).map((item) => ({ ...item, kind: 'masterModel' })),
     ...(plan.trimModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimModel' })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' })),
-    ...(plan.masterTitleRepairs ?? []).map((item) => ({ ...item, kind: 'masterTitle' }))];
+    ...(plan.masterTitleRepairs ?? []).map((item) => ({ ...item, kind: 'masterTitle' })),
+    ...(plan.masterMakerRepairs ?? []).map((item) => ({ ...item, kind: 'masterMaker' })),
+    ...(plan.trimMakerRepairs ?? []).map((item) => ({ ...item, kind: 'trimMaker' })),
+    ...(plan.productMakerRepairs ?? []).map((item) => ({ ...item, kind: 'productMaker' }))];
   const productIdentityRepairs = plan.productIdentityRepairs ?? [];
-  if (productIdentityRepairs.length && (plan.masterRepairs.length || (plan.masterModelRepairs ?? []).length || (plan.masterRetires ?? []).length)) {
+  if (productIdentityRepairs.length && (plan.masterRepairs.length || (plan.masterModelRepairs ?? []).length || (plan.masterMakerRepairs ?? []).length || (plan.masterRetires ?? []).length)) {
     throw new Error('상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로');
   }
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
@@ -265,7 +274,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (typeof r.evidence !== 'string' || !r.evidence.trim()) throw new Error(`masterRetire ${r.id} requires evidence`);
   }
   if (new Set(retires.map((r) => r.id)).size !== retires.length) throw new Error('duplicate masterRetire');
-  if (retires.some((r) => [...(plan.masterRepairs ?? []), ...(plan.masterVariantRepairs ?? []), ...(plan.masterModelRepairs ?? []), ...(plan.masterGenCodeRepairs ?? []), ...(plan.masterTitleRepairs ?? [])].some((m) => m.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
+  if (retires.some((r) => [...(plan.masterRepairs ?? []), ...(plan.masterVariantRepairs ?? []), ...(plan.masterModelRepairs ?? []), ...(plan.masterGenCodeRepairs ?? []), ...(plan.masterTitleRepairs ?? []), ...(plan.masterMakerRepairs ?? [])].some((m) => m.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
   const retiredIds = new Set(retires.map((r) => r.id));
   if (retires.some((r) => retiredIds.has(r.into))) throw new Error('masterRetire into must not itself be retired in the same plan (no chains or cycles)');
   if ((plan.trimCreates ?? []).some((c) => retiredIds.has(String(c.data.master_id))) || (plan.trimMasterLinkRepairs ?? []).some((l) => retiredIds.has(l.to))) {
@@ -327,6 +336,10 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   // Linked masters must exist already or be created by this plan — checked against Firestore at apply time.
   const productIds = new Set(plan.productRepairs.map((item) => item.id));
   if ((plan.productTrimRepairs ?? []).some((item) => productIds.has(item.id))) throw new Error('one product per plan: sub_model and trim_name repairs must not overlap');
+  const productMakerIds = new Set((plan.productMakerRepairs ?? []).map((item) => item.id));
+  if (productMakerIds.size && ([...productIds, ...(plan.productTrimRepairs ?? []).map((i) => i.id), ...productIdentityRepairs.map((i) => i.id)].some((id) => productMakerIds.has(id)))) {
+    throw new Error('one product per plan: product maker repairs must not overlap other product repairs');
+  }
   const productIdentityIds = new Set<string>();
   for (const item of productIdentityRepairs) {
     if (!isDocId(item.id)) throw new Error('productIdentity repair id must be a single document id');
@@ -398,15 +411,19 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.masterModelRepairs ? { masterModelCount: plan.masterModelRepairs.length } : {}),
     ...(plan.trimModelRepairs ? { trimModelCount: plan.trimModelRepairs.length } : {}),
     ...(plan.masterGenCodeRepairs ? { masterGenCodeCount: plan.masterGenCodeRepairs.length } : {}),
-    ...(plan.masterTitleRepairs ? { masterTitleCount: plan.masterTitleRepairs.length } : {}) };
+    ...(plan.masterTitleRepairs ? { masterTitleCount: plan.masterTitleRepairs.length } : {}),
+    ...(plan.masterMakerRepairs ? { masterMakerCount: plan.masterMakerRepairs.length } : {}),
+    ...(plan.trimMakerRepairs ? { trimMakerCount: plan.trimMakerRepairs.length } : {}),
+    ...(plan.productMakerRepairs ? { productMakerCount: plan.productMakerRepairs.length } : {}) };
 }
 
-type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id' | 'model' | 'gen_code' | 'title';
-type AliasField = 'trim_aliases' | 'sub_model_aliases' | 'model_aliases' | 'gen_code_aliases';
+type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id' | 'model' | 'gen_code' | 'title' | 'maker';
+type AliasField = 'trim_aliases' | 'sub_model_aliases' | 'model_aliases' | 'gen_code_aliases' | 'maker_aliases';
 /** The old name is kept in an alias list on these kinds (rule 20: sub-model aliases live in FreePass Data). */
 const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
   trim: 'trim_aliases', master: 'sub_model_aliases', trimSubModel: 'sub_model_aliases',
   masterModel: 'model_aliases', trimModel: 'model_aliases', masterGenCode: 'gen_code_aliases',
+  masterMaker: 'maker_aliases', trimMaker: 'maker_aliases', productMaker: 'maker_aliases',
 };
 
 /**
@@ -422,7 +439,7 @@ export async function readbackAuditEvents<R>(db: { getAll: (...refs: R[]) => Pro
 }
 
 /** 상품 문서에 이름을 쓰는 대상 종류(잠금·철회 표식·updateTime 보호 대상). */
-const PRODUCT_NAME_KINDS: ReadonlySet<string> = new Set(['product', 'productTrim']);
+const PRODUCT_NAME_KINDS: ReadonlySet<string> = new Set(['product', 'productTrim', 'productMaker']);
 /** 상품 문서 쓰기 거부 사유(정산 잠금·철회 표식, Codex 적용기 검토 (a)(b)): 정정은 잠금·철회된 문서를 건드리지 않는다. 보수적 허용표 — 비어 있지 않은 값은 전부 잠금/표식이다. */
 const isStoredFlagSet = (v: unknown) => v !== undefined && v !== null && v !== false && v !== '';
 export function productWriteBlock(data: Record<string, unknown> | undefined): 'LOCKED_BY_CONTRACT' | 'PUBLICATION_WITHDRAWN' | null {
@@ -448,6 +465,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
   if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
   if ((plan.productIdentityRepairs ?? []).length && options.approvedPlanDigest === undefined) throw new Error('approved plan digest required for productIdentity repairs');
+  // 제조사명 정정(마스터·행·상품)은 계획 전체 digest 승인 없이는 적용하지 않는다 — 함수를 직접 호출해도 같다(Codex #680 (c)).
+  if (((plan.masterMakerRepairs ?? []).length || (plan.trimMakerRepairs ?? []).length || (plan.productMakerRepairs ?? []).length) && options.approvedPlanDigest === undefined) {
+    throw new Error('approved plan digest required for maker repairs');
+  }
   const db = getFirestore(getTargetFirebaseApp());
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -461,6 +482,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.trimModelRepairs ?? []).map((item) => ({ kind: 'trimModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'model' as RepairField })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ kind: 'masterGenCode', item, ref: db.collection('vehicle_master').doc(item.id), field: 'gen_code' as RepairField })),
     ...(plan.masterTitleRepairs ?? []).map((item) => ({ kind: 'masterTitle', item, ref: db.collection('vehicle_master').doc(item.id), field: 'title' as RepairField })),
+    ...(plan.masterMakerRepairs ?? []).map((item) => ({ kind: 'masterMaker', item, ref: db.collection('vehicle_master').doc(item.id), field: 'maker' as RepairField })),
+    ...(plan.trimMakerRepairs ?? []).map((item) => ({ kind: 'trimMaker', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'maker' as RepairField })),
+    ...(plan.productMakerRepairs ?? []).map((item) => ({ kind: 'productMaker', item, ref: db.collection('products').doc(item.id), field: 'maker' as RepairField })),
   ];
   const identityTargets = (plan.productIdentityRepairs ?? []).map((item) => ({ kind: 'productIdentity', item, ref: db.collection('products').doc(item.id) }));
   const sourceCorrectionTargets = (plan.productSourceCorrections ?? []).map((item) => ({ kind: 'productSourceCorrection', item, ref: db.collection('products').doc(item.id) }));
@@ -737,10 +761,24 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (frozen >= 0) throw new Error(`retired master cannot be renamed ${targets[frozen]!.ref.path}`);
     const finalMasterSubModels: Record<string, string> = {};
     for (const t of targets) if (t.kind === 'master') finalMasterSubModels[t.ref.id] = clean(t.item.to);
+    const finalMasterMakers: Record<string, string> = {};
+    for (const t of targets) if (t.kind === 'masterMaker') finalMasterMakers[t.ref.id] = clean(t.item.to);
+    // 제조사를 옮기는 마스터의 표시명(title)은 «옛 제조사 + 세부모델» 표준형이어야 하고 같은 계획에서 새 제조사 + 세부모델로 함께 정정돼야 한다.
+    // 비어 있거나 없으면 그대로 둔다(악화 없음). 비표준 title 은 그 마스터 정정을 포함한 계획 전체를 중단한다(Codex #680 (a)).
+    const titleRepairIds = new Set(targets.filter((t) => t.kind === 'masterTitle').map((t) => t.ref.id));
+    targets.forEach((t, index) => {
+      if (t.kind !== 'masterMaker') return;
+      const data = current[index]?.data();
+      const stored = data?.title;
+      if (stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '')) return;
+      const standard = clean(`${clean(t.item.from)} ${finalMasterSubModels[t.ref.id] ?? clean(data?.sub_model)}`);
+      if (typeof stored !== 'string' || clean(stored) !== standard) throw new Error(`master title is not the standard maker + sub_model form ${t.ref.path}`);
+      if (!titleRepairIds.has(t.ref.id)) throw new Error(`master maker rename requires a masterTitle repair in the same plan ${t.ref.path}`);
+    });
     targets.forEach((t, index) => {
       if (t.kind !== 'masterTitle') return;
       const data = current[index]?.data();
-      const expected = clean(`${clean(data?.maker)} ${finalMasterSubModels[t.ref.id] ?? clean(data?.sub_model)}`);
+      const expected = clean(`${finalMasterMakers[t.ref.id] ?? clean(data?.maker)} ${finalMasterSubModels[t.ref.id] ?? clean(data?.sub_model)}`);
       if (clean(t.item.to) !== expected) throw new Error(`masterTitle ${t.ref.path} must equal final maker + sub_model (${expected})`);
     });
     // A product must not be renamed onto the name of a master that is already retired (in any earlier plan).
@@ -779,21 +817,23 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     // Final identity check (값 하나): every stored master (names only, normalized — stored values may carry stray spaces),
     // with this plan's renames and creates applied, must not end up with the same maker|model|sub_model twice.
-    if (targets.some((t) => t.kind === 'master' || t.kind === 'masterModel') || (plan.masterCreates ?? []).length) {
+    if (targets.some((t) => t.kind === 'master' || t.kind === 'masterModel' || t.kind === 'masterMaker') || (plan.masterCreates ?? []).length) {
       const renamedMasters: Record<string, string> = {};
       const remodeledMasters: Record<string, string> = {};
+      const remakedMasters: Record<string, string> = {};
       for (const t of targets) if (t.kind === 'master') renamedMasters[t.ref.id] = clean(t.item.to);
       for (const t of targets) if (t.kind === 'masterModel') remodeledMasters[t.ref.id] = clean(t.item.to);
+      for (const t of targets) if (t.kind === 'masterMaker') remakedMasters[t.ref.id] = clean(t.item.to);
       // Bounded read: names only, at most MAX_MASTER_IDENTITY_SCAN documents (stop rather than run an unbounded transaction).
       const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — identity check would be unbounded`);
       const finalKeys: Record<string, string> = {};
       for (const doc of stored.docs) {
         const data = doc.data();
-        finalKeys[doc.id] = [clean(data.maker), remodeledMasters[doc.id] ?? clean(data.model), renamedMasters[doc.id] ?? clean(data.sub_model)].join('|');
+        finalKeys[doc.id] = [remakedMasters[doc.id] ?? clean(data.maker), remodeledMasters[doc.id] ?? clean(data.model), renamedMasters[doc.id] ?? clean(data.sub_model)].join('|');
       }
       for (const c of plan.masterCreates ?? []) finalKeys[c.id] = masterNameKey(c.data);
-      const touched = new Set([...Object.keys(renamedMasters), ...Object.keys(remodeledMasters), ...(plan.masterCreates ?? []).map((c) => c.id)].map((id) => finalKeys[id]));
+      const touched = new Set([...Object.keys(renamedMasters), ...Object.keys(remodeledMasters), ...Object.keys(remakedMasters), ...(plan.masterCreates ?? []).map((c) => c.id)].map((id) => finalKeys[id]));
       const owners: Record<string, string> = {};
       for (const [id, key] of Object.entries(finalKeys)) {
         if (!touched.has(key)) continue;
@@ -832,6 +872,54 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         const off = Object.entries(rows).find(([id, model]) => (rowModelTo[id] ?? clean(model)) !== want);
         if (off) throw new Error(`model would differ between vehicle_master/${mid} (${want}) and vehicle_trim_master/${off[0]}`);
       }
+    }
+    // Maker consistency (one maker name per master and its rows — same rule as model): a master renamed without its rows aborts.
+    if (targets.some((t) => t.kind === 'masterMaker' || t.kind === 'trimMaker')) {
+      const linkTo: Record<string, string> = Object.fromEntries((plan.trimMasterLinkRepairs ?? []).map((l) => [l.id, l.to]));
+      const masterMakerTo: Record<string, string> = {};
+      const rowMakerTo: Record<string, string> = {};
+      const affected = new Set<string>();
+      targets.forEach((t, i) => {
+        if (t.kind === 'masterMaker') { masterMakerTo[t.ref.id] = clean(t.item.to); affected.add(t.ref.id); }
+        if (t.kind === 'trimMaker') { rowMakerTo[t.ref.id] = clean(t.item.to); affected.add(linkTo[t.ref.id] ?? String(current[i]?.data()?.master_id ?? '')); }
+      });
+      const createdMaster: Record<string, Record<string, unknown>> = Object.fromEntries((plan.masterCreates ?? []).map((c) => [c.id, c.data]));
+      for (const mid of affected) {
+        if (!mid) throw new Error('trim row without master_id cannot change maker');
+        const masterData = createdMaster[mid] ?? (await transaction.getAll(db.collection('vehicle_master').doc(mid)))[0]!.data();
+        if (!masterData) throw new Error(`maker check: master missing vehicle_master/${mid}`);
+        const want = masterMakerTo[mid] ?? clean(masterData.maker);
+        const stored = await transaction.get(db.collection('vehicle_trim_master').where('master_id', '==', mid).limit(MAX_MASTER_IDENTITY_SCAN + 1));
+        if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`maker check: too many rows on vehicle_master/${mid}`);
+        const rows: Record<string, unknown> = {};
+        for (const doc of stored.docs) if ((linkTo[doc.id] ?? mid) === mid) rows[doc.id] = doc.data().maker;
+        const incomingIds = Object.entries(linkTo).filter(([id, to]) => to === mid && rows[id] === undefined).map(([id]) => id);
+        if (incomingIds.length) for (const snap of await transaction.getAll(...incomingIds.map((id) => db.collection('vehicle_trim_master').doc(id)))) rows[snap.ref.id] = snap.data()?.maker;
+        for (const c of plan.trimCreates ?? []) if (c.data.master_id === mid) rows[c.id] = c.data.maker;
+        const off = Object.entries(rows).find(([id, maker]) => (rowMakerTo[id] ?? clean(maker)) !== want);
+        if (off) throw new Error(`maker would differ between vehicle_master/${mid} (${want}) and vehicle_trim_master/${off[0]}`);
+      }
+    }
+    // A product maker repair must land on exactly one active master identity (maker|model|sub_model after this plan's master renames).
+    const productMakerTargets = targets.map((t, i) => ({ t, data: current[i]?.data() })).filter((x) => x.t.kind === 'productMaker');
+    if (productMakerTargets.length) {
+      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — product maker check would be unbounded`);
+      const makerTo: Record<string, string> = {}, subTo: Record<string, string> = {}, modelTo: Record<string, string> = {};
+      for (const t of targets) {
+        if (t.kind === 'masterMaker') makerTo[t.ref.id] = clean(t.item.to);
+        if (t.kind === 'master') subTo[t.ref.id] = clean(t.item.to);
+        if (t.kind === 'masterModel') modelTo[t.ref.id] = clean(t.item.to);
+      }
+      const active: Record<string, number> = {};
+      for (const doc of stored.docs) {
+        if (doc.data().retired === true) continue;
+        const key = [makerTo[doc.id] ?? clean(doc.data().maker), modelTo[doc.id] ?? clean(doc.data().model), subTo[doc.id] ?? clean(doc.data().sub_model)].join('|');
+        active[key] = (active[key] ?? 0) + 1;
+      }
+      for (const c of plan.masterCreates ?? []) active[masterNameKey(c.data)] = (active[masterNameKey(c.data)] ?? 0) + 1;
+      const miss = productMakerTargets.find((x) => (active[[clean(x.t.item.to), clean(x.data?.model), clean(x.data?.sub_model)].join('|')] ?? 0) !== 1);
+      if (miss) throw new Error(`productMaker target does not match exactly one active vehicle_master ${miss.t.ref.path}`);
     }
     if (retireIntoRefs.length && (await transaction.getAll(...retireIntoRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction retire into-master missing or retired');
     // Retire only when nothing still uses the master: no trim row links to it (after this plan's relinks) and no product carries its name.
