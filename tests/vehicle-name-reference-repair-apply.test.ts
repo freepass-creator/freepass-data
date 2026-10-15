@@ -933,4 +933,21 @@ describe('alias canonicalization of a confirmed product identity', () => {
     store.set('products/p1', { ...store.get('products/p1')!, locked_by_contract: true });
     await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
   });
+  it('Codex #683 (a): a human-chosen or confirmed identity is never canonicalized, even when it equals the unique alias', async () => {
+    for (const marker of [{ vehicle_title_source: 'MANUAL' }, { confirmed_by: 'someone' }, { identity_manual_override: true }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+    // 기계 출처(MASTER_MATCH)·표식 없음은 허용
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_title_source: 'MASTER_MATCH' });
+    await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼 AX1' });
+  });
+  it('Codex #683 (b): maker/model must match the raw stored strings exactly (no normalization-only equality); the write never changes them', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved(plan({ from: { maker: '현대 ', model: '캐스퍼', sub_model: '캐스퍼' } }))).rejects.toThrow();
+    await expect(applyApproved(plan({ from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼 ', sub_model: '캐스퍼 AX1' } }))).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' });
+  });
 });

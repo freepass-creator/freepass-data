@@ -462,9 +462,20 @@ export function identityFromOverwritable(data: Record<string, unknown> | undefin
 /** «별칭 정규화» 후보(제조사·모델 동일, 세부모델만 다름, 세부모델 from 이 비어 있지 않음). 이것만으로는 허용하지 않는다 — 트랜잭션 안에서 from 이
  * 대상 마스터의 «등록 별칭» 이고 같은 제조사·모델의 활성 마스터 중 그 별칭을 가진 곳이 대상 하나뿐일 때만 사람 입력 보존 안전선을 통과한다(규칙 10·20). */
 export function isAliasNormalizationCandidate(from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }): boolean {
-  return clean(from.maker) !== '' && clean(from.maker) === clean(to.maker) && clean(from.model) !== '' && clean(from.model) === clean(to.model)
-    && clean(from.sub_model) !== '' && clean(from.sub_model) !== clean(to.sub_model);
+  // 제조사·모델은 «원문 문자열 그대로» 같아야 한다(정규화로 같아 보이는 전각·표기 차이는 다른 값 — 쓰기 단계가 제조사·모델까지 바꾸지 않게, Codex #683 (b)).
+  return from.maker !== '' && from.maker === to.maker && from.model !== '' && from.model === to.model
+    && clean(from.sub_model) !== '' && from.sub_model !== to.sub_model;
 }
+/** 사람이 고르거나 확정한 표식(Codex #683 (a)): 기계 출처(MASTER_MATCH·RAW_VEHICLE_TEXT) 밖의 vehicle_title_source, 또는 확정·수동·사람·검증 이름의 칸이 참이면 별칭 정규화 예외를 쓰지 않는다. */
+export function hasHumanOrConfirmedMarker(data: Record<string, unknown> | undefined): boolean {
+  if (!data) return false;
+  const source = data.vehicle_title_source;
+  if (source !== undefined && source !== null && source !== '' && source !== 'MASTER_MATCH' && source !== 'RAW_VEHICLE_TEXT') return true;
+  return Object.entries(data).some(([key, value]) => /(confirm|manual|human|verified|reviewed_by)/i.test(key)
+    && value !== undefined && value !== null && value !== false && value !== '' && !(Array.isArray(value) && value.length === 0));
+}
+const aliasNormalizationAllowedFor = (data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }) =>
+  isAliasNormalizationCandidate(from, to) && !hasHumanOrConfirmedMarker(data);
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
@@ -529,7 +540,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const blocked = productWriteBlock(snapshot.data());
     if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
     if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-      && !isAliasNormalizationCandidate(identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+      && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
@@ -736,7 +747,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
       if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-        && !isAliasNormalizationCandidate(identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+        && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
       for (const field of PRODUCT_IDENTITY_FIELDS) {
         if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
