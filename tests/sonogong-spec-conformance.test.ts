@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { conformanceLines, sonogongSpecConformance } from '../src/application/sonogong-spec-conformance.js';
+import { reportSonogongConformanceCli } from '../src/jobs/report-sonogong-spec-conformance.js';
 
 // 값은 합성. 노출 손오공 문서만 센다(다른 공급사·비노출 제외), 번호는 끝 4자리로만 나온다.
 const doc = (plate: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -44,5 +48,22 @@ describe('손오공 규격 일치 점검', () => {
     const lines = conformanceLines(sonogongSpecConformance([doc('66바6666', { int_color: '' })]));
     expect(lines[0]).toContain('노출 1대');
     expect(lines.find(l => l.startsWith('내장색'))).toContain('빈칸 1');
+  });
+});
+
+describe('보고 CLI 입력', () => {
+  it('평문 문서 덤프([{ id, data }] 또는 데이터 배열)를 읽고, 입력이 없거나 둘 다 주면 설정 오류', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'conf-'));
+    try {
+      const dump = join(dir, 'dump.json');
+      writeFileSync(dump, JSON.stringify([{ id: 'a', data: doc('802조3132') }, { id: 'b', data: doc('11가1111', { fuel_type: 'GSL' }) }, doc('22나2222')]));
+      const lines: string[] = [];
+      expect(reportSonogongConformanceCli(['--products-json', dump], l => lines.push(l))).toBe(0);
+      expect(lines[0]).toContain('노출 3대');
+      expect(lines.find(l => l.startsWith('연료'))).toContain('규격 위반 1');
+      expect(lines.join('\n')).not.toContain('802조');
+      expect(reportSonogongConformanceCli([], () => undefined)).toBe(2);
+      expect(reportSonogongConformanceCli(['--products-json', dump, '--capture', dump], () => undefined)).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
