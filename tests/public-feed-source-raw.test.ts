@@ -101,6 +101,12 @@ describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
     }
   });
 
+  it('Codex #692 잔여 ①②③: 기호·쪼갠 이름, NFD 분해, 제조사·모델명 과차단', () => {
+    for (const bad of ['K5 /홍길동', 'K5 홍·길·동', 'K5 홍 길 동', 'K5 -김철-', 'K5 ·김철·']) expect(sourceRawName({ car_name: bad }), bad).toBeNull();
+    expect(sourceRawName({ car_name: 'K5 홍길동'.normalize('NFD') })).toBeNull();                   // NFD 분해 우회
+    for (const ok of ['기아 봉고 3', '지프 랭글러', '폭스바겐 제타', '테슬라 모델 3', '메르세데스-마이바흐 S', '서울 현대 쏘나타']) expect(sourceRawName({ car_name: ok }), ok).not.toBeNull();
+  });
+
   it('Codex #692 재검토 ④: 원문 플래그가 꺼지면 옵션 검증은 종전과 같다(% 이름은 개별로 버려지고 피드는 던지지 않음), 켜지면 허용', () => {
     const withOptions = { api_options_state: 'PRESENT', api_options_basic: [{ name: '자외선 99% 차단' }, { name: '전방 충돌방지' }], api_options_paid: [] };
     process.env.FREEPASS_DATA_PUBLIC_OPTIONS = '1';

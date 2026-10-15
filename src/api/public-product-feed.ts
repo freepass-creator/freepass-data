@@ -154,7 +154,9 @@ const PERSON_NAME_ALLOW = new Set(['임팔라', '한정판', '신형차', '신�
   // 두 글자 낱말(성씨와 겹치는 흔한 차명·등급·색 낱말) — 두 글자 이름 꼴(«김철»)도 막기 위해 허용 목록으로만 예외를 둔다(Codex #692 ②).
   '현대', '기아', '한국', '신형', '신차', '전기', '전륜', '후륜', '고급', '주행', '오토', '하이', '모던', '소형', '한정', '장기', '단기', '특별', '정품', '수입', '국산',
   '구동', '연료', '모닝', '소울', '마크', '백색', '은색', '남색', '금색', '황색', '흑색', '회색', '갈색', '적색', '청색', '검정', '주황', '진주', '하늘', '전체', '선택',
-  '차단', '차량', '주차', '정비', '보증', '운전', '안전', '전방', '후방', '고속', '자동', '강화', '통풍', '열선', '성능', '연비', '유리', '도어', '주문', '오너', '신품', '구입']);
+  '차단', '차량', '주차', '정비', '보증', '운전', '안전', '전방', '후방', '고속', '자동', '강화', '통풍', '열선', '성능', '연비', '유리', '도어', '주문', '오너', '신품', '구입',
+  // 제조사·모델명(성씨와 첫 글자가 겹치는 것) — 정상 차명 과차단 방지(Codex #692 잔여 ③).
+  '지프', '제타', '봉고', '모델', '마이바흐', '주크', '사브', '링컨', '하이랜더', '지엠', '남양', '서울', '인천', '제주', '대구', '부산', '광주', '대전', '울산', '경기', '강원', '충북', '충남', '전북', '전남', '경북', '경남']);
 const HONORIFIC = '님|씨|고객님?|대표님?|사장님?|기사님?|과장님?|부장님?|팀장님?|선생님?|사모님?|양|군';
 const HONORIFIC_TOKEN = new RegExp(`^(?:${HONORIFIC})$`);
 const NAME_WITH_HONORIFIC = new RegExp(`^([가-힣]{2,3}?)(?:${HONORIFIC})$`);
@@ -163,7 +165,15 @@ const isSurnameName = (token: string, lengths: number[]): boolean =>
 /** 인명 꼴(Codex #692 ②): 성씨로 시작하는 두·세 글자 한글 낱말은 허용 목록에 없으면 이름으로 보고 제외한다(과차단은 안전한 쪽).
  * 호칭(님·씨·고객 등)이 붙은 이름·괄호 안 한글 이름 꼴도 제외. */
 const looksLikePersonName = (text: string): boolean => {
-  const tokens = text.split(/\s+/).map(token => token.replace(/^[(\[{<"'‘“]+|[)\]}>"'’”,.:;]+$/g, ''));
+  // 한글 연속열(run) 단위로 본다: 공백·기호(«/홍길동»·«(홍길동)»)로 감싸도 같은 낱말이고, 한 글자씩 기호로 쪼갠 «홍·길·동» 은 이어 붙여 본다(Codex #692 잔여 ①).
+  const tokens = text.split(/[^가-힣]+/u).filter(Boolean);
+  const merged: string[] = [];
+  let single = '';
+  for (const token of [...tokens, '']) {
+    if (token.length === 1) single += token;
+    else { if (single.length >= 2) merged.push(single); single = ''; }
+  }
+  for (const joined of merged) if (isSurnameName(joined, [2, 3]) || (NAME_WITH_HONORIFIC.exec(joined) && isSurnameName(NAME_WITH_HONORIFIC.exec(joined)![1]!, [2, 3]))) return true;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]!;
     if (isSurnameName(token, [2, 3])) return true;
@@ -181,7 +191,8 @@ export const sourceRawName = (product: Rec): string | null => {
   const original = product['원문'] && typeof product['원문'] === 'object' ? product['원문'] as Rec : {};
   const raw = refineText(product.car_name) || refineText(original['차명']);
   if (!raw) return null;
-  let text = raw.replace(INVISIBLE, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  // 모든 검사 전에 정규화한다(NFD 로 분해된 «홍길동» 이 검사를 통과한 뒤 NFC 로 합쳐져 노출되던 우회, Codex #692 잔여 ②).
+  let text = raw.normalize('NFKC').replace(INVISIBLE, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
   if (text.length > RAW_NAME_MAX) text = `${text.slice(0, RAW_NAME_MAX - 1)}…`;
   // 공급사 시트에 제조사 열이 있으나 차명에는 빠지는 경우(아이카): 원문 보존 칸의 source_maker 가 있으면 읽기 전용 접두로만 붙인다.
   const source = (product.raw && typeof product.raw === 'object' ? product.raw : original['source'] && typeof original['source'] === 'object' ? original['source'] : {}) as Rec;
@@ -189,7 +200,7 @@ export const sourceRawName = (product: Rec): string | null => {
   const headers = Array.isArray(source.headers) ? source.headers : [], cells = Array.isArray(source.cells) ? source.cells : [];
   const headerAt = headers.findIndex(h => typeof h === 'string' && h.trim() === '제조사');
   const originalRow = source.original && typeof source.original === 'object' ? source.original as Rec : {};
-  const maker = refineText(source.source_maker) || refineText(originalRow['제조사']) || (headerAt >= 0 ? refineText(cells[headerAt]) : '');
+  const maker = (refineText(source.source_maker) || refineText(originalRow['제조사']) || (headerAt >= 0 ? refineText(cells[headerAt]) : '')).normalize('NFKC');
   if (maker && maker.length <= 20 && !text.replace(/\s+/g, '').startsWith(maker.replace(/\s+/g, ''))) text = `${maker} ${text}`;
   if (looksLikePersonName(text)) return null;
   return safeOptionName(text, RAW_NAME_MAX + 16);
