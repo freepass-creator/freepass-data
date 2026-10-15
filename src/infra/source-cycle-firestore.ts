@@ -239,7 +239,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 대표 승인 전에는 쓰지 않는다(기본 꺼짐): 운영 변수 SOURCE_CYCLE_WRITE_API_OPTIONS=1 일 때만 켠다(월렌트 상품 구분과 같은 방식).
   // 입구 매핑: 제조사·모델이 비어 있고 표식이 없는 노출 문서는 한 번 다시 써서 원천 brand·model 을 채운다(쓰면 표식이 생겨 되풀이되지 않음). 기본 꺼짐·공급사별 허용.
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_review_required === true
-    && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)) rewriteReasons.push('SOURCE_IDENTITY');
+    && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)
+    && engineOwnedIdentity(f, false, record)) rewriteReasons.push('SOURCE_IDENTITY');   // 선정에도 같은 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유 자체를 주지 않는다(되풀이 쓰기 방지)
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())

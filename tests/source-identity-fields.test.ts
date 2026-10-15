@@ -226,3 +226,16 @@ describe('Codex #685 네 번째 지적', () => {
     expect(engineIdentityHold({ ...base, trim_name: '모던' })).toBe(false);
   });
 });
+
+describe('Codex #685 다섯 번째 지적', () => {
+  it('선정 단계에도 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유를 받지 않아 같은 재쓰기가 반복되지 않는다', async () => {
+    const { commands, fake } = await setup();
+    fake.put('95자1001', legacyDoc(rec('95자1001'), { sub_model: '아반떼 CN7' }));
+    fake.put('95자1002', legacyDoc(rec('95자1002'), { trim_name: '모던' }));
+    for (let i = 0; i < 2; i++) {
+      const r = await run(commands, [rec('95자1001'), rec('95자1002')]);
+      expect(r.kinds).toEqual([]);                                                // 사유 없음 → 쓰기 없음(반복 쓰기·상한 슬롯 소모 없음)
+      expect(r.warnings.some(w => w.startsWith('SOURCE_IDENTITY_REWRITE'))).toBe(false);
+    }
+  });
+});
