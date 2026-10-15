@@ -132,7 +132,7 @@ export function matchIdentity(input: IdentityProduct, masters: readonly Identity
   if (!cands.length) {
     // 정규화 후보(확정 아님): 접두·개발코드·세대 표기·짧은 모델 이름·붙여쓴 표기를 느슨히 정규화해 마스터 세부모델이 «정확히 하나» 잡히면 사유만 달리한다 —
     // MATCH 가 아니므로 적용되지 않고(엔진 정제기도 null), 사람이 확인하거나 정밀도 측정(golden set) 뒤 승격한다. 마스터에 없는 이름은 만들지 않는다.
-    const nc = normalizedMasterCandidate({ rawName: p.rawName || p.sub_model, year: p.year, maker: p.maker }, masters);
+    const nc = normalizedMasterCandidate({ rawName: p.rawName || p.sub_model, year: p.year, maker: p.maker, fuel: fuelVariantWord(p.fuel ?? '') }, masters);
     if (nc) return { state: 'HOLD', reason: 'NORMALIZED_CANDIDATE', candidates: [nc.master.id] };
     return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
   }

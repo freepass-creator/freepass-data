@@ -17,8 +17,20 @@ const product = (id: string, rawName: string, year: string, maker = ''): Identit
 describe('정규화 후보(확정 아님)', () => {
   it('접두·세대 표기가 있는 원문은 핵심어 + 연식으로 세대 후보 하나를 낸다', () => {
     expect(normalizedMasterCandidate({ rawName: '신형 카니발 9인승 디젤', year: '2023' }, masters)?.master.id).toBe('ka4');
-    expect(normalizedMasterCandidate({ rawName: '더뉴카니발 4세대 리무진', year: '2022' }, masters)?.master.id).toBe('ka4');
+    // 명시된 N세대는 마스터 순서와 정확히 같을 때만 인정(마스터에 옛 세대가 빠져 있으면 검증 불가 → 후보 없음, Codex #712 ④).
+    expect(normalizedMasterCandidate({ rawName: '더뉴카니발 4세대 리무진', year: '2022' }, masters)).toBeNull();
+    expect(normalizedMasterCandidate({ rawName: '더뉴카니발 2세대 리무진', year: '2022' }, masters)?.master.id).toBe('ka4');
     expect(normalizedMasterCandidate({ rawName: '기아_카니발_가솔린 3.5', year: '2016' }, masters)?.master.id).toBe('yp');
+  });
+
+  it('Codex #712 반례: 연식 검증은 후보 수와 무관, 숫자 없는 코드·명시된 세대 충돌·연료 변형은 후보를 내지 않는다', () => {
+    expect(normalizedMasterCandidate({ rawName: '신형 카니발', year: '2016' }, masters)?.master.id).toBe('yp');   // 2016 은 YP 범위(KA4 아님)
+    expect(normalizedMasterCandidate({ rawName: '신형 카니발', year: '2010' }, masters)).toBeNull();   // 어느 세대 범위에도 없음
+    expect(normalizedMasterCandidate({ rawName: '신형 카니발', year: '' }, masters)).toBeNull();   // 연식 공란 + 범위 있는 후보
+    expect(normalizedMasterCandidate({ rawName: '기아 카니발 ZZ', year: '2023' }, masters)).toBeNull();   // 숫자 없는 개발코드
+    expect(normalizedMasterCandidate({ rawName: '기아 카니발 3세대', year: '2023' }, masters)).toBeNull();   // 세대 증거와 마스터 순서 불일치
+    expect(normalizedMasterCandidate({ rawName: '신형 카니발 LPG', year: '2023' }, masters)?.master.id).toBe('ka4');   // LPG 는 코드가 아니다
+    expect(normalizedMasterCandidate({ rawName: '신형 카니발', year: '2023', fuel: '하이브리드' }, masters)).toBeNull();   // 연료 변형 근거: 일반 후보로 흡수 안 함
   });
 
   it('원문에 마스터에 없는 개발코드가 있으면 후보로 내지 않는다(새 세대를 기존 세대로 묶지 않음), 코드가 이름의 일부면 통과', () => {
@@ -49,5 +61,17 @@ describe('정규화 후보(확정 아님)', () => {
     expect(r.held.map(h => [h.reason, h.candidates])).toEqual([['NORMALIZED_CANDIDATE', ['ka4']]]);
     expect(r.plan.productIdentityRepairs ?? []).toEqual([]);
     expect(refineEngineIdentity({ rawName: '신형 카니발 9인승 디젤', year: '2023' }, masters)).toBeNull();
+  });
+
+  it('Codex #712: 같은 입력은 같은 계획(결정적), 후보가 아닌 행의 사유·엄격 매칭·트림 계획은 그대로', () => {
+    const items = [product('p0001', '신형 카니발 9인승 디젤', '2023'), product('p0002', '기아 카니발 KA4 프레스티지', '2023'), product('p0003', '신형 카니발 ZZ', '2023'), product('p0004', '완전히 없는 차', '2023')];
+    const a = buildIdentityPromotionPlan(items, masters), b = buildIdentityPromotionPlan(items, masters);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    const reasons = Object.fromEntries(a.held.map(h => [h.id, h.reason]));
+    expect(reasons.p0001).toBe('NORMALIZED_CANDIDATE');
+    expect(reasons.p0003).toBe('NO_MASTER_MATCH');   // 숫자 없는 새 코드는 후보로 흡수되지 않는다
+    expect(reasons.p0004).toBe('NO_MASTER_MATCH');
+    expect(reasons.p0002).toBe('NO_TRIM_MATCH');      // 엄격 매칭 경로는 그대로(세부모델은 맞고 트림만 보류)
+    expect(a.stats.products).toBe(4);
   });
 });

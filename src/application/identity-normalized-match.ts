@@ -26,7 +26,7 @@ const isShortModelName = (core: string): boolean => core.length >= 2 && core.len
 export type NormalizedCandidate = { master: IdentityMaster; via: '핵심어+연식' | '핵심어' | '짧은 이름 낱말+연식' | '짧은 이름 낱말' };
 
 /** 정확히 하나의 마스터 후보일 때만 돌려준다. maker 가 있으면 제조사 일치를 제약으로 둔다(정규화된 같은 표기). */
-export function normalizedMasterCandidate(input: { rawName: string; year: string; maker?: string }, masters: readonly IdentityMaster[]): NormalizedCandidate | null {
+export function normalizedMasterCandidate(input: { rawName: string; year: string; maker?: string; fuel?: string }, masters: readonly IdentityMaster[]): NormalizedCandidate | null {
   const raw = input.rawName.trim();
   if (!raw) return null;
   const rawCore = coreOf(raw), tokens = tokensOf(raw);
@@ -42,7 +42,8 @@ export function normalizedMasterCandidate(input: { rawName: string; year: string
   if (!hits.length) return null;
   // 변형 낱말(하이브리드·EV·PHEV) 충돌 방지: 원문에 변형 낱말이 있으면 변형이 이름에 있는 후보만, 없으면 변형 후보를 뺀다.
   const variant = (t: string): string => (/플러그인|phev/.test(t) ? 'P' : /하이브리드|hev|hybrid/.test(t) ? 'H' : /일렉트릭|electric|(?<![a-z])ev(?![a-z])|전기차/.test(t) ? 'E' : '');
-  const rawVariant = variant(raw.normalize('NFKC').toLowerCase());
+  // 연료 칸(제원)도 변형 근거다: 원문이 파워트레인을 안 적어도 연료가 하이브리드·전기면 일반 후보로 흡수하지 않는다.
+  const rawVariant = variant(`${raw} ${input.fuel ?? ''}`.normalize('NFKC').toLowerCase());
   const filtered = hits.filter(h => variant([h.m.sub_model, ...h.m.sub_model_aliases].join(' ').normalize('NFKC').toLowerCase()) === rawVariant);
   let pool = filtered.length ? filtered : [];
   if (!pool.length) return null;
@@ -52,21 +53,42 @@ export function normalizedMasterCandidate(input: { rawName: string; year: string
   pool = pool.filter(h => score(h) === best);
   const year = /^\d{4}$/.test(input.year) ? Number(input.year) : null;
   let via: NormalizedCandidate['via'];
-  if (pool.length > 1 && year !== null) {
-    const inRange = pool.filter(h => (h.m.yearFrom === null || year >= h.m.yearFrom) && (h.m.yearTo === null || year <= h.m.yearTo));
+  // 연식 검증은 후보 수와 무관하게 한다(Codex #712 ①): 연식이 범위 밖이면 후보가 하나여도 내지 않는다. 연식이 없을 때는 후보에 연식 범위가 있으면
+  // (세대 구분이 있는 모델) 검증할 수 없으므로 내지 않고, 범위가 없는(단일 세대) 후보만 통과한다.
+  const inYear = (m: IdentityMaster): boolean => year !== null
+    ? (m.yearFrom === null || year >= m.yearFrom) && (m.yearTo === null || year <= m.yearTo)
+    : m.yearFrom === null && m.yearTo === null;
+  if (pool.length > 1) {
+    const inRange = pool.filter(h => inYear(h.m));
     if (inRange.length === 1) pool = inRange;
     else return null;
   }
   if (pool.length !== 1) return null;
   const hit = pool[0]!;
+  if (!inYear(hit.m)) return null;
+  // 원문에 명시된 N세대: 마스터에는 세대 번호가 없어 «같은 제조사·모델 마스터를 시작 연도순으로 놓은 순서»만 알 수 있다. 마스터에 옛 세대가 빠져 있을 수 있으므로
+  // 순서가 N 과 정확히 같을 때만 후보로 인정한다(다르거나 검증 불가면 내지 않음 — NO_MASTER_MATCH 유지, 세대 증거 보존, Codex #712 ④).
+  const generation = /(\d+)\s?세대/.exec(raw.normalize('NFKC'));
+  if (generation) {
+    const sameModel = masters.filter(m => m.maker === hit.m.maker && m.model === hit.m.model && m.yearFrom !== null)
+      .map(m => m.yearFrom as number);
+    const order = [...new Set(sameModel)].sort((a, b) => a - b);
+    const position = hit.m.yearFrom === null ? -1 : order.indexOf(hit.m.yearFrom) + 1;
+    if (position !== Number(generation[1])) return null;
+  }
   // 원문에 개발코드(괄호 코드·영문 2~4자+숫자)가 있는데 후보 이름에 그 코드가 없으면 후보로 내지 않는다: «아반떼(CN8)» 처럼 마스터에 없는 새 세대를
   // 기존 세대로 잘못 묶어 «마스터 추가 후보» 목록에서 가리지 않게 한다(NO_MASTER_MATCH 유지). 코드가 이름의 일부(GV70·K5)면 통과한다.
   const nameTokens = new Set([hit.m.sub_model, ...hit.m.sub_model_aliases].flatMap(n => n.normalize('NFKC').toUpperCase().split(/[^0-9A-Z]+/u).filter(Boolean)));
-  const rawUpper = raw.normalize('NFKC').toUpperCase();
-  for (const m of rawUpper.matchAll(/\(([A-Z]{1,4}\d{0,2}[A-Z]?)\)|(?<![0-9A-Z])([A-Z]{2,4}\d{1,2}[A-Z]?)(?![0-9A-Z])/gu)) {
-    const code = m[1] ?? m[2];
-    if (code && !nameTokens.has(code)) return null;
-  }
+  const rawNfkc = raw.normalize('NFKC');
+  // 후보 이름의 트림 낱말(GT·LX 등)과 연료·구동 사양 낱말은 개발코드가 아니다. 숫자 없는 대문자 낱말(ZZ)도 코드로 본다(Codex #712 ③) — 괄호 안·밖 판정은 같다.
+  const nonCode = new Set(['LPG', 'LPI', 'SUV', 'RV', 'EV', 'HEV', 'PHEV', 'BEV', 'FCEV', 'GDI', 'MPI', 'TCI', 'TGDI', 'CRDI', 'VGT', 'AWD', 'FWD', 'RWD', 'AT', 'MT', 'DCT', 'CVT', 'TOP', 'PE',
+    ...hit.m.trims.flatMap(t => [t.name, ...t.aliases]).flatMap(n => n.normalize('NFKC').toUpperCase().split(/[^0-9A-Z]+/u).filter(Boolean))]);
+  const codeLike = [
+    ...[...rawNfkc.toUpperCase().matchAll(/\(([A-Z]{1,4}\d{0,2}[A-Z]?)\)/gu)].map(m => m[1]!),
+    ...[...rawNfkc.toUpperCase().matchAll(/(?<![0-9A-Z])([A-Z]{2,4}\d{1,2}[A-Z]?)(?![0-9A-Z])/gu)].map(m => m[1]!),
+    ...[...rawNfkc.matchAll(/(?<![0-9A-Za-z])([A-Z]{2,4})(?![0-9A-Za-z])/gu)].map(m => m[1]!),
+  ];
+  for (const code of codeLike) if (!nameTokens.has(code) && !nonCode.has(code)) return null;
   via = hits.length > 1 || year !== null ? (hit.short ? '짧은 이름 낱말+연식' : '핵심어+연식') : (hit.short ? '짧은 이름 낱말' : '핵심어');
   return { master: hit.m, via };
 }
