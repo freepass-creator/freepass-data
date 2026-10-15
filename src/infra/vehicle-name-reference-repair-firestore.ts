@@ -539,8 +539,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
     const blocked = productWriteBlock(snapshot.data());
     if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
-    if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-      && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+    if (hasHumanOrConfirmedMarker(snapshot.data())
+      || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
+        && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to))) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
@@ -746,8 +747,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
-      if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-        && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+      if (hasHumanOrConfirmedMarker(snapshot.data())
+        || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
+          && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to))) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
       for (const field of PRODUCT_IDENTITY_FIELDS) {
         if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
@@ -834,6 +836,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         const targetKey = identityKeyFrom(x.item.to);
         const family = (doc: { data: () => Record<string, unknown> }) => clean(doc.data().maker) === clean(x.item.to.maker) && clean(doc.data().model) === clean(x.item.to.model);
         const aliasesOf = (data: Record<string, unknown>) => (Array.isArray(data.sub_model_aliases) ? data.sub_model_aliases : []).filter((a): a is string => typeof a === 'string').map(clean);
+        // 같은 from 이 다른 활성 마스터의 «정식 이름»이면(그 마스터의 상품일 수 있다) 별칭 정규화로 옮기지 않는다(Codex #683 ②).
+        if (stored.docs.some((doc) => doc.data().retired !== true && family(doc) && clean(doc.data().sub_model) === from && !(activeKeys[targetKey] ?? []).includes(doc.id))) {
+          throw new Error(`transaction productIdentity from is a manual or confirmed value (from is another active master's canonical name) ${x.ref.path}`);
+        }
         const owners = stored.docs.filter((doc) => doc.data().retired !== true && family(doc) && aliasesOf(doc.data()).includes(from)).map((doc) => doc.id);
         for (const c of plan.masterCreates ?? []) if (clean(c.data.maker) === clean(x.item.to.maker) && clean(c.data.model) === clean(x.item.to.model) && aliasesOf(c.data).includes(from)) owners.push(c.id);
         const targetIds = activeKeys[targetKey] ?? [];

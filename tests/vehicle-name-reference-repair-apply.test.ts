@@ -950,4 +950,16 @@ describe('alias canonicalization of a confirmed product identity', () => {
     await expect(applyApproved(plan({ from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼 ', sub_model: '캐스퍼 AX1' } }))).rejects.toThrow();
     expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' });
   });
+  it('Codex #683 ①: a confirmed / human-source marker blocks even an engine-temporary (vehicle_review_required) product', async () => {
+    for (const marker of [{ confirmed: true }, { vehicle_title_source: 'HUMAN_ENTRY' }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_review_required: true, ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+  });
+  it('Codex #683 ②: a from that is another active master canonical name is never moved by alias canonicalization', async () => {
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', sub_model_aliases: [] });   // 다른 활성 마스터의 정식 이름 «캐스퍼»
+    await expect(applyApproved(plan())).rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
 });
