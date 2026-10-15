@@ -52,6 +52,14 @@ describe('변형 근거: 원문 낱말 + E-TECH(르노 계열) + 연료 칸', ()
     expect(matchIdentity(product({ sub_model: hyb, rawName: hyb }), [gas])).toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
     void ev;
   });
+  it('Codex #682(상충): 원문과 연료 칸의 변형이 서로 다르면 합치지 않고 보류, 같으면 통과', () => {
+    const hybridMaster: IdentityMaster = { ...gas, id: 'H2', sub_model: '아르카나 하이브리드 LJL' };
+    const ev: IdentityMaster = { ...gas, id: 'EV2', sub_model: '아르카나 EV LJL' };
+    const rawEv = '르노코리아 아르카나 LJL 전기 이스타일', rawPhev = '르노코리아 아르카나 LJL 하이브리드 이스타일', rawHyb = '르노코리아 아르카나 하이브리드 LJL 이스타일';
+    expect(matchIdentity(product({ sub_model: rawEv, rawName: rawEv, fuel: '하이브리드' }), [gas, ev, hybridMaster])).toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+    expect(matchIdentity(product({ sub_model: rawPhev, rawName: rawPhev, fuel: 'PHEV' }), [gas, hybridMaster])).toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+    expect(matchIdentity(product({ sub_model: rawHyb, rawName: rawHyb, fuel: '하이브리드' }), [gas, hybridMaster])).toMatchObject({ state: 'MATCH', master: { id: 'H2' } });
+  });
   it('E-TECH 는 단어 경계로만 — RETECH·E-TECHNOLOGY 는 변형 근거가 아니다(Codex #682)', () => {
     for (const text of ['르노코리아 아르카나 LJL RETECH 이스타일', '르노코리아 아르카나 LJL E-TECHNOLOGY 이스타일']) {
       expect(matchIdentity(product({ sub_model: text, rawName: text }), [gas])).toMatchObject({ state: 'MATCH', master: { id: 'G' } });

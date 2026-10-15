@@ -147,7 +147,11 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   const baseVariantText = p.rawName || (engineRawProduct ? p.sub_model : '');
   // 영숫자 단어 경계로만(RETECH·E-TECHNOLOGY 는 E-TECH 가 아니다, Codex #682).
   const etech = /(?<![A-Z0-9])E[-\s]?TECH(?![A-Z0-9])/i.test(baseVariantText.normalize('NFKC')) && ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
-  const variantText = [baseVariantText, fuelVariantWord(p.fuel ?? ''), etech ? '하이브리드' : ''].filter(Boolean).join(' ');
+  const fuelWord = fuelVariantWord(p.fuel ?? '');
+  // 상충 근거는 합치지 않고 보류한다(Codex #682): 원문의 변형과 연료 칸의 변형이 서로 다르면(원문 «전기» + 연료 «하이브리드» 등) 어느 쪽이 맞는지 모르므로 확정하지 않는다.
+  const rawSet = variantsOf([baseVariantText, etech ? '하이브리드' : ''].filter(Boolean).join(' ')), fuelSet = variantsOf(fuelWord);
+  if (rawSet.size && fuelSet.size && (rawSet.size !== fuelSet.size || [...rawSet].some(v => !fuelSet.has(v)))) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
+  const variantText = [baseVariantText, fuelWord, etech ? '하이브리드' : ''].filter(Boolean).join(' ');
   if (variantText.trim() && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
