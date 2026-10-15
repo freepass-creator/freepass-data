@@ -118,8 +118,9 @@ const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
 const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락처|연락주|연락요|계좌|주민|이메일|성명|실명|카톡\s?ID|카톡아이디)/;
 const OPTION_PHONE = /(?<!\d)\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
 // 숫자와 단위 사이 공백·하이픈·점·괄호, 통화기호 뒤 괄호까지 허용해 막는다(₩(50,000)·50,000-원, Codex #687 (a)).
-const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;
-const INVISIBLE = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u034f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u180b-\\u180e\\u200b-\\u200f\\u2028-\\u202f\\u2060-\\u206f\\u3164\\ufe00-\\ufe0f\\ufeff]', 'g');   // 통화기호·통화코드가 숫자 앞에 오는 꼴(₩50,000)도 막는다(Codex #687 ③)
+const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;   // «50,000(원)» 처럼 단위가 괄호 안인 꼴도 막는다
+// 보이지 않는 문자 전체: 제어·서식(Cf: 제로폭·방향 제어·소프트 하이픈)·결합/변형 선택자(Mn: U+FE00·U+E0100 포함)·줄/문단 구분·사설 영역(Codex #687).
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Mn}\p{Zl}\p{Zp}\p{Co}]/gu;
 const OPTION_FORBIDDEN_COMPACT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
 const safeOptionName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
