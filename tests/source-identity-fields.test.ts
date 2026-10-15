@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, sourceIdentityFields, engineIdentityHold } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, sourceIdentityFields, sourceSpecFillFields, engineIdentityHold } from '../src/infra/source-cycle-firestore.js';
 import { planSourceCycle, applySourceCycle, OPTIONS_REWRITE_CAP } from '../src/application/source-cycle.js';
 import { compactRaw, compactRecord, type SourceProductRecord } from '../src/domain/source-engine.js';
 import type { VehicleIdentityRefiner } from '../src/ports/source-cycle.js';
@@ -112,11 +112,12 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     expect((await run(commands, [rec('12가2002'), rec('12가2003')])).kinds).toEqual([]);
   });
 
-  it('사람이 채운 제조사·모델·마스터 확정 문서는 사유도 쓰기도 없다', async () => {
+  it('사람이 채운 제조사·모델·마스터 확정 문서는 제조사·모델·세부모델을 건드리지 않는다(제원 확인 표식만 한 번)', async () => {
     const { commands, fake } = await setup();
     fake.put('12가2004', legacyDoc(rec('12가2004'), { maker: '기아', model: 'K5', sub_model: '더 뉴 K5 DL3', vehicle_review_required: false, vehicle_title_source: 'MASTER_MATCH' }));
+    expect((await run(commands, [rec('12가2004')])).kinds).toEqual(['UPDATE']);   // 제원 빈 칸 확인 표식(vehicle_spec_source_checked) 한 번
+    expect(decodeFields(fake.docs.get('12가2004').fields)).toMatchObject({ maker: '기아', model: 'K5', sub_model: '더 뉴 K5 DL3', vehicle_title_source: 'MASTER_MATCH', vehicle_spec_source_checked: true });
     expect((await run(commands, [rec('12가2004')])).kinds).toEqual([]);
-    expect(decodeFields(fake.docs.get('12가2004').fields)).toMatchObject({ maker: '기아', model: 'K5' });
   });
 
   it('이번 회차에 마스터로 확정되면 마스터 이름이 이긴다(원천 값으로 먼저 채우지 않음)', async () => {
@@ -154,6 +155,35 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     fake.put('78라9001', legacyDoc(rec('78라9001', '르노삼성', 'QM6')));
     await run(commands, [rec('78라9001', '르노삼성', 'QM6')]);
     expect(decodeFields(fake.docs.get('78라9001').fields)).toMatchObject({ maker: '', model: '', vehicle_maker_model_source: 'UNMAPPED' });
+  });
+});
+
+describe('제원 입구 매핑(기존 문서의 빈 칸에만)', () => {
+  const specRec = (plate: string, spec: Record<string, unknown>): SourceProductRecord => ({ ...rec(plate), raw: { ...rec(plate).raw, spec } });
+  it('빈 칸에만 채우고, 기존 값·긴 문자열·문자열이 아닌 값은 건드리지 않는다', () => {
+    expect(sourceSpecFillFields({ ext_color: '흰색', fuel_type: '가솔린', year: '2023', mileage: '12000', engine_cc: '1598', first_registration_date: '2023-05' }, {}))
+      .toEqual({ ext_color: '흰색', fuel_type: '가솔린', year: '2023', mileage: '12000', engine_cc: '1598', first_registration_date: '2023-05' });
+    expect(sourceSpecFillFields({ ext_color: '흰색', fuel_type: '가솔린' }, { ext_color: '검정', fuel_type: '' })).toEqual({ fuel_type: '가솔린' });
+    expect(sourceSpecFillFields({ ext_color: 'x'.repeat(41), mileage: 5 }, {})).toEqual({});
+    expect(sourceSpecFillFields(null, {})).toEqual({});
+    expect(sourceSpecFillFields({ year: '2023' }, { year: 2022 })).toEqual({});   // 숫자 기존 값도 값이다
+  });
+
+  it('제조사·모델이 이미 있는 기존 문서도 제원 빈 칸을 한 번 채우고 되풀이하지 않으며 기존 값은 그대로', async () => {
+    const { commands, fake } = await setup();
+    const r = specRec('12가3001', { ext_color: '흰색', fuel_type: '가솔린', mileage: '12000' });
+    fake.put('12가3001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_title_source: 'MASTER_MATCH', ext_color: '검정' }));
+    const first = await run(commands, [r]);
+    expect(first.kinds).toEqual(['UPDATE']);
+    expect(decodeFields(fake.docs.get('12가3001').fields)).toMatchObject({ ext_color: '검정', fuel_type: '가솔린', mileage: '12000', maker: '현대', model: '아반떼' });
+    expect((await run(commands, [r])).kinds).toEqual([]);
+  });
+
+  it('허용 공급사가 없으면 제원 사유도 쓰기도 없다', async () => {
+    const { commands, fake } = await setup([]);
+    const r = specRec('12가3002', { ext_color: '흰색' });
+    fake.put('12가3002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false }));
+    expect((await run(commands, [r])).kinds).toEqual([]);
   });
 });
 
@@ -206,6 +236,47 @@ describe('Codex #685 세 번째 지적', () => {
   });
 });
 
+describe('Codex #688 지적(제원 입구 매핑)', () => {
+  const specRec = (plate: string, spec: Record<string, unknown>): SourceProductRecord => ({ ...rec(plate), raw: { ...rec(plate).raw, spec } });
+  it('① 형식·단위: 숫자는 정수 문자열만, 날짜·연식은 정해진 꼴, 연료는 제원 목록 안에서만', () => {
+    expect(sourceSpecFillFields({ engine_cc: '2,497', mileage: '12,000km', year: '23', first_registration_date: '2023/05', fuel_type: 'GSL' }, {})).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '2497cc' }, {})).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '2497', mileage: '12000', year: '2023', first_registration_date: '2023-05-02', fuel_type: '가솔린+LPG', seats: '7' }, {}))
+      .toEqual({ engine_cc: '2497', mileage: '12000', year: '2023', first_registration_date: '2023-05-02', fuel_type: '가솔린+LPG', seats: '7' });
+    expect(sourceSpecFillFields({ seats: '700' }, {})).toEqual({});   // 인승은 1~2자리 정수
+  });
+
+  it('② 전기·수소 차에는 배기량을 채우지 않는다(문서 연료 또는 이번에 채울 연료)', () => {
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '가솔린' }, { fuel_type: '전기' })).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '전기' }, {})).toEqual({ fuel_type: '전기' });
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '수소' }, {})).toEqual({ fuel_type: '수소' });
+    expect(sourceSpecFillFields({ engine_cc: '1598' }, { fuel_type: '디젤' })).toEqual({ engine_cc: '1598' });
+  });
+
+  it('④ 이미 확인한 문서(vehicle_spec_source_checked)는 다른 변경으로 갱신돼도 제원을 다시 채우지 않는다', async () => {
+    const { sourceSpecFillFields: fill } = await import('../src/infra/source-cycle-firestore.js');
+    expect(fill({ ext_color: '흰색' }, { vehicle_spec_source_checked: true })).toEqual({});
+    const { commands, fake } = await setup();
+    const r = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' });
+    fake.put('12가4001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_spec_source_checked: true }));
+    const changed = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' }); changed.terms[0]!.monthlyRent = { state: 'KNOWN', value: 540000 };
+    expect((await run(commands, [changed])).kinds).toEqual(['UPDATE']);   // 가격 변경 쓰기
+    expect(decodeFields(fake.docs.get('12가4001').fields)).toMatchObject({ price: { 36: { rent: 540000 } } });
+    expect(decodeFields(fake.docs.get('12가4001').fields).ext_color).toBeUndefined();
+  });
+
+  it('③ 신규 편입 중 제조사·모델 없이 제원만 있는 차량도 기존 보정과 합쳐 채움 상한(100)에 센다', async () => {
+    const { commands, fake } = await setup();
+    const strip = (r: SourceProductRecord) => { delete r.raw.source_maker; delete r.raw.source_model; return r; };
+    const existing = Array.from({ length: 60 }, (_, i) => `91마${String(5000 + i)}`), fresh = Array.from({ length: 60 }, (_, i) => `92바${String(6000 + i)}`);
+    for (const p of existing) fake.put(p, legacyDoc(specRec(p, { ext_color: '흰색' }), { maker: '현대', model: '아반떼', vehicle_review_required: false }));
+    const out = await run(commands, [...existing, ...fresh].map(p => strip(specRec(p, { ext_color: '흰색' }))));
+    expect(out.kinds.filter(k => k === 'ENROLL')).toHaveLength(60);
+    const checked = [...existing, ...fresh].filter(p => decodeFields(fake.docs.get(p)?.fields ?? {}).vehicle_spec_source_checked === true);
+    expect(checked).toHaveLength(OPTIONS_REWRITE_CAP);   // 편입 60 + 기존 40(쓰기 상한), 채움 합계 100
+  }, 60_000);
+});
+
 describe('Codex #685 네 번째 지적', () => {
   it('(a) 사람이 고른 세부모델·트림이 있는 문서는 채우지 않고, 그 값을 엔진이 쓴 값으로 기록하지도 않는다', async () => {
     const { commands, fake } = await setup();
@@ -227,15 +298,38 @@ describe('Codex #685 네 번째 지적', () => {
   });
 });
 
+describe('Codex #688 두 번째 지적', () => {
+  const specRec = (plate: string, spec: Record<string, unknown>): SourceProductRecord => ({ ...rec(plate), raw: { ...rec(plate).raw, spec } });
+  it('(b) 최초등록일은 실제 달력 날짜만(윤년 포함)', () => {
+    for (const bad of ['2026-99-99', '2026-02-31', '2025-02-29', '2026-13', '1900-01-01']) expect(sourceSpecFillFields({ first_registration_date: bad }, {}), bad).toEqual({});
+    for (const ok of ['2024-02-29', '2026-10', '2026-10-16']) expect(sourceSpecFillFields({ first_registration_date: ok }, {}), ok).toEqual({ first_registration_date: ok });
+  });
+
+  it('(a) 허용 공급사의 신규 문서는 검증 없는 sheetSpecFields 로 제원을 쓰지 않고, 계획의 양성 표식을 받은 검증된 채움만 쓴다', async () => {
+    const { commands, fake } = await setup();
+    const r = specRec('94아1001', { ext_color: '흰색', engine_cc: '2,497', fuel_type: 'GSL', first_registration_date: '2026-02-31' });
+    await run(commands, [r]);
+    const doc = decodeFields(fake.docs.get('94아1001').fields);
+    expect(doc.ext_color).toBe('흰색');
+    expect(doc.engine_cc).toBeUndefined();        // 형식 검증에서 거절된 값은 남지 않는다
+    expect(doc.fuel_type).toBeUndefined();
+    expect(doc.first_registration_date).toBeUndefined();
+    // 허용 공급사가 아니면 기존(신규 문서 sheetSpecFields) 동작 그대로
+    const off = await setup([]);
+    await run(off.commands, [specRec('94아1002', { ext_color: '검정' })]);
+    expect(decodeFields(off.fake.docs.get('94아1002').fields).ext_color).toBe('검정');
+  });
+});
+
 describe('Codex #685 다섯 번째 지적', () => {
   it('선정 단계에도 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유를 받지 않아 같은 재쓰기가 반복되지 않는다', async () => {
     const { commands, fake } = await setup();
     fake.put('95자1001', legacyDoc(rec('95자1001'), { sub_model: '아반떼 CN7' }));
     fake.put('95자1002', legacyDoc(rec('95자1002'), { trim_name: '모던' }));
-    for (let i = 0; i < 2; i++) {
-      const r = await run(commands, [rec('95자1001'), rec('95자1002')]);
-      expect(r.kinds).toEqual([]);                                                // 사유 없음 → 쓰기 없음(반복 쓰기·상한 슬롯 소모 없음)
-      expect(r.warnings.some(w => w.startsWith('SOURCE_IDENTITY_REWRITE'))).toBe(false);
-    }
+    await run(commands, [rec('95자1001'), rec('95자1002')]);   // 제원 확인 표식(spec) 한 번은 있을 수 있다
+    const again = await run(commands, [rec('95자1001'), rec('95자1002')]);
+    expect(again.kinds).toEqual([]);                                  // 같은 재쓰기가 반복되지 않는다(상한 슬롯 소모 없음)
+    expect(again.warnings.some(w => w.startsWith('SOURCE_IDENTITY_REWRITE'))).toBe(false);
+    expect(decodeFields(fake.docs.get('95자1001').fields).maker).toBe('');
   });
 });

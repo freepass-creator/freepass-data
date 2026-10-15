@@ -264,7 +264,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
   // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
-  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
+  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
   const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
   const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
@@ -279,15 +279,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 입구 매핑(제조사·모델 채움)은 «양성» 표식(fillSourceIdentity)을 받은 항목에서만 일어난다: 사유(SOURCE_IDENTITY)가 있는 기존 문서와 신규 편입(ENROLL)만, 회차당
   // OPTIONS_REWRITE_CAP 대까지(키 순서). 사유 없는 UPDATE·재노출은 쓰기가 일어나도 채우지 않으므로 상한을 우회하지 못한다. 쓰기가 «채움뿐»인 초과분은 계획에서 뺀다.
   // 신규 편입(ENROLL)도 같은 상한에 센다(Codex #685 (b)): 편입은 쓰기가 어차피 일어나지만 maker·model 채움은 입구 매핑이므로 채움 몫에 포함한다.
-  const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.includes('SOURCE_IDENTITY')
-    || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string')))
+  const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
+    || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string'
+      || (!!e.after.record.raw?.spec && typeof e.after.record.raw.spec === 'object' && Object.keys(e.after.record.raw.spec as object).length > 0))))
     .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   const overFill = fillEntries.slice(OPTIONS_REWRITE_CAP);
   for (const e of fillEntries.slice(0, OPTIONS_REWRITE_CAP)) e.after.fillSourceIdentity = true;
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
-      const onlyFill = e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => r === 'SOURCE_IDENTITY') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
+      const onlyFill = e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
       if (onlyFill) drop.add(e);
     }
     plan.entries = plan.entries.filter(e => !drop.has(e));
@@ -331,10 +332,12 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       writes++; stage = 'READ';
       const reread = await commands.read(e.after.record.sourceId, e.after.record.uid);
       // 계획 표식(fillSourceIdentity)은 쓰기 지시일 뿐 문서에서 되읽히는 값이 아니다 — 비교에서 뺀다.
+      // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       const { fillSourceIdentity: _planFlag, ...afterStable } = e.after;
-      if (!deepEqual(reread, afterStable)) {
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, ...rest }) => rest)(reread) : reread;
+      if (!deepEqual(rereadStable, afterStable)) {
         const a = e.after as unknown as Record<string, unknown>, b = (reread ?? {}) as unknown as Record<string, unknown>;
-        const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k], b[k])).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
+        const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
       }
       verified++;
