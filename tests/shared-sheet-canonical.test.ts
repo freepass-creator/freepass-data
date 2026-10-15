@@ -268,6 +268,17 @@ describe('shared sheet local source to Canonical', () => {
       expect(stableDigest(await s.store.listOffers())).toBe(before);
     } finally { vi.useRealTimers(); }
   });
+  it('holds, at plan time, a vehicle whose refresh also changes an odometer, instead of aborting the apply run', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '99,999km' })), 'synthetic-target', undefined, false, true);
+      const entry = p.plan.entries[0]!;
+      expect(entry.action).toBe('HOLD');
+      expect(entry.reasons).toContain('OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:SOURCE_ODOMETER_CHANGE');
+      expect(entry.change).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
