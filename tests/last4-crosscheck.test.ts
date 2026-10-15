@@ -30,6 +30,7 @@ describe('끝 4자리 교차 대조', () => {
     await writeFile(a, JSON.stringify([{ car_number: '12가1111' }, { car_number: '34나2222' }]));
     await writeFile(b, JSON.stringify(['1111']));
     const out = await runLast4Crosscheck({ homepage: a, image: b });
+    expect(out.caveat).toContain('같은 차 확정이 아니다');
     expect(out).toMatchObject({ writes: 0, matched: ['1111'], onlyInHomepage: ['2222'], onlyInImage: [] });
     await writeFile(b, '{}');
     await expect(runLast4Crosscheck({ homepage: a, image: b })).rejects.toThrow('CROSSCHECK_INPUT_INVALID');

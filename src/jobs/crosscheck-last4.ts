@@ -12,7 +12,8 @@ const valuesOf = async (path: string): Promise<unknown[]> => {
 };
 
 export async function runLast4Crosscheck(input: { homepage: string; image: string }) {
-  return { status: 'LAST4_CROSSCHECK', writes: 0, ...crosscheckLast4(await valuesOf(input.homepage), await valuesOf(input.image)) };
+  return { status: 'LAST4_CROSSCHECK', writes: 0, caveat: '끝 4자리 일치는 같은 차 확정이 아니다 — 참고·대조용, 상품 문서는 홈페이지 정본만 따른다',
+    ...crosscheckLast4(await valuesOf(input.homepage), await valuesOf(input.image)) };
 }
 
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('crosscheck-last4.js')) {
