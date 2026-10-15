@@ -114,9 +114,10 @@ const DATE = /^\d{4}-\d{2}(?:-\d{2})?$/;
 const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
 /** 옵션 이름 하나: 길이·금액 꼴·번호 꼴·제어/내부 값이 걸리면 null(그 항목만 버린다). */
 /** 옵션 이름이 공개돼도 되는가(Codex #687): 전화번호·개인정보 낱말·금액(단위 앞 공백 포함)·수수료류 금지어(글자 사이 공백·기호로 쪼갠 꼴 포함)·번호 꼴·내부 값을 개별로 거른다. */
-const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락|전화|휴대폰|핸드폰|문의|카톡|카카오|계좌|주민|이메일|메일|성명|실명)/;
+// «휴대폰 무선충전»·«블루투스 핸즈프리 전화» 같은 정상 옵션을 과차단하지 않도록 전화·휴대폰·핸드폰·문의 낱말 단독은 개인정보로 보지 않는다(번호는 OPTION_PHONE 이 막는다, Codex #687 ①).
+const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락처|연락주|연락요|계좌|주민|이메일|성명|실명|카톡\s?ID|카톡아이디)/;
 const OPTION_PHONE = /(?<!\d)\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
-const OPTION_MONEY = /\d[\d,.]*\s*(원|만\s?원|천\s?원|억|%|KRW|WON)/i;
+const OPTION_MONEY = /\d[\d,.]*\s*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)\s*\d/i;   // 통화기호·통화코드가 숫자 앞에 오는 꼴(₩50,000)도 막는다(Codex #687 ③)
 const OPTION_FORBIDDEN_COMPACT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
 const safeOptionName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
@@ -124,7 +125,8 @@ const safeOptionName = (value: unknown): string | null => {
   if (!text || text.length > OPTION_NAME_MAX) return null;
   const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
   if (BLOCKED_TEXT.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
-  if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
+  // 개인정보 낱말·금지어는 «공백·기호를 지운 꼴»에서도 본다(고 객 홍길동·수 수 료, Codex #687 ②).
+  if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
   if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(compact)) return null;
   return text;
 };
