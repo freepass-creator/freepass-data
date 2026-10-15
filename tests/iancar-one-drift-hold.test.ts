@@ -52,6 +52,48 @@ describe('RP031 읽는 동안 상태가 바뀐 차는 그 차만 보류한다', 
       .toEqual([['veh5', 'IANCAR_ONE_LIST_CHANGED_DURING_READ']]);
   });
 
+  it('불일치 차라도 가용·상세 봉투 검증(신원·시효·번호)을 건너뛰지 않는다 — 신원 불일치는 보류로 둔갑하지 않는다', async () => {
+    const base = fetcher({ 3: 'detail' });
+    // veh3: 가용 읽기가 다른 차 ID 를 돌려주면(신원 불일치) 상태 어긋남과 겹쳐도 회차 실패여야 한다.
+    const spoof = (async (input: string | URL | Request) => {
+      const response = await base(input);
+      if (/\/v1\/vehicles\/veh3\/availability/.test(new URL(String(input)).pathname)) {
+        const body = await response.json(); body.data.vehicle_id = 'other'; return Response.json(body);
+      }
+      return response;
+    }) as typeof fetch;
+    await expect(collectIancarOneFullFacts(config, spoof)).rejects.toThrow('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
+  });
+
+  it('이미 요금 보류인 차도 끝 목록 변화를 센다(전 차 보류여도 한도 판정에서 빠지지 않음)', async () => {
+    const inner = fetcher({ 1: 'end', 2: 'end', 3: 'end' });   // 한 번만 만든다(목록 읽기 횟수 상태 공유)
+    const emptyRates = (async (input: string | URL | Request) => {
+      const response = await inner(input);
+      if (new URL(String(input)).pathname.endsWith('/rates')) return Response.json({ success: true, updated_at: '2026-09-26T00:00:00Z', data: [] });
+      return response;
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, emptyRates);
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  });
+
+  it('시작 목록에 없다가 끝 목록에 나타난 ID 는 예전처럼 원천 드리프트(부재 판정 보호)', async () => {
+    let lists = 0;
+    const withExtra = (async (input: string | URL | Request) => {
+      const response = await fetcher()(input);
+      if (new URL(String(input)).pathname === '/v1/vehicles' && ++lists > 1) {
+        const body = await response.json();
+        body.data.push(row(99, { status: 'AVAILABLE', available: true }));
+        body.pagination.total = N + 1;
+        return Response.json(body);
+      }
+      return response;
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, withExtra);
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  });
+
   it('어긋난 차가 한도(20%)를 넘으면 예전처럼 회차 전체 실패/이슈', async () => {
     expect(IANCAR_ONE_DRIFT_HOLD_RATIO).toBe(0.2);
     // 상세 읽기에서 3대(> floor(10*0.2)=2) → 회차 전체 실패

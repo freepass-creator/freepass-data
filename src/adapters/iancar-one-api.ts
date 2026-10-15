@@ -573,7 +573,6 @@ export async function collectIancarOneFullFacts(
     }) as [Json, Json, Json];
     let availabilityDrift = false;
     for (const envelope of [detail, availability]) {
-      if (availabilityDrift) break;
       if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
         || envelope.data.vehicle_id !== record.vehicleId)
         throw new IancarOneApiError('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
@@ -591,12 +590,6 @@ export async function collectIancarOneFullFacts(
         if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field])) { availabilityDrift = true; break; }
       }
     }
-    if (availabilityDrift) {
-      driftHolds++;
-      records[index] = { ...structuredClone(record), hold: { code: 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', identity: false } };
-      onProgress?.(++completed, capture.total);
-      continue;
-    }
     if (((detail as JsonObject).data as JsonObject).plate_number !== record.payload.plate_number)
       throw new IancarOneApiError('IANCAR_ONE_PLATE_MISMATCH');
     // 응답 봉투(성공·배열·갱신 시각·차량 ID)가 깨진 것은 전송 문제라 회차 전체 실패로 남긴다. 봉투가 정상이고 «이 차의 요금 사실»만 기준에
@@ -606,6 +599,13 @@ export async function collectIancarOneFullFacts(
       || Date.parse(rates.updated_at) > observationNow() + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
       throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    // 신원·시효·번호·요금 봉투가 모두 정상일 때만 «가용 상태가 읽는 동안 바뀐 차»를 그 차만 보류한다(검증을 건너뛰어 불일치가 보류로 둔갑하지 않게).
+    if (availabilityDrift) {
+      driftHolds++;
+      records[index] = { ...structuredClone(record), hold: { code: 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', identity: false } };
+      onProgress?.(++completed, capture.total);
+      continue;
+    }
     let rateHold: string | null = rates.data.length ? null : 'IANCAR_ONE_RATES_EMPTY';
     const keys = new Set<string>();
     for (const rate of rates.data as JsonObject[]) {
@@ -655,17 +655,21 @@ export async function collectIancarOneFullFacts(
   const endById = new Map(ending.records.map(record => [record.vehicleId, record]));
   const factsOf = (record: IancarOneListCapture['records'][number]) =>
     digest([record.payload.inventory_status, record.payload.available, record.payload.available_from]);
+  const startIds = new Set(capture.records.map(record => record.vehicleId));
+  // 시작 목록에 없던 ID 가 끝 목록에 있으면(신규·시작에서 빠졌다 복원) 그 차의 부재 판정이 어긋날 수 있어 예전처럼 원천 드리프트로 둔다.
+  const membershipChanged = ending.records.some(record => !startIds.has(record.vehicleId));
   let listChanged = 0, plateChanged = false;
   for (let index = 0; index < capture.records.length; index++) {
     const before = capture.records[index]!, written = records[index];
-    if (!written || written.hold) continue;
+    if (!written) continue;
     const end = endById.get(before.vehicleId);
     if (end && end.payload.plate_number !== before.payload.plate_number) { plateChanged = true; continue; }
     if (end && factsOf(end) === factsOf(before)) continue;
-    listChanged++;
-    records[index] = { ...structuredClone(before), hold: { code: 'IANCAR_ONE_LIST_CHANGED_DURING_READ', identity: false } };
+    // 이미 요금·식별 보류인 차도 변화를 센다(전 차 보류라도 끝 목록 전체 변화가 한도 판정에서 빠지지 않게). 보류 사유는 덮어쓰지 않는다.
+    if (written.hold?.code !== 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT') listChanged++;   // 상세 어긋남으로 이미 센 차는 두 번 세지 않는다
+    if (!written.hold) records[index] = { ...structuredClone(before), hold: { code: 'IANCAR_ONE_LIST_CHANGED_DURING_READ', identity: false } };
   }
-  if (plateChanged || driftHolds + listChanged > driftLimit) issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  if (membershipChanged || plateChanged || driftHolds + listChanged > driftLimit) issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
   if (Date.parse(capture.syncedAt) > Date.parse(ending.syncedAt))
     issues.push('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
   return { ...capture, records, factScope: 'FULL_FACTS', issues,
