@@ -7,7 +7,7 @@ import type { CatalogCompatibilitySnapshot } from '../src/infra/erp5-compat-cata
 // 2트랙(대표 2026-10-16): 공개 피드 «원문 표기·정제 상태» 읽기 전용 파생 + 원문 차명 화이트리스트(B3Q 구조 권고). 값은 합성.
 // 어휘 = 정제된(REFINED) 차량의 제조사·모델·세부모델·등급·색·연료 낱말. 원문 차명의 모든 낱말이 어휘·숫자·제원 낱말에 속할 때만 나간다.
 const seed = (names: string[]): Array<Record<string, unknown>> =>
-  names.map((name, i) => ({ _key: `S${i}`, listable: false, maker: '시험', model: '시험', sub_model: name }));
+  [0, 1].flatMap(copy => names.map((name, i) => ({ _key: `S${copy}-${i}`, listable: false, maker: '시험', model: '시험', sub_model: name })));
 const LEGIT = ['K5 프레스티지', '신형 K5 노블레스', '쏘나타 디 엣지', '임팔라 LT', 'G80 3.5 터보 AWD', '기아 K5 DL3 가솔린', '현대 K5', '한국GM 트랙스', '쉐보레 트레일블레이저',
   '르노코리아 아르카나', '그랜저 하이브리드', '코나 일렉트릭', '현대 캐스퍼 일렉트릭', '제네시스 GV80', 'BMW 5시리즈', 'KGM 토레스', '기아 레이', '현대 아반떼 하이브리드 1.6',
   '벤츠 E 클래스', '아이오닉 6', '그랜저 IG 3.0 프레스티지', '기아 봉고 3', '지프 랭글러', '폭스바겐 제타', '테슬라 모델 3', '메르세데스 마이바흐 S', '서울 현대 쏘나타',
@@ -74,7 +74,7 @@ describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
     const long = raw(`K5 ${'프레스티지 '.repeat(40)}`);
     expect(long).not.toBeNull();
     expect(long!.length).toBeLessThanOrEqual(140);
-    expect(long!.endsWith('...')).toBe(true);   // NFKC: «…» → «...»
+    expect(long!.endsWith('…')).toBe(true);   // 통과한 뒤 낱말 경계에서 자르고 «…» 를 붙인다
     const p = quote({ car_name: '썬팅 자외선 99% 차단 K5' });   // 전체 피드가 PUBLIC_FORBIDDEN_TEXT 로 던지지 않아야 한다
     expect(p.source_raw_name).toBe('썬팅 자외선 99% 차단 K5');
   });
@@ -96,6 +96,35 @@ describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
     for (const ok of LEGIT) expect(raw(ok), ok).not.toBeNull();
     expect(raw('아반떼 2.0 터보 17인치 휠')).toBeNull();   // «휠» 이 어휘·제원 낱말 밖 → 보수적으로 null(과차단은 PENDING 확인 중)
     expect(raw('아반떼 2.0 터보 17인치')).not.toBeNull();
+  });
+
+  it('Codex #695 ①: 어휘는 마스터 이름 칸만, 서로 다른 정제 문서 2건 이상에서 나온 낱말만 — 한 문서의 인명이 다른 차로 전파되지 않는다', () => {
+    // 옵션등급·변형 같은 자유 입력 칸은 어휘 원천이 아니다
+    const free = buildRawNameVocabulary([{ maker: '기아', model: 'K5', sub_model: 'K5', trim_extra: 'Hong', variant: 'Hong' }, { maker: '기아', model: 'K5', sub_model: 'K5', trim_extra: 'Hong' }]);
+    expect(free.has('hong')).toBe(false);
+    // 마스터 이름 칸이라도 한 문서에만 있는 낱말은 어휘가 아니다
+    const once = buildRawNameVocabulary([{ maker: '기아', model: 'K5', sub_model: 'K5', trim_name: 'Hong' }, { maker: '기아', model: 'K5', sub_model: 'K5' }]);
+    expect(once.has('hong')).toBe(false);
+    expect(once.has('k5')).toBe(true);
+    expect(sourceRawName({ car_name: 'K5 Hong' }, once)).toBeNull();
+  });
+
+  it('Codex #695 ②: 임의의 영숫자 조합·문자를 끼운 번호는 코드로 인정하지 않는다', () => {
+    for (const bad of ['K5 010a-1234b-5678', 'K5 010a 1234b 5678', 'K5 abc123def', 'K5 a1b2c3', 'K5 01012345678', 'K5 12345', 'K5 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7']) {
+      expect(raw(bad), bad).toBeNull();
+    }
+    for (const ok of ['G80 3.5 터보', 'BMW 520i', '아반떼 CN7', 'GV80 2.5 터보 2023']) expect(sourceRawName({ car_name: ok }, buildRawNameVocabulary(seed(['G80 터보', 'BMW', '아반떼 CN7', 'GV80 터보'])))).not.toBeNull();
+  });
+
+  it('Codex #695 ③: 검사는 자르기 전 전체 — 허용어로 120자를 채우고 미등록 낱말을 붙여도 통과하지 않는다', () => {
+    const filler = '프레스티지 '.repeat(14);   // 약 84자
+    const padded = `K5 ${filler}${filler}홍길동`;
+    expect(padded.length).toBeGreaterThan(120);
+    expect(raw(padded)).toBeNull();
+    // 정상 긴 이름은 통과한 뒤에만 낱말 경계로 잘린다
+    const long = raw(`K5 ${filler}${filler}`);
+    expect(long).not.toBeNull();
+    expect(long!.length).toBeLessThanOrEqual(140);
   });
 
   it('어휘를 못 받으면(단독 호출) 문서 자신의 정제 칸만 어휘로 쓴다 — 빈 어휘면 한글 낱말은 null(fail-closed)', () => {

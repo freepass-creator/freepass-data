@@ -147,6 +147,7 @@ const safeOptionName = (value: unknown, maxLength: number = OPTION_NAME_MAX, all
   return text;
 };
 const RAW_NAME_MAX = 120;
+const RAW_NAME_FULL_MAX = 400;   // 검사 대상 전체 길이 상한(이보다 길면 null)
 // 원문 차명에 섞인 사람 이름 꼴(Codex #692 (b)): 성씨 + 두 글자로 된 «세 글자 한글 낱말»은 인명일 수 있어 원문 표기를 내보내지 않는다(null — 소비처는 «차량 정보 확인 중»).
 // 차명 낱말과 겹치는 흔한 세 글자 낱말은 허용 목록으로 둔다. 과차단은 안전한 쪽(원문 숨김)이다.
 const PERSON_SURNAMES = '김이박최정강조윤장임한오서신권황안송류홍전고문양손배백허유남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부황';
@@ -188,7 +189,10 @@ const refineText = (value: unknown): string => (typeof value === 'string' ? valu
 // ── 원문 차명 화이트리스트(B3Q 구조 권고, Codex #694 잔여): 인명 꼴 블랙리스트는 우회가 끝이 없다. 원문 차명의 «모든 낱말»이 정제된 차량들의 제조사·모델·세부모델·등급·색·연료 어휘
 // 또는 숫자·단위·제원 낱말에 속할 때만 내보내고, 하나라도 밖이면 null(→ PENDING 이라 소비처는 «확인 중»). 허용 문자 집합 밖(분리 자모·이모지·한자·전각 등)이면 null.
 const RAW_NAME_CHARSET = /^[가-힣A-Za-z0-9\s.,()\[\]{}/\-+&'"·:;%#*~<>_!?…]*$/;
-const RAW_VOCAB_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant', 'vehicle_class', 'fuel_type', 'ext_color', 'engine_type', 'drive_type', 'transmission'] as const;
+// 어휘 원천은 마스터 정규 이름 칸으로 좁힌다(자유 입력 가능성이 있는 옵션등급·변형·차급·엔진·구동·변속기 칸은 제외 — Codex #695 ①).
+const RAW_VOCAB_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'fuel_type', 'ext_color'] as const;
+/** 한 낱말이 어휘가 되려면 서로 다른 정제 문서 몇 건에서 나와야 하는가(한 문서에 사람 이름이 들어 있어도 다른 차 원문으로 전파되지 않게). */
+const RAW_VOCAB_MIN_SUPPORT = 2;
 const RAW_SPEC_WORDS = new Set(['가솔린', '디젤', '하이브리드', '전기', '수소', '엘피지', '엘피아이', 'lpg', 'lpi', '터보', '인치', '년식', '연식', '년', '월', 'cc', 'km', '만km', '이상', '이하', '급', '형',
   '모델', '신형', '구형', '더', '뉴', '올', '디', '에디션', '패키지', '스페셜', '한정판', '풀옵션', '무사고', '오토', '수동', '자동', '투톤', '선루프', '파노라마',
   '흰색', '검정', '검정색', '은색', '회색', '청색', '파랑', '빨강', '적색', '흑색', '백색', '진주색', '갈색', '녹색', '금색', '주황', '노랑',
@@ -196,22 +200,27 @@ const RAW_SPEC_WORDS = new Set(['가솔린', '디젤', '하이브리드', '전�
 const vocabTokens = (value: unknown): string[] =>
   typeof value === 'string' ? value.normalize('NFKC').toLowerCase().split(/[^가-힣a-z0-9.]+/u).map(token => token.replace(/^\.+|\.+$/g, '')).filter(Boolean) : [];
 /** 정제된(REFINED) 차량의 제조사·모델·세부모델·등급·색·연료 칸에서 낱말 어휘를 만든다(원문 오염을 피하려 정제 상태가 REFINED 인 문서만). 피드·견적 한 번의 응답에서 한 번만 만든다. */
-export const buildRawNameVocabulary = (products: Iterable<Rec>): Set<string> => {
-  const vocab = new Set<string>();
+export const buildRawNameVocabulary = (products: Iterable<Rec>, minSupport: number = RAW_VOCAB_MIN_SUPPORT): Set<string> => {
+  const support = new Map<string, number>();
   for (const product of products) {
     if (!product || typeof product !== 'object' || refineState(product).refine_state !== 'REFINED') continue;
-    for (const field of RAW_VOCAB_FIELDS) for (const token of vocabTokens(product[field])) vocab.add(token);
+    const own = new Set<string>();
+    for (const field of RAW_VOCAB_FIELDS) for (const token of vocabTokens(product[field])) own.add(token);
+    for (const token of own) support.set(token, (support.get(token) ?? 0) + 1);
   }
-  return vocab;
+  return new Set([...support].filter(([, count]) => count >= minSupport).map(([token]) => token));
 };
 const rawNameTokensAllowed = (text: string, vocab: ReadonlySet<string>): boolean => {
   if (!RAW_NAME_CHARSET.test(text)) return false;
+  // 숫자 합산 상한: 전화번호를 숫자·문자 조각으로 쪼갠 꼴을 막는다(차명·제원의 숫자는 16자리를 넘기 어렵다).
+  if ((text.match(/[0-9]/g) ?? []).length > 16) return false;
   for (const token of vocabTokens(text)) {
-    if (/^[0-9.]+$/.test(token)) continue;
-    const rest = token.replace(/^[0-9.]+/, '');   // «17인치»·«2.0터보» 처럼 숫자로 시작하는 낱말은 숫자를 뗀 나머지를 본다
-    if (!rest) continue;
-    if (/^[a-z]*[0-9][a-z0-9]*$/.test(token) && token.length <= 8) continue;   // K5·GV80·2wd 같은 코드(숫자 포함, 짧음)
-    if (vocab.has(token) || vocab.has(rest) || RAW_SPEC_WORDS.has(token) || RAW_SPEC_WORDS.has(rest)) continue;
+    if (/^[0-9]{1,4}$/.test(token) || /^[0-9]{1,2}\.[0-9]{1,2}$/.test(token)) continue;   // 연식·배기량 꼴 숫자(5자리 이상 연속 숫자는 허용하지 않는다)
+    if (/^[0-9.]+$/.test(token)) return false;
+    // 알려진 코드 패턴: 영문 1~3자 + 숫자 1~3자 (+ 영문 1자)(K5·GV80·X3·CN7), 숫자 3자 + i/d/e/t(520i·330d). 임의의 영숫자 조합은 허용하지 않는다(Codex #695 ②).
+    if (/^[a-z]{1,3}[0-9]{1,3}[a-z]?$/.test(token) || /^[0-9]{3}(?:i|d|e|t|xi|ix|li)$/.test(token)) continue;
+    const rest = token.replace(/^[0-9]{1,4}(?:\.[0-9]{1,2})?/, '');   // «17인치»·«2.0터보» 처럼 숫자로 시작하는 낱말은 앞 숫자를 뗀 나머지를 본다
+    if (rest && (vocab.has(token) || vocab.has(rest) || RAW_SPEC_WORDS.has(token) || RAW_SPEC_WORDS.has(rest))) continue;
     return false;
   }
   return true;
@@ -224,11 +233,8 @@ export const sourceRawName = (product: Rec, vocabulary?: ReadonlySet<string>): s
   if (!raw) return null;
   // 모든 검사 전에 정규화한다(NFD 로 분해된 «홍길동» 이 검사를 통과한 뒤 NFC 로 합쳐져 노출되던 우회, Codex #692 잔여 ②).
   let text = raw.normalize('NFKC').replace(INVISIBLE, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (text.length > RAW_NAME_MAX) {
-    // 낱말 중간에서 자르지 않는다(잘린 조각이 어휘 검사에서 떨어지지 않게): 마지막 공백까지만 남기고 «…» 를 붙인다.
-    const cut = text.slice(0, RAW_NAME_MAX - 1), at = cut.lastIndexOf(' ');
-    text = `${at > 0 ? cut.slice(0, at) : cut}…`;
-  }
+  // 검사는 «자르기 전 전체»에 한다(허용어로 120자를 채우고 미등록 낱말을 뒤에 붙여 검사에서 사라지게 하는 우회 방지, Codex #695 ③). 자르기는 통과한 뒤에만.
+  if (text.length > RAW_NAME_FULL_MAX) return null;
   // 공급사 시트에 제조사 열이 있으나 차명에는 빠지는 경우(아이카): 원문 보존 칸의 source_maker 가 있으면 읽기 전용 접두로만 붙인다.
   const source = (product.raw && typeof product.raw === 'object' ? product.raw : original['source'] && typeof original['source'] === 'object' ? original['source'] : {}) as Rec;
   // 제조사: 손오공 raw.source_maker, 아이카 시트 원본 칸(raw.original['제조사'] 또는 headers/cells 의 «제조사» 열). 문서에 값을 새로 쓰지 않는다.
@@ -239,8 +245,13 @@ export const sourceRawName = (product: Rec, vocabulary?: ReadonlySet<string>): s
   if (maker && maker.length <= 20 && !text.replace(/\s+/g, '').startsWith(maker.replace(/\s+/g, ''))) text = `${maker} ${text}`;
   if (looksLikePersonName(text)) return null;
   // 화이트리스트: 어휘를 못 받으면(단독 호출) 이 문서 자신의 정제 칸만 어휘로 쓴다(fail-closed).
-  if (!rawNameTokensAllowed(text, vocabulary ?? buildRawNameVocabulary([product]))) return null;
-  return safeOptionName(text, RAW_NAME_MAX + 16);
+  if (!rawNameTokensAllowed(text, vocabulary ?? buildRawNameVocabulary([product], 1))) return null;
+  const checked = safeOptionName(text, RAW_NAME_FULL_MAX + 40);
+  if (!checked) return null;
+  if (checked.length <= RAW_NAME_MAX) return checked;
+  // 낱말 중간에서 자르지 않는다: 마지막 공백까지만 남기고 «…» 를 붙인다(통과한 전체의 앞부분이라 검사를 다시 할 필요가 없다).
+  const head = checked.slice(0, RAW_NAME_MAX - 1), at = head.lastIndexOf(' ');
+  return `${at > 0 ? head.slice(0, at) : head}…`;
 };
 /** 정제 상태(커맨드 센터·B3Q 집계 반영): «실제 값» 기준이다 — 제조사·모델·세부모델 중 빈 칸, 세부모델에 밑줄(«원문 형태»),
  * 엔진 임시 표식이 있고 세부모델이 원문 차명 그대로인 문서(표식만 남은 정제 완료 문서는 REFINED)는 PENDING. «확인 중» 은 저장된 문자열이 아니라
