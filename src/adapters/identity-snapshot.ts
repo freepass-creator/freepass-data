@@ -37,7 +37,10 @@ function snapshotProductOf(id: string, f: Rec, includeAll: boolean): SnapshotPro
     maker: str(f.maker), model: str(f.model), sub_model: str(f.sub_model), trim_name: str(f.trim_name),
     rawName: str(original.차명) || str(f.car_name), year: yearOf(f), listable: f.listable === true,
     ...(str(f.provider_company_code) ? { supplier: str(f.provider_company_code) } : {}),
-    ...(f.vehicle_maker_model_source === 'SOURCE_FIELDS' ? { makerModelFromSource: true } : {}),
+    // 표식만으로는 부족하다(Codex #685 (a)): 현재 maker·model 이 «이 경로가 쓴 값 그대로»(vehicle_maker_model_filled)일 때만 원천이 채운 값으로 본다 —
+    // 사람이 고친 값은 표식이 남아 있어도 그대로 대조에 쓴다(마스터 값으로 덮어쓰는 수정안을 만들지 않는다).
+    ...(f.vehicle_maker_model_source === 'SOURCE_FIELDS' && object(f.vehicle_maker_model_filled)
+      && str(f.vehicle_maker_model_filled.maker) === str(f.maker) && str(f.vehicle_maker_model_filled.model) === str(f.model) ? { makerModelFromSource: true } : {}),
     ...(f.vehicle_review_required === true || f.vehicle_title_source === 'RAW_VEHICLE_TEXT' ? { engineTemp: true } : {}) };
 }
 
