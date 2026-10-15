@@ -172,3 +172,36 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(confirmed.held.map(h => h.reason)).toEqual(['TRIM_CONFLICT_EXISTING']);
   });
 });
+
+describe('원문 형태 세부모델 + 채워진 제조사·모델(입구 매핑 뒤, B3Q 18:00 회차)', () => {
+  const sonata = master({ id: 'm-dn8', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', yearFrom: 2019, yearTo: null, trims: [{ name: '프리미엄', aliases: [] }] });
+  const raw = '현대_쏘나타 DN8_가솔린 2.0 / 프리미엄';
+  const tempDoc = (over: Partial<IdentityProduct> = {}) => product({ id: 'p', plate4: '9203', maker: '현대', model: '쏘나타', sub_model: raw, rawName: raw, year: '2024', listable: true, engineTemp: true, ...over });
+
+  it('채움 표식(makerModelFromSource)이 없어도 엔진 임시 표식 + 세부모델=원문이면 원문 대조 경로로 마스터에 매칭된다', () => {
+    const r = buildIdentityPromotionPlan([tempDoc()], [sonata]);
+    expect(r.plan.productIdentityRepairs?.map(x => x.to.sub_model)).toEqual(['쏘나타 DN8']);
+  });
+
+  it('표식이 있을 때와 같은 결과(maker·model 이 비어 있는 경로와 동일)', () => {
+    const withFlag = buildIdentityPromotionPlan([tempDoc({ makerModelFromSource: true })], [sonata]);
+    const blank = buildIdentityPromotionPlan([tempDoc({ maker: '', model: '' })], [sonata]);
+    const noFlag = buildIdentityPromotionPlan([tempDoc()], [sonata]);
+    expect(noFlag.plan.productIdentityRepairs).toEqual(withFlag.plan.productIdentityRepairs);
+    expect(noFlag.plan.productIdentityRepairs?.map(x => x.to.sub_model)).toEqual(blank.plan.productIdentityRepairs?.map(x => x.to.sub_model));
+  });
+
+  it('제조사가 다르면 제약으로 남는다(다른 제조사 마스터에 매칭하지 않는다), 임시 표식이 없으면 종전 정확 비교', () => {
+    const other = master({ id: 'm-kia', maker: '기아', model: 'K5', sub_model: 'K5 DL3' });
+    const none = buildIdentityPromotionPlan([tempDoc({ maker: '기아', model: 'K5', sub_model: '현대_쏘나타 DN8', rawName: '현대_쏘나타 DN8' })], [sonata, other]);
+    expect(none.plan.productIdentityRepairs ?? []).toEqual([]);
+    const human = buildIdentityPromotionPlan([tempDoc({ engineTemp: false })], [sonata]);
+    expect(human.plan.productIdentityRepairs ?? []).toEqual([]);   // 사람이 정리한 문서(임시 표식 없음)는 세부모델 정확 비교만
+  });
+
+  it('마스터에 없는 모델이면 이름을 만들지 않고 NO_MASTER_MATCH 로 둔다', () => {
+    const r = buildIdentityPromotionPlan([tempDoc({ model: '타스만', sub_model: '기아_타스만_2.5T', rawName: '기아_타스만_2.5T', maker: '기아' })], [sonata]);
+    expect(r.plan.productIdentityRepairs ?? []).toEqual([]);
+    expect(r.held.some(h => h.reason === 'NO_MASTER_MATCH')).toBe(true);
+  });
+});
