@@ -152,7 +152,16 @@ const filledByUs = (f: Fields): boolean => {
   const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown; sub_model?: unknown } | null | undefined;
   // 사람이 maker·model «또는 세부모델»을 고쳤으면 표식만 남아도 보류가 아니다(Codex #685 ①: 세부모델도 «쓴 값 그대로»일 때만).
   return f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && !!filled && typeof filled === 'object'
-    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model);
+    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model)
+    // 엔진은 이 문서의 트림을 쓴 적이 없다(채움 시점 트림은 빈칸) — 트림이 채워져 있으면 사람이 고친 것이므로 정체성 보류가 아니다(Codex #685 (b)).
+    && textOf(f.trim_name) === '';
+};
+/** 입구 매핑이 채워도 되는 «엔진 소유» 문서인가(Codex #685 (a)): 신규 편입이거나, 세부모델이 엔진이 복사한 원문 차명 그대로이고 트림이 비어 있을 때만.
+ * 사람이 고른 세부모델·트림이 있는 문서는 채우지 않으며, 그 값을 «엔진이 쓴 값»으로 기록하지도 않는다. */
+const engineOwnedIdentity = (original: Fields, isNew: boolean, r: SourceProductRecord): boolean => {
+  if (isNew) return true;
+  const rawText = textOf((original.원문 as Fields | undefined)?.차명) || textOf(original.car_name) || textOf(r.vehicleText);
+  return textOf(original.trim_name) === '' && (textOf(original.sub_model) === '' || (rawText !== '' && textOf(original.sub_model) === rawText));
 };
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
@@ -165,10 +174,22 @@ const specBlank = (v: unknown) => v === undefined || v === null || (typeof v ===
 export const SPEC_FUEL_ALLOWED: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
 const ELECTRIC_FUELS: ReadonlySet<string> = new Set(['전기', '수소']);
 /** 칸별 형식·단위 검증(Codex #688 ①): 숫자는 단위·쉼표 없는 정수 문자열만(2,497·2497cc 는 채우지 않음), 날짜·연식은 정해진 꼴만, 연료는 제원 목록 안에서만. */
+/** 실제 달력 날짜(YYYY-MM 또는 YYYY-MM-DD, 윤년 포함): 2026-99-99·2026-02-31 은 최초등록일로 채우지 않는다(Codex #688 (b)). */
+const realCalendarDate = (v: string): boolean => {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(v);
+  if (!m) return false;
+  const year = Number(m[1]), month = Number(m[2]);
+  if (year < 1950 || year > 2100 || month < 1 || month > 12) return false;
+  if (m[3] === undefined) return true;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  const day = Number(m[3]);
+  return day >= 1 && day <= days;
+};
 const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
   ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
   fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
-  first_registration_date: v => /^\d{4}-\d{2}(-\d{2})?$/.test(v),
+  first_registration_date: v => realCalendarDate(v),
   year: v => /^(19|20)\d{2}$/.test(v),
   mileage: v => /^\d{1,7}$/.test(v),
   engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
@@ -343,7 +364,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     salePriceMap(r.terms);
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(isNew ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
-      원문: { 차명: r.vehicleText, source: r.raw }, ...sheetSpecFields(r.raw.spec) } : {}),
+      원문: { 차명: r.vehicleText, source: r.raw }, ...(opts.sourceIdentitySources?.has(r.sourceId) ? {} : sheetSpecFields(r.raw.spec)) } : {}),
     ...(identity ? identityFields(identity, original, r, isNew) : {}),
     price, source_cycle_price_digest: priceDigest(price),
     ...(price === original.price ? {} : calculatedDepositFields(r)),
@@ -365,7 +386,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
