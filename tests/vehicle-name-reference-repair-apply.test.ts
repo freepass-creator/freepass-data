@@ -125,6 +125,16 @@ describe('reviewed product snapshot binding', () => {
     noBusinessWrites();
   });
 
+  it('will not seal a stale from value, a contract lock, or an already human-confirmed product', async () => {
+    store.set(productPath, { ...store.get(productPath)!, trim_name: '사람이 선택한 등급' });
+    expect(() => seal()).toThrow(/capture from changed/);
+    store.set(productPath, { ...store.get(productPath)!, trim_name: '', locked_by_contract: true });
+    expect(() => seal()).toThrow(/capture product locked/);
+    store.set(productPath, { ...store.get(productPath)!, locked_by_contract: null, human_confirmed: true });
+    expect(() => seal()).toThrow(/human-confirmed/);
+    noBusinessWrites();
+  });
+
   it.each([
     ['year', '2025'], ['fuel_type', '하이브리드'], ['car_name', '다른 원문'],
     ['원문', { 차명: '다른 세대 원문' }], ['price', { '36': { price: 1 } }],

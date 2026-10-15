@@ -162,6 +162,15 @@ export function sealVehicleNameRepairPlan(plan: VehicleNameRepairPlan, input: {
     products: items.map(item => {
       const snapshot = byId.get(item.id);
       if (!snapshot?.exists) throw new Error(`reviewed product snapshot missing ${item.id}`);
+      const identityRepair = plan.productIdentityRepairs?.find(repair => repair.id === item.id);
+      const trimRepair = plan.productTrimRepairs?.find(repair => repair.id === item.id);
+      if (identityRepair ? !matchesIdentityFrom(snapshot.data(), identityRepair.from)
+        : !trimRepair || !matchesFrom(snapshot.data()?.trim_name, trimRepair.from)) {
+        throw new Error(`reviewed capture from changed ${item.id}`);
+      }
+      if (productWriteBlock(snapshot.data()) || hasHumanOrConfirmedMarker(snapshot.data())) {
+        throw new Error(`reviewed capture product locked, withdrawn or human-confirmed ${item.id}`);
+      }
       const hits = input.masters.filter(m => m.data.retired !== true && PRODUCT_IDENTITY_FIELDS.every(f => m.data[f] === item.identity[f]));
       if (hits.length !== 1) throw new Error(`reviewed target must match exactly one active master ${item.id}`);
       return { id: item.id, documentDigest: stableDigest(snapshot.data()), updateTime: reviewUpdateTime(snapshot.updateTime),
