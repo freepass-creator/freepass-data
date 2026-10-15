@@ -63,6 +63,12 @@ export type PublicProduct = {
   photo_link: string | null;
   /** 사본 서빙이 보장된 승인 사진 수(이안카 압축 사본 refs 가 검증됐을 때만 > 0). 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
   photo_approved_count: number;
+  /** 옵션(대표 2026-10-16 «손오공은 유상옵션이 있다»). 운영 변수 FREEPASS_DATA_PUBLIC_OPTIONS=1 일 때만 나가고 목록(list) 모드에서는 나가지 않는다. 값은 손오공 API 의 분류 후 이름뿐이며
+   * 금액 꼴·번호 꼴 이름은 개별로 버린다(피드 전체를 던지지 않는다). option_state: PRESENT(옵션 있음)·NONE(원천이 옵션 없음이라 함)·UNKNOWN(미확인 — 원천에 옵션 필드 없음 포함). */
+  option_state?: 'PRESENT' | 'NONE' | 'UNKNOWN';
+  option_basic?: string[];
+  /** 유상 옵션. amount_krw 가 null 이면 «금액 확인 중». 가격 계산에는 쓰지 않는다(표시 전용). */
+  option_paid?: Array<{ name: string; amount_krw: number | null }>;
   _policy: PublicPolicy | null;
 };
 
@@ -104,6 +110,54 @@ const CONTROL_OR_PRIVATE = /[\u0000-\u001f\u007f]|<[^>]*>|https?:\/\/|(?:^|\/)(?
 const PUBLIC_KEY = /^[A-Za-z0-9가-힣][A-Za-z0-9가-힣_-]{0,79}$/;
 const PRICE_KEY = /^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$/;
 const DATE = /^\d{4}-\d{2}(?:-\d{2})?$/;
+
+const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
+/** 옵션 이름 하나: 길이·금액 꼴·번호 꼴·제어/내부 값이 걸리면 null(그 항목만 버린다). */
+/** 옵션 이름이 공개돼도 되는가(Codex #687): 전화번호·개인정보 낱말·금액(단위 앞 공백 포함)·수수료류 금지어(글자 사이 공백·기호로 쪼갠 꼴 포함)·번호 꼴·내부 값을 개별로 거른다. */
+// «휴대폰 무선충전»·«블루투스 핸즈프리 전화» 같은 정상 옵션을 과차단하지 않도록 전화·휴대폰·핸드폰·문의 낱말 단독은 개인정보로 보지 않는다(번호는 OPTION_PHONE 이 막는다, Codex #687 ①).
+const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락처|연락주|연락요|계좌|주민|이메일|성명|실명|카톡\s?ID|카톡아이디)/;
+const OPTION_PHONE = /(?<!\d)\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
+// 숫자와 단위 사이 공백·하이픈·점·괄호, 통화기호 뒤 괄호까지 허용해 막는다(₩(50,000)·50,000-원, Codex #687 (a)).
+const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만(?!\s?(?:km|㎞|킬로|년|개월))|천(?!\s?(?:km|㎞|킬로|년|개월))|억|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;
+// «50,000(원)»·«썬팅 50만»(원 생략)은 막고, «자외선 99% 차단»(퍼센트는 금액이 아님)·«20만km 보증»(거리·기간 단위)은 통과시킨다(Codex #687 잔여).
+// 보이지 않는 문자 전체: 제어·서식(Cf: 제로폭·방향 제어·소프트 하이픈)·결합/변형 선택자(Mn: U+FE00·U+E0100 포함)·줄/문단 구분·사설 영역(Codex #687).
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Mn}\p{Zl}\p{Zp}\p{Co}]/gu;
+const OPTION_BLOCKED_WORDS = /(수수료|청구|지급|마진|할인|commission|payout)/i;
+const OPTION_FORBIDDEN_COMPACT =/(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
+const safeOptionName = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  // 보이지 않는 문자(제로폭·방향 제어·소프트 하이픈 등)는 먼저 지운다 — «고​객»·«010​-1234» 우회 방지(Codex #687 (b)).
+  const text = value.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > OPTION_NAME_MAX) return null;
+  const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
+  // 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 옵션이 사라진다 — 옵션 이름은 금액 꼴(OPTION_MONEY)·금지어(할인 포함)로 따로 본다(Codex #687 잔여).
+  if (OPTION_BLOCKED_WORDS.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
+  // 개인정보 낱말·금지어는 «공백·기호를 지운 꼴»에서도 본다(고 객 홍길동·수 수 료, Codex #687 ②).
+  if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
+  if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(compact)) return null;
+  return text;
+};
+export const publicOptions = (product: Rec): Pick<PublicProduct, 'option_state' | 'option_basic' | 'option_paid'> => {
+  const state = product.api_options_state;
+  if (state !== 'PRESENT' && state !== 'NONE') return { option_state: 'UNKNOWN', option_basic: [], option_paid: [] };
+  const seen = new Set<string>();
+  const basic: string[] = [];
+  for (const item of Array.isArray(product.api_options_basic) ? product.api_options_basic : []) {
+    const name = safeOptionName(item && typeof item === 'object' ? (item as Rec).name : null);
+    if (name && !seen.has(name) && basic.length < OPTION_LIST_MAX) { seen.add(name); basic.push(name); }
+  }
+  const paid: Array<{ name: string; amount_krw: number | null }> = [];
+  const paidSeen = new Set<string>();
+  for (const item of Array.isArray(product.api_options_paid) ? product.api_options_paid : []) {
+    const rec = item && typeof item === 'object' ? item as Rec : {};
+    const name = safeOptionName(rec.name);
+    if (!name || paidSeen.has(name) || paid.length >= OPTION_LIST_MAX) continue;
+    paidSeen.add(name);
+    const amount = rec.amount_state === 'KNOWN' && typeof rec.amount_krw === 'number' && Number.isSafeInteger(rec.amount_krw) && rec.amount_krw > 0 ? rec.amount_krw : null;
+    paid.push({ name, amount_krw: amount });
+  }
+  return { option_state: state, option_basic: basic, option_paid: paid };
+};
 
 const cleanText = (value: unknown, maxLength: number, field: string): string | null => {
   if (value == null || value === '') return null;
@@ -299,6 +353,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   }
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
+  if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product));
   assertNoForbiddenValue(result);
   return result;
 };
