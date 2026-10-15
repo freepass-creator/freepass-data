@@ -19,7 +19,7 @@ export function parseIdentitySnapshot(raw: unknown): { products: Array<IdentityP
     // 전체 차량번호가 들어오면 거부한다(보고서에 번호 전체를 남기지 않는다).
     if (/\d{2,3}[가-힣]\d{4}/.test(str(p.plate4)) || str(p.plate4).length > 4) throw new Error('IDENTITY_PRODUCT_PLATE_NOT_MASKED');
     return { id: str(p.id), plate4: str(p.plate4), maker: str(p.maker), model: str(p.model), sub_model: str(p.sub_model), trim_name: str(p.trim_name),
-      rawName: str(p.rawName), year: str(p.year), listable: p.listable === true, ...(str(p.supplier) ? { supplier: str(p.supplier) } : {}), ...(p.engineTemp === true ? { engineTemp: true } : {}) };
+      rawName: str(p.rawName), year: str(p.year), listable: p.listable === true, ...(str(p.supplier) ? { supplier: str(p.supplier) } : {}), ...(p.engineTemp === true ? { engineTemp: true } : {}), ...(p.makerModelFromSource === true ? { makerModelFromSource: true } : {}) };
   });
   const masters = raw.masters.map((m: unknown): IdentityMaster => {
     if (!object(m) || !str(m.id).trim() || !str(m.sub_model).trim()) throw new Error('IDENTITY_MASTER_INVALID');

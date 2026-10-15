@@ -263,7 +263,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
   // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
-  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && e.before?.rewriteReasons?.length === 1 && e.before.rewriteReasons[0] === 'API_OPTIONS' &&
+  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
+  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
   const optionsAllowed = Math.max(0, OPTIONS_REWRITE_CAP - (plan.entries.length - optionsOnly.length));
   if (optionsOnly.length > optionsAllowed) {
@@ -273,6 +274,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const optionsRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('API_OPTIONS')).length;
   if (optionsRewrite > 0) plan.warnings.push(`API_OPTIONS_REWRITE:${optionsRewrite}`);
+  const sourceIdentityRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('SOURCE_IDENTITY')).length;
+  if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);
   const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);

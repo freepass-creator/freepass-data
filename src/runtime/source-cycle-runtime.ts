@@ -142,7 +142,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
       ...(env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1',
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
-      writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1', identity });
+      writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
+      // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
+      sourceIdentitySources: (env.SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

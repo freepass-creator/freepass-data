@@ -146,8 +146,24 @@ export function legacyObservedAt(f: Fields, updateTime: string): string {
 /** 엔진 회차 정체성 정제(대표 2026-10-15)의 대상: 엔진이 편입한 문서(source_cycle_record 있음) 중 아직 «검토 필요» 이고 제조사·모델이 빈 문서뿐이다.
  * 사람·ERP4 가 정한 정체성(제조사·모델이 하나라도 있음)이나 검토가 끝난 문서는 절대 건드리지 않는다. */
 const textOf = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+/** 원천 필드(brand·model)로 제조사·모델만 채운 문서 표식. 이 문서도 아직 마스터로 확정되지 않은 «엔진 보류»이며 정체성 정제가 마스터 이름으로 덮어쓴다. */
+export const SOURCE_FIELDS_MARK = 'SOURCE_FIELDS';
 export const engineIdentityHold = (f: Fields): boolean =>
-  f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true && !textOf(f.maker) && !textOf(f.model);
+  f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
+  && ((!textOf(f.maker) && !textOf(f.model)) || f.vehicle_maker_model_source === SOURCE_FIELDS_MARK);
+/** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
+ * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
+export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean): Fields {
+  if (refinedThisCycle) return {};
+  if (textOf(original.maker) || textOf(original.model)) return {};
+  if (original.vehicle_maker_model_source !== undefined && original.vehicle_maker_model_source !== null) {
+    // 이미 시도했다. 원천 값이 바뀌었으면 표식이 SOURCE_FIELDS 인 문서에 한해 갱신(사람·마스터가 채운 문서는 위에서 걸러짐).
+    if (original.vehicle_maker_model_source !== SOURCE_FIELDS_MARK) return {};
+  }
+  const maker = textOf(r.raw?.source_maker), model = textOf(r.raw?.source_model);
+  if (!maker && !model) return original.vehicle_maker_model_source === undefined || original.vehicle_maker_model_source === null ? { vehicle_maker_model_source: 'ABSENT' } : {};
+  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK };
+}
 const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
 const specOf = (r: SourceProductRecord | undefined): Fields => {
   const spec = r?.raw?.spec;
@@ -168,7 +184,7 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
     ...(!isNew && !yearOf(original.year) && sourceYear ? { year: sourceYear } : {}) };
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
-  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false): CycleProduct {
+  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -203,6 +219,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 손오공 API 옵션(대표 10-15 승인): 옵션 확인 표식(api_options_state)이 한 번도 없던 노출 문서는 한 번 다시 써서 칸을 채운다.
   // 쓰면 표식이 생겨 되풀이되지 않는다(상세가 없으면 NO_DETAIL 표식). 회차당 상한은 계획 단계(API_OPTIONS_DEFERRED)가 건다.
   // 대표 승인 전에는 쓰지 않는다(기본 꺼짐): 운영 변수 SOURCE_CYCLE_WRITE_API_OPTIONS=1 일 때만 켠다(월렌트 상품 구분과 같은 방식).
+  // 입구 매핑: 제조사·모델이 비어 있고 표식이 없는 노출 문서는 한 번 다시 써서 원천 brand·model 을 채운다(쓰면 표식이 생겨 되풀이되지 않음). 기본 꺼짐·공급사별 허용.
+  if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_review_required === true
+    && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)) rewriteReasons.push('SOURCE_IDENTITY');
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -265,7 +284,7 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
-export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean } = {}): Fields {
+export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null } = {}): Fields {
   const r = p.record;
   const isNew = !Object.keys(original).length;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
@@ -301,6 +320,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
+    ...(opts.sourceIdentitySources?.has(r.sourceId) ? sourceIdentityFields(r, original, !!identity) : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -313,17 +333,18 @@ export const rawTitleBackfillFields = (f: Fields): Fields | null =>
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean;
+  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[];
   /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
   identity?: () => Promise<VehicleIdentityRefiner | null> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
   const monthly = options.writeMonthlyProductType === true;
   const apiOptions = options.writeApiOptions === true;
+  const srcIdentity: ReadonlySet<string> | null = options.sourceIdentitySources?.length ? new Set(options.sourceIdentitySources) : null;
   let refiner: VehicleIdentityRefiner | null = null;
   const ready = async () => { refiner = options.identity ? await options.identity().catch(() => null) : null; };
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refiner, apiOptions);
-  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refiner, writeApiOptions: apiOptions });
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refiner, apiOptions, srcIdentity);
+  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refiner, writeApiOptions: apiOptions, sourceIdentitySources: srcIdentity });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
@@ -417,7 +438,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 정체성 정제 판정(engineIdentityHold·identityYear)이 읽는 칸 — 목록과 전체 문서의 envelope 가 같아야 백업 대조가 맞는다.
           'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date',
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
-          'api_options_state']) query.append('mask.fieldPaths', fieldPath(field));
+          'api_options_state', 'vehicle_maker_model_source']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
@@ -431,7 +452,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refiner, apiOptions); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refiner, apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
