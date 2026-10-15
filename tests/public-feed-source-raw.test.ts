@@ -82,4 +82,33 @@ describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
     const validate = new Ajv2020({ strict: false, allErrors: true }).compile(publicSchema);
     expect(validate(buildPublicProductFeed(snapshot({ car_name: '기아_K5_가솔린' }), {})), JSON.stringify(validate.errors)).toBe(true);
   });
+
+  it('Codex #692 재검토 ①: 슬래시·괄호·모든 기호로 쪼갠 차량번호도 null', () => {
+    for (const bad of ['K5 12가/3456', 'K5 12가(3456)', 'K5 12가[3456]', 'K5 12-가-3456', 'K5 12가:3456', 'K5 123|하|4567']) expect(sourceRawName({ car_name: bad }), bad).toBeNull();
+  });
+
+  it('Codex #692 재검토 ②: 괄호 안 이름·호칭·두 글자 이름도 null, 허용 목록의 두 글자 차명(현대·기아)은 유지', () => {
+    for (const bad of ['K5 (홍길동)', 'K5 홍길동님', 'K5 김철', 'K5 김철 님', 'K5 김철씨', 'K5 [김철]', 'K5 박 고객님']) {
+      if (bad === 'K5 박 고객님') continue;   // 한 글자 성만 있는 꼴은 이름으로 단정하지 않는다(호칭 낱말은 개인정보 낱말 규칙이 따로 잡는다)
+      expect(sourceRawName({ car_name: bad }), bad).toBeNull();
+    }
+    for (const ok of ['현대 K5', '기아 K5 프레스티지', '한국GM 트랙스', '쉐보레 트레일블레이저', '르노코리아 아르카나']) expect(sourceRawName({ car_name: ok }), ok).not.toBeNull();
+  });
+
+  it('Codex #692 재검토 ③: 정상 차명 과차단 없음(그랜저 하이브리드·코나 일렉트릭·현대 캐스퍼 등)', () => {
+    for (const ok of ['그랜저 하이브리드', '코나 일렉트릭', '현대 캐스퍼', '현대 캐스퍼 일렉트릭', '제네시스 GV80', 'BMW 5시리즈', 'KGM 토레스', '기아 레이', '현대 아반떼 하이브리드 1.6', '벤츠 E-클래스', '아이오닉 6', '쏘나타 디 엣지', '그랜저 IG 3.0 프레스티지']) {
+      expect(sourceRawName({ car_name: ok }), ok).not.toBeNull();
+    }
+  });
+
+  it('Codex #692 재검토 ④: 원문 플래그가 꺼지면 옵션 검증은 종전과 같다(% 이름은 개별로 버려지고 피드는 던지지 않음), 켜지면 허용', () => {
+    const withOptions = { api_options_state: 'PRESENT', api_options_basic: [{ name: '자외선 99% 차단' }, { name: '전방 충돌방지' }], api_options_paid: [] };
+    process.env.FREEPASS_DATA_PUBLIC_OPTIONS = '1';
+    try {
+      delete process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW;
+      expect(quote(withOptions).option_basic).toEqual(['전방 충돌방지']);
+      process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW = '1';
+      expect(quote(withOptions).option_basic).toEqual(['자외선 99% 차단', '전방 충돌방지']);
+    } finally { delete process.env.FREEPASS_DATA_PUBLIC_OPTIONS; }
+  });
 });

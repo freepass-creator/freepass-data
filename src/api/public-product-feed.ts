@@ -129,18 +129,20 @@ const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만(?!\s?(?:km|�
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Mn}\p{Zl}\p{Zp}\p{Co}]/gu;
 const OPTION_BLOCKED_WORDS = /(수수료|청구|지급|마진|할인|commission|payout)/i;
 const OPTION_FORBIDDEN_COMPACT =/(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
-const safeOptionName = (value: unknown, maxLength: number = OPTION_NAME_MAX): string | null => {
+const safeOptionName = (value: unknown, maxLength: number = OPTION_NAME_MAX, allowPercent = true): string | null => {
   if (typeof value !== 'string') return null;
   // 보이지 않는 문자(제로폭·방향 제어·소프트 하이픈 등)는 먼저 지운다 — «고​객»·«010​-1234» 우회 방지(Codex #687 (b)).
   const text = value.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
   if (!text || text.length > maxLength) return null;
+  // 원문 표기 플래그가 꺼진 응답에서는 옵션 검증이 종전(#687)과 같아야 한다: «%» 가 든 이름은 공용 금지값 검사에서 걸리므로 미리 개별로 버린다(피드 전체를 던지지 않게).
+  if (!allowPercent && /%/.test(text)) return null;
   const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
   // 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 옵션이 사라진다 — 옵션 이름은 금액 꼴(OPTION_MONEY)·금지어(할인 포함)로 따로 본다(Codex #687 잔여).
   if (OPTION_BLOCKED_WORDS.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
   // 개인정보 낱말·금지어는 «공백·기호를 지운 꼴»에서도 본다(고 객 홍길동·수 수 료, Codex #687 ②).
   if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
   // 차량번호 꼴은 구분기호(공백·하이픈·점·가운뎃점·밑줄)를 지운 꼴에서도 본다(«12가-3456», Codex #692 (a)).
-  const plateCompact = text.replace(/[\s\-–—.·_]+/g, '');
+  const plateCompact = text.replace(/[^0-9가-힣]+/gu, '');   // 숫자·한글만 남긴다(구분기호·슬래시·괄호 전부 — Codex #692 ①)
   if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{2,3}[가-힣]\d{4}/.test(plateCompact) || /\d{7,}/.test(compact)) return null;
   return text;
 };
@@ -148,9 +150,30 @@ const RAW_NAME_MAX = 120;
 // 원문 차명에 섞인 사람 이름 꼴(Codex #692 (b)): 성씨 + 두 글자로 된 «세 글자 한글 낱말»은 인명일 수 있어 원문 표기를 내보내지 않는다(null — 소비처는 «차량 정보 확인 중»).
 // 차명 낱말과 겹치는 흔한 세 글자 낱말은 허용 목록으로 둔다. 과차단은 안전한 쪽(원문 숨김)이다.
 const PERSON_SURNAMES = '김이박최정강조윤장임한오서신권황안송류홍전고문양손배백허유남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부황';
-const PERSON_NAME_ALLOW = new Set(['임팔라', '한정판', '신형차', '신차급', '정통파', '오토캠', '고급형', '전기차', '주행거리', '전용차', '장기차', '유니크', '모하비', '소렌토', '소나타', '마티즈', '마스터', '마이티', '마칸', '고스트', '우라칸', '도요타', '마즈다', '마쯔다', '유콘', '선루프', '박스카', '진주색', '연두색', '주황색', '하늘색', '고동색', '구형', '서비스']);
-const looksLikePersonName = (text: string): boolean =>
-  text.split(/\s+/).some(token => /^[가-힣]{3}$/.test(token) && PERSON_SURNAMES.includes(token.charAt(0)) && !PERSON_NAME_ALLOW.has(token));
+const PERSON_NAME_ALLOW = new Set(['임팔라', '한정판', '신형차', '신차급', '정통파', '오토캠', '고급형', '전기차', '주행거리', '전용차', '장기차', '유니크', '모하비', '소렌토', '소나타', '마티즈', '마스터', '마이티', '마칸', '고스트', '우라칸', '도요타', '마즈다', '마쯔다', '유콘', '선루프', '박스카', '진주색', '연두색', '주황색', '하늘색', '고동색', '구형', '서비스',
+  // 두 글자 낱말(성씨와 겹치는 흔한 차명·등급·색 낱말) — 두 글자 이름 꼴(«김철»)도 막기 위해 허용 목록으로만 예외를 둔다(Codex #692 ②).
+  '현대', '기아', '한국', '신형', '신차', '전기', '전륜', '후륜', '고급', '주행', '오토', '하이', '모던', '소형', '한정', '장기', '단기', '특별', '정품', '수입', '국산',
+  '구동', '연료', '모닝', '소울', '마크', '백색', '은색', '남색', '금색', '황색', '흑색', '회색', '갈색', '적색', '청색', '검정', '주황', '진주', '하늘', '전체', '선택',
+  '차단', '차량', '주차', '정비', '보증', '운전', '안전', '전방', '후방', '고속', '자동', '강화', '통풍', '열선', '성능', '연비', '유리', '도어', '주문', '오너', '신품', '구입']);
+const HONORIFIC = '님|씨|고객님?|대표님?|사장님?|기사님?|과장님?|부장님?|팀장님?|선생님?|사모님?|양|군';
+const HONORIFIC_TOKEN = new RegExp(`^(?:${HONORIFIC})$`);
+const NAME_WITH_HONORIFIC = new RegExp(`^([가-힣]{2,3}?)(?:${HONORIFIC})$`);
+const isSurnameName = (token: string, lengths: number[]): boolean =>
+  lengths.includes(token.length) && /^[가-힣]+$/.test(token) && PERSON_SURNAMES.includes(token.charAt(0)) && !PERSON_NAME_ALLOW.has(token);
+/** 인명 꼴(Codex #692 ②): 성씨로 시작하는 두·세 글자 한글 낱말은 허용 목록에 없으면 이름으로 보고 제외한다(과차단은 안전한 쪽).
+ * 호칭(님·씨·고객 등)이 붙은 이름·괄호 안 한글 이름 꼴도 제외. */
+const looksLikePersonName = (text: string): boolean => {
+  const tokens = text.split(/\s+/).map(token => token.replace(/^[(\[{<"'‘“]+|[)\]}>"'’”,.:;]+$/g, ''));
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (isSurnameName(token, [2, 3])) return true;
+    const withTitle = NAME_WITH_HONORIFIC.exec(token);
+    if (withTitle && isSurnameName(withTitle[1]!, [2, 3])) return true;
+    if (HONORIFIC_TOKEN.test(token) && i > 0 && isSurnameName(tokens[i - 1]!, [2, 3])) return true;
+  }
+  for (const m of text.matchAll(/[(\[{<]\s*([가-힣]{2,4})\s*[)\]}>]/g)) if (isSurnameName(m[1]!, [2, 3, 4])) return true;
+  return false;
+};
 const refineText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 /** 공급사 원문 표기(표시용 읽기 전용 파생): 문서 car_name → 없으면 원문.차명. 밑줄 구분을 공백으로, 보이지 않는 문자·연속 공백 정리, 120자 상한.
  * 옵션 이름과 같은 안전 필터(전화·번호·금액 꼴·개인정보·금지어)에 걸리면 null. 문서·원문은 바꾸지 않는다. */
@@ -184,20 +207,20 @@ export const refineState = (product: Rec): Required<Pick<PublicProduct, 'refine_
   const rawShape = sub.includes('_');
   return { refine_state: missing.length > 0 || rawShape || markerEquals ? 'PENDING' : 'REFINED', refine_missing: [...missing] };
 };
-export const publicOptions = (product: Rec): Pick<PublicProduct, 'option_state' | 'option_basic' | 'option_paid'> => {
+export const publicOptions = (product: Rec, allowPercent = true): Pick<PublicProduct, 'option_state' | 'option_basic' | 'option_paid'> => {
   const state = product.api_options_state;
   if (state !== 'PRESENT' && state !== 'NONE') return { option_state: 'UNKNOWN', option_basic: [], option_paid: [] };
   const seen = new Set<string>();
   const basic: string[] = [];
   for (const item of Array.isArray(product.api_options_basic) ? product.api_options_basic : []) {
-    const name = safeOptionName(item && typeof item === 'object' ? (item as Rec).name : null);
+    const name = safeOptionName(item && typeof item === 'object' ? (item as Rec).name : null, OPTION_NAME_MAX, allowPercent);
     if (name && !seen.has(name) && basic.length < OPTION_LIST_MAX) { seen.add(name); basic.push(name); }
   }
   const paid: Array<{ name: string; amount_krw: number | null }> = [];
   const paidSeen = new Set<string>();
   for (const item of Array.isArray(product.api_options_paid) ? product.api_options_paid : []) {
     const rec = item && typeof item === 'object' ? item as Rec : {};
-    const name = safeOptionName(rec.name);
+    const name = safeOptionName(rec.name, OPTION_NAME_MAX, allowPercent);
     if (!name || paidSeen.has(name) || paid.length >= OPTION_LIST_MAX) continue;
     paidSeen.add(name);
     const amount = rec.amount_state === 'KNOWN' && typeof rec.amount_krw === 'number' && Number.isSafeInteger(rec.amount_krw) && rec.amount_krw > 0 ? rec.amount_krw : null;
@@ -400,11 +423,15 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   }
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
-  if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product));
-  if (process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1') Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
+  const sourceRawOn = process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1';
+  if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product, sourceRawOn));
+  if (sourceRawOn) Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
   // 옵션·원문 표기는 자기 안전 필터(safeOptionName)로 이미 거른다 — 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 값 하나로 피드 전체를 던지게 하므로 여기서는 뺀다.
-  const { option_basic: _ob, option_paid: _op, source_raw_name: _sr, ...checked } = result;
-  assertNoForbiddenValue(checked);
+  // 원문 표기 플래그가 켜진 응답에서만 옵션·원문 표기를 공용 검사에서 뺀다(자체 필터로 이미 거름). 꺼져 있으면 옵션 검증은 종전과 같다.
+  if (sourceRawOn) {
+    const { option_basic: _ob, option_paid: _op, source_raw_name: _sr, ...checked } = result;
+    assertNoForbiddenValue(checked);
+  } else assertNoForbiddenValue(result);
   return result;
 };
 
