@@ -81,3 +81,42 @@ export function summarizeOptionProjections(projections: OptionProjection[]) {
   }
   return summary;
 }
+
+/** 문서·기록에 싣는 «분류 후, 크기 제한된» 옵션 꼴(Codex #674). 분류 전 원문 전체(미분류 이름·금액 포함)는 어디에도 저장하지 않는다.
+ * 항목 수·이름 길이·직렬화 바이트를 넘으면 TOO_MANY(목록 없음)로 둔다. 판정은 압축 전에 한다(압축이 큰 배열을 digest 로 바꾸기 전). */
+export const OPTIONS_MAX_ITEMS = 300, OPTION_NAME_MAX = 120, OPTIONS_MAX_BYTES = 32_768, OPTION_AMOUNT_RAW_STRING_MAX = 40;
+export type BoundedOptions = { state: 'PRESENT' | 'NONE' | 'TOO_MANY'; basic: BasicOption[]; paid: PaidOption[]; unclassified_count: number };
+const tooMany = (): BoundedOptions => ({ state: 'TOO_MANY', basic: [], paid: [], unclassified_count: 0 });
+const withinBounds = (b: BoundedOptions) => b.basic.length + b.paid.length <= OPTIONS_MAX_ITEMS &&
+  [...b.basic.map(o => o.name), ...b.paid.map(o => o.name)].every(n => n.length > 0 && n.length <= OPTION_NAME_MAX) &&
+  Buffer.byteLength(JSON.stringify({ b: b.basic, p: b.paid }), 'utf8') <= OPTIONS_MAX_BYTES;
+/** 상세 options 원문 → 제한된 분류 꼴. 배열이 아니면 null(모르는 값). */
+export function boundedOptions(options: unknown): BoundedOptions | null {
+  if (!Array.isArray(options)) return null;
+  if (options.length > OPTIONS_MAX_ITEMS) return tooMany();
+  const p = projectSonogongOptions(options);
+  const paid = p.paid.map(o => ({ ...o, amount_raw: typeof o.amount_raw === 'string' && o.amount_raw.length > OPTION_AMOUNT_RAW_STRING_MAX ? null : o.amount_raw }));
+  const result: BoundedOptions = { state: p.basic.length + paid.length ? 'PRESENT' : 'NONE', basic: p.basic, paid, unclassified_count: p.unclassified.length };
+  return withinBounds(result) ? result : tooMany();
+}
+/** 저장된 제한 꼴(raw.api_options)을 다시 읽을 때의 검증: 모양이 맞고 제한 안일 때만 통과(아니면 null). */
+export function asBoundedOptions(v: unknown): BoundedOptions | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (o.state !== 'PRESENT' && o.state !== 'NONE' && o.state !== 'TOO_MANY') return null;
+  if (!Array.isArray(o.basic) || !Array.isArray(o.paid) || o.basic.length + o.paid.length > OPTIONS_MAX_ITEMS) return null;
+  const str = (x: unknown) => typeof x === 'string' && x.length > 0 && x.length <= OPTION_NAME_MAX;
+  const basic: BasicOption[] = [], paid: PaidOption[] = [];
+  for (const x of o.basic) { const e = x as Record<string, unknown>; if (!e || !str(e.name) || typeof e.category !== 'string' || e.category.length > 40) return null; basic.push({ category: e.category, name: e.name as string }); }
+  for (const x of o.paid) {
+    const e = x as Record<string, unknown>;
+    if (!e || !str(e.name) || (e.amount_state !== 'KNOWN' && e.amount_state !== 'UNKNOWN')) return null;
+    const krw = typeof e.amount_krw === 'number' && Number.isSafeInteger(e.amount_krw) && e.amount_krw > 0 ? e.amount_krw : null;
+    if ((e.amount_state === 'KNOWN') !== (krw !== null)) return null;
+    const raw = typeof e.amount_raw === 'number' ? e.amount_raw : typeof e.amount_raw === 'string' && e.amount_raw.length <= OPTION_AMOUNT_RAW_STRING_MAX ? e.amount_raw : null;
+    paid.push({ name: e.name as string, amount_krw: krw, amount_state: e.amount_state as 'KNOWN' | 'UNKNOWN', amount_raw: raw });
+  }
+  const count = typeof o.unclassified_count === 'number' && Number.isSafeInteger(o.unclassified_count) && o.unclassified_count >= 0 ? o.unclassified_count : 0;
+  const result: BoundedOptions = { state: o.state, basic, paid, unclassified_count: count };
+  return withinBounds(result) ? result : null;
+}

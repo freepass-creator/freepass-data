@@ -9,7 +9,7 @@ import type { CycleCommands, CycleProduct, SupplierFields, VehicleIdentityRefine
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
-import { projectSonogongOptions } from '../domain/sonogong-options.js';
+import { boundedOptions, asBoundedOptions, OPTIONS_MAX_ITEMS } from '../domain/sonogong-options.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 
@@ -114,24 +114,17 @@ export function apiPhotoFields(r: SourceProductRecord, original: Fields): Fields
  * 과거 시트 유래 칸(옵션·options·정제옵션)과 섞지 않는다. 유상 구분 근거는 API category «선택옵션» 하나이며 표시 전용(가격 계산 비반영).
  * 상세가 없거나 options 가 배열이 아니면 «모르는 값»으로 기존 옵션을 지우지 않는다 — 칸이 한 번도 없던 문서에만 확인 표식(api_options_state)을 남겨
  * 되풀이 쓰기(API_OPTIONS 사유)를 막는다. 옵션이 바뀌면 상세 digest 가 바뀌어 일반 변경으로 다시 쓴다. */
-export const API_OPTIONS_MAX_ITEMS = 300;
+export const API_OPTIONS_MAX_ITEMS = OPTIONS_MAX_ITEMS;
 export function apiOptionFields(r: SourceProductRecord, original: Fields): Fields {
   if (r.sourceId !== 'RP012') return {};
-  // 계획·저장 단계의 압축 레코드는 상세 전체를 digest 로 바꾸므로 옵션 목록은 raw.api_options(작은 목록)에서도 읽는다.
-  const detailOptions = (r.raw?.detail as { options?: unknown } | null | undefined)?.options;
-  const options = Array.isArray(detailOptions) ? detailOptions : r.raw?.api_options;
+  // 상세가 있으면 거기서(분류+제한), 계획·저장 단계의 압축 레코드면 저장된 제한 꼴(raw.api_options)에서 읽는다. 분류 전 원문은 저장하지 않는다.
+  const kept = boundedOptions((r.raw?.detail as { options?: unknown } | null | undefined)?.options) ?? asBoundedOptions(r.raw?.api_options);
   const hadMark = original.api_options_state !== undefined && original.api_options_state !== null;
-  if (!Array.isArray(options)) {
-    return hadMark ? {} : { api_options_state: 'NO_DETAIL', api_options_observed_at: r.observedAt };
-  }
-  const projection = projectSonogongOptions(options);
-  if (projection.basic.length + projection.paid.length > API_OPTIONS_MAX_ITEMS) {
-    return hadMark ? {} : { api_options_state: 'TOO_MANY', api_options_observed_at: r.observedAt };
-  }
-  const { basic, paid } = projection;
-  return { api_options_basic: basic, api_options_paid: paid,
-    api_options_state: basic.length + paid.length ? 'PRESENT' : 'NONE', api_options_source: 'RP012-api',
-    api_options_unclassified_count: projection.unclassified.length,
+  if (!kept) return hadMark ? {} : { api_options_state: 'NO_DETAIL', api_options_observed_at: r.observedAt };
+  if (kept.state === 'TOO_MANY') return hadMark ? {} : { api_options_state: 'TOO_MANY', api_options_observed_at: r.observedAt };
+  const { basic, paid } = kept;
+  return { api_options_basic: basic, api_options_paid: paid, api_options_state: kept.state, api_options_source: 'RP012-api',
+    api_options_unclassified_count: kept.unclassified_count,
     api_options_digest: stableDigest({ basic, paid }).slice(0, 32), api_options_observed_at: r.observedAt };
 }
 /** 엔진 기록(source_cycle_record)이 없는 옛 문서의 관측 기준 시각. 기본은 source_observed_at, 없으면 문서 updateTime.

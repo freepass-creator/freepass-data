@@ -1,4 +1,5 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import { boundedOptions, asBoundedOptions } from './sonogong-options.js';
 import type { SourceRun } from './source.js';
 
 export type SourceAmount = { state: 'KNOWN'; value: number } | { state: 'ZERO'; value: 0 } | { state: 'UNKNOWN'; value: null };
@@ -83,21 +84,19 @@ const PHOTO_URL_LIST_MAX = 20, PHOTO_URL_MAX_LENGTH = 1000;
 export const isPhotoUrlList = (v: unknown): v is string[] => Array.isArray(v) && v.length <= PHOTO_URL_LIST_MAX &&
   v.every(x => typeof x === 'string' && x.length <= PHOTO_URL_MAX_LENGTH && /^https:\/\/[^\s]+$/.test(x));
 const photoListKept = (record: SourceProductRecord, v: unknown): v is string[] => PHOTO_URL_LIST_SOURCES.has(record.sourceId) && isPhotoUrlList(v);
-/** 손오공 API 상세 옵션 목록(raw.detail.options)을 문서까지 «작은 목록»으로 싣는다(대표 2026-10-15 승인, 새 칸 api_options_* 쓰기가 읽는다). 상세 전체는 예전처럼
- * digest 이고, 옵션만 raw.api_options 로 따로 둔다. 변경 판정(comparableRecord)은 이 칸을 비교에서 뺀다 — 옵션이 바뀌면 상세 digest 가 이미 바뀌고,
- * 옛 저장 기록(칸 없음)과 «같음»이어야 일괄 UPDATE 가 생기지 않는다. 항목이 너무 많거나 크면 싣지 않는다(문서 크기 보호). */
+/** 손오공 API 상세 옵션을 문서까지 «분류 후·크기 제한된 꼴»(boundedOptions)로만 싣는다(대표 2026-10-15 승인, 새 칸 api_options_* 쓰기가 읽는다).
+ * 상세 전체는 예전처럼 digest 이고, 옵션만 raw.api_options 로 따로 둔다. 분류 전 원문(미분류 이름·금액)과 큰 배열은 저장하지 않는다(Codex #674).
+ * 변경 판정(comparableRecord)은 이 칸을 비교에서 뺀다 — 옵션이 바뀌면 상세 digest 가 이미 바뀌고, 옛 저장 기록(칸 없음)과 «같음»이어야 일괄 UPDATE 가 없다. */
 export const API_OPTION_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
-const API_OPTION_LIST_MAX = 300, API_OPTION_ITEM_MAX_LENGTH = 200;
-const optionListKept = (record: SourceProductRecord, v: unknown): v is Record<string, unknown>[] => API_OPTION_LIST_SOURCES.has(record.sourceId) &&
-  Array.isArray(v) && v.length <= API_OPTION_LIST_MAX && v.every(x => !!x && typeof x === 'object' && !Array.isArray(x) &&
-  Object.values(x as Record<string, unknown>).every(y => y === null || typeof y === 'number' || (typeof y === 'string' && y.length <= API_OPTION_ITEM_MAX_LENGTH)));
 export function compactRecord(record: SourceProductRecord): SourceProductRecord {
   const raw = compactRaw(record.raw ?? {});
   if (smallSpec(record.raw?.spec)) raw.spec = structuredClone(record.raw.spec);
   if (photoListKept(record, record.raw?.images)) raw.images = [...record.raw.images];
-  const detailOptions = (record.raw?.detail as { options?: unknown } | null | undefined)?.options;
-  if (optionListKept(record, detailOptions)) raw.api_options = structuredClone(detailOptions);
-  else if (optionListKept(record, record.raw?.api_options)) raw.api_options = structuredClone(record.raw.api_options);
+  if (API_OPTION_LIST_SOURCES.has(record.sourceId)) {
+    // 판정은 압축 전 원문에서 한다: 상세가 있으면 거기서, 이미 압축된 기록이면 저장된 제한 꼴만 다시 검증해 통과시킨다.
+    const kept = boundedOptions((record.raw?.detail as { options?: unknown } | null | undefined)?.options) ?? asBoundedOptions(record.raw?.api_options);
+    if (kept) raw.api_options = kept;
+  }
   return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw,
     terms: (record.terms ?? []).map(t => ({ ...structuredClone({ ...t, raw: {} }), raw: compactRaw(t.raw ?? {}) })) };
 }

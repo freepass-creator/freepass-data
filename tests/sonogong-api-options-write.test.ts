@@ -89,6 +89,42 @@ describe('apiOptionFields(손오공 API 옵션 → 새 칸)', () => {
   });
 });
 
+describe('저장 기록의 옵션은 분류 후·제한된 꼴만 (Codex #674)', () => {
+  it('압축 레코드에는 미분류 이름·원문 금액 전체가 들어가지 않는다', () => {
+    const r = rec('12가4', [...OPTIONS, { category: '12가3456 알수없음', name: '미분류 이름 XYZ', amount: 777000 }]);
+    const compact = compactRecord(r);
+    expect(compact.raw.api_options).toMatchObject({ state: 'PRESENT', unclassified_count: 1 });
+    const text = JSON.stringify(compact.raw);
+    expect(text).not.toContain('미분류 이름 XYZ');
+    expect(text).not.toContain('12가3456');
+    expect(text).not.toContain('777000');
+    // 압축된 기록을 다시 압축해도 같고(멱등), 쓰기 칸도 같다.
+    expect(compactRecord(compact).raw.api_options).toEqual(compact.raw.api_options);
+    expect(apiOptionFields(compact, {})).toMatchObject({ api_options_state: 'PRESENT' });
+  });
+
+  it('300개 초과는 압축 전에 TOO_MANY 로 판정된다(NO_DETAIL 로 둔갑하지 않음)', () => {
+    const many = Array.from({ length: 301 }, (_, i) => ({ category: 'SAFETY', name: `옵션${i}`, amount: null }));
+    const compact = compactRecord(rec('12가5', many));
+    expect(compact.raw.api_options).toEqual({ state: 'TOO_MANY', basic: [], paid: [], unclassified_count: 0 });
+    expect(apiOptionFields(compact, {})).toEqual({ api_options_state: 'TOO_MANY', api_options_observed_at: time });
+  });
+
+  it('이름이 너무 길거나 직렬화가 크면 목록을 싣지 않는다', () => {
+    const long = [{ category: 'SAFETY', name: 'ㅁ'.repeat(121), amount: null }];
+    expect(compactRecord(rec('12가6', long)).raw.api_options).toMatchObject({ state: 'TOO_MANY' });
+    const bigRaw = [{ category: '선택옵션', name: '정상', amount: 'x'.repeat(5000) }];
+    expect(compactRecord(rec('12가6', bigRaw)).raw.api_options).toMatchObject({ state: 'PRESENT' });
+    expect(JSON.stringify(compactRecord(rec('12가6', bigRaw)).raw.api_options)).not.toContain('xxxxxxxx');
+  });
+
+  it('저장 형태가 깨졌거나 모양이 맞지 않으면 읽지 않는다', () => {
+    const base = rec('12가7');
+    expect(apiOptionFields({ ...base, raw: { api_options: { state: 'PRESENT', basic: [{ name: 3 }], paid: [] } } }, {})).toEqual({ api_options_state: 'NO_DETAIL', api_options_observed_at: time });
+    expect(apiOptionFields({ ...base, raw: { api_options: 'x' } }, {})).toMatchObject({ api_options_state: 'NO_DETAIL' });
+  });
+});
+
 describe('API_OPTIONS 쓰기(plan → 적용)', () => {
   it('새 문서는 편입할 때 옵션 칸도 함께 쓴다', async () => {
     const { commands, fake } = await setup();
@@ -126,5 +162,17 @@ describe('API_OPTIONS 쓰기(plan → 적용)', () => {
     const second = await run(commands, records);
     expect(second.kinds).toHaveLength(5);
     expect((await run(commands, records)).kinds).toEqual([]);
+  }, 60_000);
+
+  it('다른 쓰기(가격 변경)가 있으면 그만큼 옵션 전용 쓰기가 줄어 회차 전체 쓰기가 상한을 넘지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const total = OPTIONS_REWRITE_CAP + 20, plates = Array.from({ length: total }, (_, i) => `34나${String(5000 + i)}`);
+    for (const p of plates) fake.put(p, legacyDoc(rec(p)));
+    const changed = 30;   // 가격이 바뀐 문서(원천 변경과 옵션 사유가 겹침 — 어느 쪽이든 쓰기 1건)
+    const records = plates.map((p, i) => rec(p, OPTIONS, i < changed ? 510000 : 500000));
+    const first = await run(commands, records);
+    expect(first.kinds.length).toBeLessThanOrEqual(OPTIONS_REWRITE_CAP);
+    expect(first.warnings.some(w => w.startsWith('API_OPTIONS_DEFERRED:'))).toBe(true);
+    expect(first.kinds.length).toBeGreaterThanOrEqual(changed);
   }, 60_000);
 });
