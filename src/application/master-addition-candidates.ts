@@ -12,6 +12,13 @@ export type CandidateRow = {
   yearRange: string; plate4Samples: string[]; masterCandidates: string[]; proposal: string;
 };
 
+/** 출력에 나가는 모든 문자열의 마스킹(원문 차명에 전체 차량번호·전화번호가 섞여도 끝 4자리 제한을 지킨다, Codex #678 ②). */
+export function maskSensitive(value: string): string {
+  return value.normalize('NFKC')
+    .replace(/(\d{2,3})\s?([가-힣])\s?(\d{4})/g, (_m, _a, _b, last4: string) => `****${last4}`)   // 차량번호 꼴 → 끝 4자리만
+    .replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, '[전화]')                                      // 전화번호 꼴
+    .replace(/\d{7,}/g, '[숫자]');                                                                   // 긴 숫자열(번호·식별자 가능성)
+}
 const normName = (v: string) => v.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 /** 손오공 원문 «제조사_모델(코드)_연료 배기량 …» 의 결정적 분해: 밑줄 3분할 + 모델 뒤 괄호 코드. 형식이 아니면 null(추정하지 않는다). */
 export function decomposeSonogongName(raw: string): CandidateRow['decomposed'] {
@@ -53,20 +60,22 @@ export function buildMasterAdditionCandidates(products: readonly CandidateProduc
   const result = buildIdentityPromotionPlan(products, masters);
   const byId = new Map(products.map(p => [p.id, p]));
   const groups = new Map<string, { row: CandidateRow; years: number[]; plates: Set<string> }>();
-  const reasonCounts: Record<string, number> = {};
+  const reasonCounts: Record<string, number> = {}, excludedReasons: Record<string, number> = {};
   for (const hold of result.held) {
-    if (!REASONS.has(hold.reason)) continue;
+    if (!REASONS.has(hold.reason)) { excludedReasons[hold.reason] = (excludedReasons[hold.reason] ?? 0) + 1; continue; }
     const p = byId.get(hold.id);
-    if (!p) continue;
+    if (!p) { excludedReasons.PRODUCT_NOT_IN_INPUT = (excludedReasons.PRODUCT_NOT_IN_INPUT ?? 0) + 1; continue; }
     reasonCounts[hold.reason] = (reasonCounts[hold.reason] ?? 0) + 1;
     const supplier = p.supplier ?? '';
     const rawName = (p.rawName || p.sub_model || '').trim();
-    const key = [supplier, hold.reason, normName(rawName)].join('\u0000');
+    const key = [supplier, hold.reason, normName(maskSensitive(rawName))].join('\u0000');
     let g = groups.get(key);
     if (!g) {
-      const decomposed = supplier === 'RP012' ? decomposeSonogongName(rawName) : null;
-      g = { row: { supplier, reason: hold.reason, count: 0, rawName, decomposed, yearRange: '', plate4Samples: [], masterCandidates: [...hold.candidates],
-        proposal: proposalFor(hold.reason, decomposed, hold.candidates) }, years: [], plates: new Set() };
+      const decomposedRaw = supplier === 'RP012' ? decomposeSonogongName(maskSensitive(rawName)) : null;
+      const decomposed = decomposedRaw ? { maker: decomposedRaw.maker, model: decomposedRaw.model, code: decomposedRaw.code, powertrain: decomposedRaw.powertrain } : null;
+      const candidates = hold.candidates.map(maskSensitive);
+      g = { row: { supplier, reason: hold.reason, count: 0, rawName: maskSensitive(rawName), decomposed, yearRange: '', plate4Samples: [], masterCandidates: candidates,
+        proposal: proposalFor(hold.reason, decomposed, candidates) }, years: [], plates: new Set() };
       groups.set(key, g);
     }
     g.row.count++;
@@ -76,11 +85,14 @@ export function buildMasterAdditionCandidates(products: readonly CandidateProduc
   const rows = [...groups.values()].map(({ row, years, plates }) => ({ ...row,
     yearRange: years.length ? `${Math.min(...years)}-${Math.max(...years)}` : '', plate4Samples: [...plates].sort() }))
     .sort((a, b) => b.count - a.count || a.supplier.localeCompare(b.supplier) || a.rawName.localeCompare(b.rawName));
-  return { rows, reasonCounts, heldTotal: result.held.length, products: products.length };
+  // 합계 일치: heldTotal = Σ reasonCounts(표에 오른 사유) + Σ excludedReasons(허용 목록 밖 사유·입력에 없는 상품).
+  return { rows, reasonCounts, excludedReasons, heldTotal: result.held.length, products: products.length };
 }
 
+/** 스프레드시트 수식 주입 방어(Codex #678 ①): =, +, -, @, 탭, 줄머리 CR 로 시작하는 문자열은 앞에 작은따옴표를 붙여 수식으로 해석되지 않게 한다. */
+export const neutralizeFormula = (s: string) => (/^[=+\-@\t\r]/.test(s) ? `'${s}` : s);
 const csvCell = (v: string | number) => {
-  const s = String(v);
+  const s = typeof v === 'number' ? String(v) : neutralizeFormula(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 /** 승인표 CSV: 마지막 «승인(예/아니오)» 칸은 비워 둔다 — 대표가 채운다. */

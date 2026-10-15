@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildMasterAdditionCandidates, candidatesToCsv, decomposeSonogongName } from '../src/application/master-addition-candidates.js';
+import { buildMasterAdditionCandidates, candidatesToCsv, decomposeSonogongName, maskSensitive } from '../src/application/master-addition-candidates.js';
 import { runMasterCandidatesCli } from '../src/jobs/build-master-addition-candidates.js';
 import type { IdentityMaster } from '../src/application/identity-promotion-plan.js';
 
@@ -44,6 +44,30 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(header!.endsWith('승인(예/아니오)')).toBe(true);
     expect(first!.endsWith(',')).toBe(true);
     expect(csv).not.toMatch(/\d{2,3}[가-힣]\d{4}/);   // 전체 번호 없음
+  });
+
+  it('수식 주입 방어: = + - @ 로 시작하는 원문은 앞에 작은따옴표', () => {
+    const csv = candidatesToCsv(buildMasterAdditionCandidates([product('12가2001', '=HYPERLINK("x")'), product('12가2002', '+1+1'), product('12가2003', '@SUM(A1)'),
+      product('12가2004', '-2+3')], [master]).rows);
+    for (const cell of ["'=HYPERLINK", "'+1+1", "'@SUM", "'-2+3"]) expect(csv).toContain(cell);
+    expect(csv).not.toMatch(/(^|,)"?[=+@]/m);
+  });
+
+  it('원문에 섞인 전체 차량번호·전화번호·긴 숫자열은 마스킹한다(끝 4자리만 남음)', () => {
+    const r = buildMasterAdditionCandidates([product('12가3001', '현대_그랜저_12가3456 연락 010-1234-5678 번호 12345678901')], [master]);
+    const text = JSON.stringify(r.rows) + candidatesToCsv(r.rows);
+    expect(text).not.toMatch(/\d{2,3}[가-힣]\s?\d{4}/);
+    expect(text).not.toContain('010-1234-5678');
+    expect(text).not.toContain('12345678901');
+    expect(text).toContain('****3456');
+    expect(maskSensitive('서울 34나5678')).toBe('서울 ****5678');
+  });
+
+  it('허용 목록 밖 사유도 합계에서 빠지지 않는다: heldTotal = 표 사유 합 + 제외 사유 합', () => {
+    const many = [product('12가4001', '제네시스_G80 (RG3)_가솔린'), product('12가4002', '그랜저 GN7'), product('12가4003', '현대_그랜저 GN7 프리미엄', { sub_model: '그랜저 GN7', maker: '현대', model: '그랜저' })];
+    const r = buildMasterAdditionCandidates(many, [master]);
+    const listed = Object.values(r.reasonCounts).reduce((a, b) => a + b, 0), excluded = Object.values(r.excludedReasons).reduce((a, b) => a + b, 0);
+    expect(listed + excluded).toBe(r.heldTotal);
   });
 
   it('CLI: 쓰기는 지정한 CSV·요약만, 요약은 공급사·사유별 대수', async () => {

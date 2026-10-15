@@ -16,7 +16,7 @@ export async function runMasterCandidatesCli(argv: { input?: string | undefined;
   const bySupplier: Record<string, Record<string, number>> = {};
   for (const r of result.rows) { const s = (bySupplier[r.supplier || '(미상)'] ??= {}); s[r.reason] = (s[r.reason] ?? 0) + r.count; }
   const summary = { status: 'MASTER_ADDITION_CANDIDATES', writes: 0, products: result.products, heldTotal: result.heldTotal, groups: result.rows.length,
-    reasonCounts: result.reasonCounts, bySupplier };
+    reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, bySupplier };
   if (argv.summary) await writeFile(argv.summary, JSON.stringify(summary, null, 2), { mode: 0o600 });
   return summary;
 }
