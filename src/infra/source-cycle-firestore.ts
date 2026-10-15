@@ -168,7 +168,7 @@ export const engineIdentityHold = (f: Fields): boolean =>
   && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
 /** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
  * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
-export const SPEC_FILL_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
+export const SPEC_FILL_KEYS = ['ext_color', 'int_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
 const specBlank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
 /** 차종 기준 한 장 제원 목록(연료): 가솔린·디젤·LPG·하이브리드·플러그인 하이브리드·전기·수소·가솔린+LPG. 목록 밖 표기(연료 코드 등)는 채우지 않는다. */
 export const SPEC_FUEL_ALLOWED: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
@@ -188,6 +188,7 @@ const realCalendarDate = (v: string): boolean => {
 };
 const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
   ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
   fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
   first_registration_date: v => realCalendarDate(v),
   year: v => /^(19|20)\d{2}$/.test(v),
@@ -195,6 +196,15 @@ const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean
   engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
   seats: v => /^\d{1,2}$/.test(v) && Number(v) >= 1,
 };
+/** 내장색 전용 완료 표식(Codex #697 비차단): 내장색이 채움 목록에 늘기 전에 제원 채움을 마친 문서(vehicle_spec_source_checked=true)는 내장색만 한 번 더 채운다 — 값이 없어도 표식을 남겨 되풀이하지 않는다. */
+export const INT_COLOR_MARK = 'vehicle_int_color_source_checked';
+export function intColorOnlyFields(spec: unknown, original: Fields): Fields {
+  if (original[INT_COLOR_MARK] === true) return {};
+  const v = spec && typeof spec === 'object' && !Array.isArray(spec) ? (spec as Record<string, unknown>).int_color : undefined;
+  const out: Fields = { [INT_COLOR_MARK]: true };
+  if (specBlank(original.int_color) && typeof v === 'string' && SPEC_VALID.int_color(v.trim())) out.int_color = v.trim();
+  return out;
+}
 export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return {};
   if (original.vehicle_spec_source_checked === true) return {};   // 이미 확인한 문서는 다른 변경으로 갱신돼도 다시 채우지 않는다(Codex #688 ④)
@@ -289,6 +299,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
     && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
     && SPEC_FILL_KEYS.some(k => specBlank(f[k]) && !(k === 'engine_cc' && ELECTRIC_FUELS.has(String(f.fuel_type ?? '').trim())))) rewriteReasons.push('SOURCE_SPEC');
+  // 제원 확인을 이미 마친 문서의 내장색 보완(내장색 전용 표식으로 문서당 한 번 — 저장 기록은 제원이 digest 라 원천에 내장색이 있는지는 쓰기 때 현재 관측으로 정한다).
+  else if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_spec_source_checked === true
+    && f[INT_COLOR_MARK] !== true && specBlank(f.int_color)) rewriteReasons.push('SOURCE_SPEC');
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -391,7 +404,10 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
-      ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true } : {}),
+      ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
+    // 이미 제원 채움을 마친 문서의 내장색만 보완(채울 값이 있을 때만 사유가 생긴다).
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked === true
+      ? intColorOnlyFields(r.raw?.spec, original) : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -514,7 +530,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
           'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
-          'ext_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
+          'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked', 'vehicle_int_color_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);

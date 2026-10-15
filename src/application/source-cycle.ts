@@ -282,9 +282,10 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
     || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string'
       || (!!e.after.record.raw?.spec && typeof e.after.record.raw.spec === 'object' && Object.keys(e.after.record.raw.spec as object).length > 0))))
-    .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
-  const overFill = fillEntries.slice(OPTIONS_REWRITE_CAP);
-  for (const e of fillEntries.slice(0, OPTIONS_REWRITE_CAP)) e.after.fillSourceIdentity = true;
+    // 채움 우선순위: 노출되는(after.listable) 문서가 먼저, 같은 군 안에서는 키 순서(결정적). 노출 중인 차의 빈 제원이 비노출 차보다 먼저 채워진다.
+    .sort((a, b) => Number(!!b.after.listable) - Number(!!a.after.listable) || sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  const overFill = fillEntries.slice(optionsCap);   // 채움 상한도 옵션 상한 설정(기본 100, 최대 400)을 따른다 — 첫 적용 때 여러 회차로 늘어지지 않게
+  for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
@@ -292,7 +293,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (onlyFill) drop.add(e);
     }
     plan.entries = plan.entries.filter(e => !drop.has(e));
-    plan.warnings.push(`SOURCE_IDENTITY_DEFERRED:${overFill.length}:cap${OPTIONS_REWRITE_CAP}`);
+    plan.warnings.push(`SOURCE_IDENTITY_DEFERRED:${overFill.length}:cap${optionsCap}`);
   }
   const sourceIdentityRewrite = fillEntries.length - overFill.length;
   if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);
@@ -333,10 +334,13 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       const reread = await commands.read(e.after.record.sourceId, e.after.record.uid);
       // 계획 표식(fillSourceIdentity)은 쓰기 지시일 뿐 문서에서 되읽히는 값이 아니다 — 비교에서 뺀다.
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
-      const { fillSourceIdentity: _planFlag, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, ...rest }) => rest)(reread) : reread;
+      // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
+      // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
+      const { fillSourceIdentity: _planFlag, rewriteReasons: _planReasons, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const a = e.after as unknown as Record<string, unknown>, b = (reread ?? {}) as unknown as Record<string, unknown>;
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
       }

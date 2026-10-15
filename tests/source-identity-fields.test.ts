@@ -333,3 +333,79 @@ describe('Codex #685 다섯 번째 지적', () => {
     expect(decodeFields(fake.docs.get('95자1001').fields).maker).toBe('');
   });
 });
+
+describe('2026-10-16 17:00 RP012 REEXPOSE 되읽기 불일치(rewriteReasons)', () => {
+  it('재노출 문서는 쓴 뒤 노출·엔진 소유가 되어 읽기 경로가 사유(채움 대기)를 계산하지만 되읽기는 일치로 본다(APPLY_UNCERTAIN 아님)', async () => {
+    const { commands, fake } = await setup();
+    const records: SourceProductRecord[] = [];
+    for (let i = 0; i < 8; i++) {
+      const plate = `95자${String(2000 + i)}`;
+      const r = rec(plate);
+      records.push(r);
+      fake.put(plate, legacyDoc(r, { listable: false, status: '출고불가', status_kind: '출고불가' }));
+    }
+    const result = await run(commands, records);
+    expect(result.kinds.filter(k => k === 'REEXPOSE').length).toBe(8);
+    expect(result.applied?.status).toBe('APPLIED');
+    expect(result.applied?.uncertain).toEqual([]);
+    expect(result.applied?.verified).toBe(8);
+    // 쓴 뒤 다시 읽으면 채움 대기 사유가 보인다(다음 회차에 채움) — 되읽기 비교에서는 제외된다
+    const reread = await commands.read(source, '95자2000');
+    expect(reread?.rewriteReasons ?? []).toContain('SOURCE_IDENTITY');
+  });
+
+  it('채움 상한은 옵션 상한 설정(optionsRewriteCap)을 따른다: 기본 100 이면 이월, 150 이면 120대 모두 한 회차에 채운다', async () => {
+    const records: SourceProductRecord[] = [];
+    const seed = (fake: Awaited<ReturnType<typeof setup>>['fake']) => {
+      for (let i = 0; i < 120; i++) { const plate = `95자${String(4000 + i)}`; const r = rec(plate); records.push(r); fake.put(plate, legacyDoc(r)); }
+    };
+    const planWith = async (cap: number | undefined) => {
+      records.length = 0;
+      const { commands, fake } = await setup(); seed(fake);
+      const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1, ...(cap ? { optionsRewriteCap: cap } : {}) },
+        { records, observedAt: time, heldCount: 0, complete: true }, await commands.list(source), now);
+      const applied = await applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
+      const filled = [...fake.docs.keys()].filter(uid => decodeFields(fake.docs.get(uid).fields).maker === '현대').length;
+      return { warnings: built.plan.warnings, status: applied.status, filled };
+    };
+    const base = await planWith(undefined);
+    expect(base.status).toBe('APPLIED');
+    expect(base.filled).toBe(OPTIONS_REWRITE_CAP);
+    expect(base.warnings.some(w => /_DEFERRED:/.test(w))).toBe(true);   // 옵션·채움 공통 상한 이월 경고
+    const wide = await planWith(150);
+    expect(wide.status).toBe('APPLIED');
+    expect(wide.filled).toBe(120);
+    expect(wide.warnings.some(w => /_DEFERRED:/.test(w))).toBe(false);
+  });
+});
+
+describe('Codex #697 비차단: 제원 채움을 마친 문서의 내장색 보완', () => {
+  const withInterior = (plate: string, interior: string | null): SourceProductRecord => {
+    const r = rec(plate);
+    return { ...r, raw: { ...r.raw, spec: { ext_color: '빨간색', ...(interior ? { int_color: interior } : {}) } } } as SourceProductRecord;
+  };
+  it('제원 확인(vehicle_spec_source_checked)을 이미 마친 문서도 내장색만 한 번 보완하고 표식을 남겨 되풀이하지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = withInterior('95자5001', '블랙');
+    fake.put('95자5001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true, ext_color: '흰색' }));
+    const first = await run(commands, [r]);
+    expect(first.applied?.status).toBe('APPLIED');
+    const doc = decodeFields(fake.docs.get('95자5001').fields);
+    expect(doc.int_color).toBe('블랙');
+    expect(doc.ext_color).toBe('흰색');                        // 기존 값 비접촉
+    expect(doc.vehicle_int_color_source_checked).toBe(true);
+    const second = await run(commands, [r]);
+    expect(second.kinds).toEqual([]);                          // 되풀이 쓰기 없음
+  });
+  it('원천에 내장색이 없어도 표식만 한 번 남기고(값은 비움) 다시 쓰지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = withInterior('95자5002', null);
+    fake.put('95자5002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true }));
+    const first = await run(commands, [r]);
+    expect(first.applied?.status).toBe('APPLIED');
+    const doc = decodeFields(fake.docs.get('95자5002').fields);
+    expect(doc.vehicle_int_color_source_checked).toBe(true);   // 값은 비우고 표식만
+    expect(doc.int_color ?? '').toBe('');
+    expect((await run(commands, [r])).kinds).toEqual([]);      // 다시 쓰지 않는다
+  });
+});

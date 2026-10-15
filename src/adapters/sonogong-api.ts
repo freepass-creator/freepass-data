@@ -284,6 +284,9 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
       const spec: Record<string, string> = {};
       if (typeof row.exteriorColor === 'string' && row.exteriorColor.trim()) spec.ext_color = row.exteriorColor.trim();
+      // 내장색(상세 interiorColor, 없으면 목록): 대표 2026-10-16 화면 대조 «제원 칸이 전부 비어 있다». 문자열이 아니면 칸을 비운다.
+      const interior = typeof detail?.interiorColor === 'string' && detail.interiorColor.trim() ? detail.interiorColor.trim() : typeof row.interiorColor === 'string' ? row.interiorColor.trim() : '';
+      if (interior) spec.int_color = interior;
       // 연료: 공통 허용 목록·별칭(normalize-sonogong 의 표)으로만 바꾼다. 모르면 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
       if (typeof row.fuel === 'string' && row.fuel.trim()) {
         const fuel = fuelName(row.fuel);

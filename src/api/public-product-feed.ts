@@ -260,7 +260,9 @@ const cleanKey = (value: unknown): string => {
 };
 
 const cleanNumber = (value: unknown, field: string): number | null => {
-  if (value == null || value === '') return null;
+  if (value == null || value === '' || (typeof value === 'string' && value.trim() === '')) return null;
+  // 제원 입구 매핑·시트 제원은 숫자를 문자열("7113")로 저장한다: 단위·쉼표 없는 숫자 문자열만 숫자로 읽는다(그 밖의 문자열은 종전처럼 오류).
+  if (typeof value === 'string' && /^\d{1,9}(?:\.\d{1,2})?$/.test(value.trim())) value = Number(value.trim());
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error(`PUBLIC_NUMBER_INVALID:${field}`);
   return Math.round(value * 10) / 10;
 };
