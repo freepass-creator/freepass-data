@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import publicSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import { buildPublicProductFeed, buildPublicProductQuote, refineState, sourceRawName } from '../src/api/public-product-feed.js';
@@ -15,6 +15,7 @@ const snapshot = (extra: Record<string, unknown>): CatalogCompatibilitySnapshot 
     collectionCounts: { products: 1, policy: 1 }, depositEvidenceVersion: 'catalog-compat-deposit/1' },
 }) as unknown as CatalogCompatibilitySnapshot;
 const quote = (extra: Record<string, unknown>) => buildPublicProductQuote(snapshot(extra), 'P1', {})!.product as Record<string, unknown>;
+beforeEach(() => { process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW = '1'; });
 afterEach(() => { delete process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW; });
 
 describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
@@ -65,14 +66,19 @@ describe('공개 피드 원문 표기·정제 상태(2트랙)', () => {
     expect(p.source_raw_name).toBe('썬팅 자외선 99% 차단 K5');
   });
 
-  it('목록·상세 모두 포함, 플래그 0 이면 세 칸 없음, 계약 스키마 통과', () => {
+  it('Codex #692: 구분기호로 쪼갠 차량번호·이름 꼴은 null, 정상 차명은 유지', () => {
+    for (const bad of ['K5 12가-3456', 'K5 12가 3456', 'K5 12가.3456', 'K5 123-하-4567', 'K5 홍길동', '쏘나타 김철수 님']) expect(sourceRawName({ car_name: bad }), bad).toBeNull();
+    for (const ok of ['K5 프레스티지', '신형 K5 노블레스', '쏘나타 디 엣지', '임팔라 LT', 'G80 3.5 터보 AWD', '기아_K5(DL3)_가솔린']) expect(sourceRawName({ car_name: ok }), ok).not.toBeNull();
+  });
+
+  it('목록·상세 모두 포함, 플래그 기본 꺼짐이면 세 칸 없음, 계약 스키마 통과', () => {
     const feed = buildPublicProductFeed(snapshot({ car_name: 'K5' }), {});
     const item = (feed as unknown as { products: Array<Record<string, unknown>> }).products[0]!;
     expect(item.refine_state).toBe('REFINED');
-    process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW = '0';
+    delete process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW;   // 기본 꺼짐
     const off = quote({ car_name: 'K5' });
     expect('source_raw_name' in off || 'refine_state' in off || 'refine_missing' in off).toBe(false);
-    delete process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW;
+    process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW = '1';
     const validate = new Ajv2020({ strict: false, allErrors: true }).compile(publicSchema);
     expect(validate(buildPublicProductFeed(snapshot({ car_name: '기아_K5_가솔린' }), {})), JSON.stringify(validate.errors)).toBe(true);
   });

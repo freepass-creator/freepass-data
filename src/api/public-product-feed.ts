@@ -66,7 +66,7 @@ export type PublicProduct = {
   /** 옵션(대표 2026-10-16 «손오공은 유상옵션이 있다»). 운영 변수 FREEPASS_DATA_PUBLIC_OPTIONS=1 일 때만 나가고 목록(list) 모드에서는 나가지 않는다. 값은 손오공 API 의 분류 후 이름뿐이며
    * 금액 꼴·번호 꼴 이름은 개별로 버린다(피드 전체를 던지지 않는다). option_state: PRESENT(옵션 있음)·NONE(원천이 옵션 없음이라 함)·UNKNOWN(미확인 — 원천에 옵션 필드 없음 포함). */
   /** 2트랙(대표 2026-10-16): 공급사 원문 표기(읽기 전용 파생·표시용)와 정제 상태. 정제 칸 값이 있으면 항상 그 값이 이기고, 비어 있고 PENDING 이면 원문을 «정제 대기»와 함께 쓴다.
-   * FREEPASS_DATA_PUBLIC_SOURCE_RAW=0 이면 나가지 않는다(기본 켜짐). */
+   * FREEPASS_DATA_PUBLIC_SOURCE_RAW=1 일 때만 나간다(기본 꺼짐 — Codex #692: 원문에는 개인정보가 섞일 수 있어 켜기 전에 DRY 집계로 확인). */
   source_raw_name?: string | null;
   refine_state?: 'REFINED' | 'PENDING';
   refine_missing?: Array<'maker' | 'model' | 'sub_model'>;
@@ -139,10 +139,18 @@ const safeOptionName = (value: unknown, maxLength: number = OPTION_NAME_MAX): st
   if (OPTION_BLOCKED_WORDS.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
   // 개인정보 낱말·금지어는 «공백·기호를 지운 꼴»에서도 본다(고 객 홍길동·수 수 료, Codex #687 ②).
   if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
-  if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(compact)) return null;
+  // 차량번호 꼴은 구분기호(공백·하이픈·점·가운뎃점·밑줄)를 지운 꼴에서도 본다(«12가-3456», Codex #692 (a)).
+  const plateCompact = text.replace(/[\s\-–—.·_]+/g, '');
+  if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{2,3}[가-힣]\d{4}/.test(plateCompact) || /\d{7,}/.test(compact)) return null;
   return text;
 };
 const RAW_NAME_MAX = 120;
+// 원문 차명에 섞인 사람 이름 꼴(Codex #692 (b)): 성씨 + 두 글자로 된 «세 글자 한글 낱말»은 인명일 수 있어 원문 표기를 내보내지 않는다(null — 소비처는 «차량 정보 확인 중»).
+// 차명 낱말과 겹치는 흔한 세 글자 낱말은 허용 목록으로 둔다. 과차단은 안전한 쪽(원문 숨김)이다.
+const PERSON_SURNAMES = '김이박최정강조윤장임한오서신권황안송류홍전고문양손배백허유남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부황';
+const PERSON_NAME_ALLOW = new Set(['임팔라', '한정판', '신형차', '신차급', '정통파', '오토캠', '고급형', '전기차', '주행거리', '전용차', '장기차', '유니크', '모하비', '소렌토', '소나타', '마티즈', '마스터', '마이티', '마칸', '고스트', '우라칸', '도요타', '마즈다', '마쯔다', '유콘', '선루프', '박스카', '진주색', '연두색', '주황색', '하늘색', '고동색', '구형', '서비스']);
+const looksLikePersonName = (text: string): boolean =>
+  text.split(/\s+/).some(token => /^[가-힣]{3}$/.test(token) && PERSON_SURNAMES.includes(token.charAt(0)) && !PERSON_NAME_ALLOW.has(token));
 const refineText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 /** 공급사 원문 표기(표시용 읽기 전용 파생): 문서 car_name → 없으면 원문.차명. 밑줄 구분을 공백으로, 보이지 않는 문자·연속 공백 정리, 120자 상한.
  * 옵션 이름과 같은 안전 필터(전화·번호·금액 꼴·개인정보·금지어)에 걸리면 null. 문서·원문은 바꾸지 않는다. */
@@ -160,6 +168,7 @@ export const sourceRawName = (product: Rec): string | null => {
   const originalRow = source.original && typeof source.original === 'object' ? source.original as Rec : {};
   const maker = refineText(source.source_maker) || refineText(originalRow['제조사']) || (headerAt >= 0 ? refineText(cells[headerAt]) : '');
   if (maker && maker.length <= 20 && !text.replace(/\s+/g, '').startsWith(maker.replace(/\s+/g, ''))) text = `${maker} ${text}`;
+  if (looksLikePersonName(text)) return null;
   return safeOptionName(text, RAW_NAME_MAX + 16);
 };
 /** 정제 상태(커맨드 센터·B3Q 집계 반영): «실제 값» 기준이다 — 제조사·모델·세부모델 중 빈 칸, 세부모델에 밑줄(«원문 형태»),
@@ -392,7 +401,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
   if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product));
-  if (process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW !== '0') Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
+  if (process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1') Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
   // 옵션·원문 표기는 자기 안전 필터(safeOptionName)로 이미 거른다 — 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 값 하나로 피드 전체를 던지게 하므로 여기서는 뺀다.
   const { option_basic: _ob, option_paid: _op, source_raw_name: _sr, ...checked } = result;
   assertNoForbiddenValue(checked);
