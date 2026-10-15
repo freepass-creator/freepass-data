@@ -902,3 +902,35 @@ describe('maker rename repair (masterMaker / trimMaker / productMaker)', () => {
     expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
   });
 });
+
+// 별칭 정규화(사람 입력 보존 안전선의 유일한 예외): 확정·사람 입력 세부모델이 대상 마스터의 «등록 별칭» 일 때만 마스터 이름으로 바꾼다. 트림·제조사·모델은 그대로.
+describe('alias canonicalization of a confirmed product identity', () => {
+  beforeEach(() => {
+    store.clear();
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+  });
+  const plan = (over: Record<string, unknown> = {}) => ({ sourceDigest: 'alias-v1', masterRepairs: [], productRepairs: [],
+    productIdentityRepairs: [{ id: 'p1', from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1' },
+      evidence: '원문 차명: 현대_캐스퍼_가솔린 1.0 밴_스마트', ...over }] });
+  it('renames the confirmed sub-model to the master name when from is the target master\'s unique registered alias; trim and maker/model untouched', async () => {
+    const result = await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', trim_name: '스마트' });
+    expect(result).toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+  });
+  it('refuses when from is not a registered alias of the target master', async () => {
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: [] });
+    await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+  it('refuses when two active masters of the same family register the same alias (not unconditional)', async () => {
+    store.set('vehicle_master/m-new', { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '더 뉴 캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan())).rejects.toThrow(/not a unique registered alias/);
+  });
+  it('refuses a change of maker or model, and a locked or withdrawn product', async () => {
+    store.set('vehicle_master/m-other', { id: 'm-other', maker: '기아', model: '레이', sub_model: '레이 TAM', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan({ to: { maker: '기아', model: '레이', sub_model: '레이 TAM' } }))).rejects.toThrow(/manual or confirmed value/);
+    store.set('products/p1', { ...store.get('products/p1')!, locked_by_contract: true });
+    await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+  });
+});

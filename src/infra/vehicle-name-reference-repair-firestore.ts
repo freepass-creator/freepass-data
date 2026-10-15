@@ -459,6 +459,13 @@ export function identityFromOverwritable(data: Record<string, unknown> | undefin
   return rawText !== '' && sub === rawText && !clean(from.maker) && !clean(from.model);
 }
 
+/** «별칭 정규화» 후보(제조사·모델 동일, 세부모델만 다름, 세부모델 from 이 비어 있지 않음). 이것만으로는 허용하지 않는다 — 트랜잭션 안에서 from 이
+ * 대상 마스터의 «등록 별칭» 이고 같은 제조사·모델의 활성 마스터 중 그 별칭을 가진 곳이 대상 하나뿐일 때만 사람 입력 보존 안전선을 통과한다(규칙 10·20). */
+export function isAliasNormalizationCandidate(from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }): boolean {
+  return clean(from.maker) !== '' && clean(from.maker) === clean(to.maker) && clean(from.model) !== '' && clean(from.model) === clean(to.model)
+    && clean(from.sub_model) !== '' && clean(from.sub_model) !== clean(to.sub_model);
+}
+
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
   const planDigest = stableDigest(plan);
@@ -521,7 +528,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
     const blocked = productWriteBlock(snapshot.data());
     if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
-    if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+    if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
+      && !isAliasNormalizationCandidate(identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
@@ -727,7 +735,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
-      if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+      if (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
+        && !isAliasNormalizationCandidate(identityTargets[index]!.item.from, identityTargets[index]!.item.to)) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
       for (const field of PRODUCT_IDENTITY_FIELDS) {
         if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
@@ -796,7 +805,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const retiredKeys = new Set(retired.docs.map((doc) => identityKeyFrom(doc.data())));
       const retiredHit = identityTargets.find((x) => retiredKeys.has(identityKeyFrom(x.item.to)));
       if (retiredHit) throw new Error(`product ${retiredHit.ref.path} would take the identity of a retired master`);
-      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'sub_model_aliases', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — product identity check would be unbounded`);
       const activeKeys: Record<string, string[]> = {};
       const addActive = (key: string, id: string, retired?: unknown) => {
@@ -807,6 +816,20 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       for (const c of plan.masterCreates ?? []) addActive(masterNameKey(c.data), c.id);
       const miss = identityTargets.find((x) => (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
       if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
+      // 사람 입력 보존 안전선을 «별칭 정규화» 로만 푼다: 덮어쓰기 불가(확정·사람 입력) from 은 대상 마스터의 등록 별칭이고 그 별칭을 가진 활성 마스터가 대상 하나뿐일 때만.
+      identityTargets.forEach((x, index) => {
+        if (identityFromOverwritable(identityCurrent[index]?.data(), x.item.from)) return;
+        const from = clean(x.item.from.sub_model);
+        const targetKey = identityKeyFrom(x.item.to);
+        const family = (doc: { data: () => Record<string, unknown> }) => clean(doc.data().maker) === clean(x.item.to.maker) && clean(doc.data().model) === clean(x.item.to.model);
+        const aliasesOf = (data: Record<string, unknown>) => (Array.isArray(data.sub_model_aliases) ? data.sub_model_aliases : []).filter((a): a is string => typeof a === 'string').map(clean);
+        const owners = stored.docs.filter((doc) => doc.data().retired !== true && family(doc) && aliasesOf(doc.data()).includes(from)).map((doc) => doc.id);
+        for (const c of plan.masterCreates ?? []) if (clean(c.data.maker) === clean(x.item.to.maker) && clean(c.data.model) === clean(x.item.to.model) && aliasesOf(c.data).includes(from)) owners.push(c.id);
+        const targetIds = activeKeys[targetKey] ?? [];
+        if (owners.length !== 1 || owners[0] !== targetIds[0]) {
+          throw new Error(`transaction productIdentity from is a manual or confirmed value (not a unique registered alias of the target master) ${x.ref.path}`);
+        }
+      });
     }
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
     if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction linked vehicle_master missing or retired');
