@@ -205,3 +205,24 @@ describe('Codex #685 세 번째 지적', () => {
     expect(result.trimPlan === null || (result.trimPlan.productTrimRepairs ?? []).length === 0).toBe(true);
   });
 });
+
+describe('Codex #685 네 번째 지적', () => {
+  it('(a) 사람이 고른 세부모델·트림이 있는 문서는 채우지 않고, 그 값을 엔진이 쓴 값으로 기록하지도 않는다', async () => {
+    const { commands, fake } = await setup();
+    fake.put('93사1001', legacyDoc(rec('93사1001'), { sub_model: '아반떼 CN7', trim_name: '' }));        // 사람이 세부모델을 고름
+    fake.put('93사1002', legacyDoc(rec('93사1002'), { trim_name: '모던' }));                              // 사람이 트림을 고름
+    await run(commands, [rec('93사1001'), rec('93사1002')]);
+    for (const id of ['93사1001', '93사1002']) {
+      const doc = decodeFields(fake.docs.get(id).fields);
+      expect(doc.maker).toBe('');
+      expect(doc.vehicle_maker_model_filled).toBeUndefined();
+    }
+  });
+
+  it('(b) 트림을 사람이 고치면 maker·model·세부모델이 그대로여도 정체성 보류가 아니다', () => {
+    const base = { source_cycle_record: {}, vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', maker: '현대', model: '아반떼', sub_model: '현대_아반떼_가솔린',
+      vehicle_maker_model_filled: { maker: '현대', model: '아반떼', sub_model: '현대_아반떼_가솔린' } };
+    expect(engineIdentityHold({ ...base, trim_name: '' })).toBe(true);
+    expect(engineIdentityHold({ ...base, trim_name: '모던' })).toBe(false);
+  });
+});

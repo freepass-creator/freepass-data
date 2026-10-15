@@ -152,7 +152,16 @@ const filledByUs = (f: Fields): boolean => {
   const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown; sub_model?: unknown } | null | undefined;
   // 사람이 maker·model «또는 세부모델»을 고쳤으면 표식만 남아도 보류가 아니다(Codex #685 ①: 세부모델도 «쓴 값 그대로»일 때만).
   return f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && !!filled && typeof filled === 'object'
-    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model);
+    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model)
+    // 엔진은 이 문서의 트림을 쓴 적이 없다(채움 시점 트림은 빈칸) — 트림이 채워져 있으면 사람이 고친 것이므로 정체성 보류가 아니다(Codex #685 (b)).
+    && textOf(f.trim_name) === '';
+};
+/** 입구 매핑이 채워도 되는 «엔진 소유» 문서인가(Codex #685 (a)): 신규 편입이거나, 세부모델이 엔진이 복사한 원문 차명 그대로이고 트림이 비어 있을 때만.
+ * 사람이 고른 세부모델·트림이 있는 문서는 채우지 않으며, 그 값을 «엔진이 쓴 값»으로 기록하지도 않는다. */
+const engineOwnedIdentity = (original: Fields, isNew: boolean, r: SourceProductRecord): boolean => {
+  if (isNew) return true;
+  const rawText = textOf((original.원문 as Fields | undefined)?.차명) || textOf(original.car_name) || textOf(r.vehicleText);
+  return textOf(original.trim_name) === '' && (textOf(original.sub_model) === '' || (rawText !== '' && textOf(original.sub_model) === rawText));
 };
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
@@ -329,7 +338,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
