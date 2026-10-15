@@ -120,7 +120,7 @@ for (const r of rows) {
   const files = listed
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
     .filter(x => !FOLDER_COPY || !(isDocumentName(String(x.name)) || isUseRestrictedName(String(x.name))))
-    .sort((a, b) => intakeNameCompare(a.name, b.name)).slice(0, MAX);
+    .sort((a, b) => intakeNameCompare(a.name, b.name) || String(a.id).localeCompare(String(b.id))).slice(0, MAX);   // 같은 이름이면 id 순(계획 모듈과 같은 보조 정렬)
   if (!files.length) { out.push(`${r.plate.slice(-4)} 폴더 이미지 없음/체크섬 없음`); continue; }
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
   const refs = files.map(x => ({ driveFileId: x.id, sha256: x.sha256Checksum, mediaType: MEDIA[x.mimeType], role: 'VEHICLE_PHOTO', zone: '차량사진', vehicleKey: key, approvedAt: now,

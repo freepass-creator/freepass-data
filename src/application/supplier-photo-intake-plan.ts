@@ -3,7 +3,7 @@
  *  원칙: 불확실하면 보류(fail-closed). 번호 매칭 키는 «같은 공급사 안 전체 번호»이며 끝 4자리는 표시 전용이다. */
 import { folderMatchesPlate, plateFromFolderName } from '../domain/photo-folder-match.js';
 
-/** sha256 = 드라이브가 준 체크섬. 키가 있으면(null 포함) 64자리 16진이 아닌 이미지는 «체크섬 없음»으로 제외한다(등록 도구와 같은 판정). 키가 없으면 검사하지 않는다. */
+/** sha256 = 드라이브가 준 체크섬. 64자리 16진이 아니거나 생략(undefined)·null 이면 이미지라도 «체크섬 없음»으로 제외한다(등록 도구와 같은 판정, fail-closed — Codex #690). */
 export type IntakeFile = { id: string; name: string; mimeType: string | null; size: number | null; sha256?: string | null | undefined };
 /** files = 번호 폴더의 직계 파일만(하위 폴더는 subfolderCount 로만 전달 — 서류 하위 폴더는 통째로 읽지 않는다). */
 export type IntakeFolder = { id: string; name: string; files: IntakeFile[]; subfolderCount?: number };
@@ -52,7 +52,7 @@ export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: Int
     // PDF 는 사진 폴더에서 서류로 본다(이름에 표지가 없어도 «001.pdf»): 서류 비율에 넣고 사진 후보에서 뺀다(Codex #690).
     if ((f.mimeType ?? '').toLowerCase() === 'application/pdf') { documentLike++; bump('DOCUMENT_PDF'); continue; }
     if (!isImage(f)) { bump('NOT_IMAGE'); continue; }
-    if (f.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(f.sha256 ?? '')) { bump('NO_CHECKSUM'); continue; }
+    if (!/^[a-f0-9]{64}$/.test(f.sha256 ?? '')) { bump('NO_CHECKSUM'); continue; }
     if (f.size === null || f.size > INTAKE_MAX_FILE_BYTES || f.size <= 0) { bump('FILE_TOO_LARGE'); continue; }
     kept.push(f);
   }

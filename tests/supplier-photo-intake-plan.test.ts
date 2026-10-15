@@ -7,7 +7,8 @@ import { classifyFolderFiles, isDocumentHeavy, intakeSuppliers, planSupplierInta
 import { parsePhotoCopySuppliers } from '../src/domain/consumer-output-contract.js';
 import { planSupplierPhotoIntakeCli } from '../src/jobs/plan-supplier-photo-intake.js';
 
-const img = (name: string, size = 100_000, mimeType: string | null = 'image/jpeg'): IntakeFile => ({ id: `id-${name}`, name, mimeType, size });
+const SHA = 'c'.repeat(64);
+const img = (name: string, size = 100_000, mimeType: string | null = 'image/jpeg'): IntakeFile => ({ id: `id-${name}`, name, mimeType, size, sha256: SHA });
 const folder = (name: string, files: IntakeFile[], subfolderCount = 0): IntakeFolder => ({ id: `f-${name}`, name, files, subfolderCount });
 const allowed = new Set(['RP012']);
 const plan = (folders: IntakeFolder[], products: Array<{ plate: string; hasPhotoRefs: boolean }>, opts: { maxVehicles?: number } = {}) =>
@@ -142,8 +143,13 @@ describe('공급사 사진 인입 계획', () => {
     const c = classifyFolderFiles([withSha('1.jpg', sha), withSha('2.jpg', null), withSha('3.jpg', 'xyz')]);
     expect(c.photos.map(f => f.name)).toEqual(['1.jpg']);
     expect(c.excluded.NO_CHECKSUM).toBe(2);
-    // 체크섬 키가 없으면(스냅숏이 모르면) 검사하지 않는다
-    expect(classifyFolderFiles([img('1.jpg')]).photos).toHaveLength(1);
+    // 체크섬이 생략(undefined)된 이미지도 제외한다(fail-closed, 등록 도구와 같은 판정)
+    const omitted = classifyFolderFiles([{ id: 'x', name: '1.jpg', mimeType: 'image/jpeg', size: 1000 }]);
+    expect(omitted.photos).toHaveLength(0);
+    expect(omitted.excluded.NO_CHECKSUM).toBe(1);
+    // 같은 이름은 id 순으로 안정 정렬
+    const dup = classifyFolderFiles([{ ...img('1.jpg'), id: 'b' }, { ...img('1.jpg'), id: 'a' }]).photos.map(f => f.id);
+    expect(dup).toEqual(['a', 'b']);
     // 숫자 인식 정렬: 2 < 10 (등록 도구와 같은 기준)
     const order = classifyFolderFiles([img('10.jpg'), img('2.jpg'), img('1.jpg')]).photos.map(f => f.name);
     expect(order).toEqual(['1.jpg', '2.jpg', '10.jpg']);

@@ -1,6 +1,6 @@
 /** 공급사 사진 인입 계획(DRY_RUN, 쓰기 0): 드라이브 폴더 스냅숏 + 상품 스냅숏 JSON → 매칭·분류 계획 요약.
  *   npm run plan:supplier-photo-intake -- --input <snapshot.json> [--max-vehicles 50]
- * 입력 JSON: { "suppliers": [ { "supplierCode": "RP012", "folders": [ {id,name,files:[{id,name,mimeType,size}],subfolderCount} ], "products": [ {plate,hasPhotoRefs} ] } ] }
+ * 입력 JSON: { "suppliers": [ { "supplierCode": "RP012", "folders": [ {id,name,files:[{id,name,mimeType,size,sha256}](sha256 없는 이미지는 «체크섬 없음»으로 제외),subfolderCount} ], "products": [ {plate,hasPhotoRefs} ] } ] }
  * 환경: FREEPASS_DATA_PHOTO_INTAKE_SUPPLIERS(기본 비어 있음 = 아무것도 안 함), FREEPASS_DATA_PHOTO_COPY_SUPPLIERS(서빙 허용표).
  * 출력: 끝 4자리 번호와 건수만(파일 id·이름·전체 번호 없음). 이 잡은 드라이브·Firestore 를 읽지도 쓰지도 않는다. 종료 코드: 0 정상 · 2 설정 오류. */
 import { readFileSync } from 'node:fs';
