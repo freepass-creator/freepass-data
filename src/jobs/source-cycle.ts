@@ -9,6 +9,10 @@ import { fileCycleControl } from '../adapters/source-cycle-control.js';
 export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
+    /** onlyWhenSynced 에서 갱신 후 10분을 넘겼을 때 «다음 갱신»을 기다릴 최대 시간(ms, 기본 0 = 기다리지 않고 종전처럼 건너뜀).
+     * 이안카 synced_at 은 15분 주기라 :05 단독 회차는 거의 항상 창 가장자리(갱신 후 10분 03초)에서 시작해 매번 건너뛰었다(2026-10-16). 15분 안쪽이면 다음 갱신을
+     * 기다렸다가 읽는다(상류가 안 바뀌면 종전처럼 건너뜀). sleepMs 는 시험용 주입. */
+    syncWaitMs?: number; sleepMs?: (ms: number) => Promise<void>;
     /** 같은 회차에서 방금 읽어 세운 계획을 바로 적용한다(무인 회차 전용). 사람이 검토한 계획 파일 승인 경로(approvedPlan)와 섞지 않는다. */
     autoApprove?: boolean;
     /** 사람이 손으로 돌리는 «계획만 만들기»(--plan, 적용 없음). 이 실행의 실패는 무인 회차의 연속 실패 수·정지 상태를 바꾸지 않는다(2026-10-16 수동 plan 이 정지를 오염). */
@@ -45,6 +49,17 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         if (!synced || !Number.isFinite(Date.parse(synced)) || Date.parse(synced) > clock()) throw new Error('SYNC_PROBE_INVALID');
         // 상세 읽기에 약 5분이 걸리고 상류 신선도 창은 15분이다. 갱신 후 10분이 넘었으면 이번 갱신은 창 안에 끝낼 수 없어 다음 갱신을 기다린다
         // (넘긴 채 읽으면 DETAIL_SOURCE_DRIFT 로 5분마다 되풀이 실패하며 공급사 API 만 소모한다).
+        // 다음 갱신 대기(옵트인): 갱신 후 10~14분이면 다음 갱신(15분 주기)이 5분 안쪽이다 — 30초마다 확인해 바뀌면 그 갱신으로 읽는다.
+        const ageMs = () => clock() - Date.parse(synced!);
+        if (options.syncWaitMs && options.syncWaitMs > 0 && ageMs() > 10 * 60_000 && ageMs() <= 14 * 60_000 && synced !== state.lastSyncedAt) {
+          const sleepFn = options.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+          const pollMs = 30_000, attempts = Math.ceil(Math.min(options.syncWaitMs, 10 * 60_000) / pollMs);
+          for (let i = 0; i < attempts; i++) {
+            await sleepFn(pollMs);
+            const next = await plugin.syncedAt!();
+            if (next && Number.isFinite(Date.parse(next)) && Date.parse(next) > Date.parse(synced) && Date.parse(next) <= clock()) { synced = next; break; }
+          }
+        }
         if (clock() - Date.parse(synced) > 10 * 60_000 && synced !== state.lastSyncedAt) {
           state.error = null;
           await control.save(plugin.sourceId, state);
@@ -197,7 +212,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
  * 그 계획을 바로 적용한다. blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·문서별 CAS·백업·되읽기·3회 실패 정지가 그대로
  * 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. 변경이 없으면 적용하지 않는다(stage PLAN). */
 export async function runUnattendedSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
-  options: { onlyWhenSynced?: boolean; now?: () => number } = {}) {
+  options: { onlyWhenSynced?: boolean; now?: () => number; syncWaitMs?: number; sleepMs?: (ms: number) => Promise<void> } = {}) {
   const result = await runSourceCycle(plugin, commands, control, { ...options, autoApprove: true });
   const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN';
   const noChange = result.status === 'DRY_RUN' && 'plan' in result && result.plan && result.plan.entries.length === 0;

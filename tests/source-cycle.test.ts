@@ -427,6 +427,33 @@ describe('runner safety and heartbeat', () => {
     expect(read).not.toHaveBeenCalled();
     expect((await ctrl.load(config.sourceId))).toMatchObject({ failures: 0, stopped: false, lastSyncedAt: null });   // 토큰을 소비하지 않는다
   });
+  it('only-when-synced waits for the next upstream sync when the current one is 10–14 minutes old (opt-in), then reads', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    let synced = new Date(Date.parse(time) - 11 * 60_000).toISOString();
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => synced);
+    const sleeps: number[] = [];
+    const sleepMs = async (ms: number) => { sleeps.push(ms); if (sleeps.length === 3) synced = time; };   // 세 번째 확인에서 상류가 갱신된다
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), syncWaitMs: 7 * 60_000, sleepMs });
+    expect(r.status).toBe('DRY_RUN');
+    expect(sleeps).toEqual([30_000, 30_000, 30_000]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+  it('only-when-synced: no upstream change inside the wait, or older than 14 minutes, falls back to the previous skip (no read)', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const stale = new Date(Date.parse(time) - 11 * 60_000).toISOString();
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => stale);
+    const sleeps: number[] = [];
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), syncWaitMs: 2 * 60_000, sleepMs: async ms => { sleeps.push(ms); } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(sleeps).toHaveLength(4);   // 2분 / 30초
+    const veryOld = new Date(Date.parse(time) - 20 * 60_000).toISOString();
+    const p2 = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => veryOld);
+    const sleeps2: number[] = [];
+    const r2 = await runSourceCycle(p2, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), syncWaitMs: 7 * 60_000, sleepMs: async ms => { sleeps2.push(ms); } });
+    expect(r2.status).toBe('UNCHANGED_SYNC');
+    expect(sleeps2).toEqual([]);      // 상류가 오래 멈춘 것: 기다려도 소용없다
+    expect(read).not.toHaveBeenCalled();
+  });
   it('CLI cannot enable scheduled writes', async () => {
     await expect(sourceCycleCli(['--runtime', 'unused', '--apply'])).rejects.toThrow('SCHEDULED_APPLY_NOT_AUTHORIZED');
   });

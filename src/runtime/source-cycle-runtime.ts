@@ -608,7 +608,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       } catch { /* 첫 회차 또는 기록 없음 */ }
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+            // 이안카 단독 회차는 갱신 후 10분을 넘겨 시작하는 일이 잦아 다음 갱신(≤5분)을 기다렸다 읽는다. 0 이면 종전(건너뜀). 상한 10분.
+            syncWaitMs: args.includes('--only-when-synced') && plugin.family === 'IANCAR'
+              ? Math.min(10, Math.max(0, Number(env.SOURCE_CYCLE_IANCAR_SYNC_WAIT_MIN ?? '7') || 0)) * 60_000 : 0 });
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {
