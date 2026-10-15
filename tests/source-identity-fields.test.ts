@@ -39,11 +39,12 @@ function fakeFirestore() {
   return { docs, fetcher, put: (uid: string, f: Record<string, unknown>) => docs.set(uid, doc(uid, encodeFields(f as never))) };
 }
 const knownMakers: VehicleIdentityRefiner = { digest: 't', match: () => null, makers: ['현대', '기아'] };
-async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers) {
+async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers, extra: { identityRefineSources?: string[] } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'source-identity-')); dirs.push(dir);
   const fake = fakeFirestore();
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
     supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } }, sourceIdentitySources,
+    ...(extra.identityRefineSources ? { identityRefineSources: extra.identityRefineSources } : {}),
     identity: async () => identity });
   return { commands, fake };
 }
@@ -126,6 +127,19 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     await run(commands, [rec('12가2005', '현대자동차', '아반떼')]);
     expect(decodeFields(fake.docs.get('12가2005').fields)).toMatchObject({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', vehicle_title_source: 'MASTER_MATCH', vehicle_review_required: false });
     expect(decodeFields(fake.docs.get('12가2005').fields).vehicle_maker_model_source).toBeUndefined();
+  });
+
+  it('정체성 정제 공급사 허용 목록: 목록 밖 공급사는 마스터로 확정되어도 정제하지 않고(입구 매핑만), 목록 안이면 마스터 이름이 이긴다', async () => {
+    const refiner: VehicleIdentityRefiner = { digest: 'd', makers: ['현대', '기아'],
+      match: () => ({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', trim_name: null, master_id: 'm1' }) };
+    const outside = await setup(['RP012'], refiner, { identityRefineSources: ['RP031'] });
+    await run(outside.commands, [rec('12가2105', '현대', '아반떼')]);
+    const o = decodeFields(outside.fake.docs.get('12가2105').fields);
+    expect(o.vehicle_title_source).not.toBe('MASTER_MATCH');           // 정제 안 함
+    expect(o).toMatchObject({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' });
+    const inside = await setup(['RP012'], refiner, { identityRefineSources: ['RP012'] });
+    await run(inside.commands, [rec('12가2106', '현대', '아반떼')]);
+    expect(decodeFields(inside.fake.docs.get('12가2106').fields)).toMatchObject({ sub_model: '아반떼 CN7', vehicle_title_source: 'MASTER_MATCH' });
   });
 
   it('입구 매핑만 채우는 다시 쓰기는 옵션 쓰기와 같은 회차 상한 안에서 이월된다', async () => {

@@ -134,7 +134,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 정체성 정제: 기본 켜짐, SOURCE_CYCLE_IDENTITY_REFINE=0 이면 끔. 첫 목록 읽기 때 한 번만 읽고(같은 Promise) 회차 내내 같은 마스터를 쓴다.
   // 입구 매핑이 켜진 공급사가 있으면 마스터(제조사 목록)를 읽어야 하므로 REFINE=0 이어도 로드한다(정제 자체는 identityRefine=false 로 끈 채).
   const sourceIdentitySources = (env.SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
-  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0';
+  // 정체성 정제 켜기(IDENTITY-SAME-CYCLE-DESIGN 2단계, 기본 꺼짐으로 뒤집음): SOURCE_CYCLE_IDENTITY_SOURCES=공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다.
+  // 목록이 없으면 SOURCE_CYCLE_IDENTITY_REFINE=1 일 때만 전체에 켠다(명시). 그 밖(미설정 포함)은 꺼짐 — 옵션 사고(#674)의 교훈: 무인 쓰기 경로는 기본 꺼짐.
+  const identitySources = (env.SOURCE_CYCLE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' || (identitySources.length === 0 && env.SOURCE_CYCLE_IDENTITY_REFINE !== '1');
   let identityStatus = refineOff && !sourceIdentitySources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
@@ -147,7 +150,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, identityRefine: !refineOff, identity });
+      sourceIdentitySources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

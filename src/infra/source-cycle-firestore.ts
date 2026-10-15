@@ -421,6 +421,8 @@ const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
+  /** 정체성 정제(마스터 이름 채움)를 켤 공급사 코드 목록(IDENTITY-SAME-CYCLE-DESIGN 2단계). 값이 있으면 그 공급사만, 없으면(undefined) identityRefine 이 전체를 정한다. */
+  identityRefineSources?: readonly string[];
   /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
   identity?: () => Promise<VehicleIdentityRefiner | null> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
@@ -431,9 +433,12 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   let refiner: VehicleIdentityRefiner | null = null;
   const ready = async () => { refiner = options.identity ? await options.identity().catch(() => null) : null; };
   // 정체성 정제(마스터 이름 덮어쓰기)는 identityRefine=false 면 끈다(입구 매핑용 제조사 목록만 읽은 경우).
-  const refineWith = () => (options.identityRefine === false ? null : refiner);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineWith(), apiOptions, srcIdentity);
-  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineWith(), writeApiOptions: apiOptions,
+  const refineSources: ReadonlySet<string> | null = options.identityRefineSources ? new Set(options.identityRefineSources) : null;
+  // 공급사 허용 목록이 있으면 그 공급사 문서·레코드에만 정제기를 건넨다(없으면 종전: identityRefine 이 전체를 정한다).
+  const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
+  const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity);
+  const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
     sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
@@ -544,7 +549,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineWith(), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
