@@ -31,6 +31,15 @@ describe('변형 근거: 원문 낱말 + E-TECH(르노 계열) + 연료 칸', ()
     // 하이브리드 행이 있어도 원문이 «하이브리드 LJL» 이름 전체를 담지 않으면 마스터 이름 대조가 못 하므로 일반 행에 걸려 보류(변형 누락 방지)
     expect(matchIdentity(product(raw), [gas, hybrid]).state).toBe('HOLD');
   });
+  it('E-TECH 는 단어 경계로만 — RETECH·E-TECHNOLOGY 는 변형 근거가 아니다(Codex #682)', () => {
+    for (const text of ['르노코리아 아르카나 LJL RETECH 이스타일', '르노코리아 아르카나 LJL E-TECHNOLOGY 이스타일']) {
+      expect(matchIdentity(product({ sub_model: text, rawName: text }), [gas])).toMatchObject({ state: 'MATCH', master: { id: 'G' } });
+    }
+    expect(matchIdentity(product({ sub_model: '르노코리아 아르카나 LJL (E-TECH) 이스타일', rawName: '르노코리아 아르카나 LJL (E-TECH) 이스타일' }), [gas]))
+      .toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+    expect(matchIdentity(product({ sub_model: '르노코리아 아르카나 LJL E TECH 이스타일', rawName: '르노코리아 아르카나 LJL E TECH 이스타일' }), [gas]))
+      .toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+  });
   it('E-TECH 는 르노 계열에만 적용(다른 제조사 이름 속 낱말로는 변형 아님)', () => {
     const other: IdentityMaster = { ...gas, id: 'X', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8' };
     const p = product({ sub_model: '현대 쏘나타 DN8 E-TECH', rawName: '현대 쏘나타 DN8 E-TECH' });

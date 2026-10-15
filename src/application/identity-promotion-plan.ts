@@ -139,7 +139,8 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   // 이미 세부모델이 채워진 상품도 원문 차명이 있으면 같은 검사를 받는다(빈칸 조건문 안에 두면 채워진 상품이 우회한다).
   // 변형 근거는 원문 낱말 + (르노 계열) E-TECH + 문서 연료 칸(하이브리드·플러그인·전기). 연료는 차 한 대 사실이라 원문이 침묵해도 쓴다.
   const baseVariantText = p.rawName || (engineRawProduct ? p.sub_model : '');
-  const etech = /E[-\s]?TECH/i.test(baseVariantText) && ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
+  // 영숫자 단어 경계로만(RETECH·E-TECHNOLOGY 는 E-TECH 가 아니다, Codex #682).
+  const etech = /(?<![A-Z0-9])E[-\s]?TECH(?![A-Z0-9])/i.test(baseVariantText.normalize('NFKC')) && ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
   const variantText = [baseVariantText, fuelVariantWord(p.fuel ?? ''), etech ? '하이브리드' : ''].filter(Boolean).join(' ');
   if (variantText.trim() && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
