@@ -156,7 +156,7 @@ const PERSON_NAME_ALLOW = new Set(['임팔라', '한정판', '신형차', '신�
   '구동', '연료', '모닝', '소울', '마크', '백색', '은색', '남색', '금색', '황색', '흑색', '회색', '갈색', '적색', '청색', '검정', '주황', '진주', '하늘', '전체', '선택',
   '차단', '차량', '주차', '정비', '보증', '운전', '안전', '전방', '후방', '고속', '자동', '강화', '통풍', '열선', '성능', '연비', '유리', '도어', '주문', '오너', '신품', '구입',
   // 제조사·모델명(성씨와 첫 글자가 겹치는 것) — 정상 차명 과차단 방지(Codex #692 잔여 ③).
-  '지프', '제타', '봉고', '모델', '마이바흐', '주크', '사브', '링컨', '하이랜더', '지엠', '남양', '서울', '인천', '제주', '대구', '부산', '광주', '대전', '울산', '경기', '강원', '충북', '충남', '전북', '전남', '경북', '경남']);
+  '지프', '제타', '인치', '봉고', '모델', '마이바흐', '주크', '사브', '링컨', '하이랜더', '지엠', '남양', '서울', '인천', '제주', '대구', '부산', '광주', '대전', '울산', '경기', '강원', '충북', '충남', '전북', '전남', '경북', '경남']);
 const HONORIFIC = '님|씨|고객님?|대표님?|사장님?|기사님?|과장님?|부장님?|팀장님?|선생님?|사모님?|양|군';
 const HONORIFIC_TOKEN = new RegExp(`^(?:${HONORIFIC})$`);
 const NAME_WITH_HONORIFIC = new RegExp(`^([가-힣]{2,3}?)(?:${HONORIFIC})$`);
@@ -185,15 +185,50 @@ const looksLikePersonName = (text: string): boolean => {
   return false;
 };
 const refineText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+// ── 원문 차명 화이트리스트(B3Q 구조 권고, Codex #694 잔여): 인명 꼴 블랙리스트는 우회가 끝이 없다. 원문 차명의 «모든 낱말»이 정제된 차량들의 제조사·모델·세부모델·등급·색·연료 어휘
+// 또는 숫자·단위·제원 낱말에 속할 때만 내보내고, 하나라도 밖이면 null(→ PENDING 이라 소비처는 «확인 중»). 허용 문자 집합 밖(분리 자모·이모지·한자·전각 등)이면 null.
+const RAW_NAME_CHARSET = /^[가-힣A-Za-z0-9\s.,()\[\]{}/\-+&'"·:;%#*~<>_!?…]*$/;
+const RAW_VOCAB_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant', 'vehicle_class', 'fuel_type', 'ext_color', 'engine_type', 'drive_type', 'transmission'] as const;
+const RAW_SPEC_WORDS = new Set(['가솔린', '디젤', '하이브리드', '전기', '수소', '엘피지', '엘피아이', 'lpg', 'lpi', '터보', '인치', '년식', '연식', '년', '월', 'cc', 'km', '만km', '이상', '이하', '급', '형',
+  '모델', '신형', '구형', '더', '뉴', '올', '디', '에디션', '패키지', '스페셜', '한정판', '풀옵션', '무사고', '오토', '수동', '자동', '투톤', '선루프', '파노라마',
+  '흰색', '검정', '검정색', '은색', '회색', '청색', '파랑', '빨강', '적색', '흑색', '백색', '진주색', '갈색', '녹색', '금색', '주황', '노랑',
+  'awd', '2wd', '4wd', 'suv', 'rv', 'ev', 'hev', 'phev', 'bev', 'gdi', 'tdi', 'gt', 'amg', 'se', 'le', 'gl', 'gls', 'lx', 'ex', 'dx', 'sx', 'lt', 'ls', 'rs', 'xl', 'l', 'm', 'x']);
+const vocabTokens = (value: unknown): string[] =>
+  typeof value === 'string' ? value.normalize('NFKC').toLowerCase().split(/[^가-힣a-z0-9.]+/u).map(token => token.replace(/^\.+|\.+$/g, '')).filter(Boolean) : [];
+/** 정제된(REFINED) 차량의 제조사·모델·세부모델·등급·색·연료 칸에서 낱말 어휘를 만든다(원문 오염을 피하려 정제 상태가 REFINED 인 문서만). 피드·견적 한 번의 응답에서 한 번만 만든다. */
+export const buildRawNameVocabulary = (products: Iterable<Rec>): Set<string> => {
+  const vocab = new Set<string>();
+  for (const product of products) {
+    if (!product || typeof product !== 'object' || refineState(product).refine_state !== 'REFINED') continue;
+    for (const field of RAW_VOCAB_FIELDS) for (const token of vocabTokens(product[field])) vocab.add(token);
+  }
+  return vocab;
+};
+const rawNameTokensAllowed = (text: string, vocab: ReadonlySet<string>): boolean => {
+  if (!RAW_NAME_CHARSET.test(text)) return false;
+  for (const token of vocabTokens(text)) {
+    if (/^[0-9.]+$/.test(token)) continue;
+    const rest = token.replace(/^[0-9.]+/, '');   // «17인치»·«2.0터보» 처럼 숫자로 시작하는 낱말은 숫자를 뗀 나머지를 본다
+    if (!rest) continue;
+    if (/^[a-z]*[0-9][a-z0-9]*$/.test(token) && token.length <= 8) continue;   // K5·GV80·2wd 같은 코드(숫자 포함, 짧음)
+    if (vocab.has(token) || vocab.has(rest) || RAW_SPEC_WORDS.has(token) || RAW_SPEC_WORDS.has(rest)) continue;
+    return false;
+  }
+  return true;
+};
 /** 공급사 원문 표기(표시용 읽기 전용 파생): 문서 car_name → 없으면 원문.차명. 밑줄 구분을 공백으로, 보이지 않는 문자·연속 공백 정리, 120자 상한.
  * 옵션 이름과 같은 안전 필터(전화·번호·금액 꼴·개인정보·금지어)에 걸리면 null. 문서·원문은 바꾸지 않는다. */
-export const sourceRawName = (product: Rec): string | null => {
+export const sourceRawName = (product: Rec, vocabulary?: ReadonlySet<string>): string | null => {
   const original = product['원문'] && typeof product['원문'] === 'object' ? product['원문'] as Rec : {};
   const raw = refineText(product.car_name) || refineText(original['차명']);
   if (!raw) return null;
   // 모든 검사 전에 정규화한다(NFD 로 분해된 «홍길동» 이 검사를 통과한 뒤 NFC 로 합쳐져 노출되던 우회, Codex #692 잔여 ②).
   let text = raw.normalize('NFKC').replace(INVISIBLE, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (text.length > RAW_NAME_MAX) text = `${text.slice(0, RAW_NAME_MAX - 1)}…`;
+  if (text.length > RAW_NAME_MAX) {
+    // 낱말 중간에서 자르지 않는다(잘린 조각이 어휘 검사에서 떨어지지 않게): 마지막 공백까지만 남기고 «…» 를 붙인다.
+    const cut = text.slice(0, RAW_NAME_MAX - 1), at = cut.lastIndexOf(' ');
+    text = `${at > 0 ? cut.slice(0, at) : cut}…`;
+  }
   // 공급사 시트에 제조사 열이 있으나 차명에는 빠지는 경우(아이카): 원문 보존 칸의 source_maker 가 있으면 읽기 전용 접두로만 붙인다.
   const source = (product.raw && typeof product.raw === 'object' ? product.raw : original['source'] && typeof original['source'] === 'object' ? original['source'] : {}) as Rec;
   // 제조사: 손오공 raw.source_maker, 아이카 시트 원본 칸(raw.original['제조사'] 또는 headers/cells 의 «제조사» 열). 문서에 값을 새로 쓰지 않는다.
@@ -203,6 +238,8 @@ export const sourceRawName = (product: Rec): string | null => {
   const maker = (refineText(source.source_maker) || refineText(originalRow['제조사']) || (headerAt >= 0 ? refineText(cells[headerAt]) : '')).normalize('NFKC');
   if (maker && maker.length <= 20 && !text.replace(/\s+/g, '').startsWith(maker.replace(/\s+/g, ''))) text = `${maker} ${text}`;
   if (looksLikePersonName(text)) return null;
+  // 화이트리스트: 어휘를 못 받으면(단독 호출) 이 문서 자신의 정제 칸만 어휘로 쓴다(fail-closed).
+  if (!rawNameTokensAllowed(text, vocabulary ?? buildRawNameVocabulary([product]))) return null;
   return safeOptionName(text, RAW_NAME_MAX + 16);
 };
 /** 정제 상태(커맨드 센터·B3Q 집계 반영): «실제 값» 기준이다 — 제조사·모델·세부모델 중 빈 칸, 세부모델에 밑줄(«원문 형태»),
@@ -375,7 +412,7 @@ const providerMatches = (product: Rec, provider: string | undefined): boolean =>
   return [product.provider_company_code, product.partner_code].some((value) => typeof value === 'string' && value === provider);
 };
 
-const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMode: boolean): PublicProduct => {
+const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMode: boolean, rawVocabulary?: ReadonlySet<string>): PublicProduct => {
   const key = cleanKey(product.publicProductKey ?? product.product_code ?? product._key);
   const policyId = typeof product.policy_id === 'string' ? product.policy_id : typeof product.policy_code === 'string' ? product.policy_code : undefined;
   const images = cleanImages(product);
@@ -436,7 +473,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
   const sourceRawOn = process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1';
   if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product, sourceRawOn));
-  if (sourceRawOn) Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
+  if (sourceRawOn) Object.assign(result, { source_raw_name: sourceRawName(product, rawVocabulary), ...refineState(product) });
   // 옵션·원문 표기는 자기 안전 필터(safeOptionName)로 이미 거른다 — 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 값 하나로 피드 전체를 던지게 하므로 여기서는 뺀다.
   // 원문 표기 플래그가 켜진 응답에서만 옵션·원문 표기를 공용 검사에서 뺀다(자체 필터로 이미 거름). 꺼져 있으면 옵션 검증은 종전과 같다.
   if (sourceRawOn) {
@@ -465,10 +502,13 @@ const assertNoForbiddenValue = (value: unknown): void => {
   }
 };
 
-const productsFromSnapshot = (snapshot: CatalogCompatibilitySnapshot, query: PublicProductFeedQuery, listMode: boolean): PublicProduct[] =>
-  Object.values(snapshot.data.products)
+const productsFromSnapshot = (snapshot: CatalogCompatibilitySnapshot, query: PublicProductFeedQuery, listMode: boolean): PublicProduct[] => {
+  // 원문 표기 화이트리스트 어휘는 응답 한 번에 한 번만 만든다(플래그가 켜진 경우만).
+  const rawVocabulary = process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1' ? buildRawNameVocabulary(Object.values(snapshot.data.products) as Rec[]) : undefined;
+  return Object.values(snapshot.data.products)
     .filter((product) => product.listable !== false && providerMatches(product, query.p) && channelMatches(product, query.wl))
-    .map((product) => buildPublicProduct(product, snapshot.data.policies, listMode));
+    .map((product) => buildPublicProduct(product, snapshot.data.policies, listMode, rawVocabulary));
+};
 
 export const publicConsumerIdFromWhitelabel = (wl: unknown): string => {
   if (typeof wl !== 'string' || !wl.trim()) return 'erp-com';
