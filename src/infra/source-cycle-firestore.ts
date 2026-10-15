@@ -236,8 +236,15 @@ export const sourceModelsOf = (models: Readonly<Record<string, readonly string[]
   const out = new Map<string, Map<string, string>>();
   for (const [maker, names] of Object.entries(models)) {
     const byKey = new Map<string, string>();
-    for (const name of names) if (modelKey(name)) byKey.set(modelKey(name), textOf(name));
-    for (const [alias, canonical] of Object.entries(aliases?.[maker] ?? {})) if (modelKey(alias) && byKey.has(modelKey(canonical)) && !byKey.has(modelKey(alias))) byKey.set(modelKey(alias), textOf(canonical));
+    for (const name of [...names].sort()) if (modelKey(name) && !byKey.has(modelKey(name))) byKey.set(modelKey(name), textOf(name));   // 같은 키의 정식 이름이 둘이면 정렬 첫 번째로 고정
+    // 별칭: 정식 이름(저장된 값)으로 변환한다(별칭 대상 표기가 대소문자만 달라도 정식 값을 쓴다). 같은 별칭 키가 서로 다른 정식으로 가면 제외(모호).
+    const aliasTargets = new Map<string, Set<string>>();
+    for (const [alias, canonical] of Object.entries(aliases?.[maker] ?? {})) {
+      const canon = byKey.get(modelKey(canonical));
+      if (!modelKey(alias) || !canon || byKey.has(modelKey(alias))) continue;
+      (aliasTargets.get(modelKey(alias)) ?? aliasTargets.set(modelKey(alias), new Set<string>()).get(modelKey(alias))!).add(canon);
+    }
+    for (const [aliasKey, targets] of aliasTargets) if (targets.size === 1) byKey.set(aliasKey, [...targets][0]!);
     out.set(maker.trim(), byKey);
   }
   return out;

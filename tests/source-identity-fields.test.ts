@@ -7,6 +7,7 @@ import { planSourceCycle, applySourceCycle, OPTIONS_REWRITE_CAP } from '../src/a
 import { compactRaw, compactRecord, type SourceProductRecord } from '../src/domain/source-engine.js';
 import type { VehicleIdentityRefiner } from '../src/ports/source-cycle.js';
 import { identityProductsFromPlainDocs } from '../src/adapters/identity-snapshot.js';
+import { modelTablesFromMasters } from '../src/runtime/source-cycle-runtime.js';
 
 // 입구 매핑(대표 2026-10-16): 손오공 brand·model → 빈 maker·model 에만. 기본 꺼짐, 공급사별 허용. 값은 전부 합성.
 const time = '2026-10-16T05:00:00.000Z', now = Date.parse('2026-10-16T05:05:00.000Z'), source = 'RP012';
@@ -528,6 +529,20 @@ describe('2026-10-16 «마스터가 작동을 안 한다»: 모델은 마스터 
     const filled = { maker: '기아', model: '신형 카니발', sub_model: '기아_신형 카니발_디젤' };
     const doc = { maker: filled.maker, model: filled.model, sub_model: filled.sub_model, trim_name: '', vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: filled };
     expect(sourceIdentityFields(rec('12가1', '기아', '신형 카니발'), doc, false, makers, '', aliased)).toMatchObject({ model: '카니발' });
+  });
+
+  it('Codex #706 2차: 한 별칭이 서로 다른 정식 모델 둘에 있으면 제외, 별칭 대상은 저장된 정식 값(대소문자)으로 변환', () => {
+    const tables = modelTablesFromMasters([
+      { maker: '기아', model: '카니발', model_aliases: ['신형 카니발', '더 뉴 모델'] },
+      { maker: '기아', model: '쏘렌토', model_aliases: ['더 뉴 모델', '신형 쏘렌토'] },   // «더 뉴 모델» 이 두 정식 모델에 → 모호
+      { maker: '기아', model: 'K5', model_aliases: ['케이파이브'] },
+    ]);
+    expect(tables.modelAliases['기아']).toEqual({ '신형카니발': '카니발', '신형쏘렌토': '쏘렌토', '케이파이브': 'K5' });
+    expect(tables.models['기아']).toEqual(['K5', '쏘렌토', '카니발'].sort());
+    const models = sourceModelsOf({ 기아: ['K5'] }, { 기아: { 케이파이브: 'k5' } });   // 별칭 대상 표기가 대소문자만 다름
+    expect(sourceIdentityFields(rec('12가1', '기아', '케이파이브'), {}, false, new Set(['기아']), '', models)).toMatchObject({ model: 'K5' });
+    // 모호 별칭은 표 생성에서 제외되므로(위) 표에 없는 표기는 비운다
+    expect(sourceIdentityFields(rec('12가1', '기아', '더 뉴 모델'), {}, false, new Set(['기아']), '', sourceModelsOf(tables.models, tables.modelAliases))).toMatchObject({ model: '' });
   });
 
   it('Codex #706 ③④: 선정과 쓰기가 같은 조건 — 트림이 있는 문서는 되돌리기 사유가 없고, 통합 쓰기는 APPLIED·uncertain 0·verified 건수 일치', async () => {

@@ -120,27 +120,43 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
-      // 허용 집합 = 마스터 «정식 모델 이름»만. 별칭은 정식 이름으로 변환하는 표(modelAliases)로만 쓴다(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
-      models: (() => {
-        const out: Record<string, Set<string>> = {};
-        for (const m of masters) {
-          const maker = m.maker.trim(), model = m.model.trim();
-          if (maker && model) (out[maker] ??= new Set<string>()).add(model);
-        }
-        return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v].sort()]));
-      })(),
-      modelAliases: (() => {
-        const out: Record<string, Record<string, string>> = {};
-        for (const m of masters) {
-          const maker = m.maker.trim(), model = m.model.trim();
-          if (!maker || !model) continue;
-          for (const alias of m.model_aliases) if (alias.trim() && alias.trim() !== model) (out[maker] ??= {})[alias.trim()] = model;
-        }
-        return out;
-      })() } };
+      ...modelTablesFromMasters(masters) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
+}
+/** 입구 매핑이 쓰는 마스터 모델 표(순수): 허용 집합 = 마스터 «정식 모델 이름»만, 별칭은 «정식 이름으로 변환» 표로만(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
+ * 같은 제조사에서 한 별칭(정규화 키: 공백·대소문자 무시)이 서로 다른 정식 모델 둘 이상에 있으면 모호하므로 그 별칭은 제외한다(틀린 모델을 쓰지 않는다, Codex #706). */
+export function modelTablesFromMasters(masters: ReadonlyArray<{ maker: string; model: string; model_aliases: readonly string[] }>):
+  { models: Record<string, readonly string[]>; modelAliases: Record<string, Record<string, string>> } {
+  const key = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const models: Record<string, Set<string>> = {};
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (maker && model) (models[maker] ??= new Set<string>()).add(model);
+  }
+  const canonicalKeys = (maker: string): Set<string> => new Set([...(models[maker] ?? [])].map(key));
+  const candidates: Record<string, Map<string, Map<string, string>>> = {};   // maker → aliasKey → (정식 키 → 정식 이름)
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (!maker || !model) continue;
+    for (const alias of m.model_aliases) {
+      const a = alias.trim();
+      if (!a || key(a) === key(model)) continue;
+      const byAlias = (candidates[maker] ??= new Map<string, Map<string, string>>());
+      const targets = byAlias.get(key(a)) ?? byAlias.set(key(a), new Map<string, string>()).get(key(a))!;
+      targets.set(key(model), model);
+    }
+  }
+  const modelAliases: Record<string, Record<string, string>> = {};
+  for (const [maker, byAlias] of Object.entries(candidates)) {
+    const own = canonicalKeys(maker);
+    for (const [aliasKey, targets] of byAlias) {
+      if (targets.size !== 1 || own.has(aliasKey)) continue;   // 모호(정식 모델 둘 이상) 또는 다른 정식 이름과 같은 키
+      (modelAliases[maker] ??= {})[aliasKey] = [...targets.values()][0]!;
+    }
+  }
+  return { models: Object.fromEntries(Object.entries(models).map(([k, v]) => [k, [...v].sort()])), modelAliases };
 }
 export const sonogongApiEnabled = (env: NodeJS.ProcessEnv): boolean =>
   env.SOURCE_CYCLE_SONOGONG_API === '1' && !!env.SONOGONG_API_KEY?.trim() && !!env.SONOGONG_API_BASE?.trim();
