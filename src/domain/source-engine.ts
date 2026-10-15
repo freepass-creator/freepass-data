@@ -83,10 +83,21 @@ const PHOTO_URL_LIST_MAX = 20, PHOTO_URL_MAX_LENGTH = 1000;
 export const isPhotoUrlList = (v: unknown): v is string[] => Array.isArray(v) && v.length <= PHOTO_URL_LIST_MAX &&
   v.every(x => typeof x === 'string' && x.length <= PHOTO_URL_MAX_LENGTH && /^https:\/\/[^\s]+$/.test(x));
 const photoListKept = (record: SourceProductRecord, v: unknown): v is string[] => PHOTO_URL_LIST_SOURCES.has(record.sourceId) && isPhotoUrlList(v);
+/** 손오공 API 상세 옵션 목록(raw.detail.options)을 문서까지 «작은 목록»으로 싣는다(대표 2026-10-15 승인, 새 칸 api_options_* 쓰기가 읽는다). 상세 전체는 예전처럼
+ * digest 이고, 옵션만 raw.api_options 로 따로 둔다. 변경 판정(comparableRecord)은 이 칸을 비교에서 뺀다 — 옵션이 바뀌면 상세 digest 가 이미 바뀌고,
+ * 옛 저장 기록(칸 없음)과 «같음»이어야 일괄 UPDATE 가 생기지 않는다. 항목이 너무 많거나 크면 싣지 않는다(문서 크기 보호). */
+export const API_OPTION_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
+const API_OPTION_LIST_MAX = 300, API_OPTION_ITEM_MAX_LENGTH = 200;
+const optionListKept = (record: SourceProductRecord, v: unknown): v is Record<string, unknown>[] => API_OPTION_LIST_SOURCES.has(record.sourceId) &&
+  Array.isArray(v) && v.length <= API_OPTION_LIST_MAX && v.every(x => !!x && typeof x === 'object' && !Array.isArray(x) &&
+  Object.values(x as Record<string, unknown>).every(y => y === null || typeof y === 'number' || (typeof y === 'string' && y.length <= API_OPTION_ITEM_MAX_LENGTH)));
 export function compactRecord(record: SourceProductRecord): SourceProductRecord {
   const raw = compactRaw(record.raw ?? {});
   if (smallSpec(record.raw?.spec)) raw.spec = structuredClone(record.raw.spec);
   if (photoListKept(record, record.raw?.images)) raw.images = [...record.raw.images];
+  const detailOptions = (record.raw?.detail as { options?: unknown } | null | undefined)?.options;
+  if (optionListKept(record, detailOptions)) raw.api_options = structuredClone(detailOptions);
+  else if (optionListKept(record, record.raw?.api_options)) raw.api_options = structuredClone(record.raw.api_options);
   return { ...structuredClone({ ...record, raw: {}, terms: [] }), raw,
     terms: (record.terms ?? []).map(t => ({ ...structuredClone({ ...t, raw: {} }), raw: compactRaw(t.raw ?? {}) })) };
 }
@@ -95,6 +106,7 @@ export function comparableRecord(record: SourceProductRecord): SourceProductReco
   const compact = compactRecord(record);
   if (smallSpec(compact.raw.spec)) compact.raw.spec = specDigest(compact.raw.spec);
   if (photoListKept(compact, compact.raw.images)) compact.raw.images = specDigest(compact.raw.images);
+  delete compact.raw.api_options;   // 변경 판정에서 제외(상세 digest 가 이미 옵션 변화를 담는다)
   return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,

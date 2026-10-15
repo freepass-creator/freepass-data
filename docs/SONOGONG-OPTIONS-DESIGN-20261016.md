@@ -43,3 +43,11 @@
 1. 새 칸 이름·구조(`api_options_basic/paid`)와 공개 피드 스키마 추가(선택 필드) 승인.
 2. `description` 을 비공개 내부 메모로 둘지(권고), 공개 비고 정제 경로를 둘지.
 3. 유상 옵션 금액의 «표시 전용» 범위(상세만, 견적서 미표시) 확정.
+
+## 9. 구현 상태 (2026-10-16, 박대표 10-15 «니 추천대로» 승인 범위: plan → Codex → 승인 digest 까지)
+- **승인됨**: §3 새 칸·§4 표시 전용·§5 description 비공개·영업자 채널 공급사명 표시(소비자용만 숨김). **아직 아님**: 실제 적용(APPLY)·공개 피드 칸 추가 — plan·Codex 뒤 대표 재확인.
+- **실측(source_raw/RP012 339건, 쓰기 0)**: 옵션 있는 문서 283, 무상 10,759, 유상(선택옵션) 541 중 금액 KNOWN 484·UNKNOWN 57, 알 수 없는 구분 0, 무상에 금액 붙은 항목 0.
+- **CODED(적용 전)**: 새 칸 `api_options_basic`·`api_options_paid`·`api_options_state`(PRESENT/NONE/NO_DETAIL/TOO_MANY)·`api_options_source`·`api_options_digest`·`api_options_observed_at`·`api_options_unclassified_count`. 무상 확정은 알려진 코드(CONVENIENCE·INTERIOR·SAFETY·EXTERIOR·MULTIMEDIA)만, «선택옵션»은 유상, 그 밖은 분류 보류(unclassified).
+- **쓰기 규칙**: 상세가 없거나 options 가 배열이 아니면 기존 옵션을 지우지 않고(표식만, 한 번), 과거 시트 유래 칸(옵션·options·정제옵션)·사람 입력 칸은 건드리지 않는다. 상세 digest 가 바뀌면 일반 변경으로 다시 쓴다(변경 판정에서 옵션 목록은 제외 — 옛 기록과 «같음», 일괄 UPDATE 없음).
+- **첫 반영 상한**: 옵션 칸만 채우는 다시 쓰기는 회차당 100대(`OPTIONS_REWRITE_CAP`), 초과분은 다음 회차로 이월(경고 `API_OPTIONS_DEFERRED:n:cap100`). plan 경고 `API_OPTIONS_REWRITE:n` 으로 대수를 확인한다.
+- **미구현·결정 필요**: 공개 피드 선택 필드(`option_basic`·`option_paid`)와 스키마 버전, 영업자용 시트의 옵션 칸, 견적서 표시 범위.
