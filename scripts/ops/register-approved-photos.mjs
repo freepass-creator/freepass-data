@@ -96,6 +96,7 @@ for (const r of rows) {
   let folderName = '';
   try { folderName = run(['drive', 'files', 'get'], { fileId: r.folder, fields: 'name', supportsAllDrives: true }).name || ''; } catch { out.push(`${r.plate.slice(-4)} 폴더 이름 조회 실패 — 등록 안 함`); continue; }
   if (FOLDER_COPY && isUseRestrictedName(folderName)) { out.push(`${r.plate.slice(-4)} 사용X 폴더 — 등록 안 함`); continue; }
+  if (FOLDER_COPY && isDocumentName(folderName)) { out.push(`${r.plate.slice(-4)} 서류 이름 폴더 — 등록 안 함`); continue; }
   if (!folderMatchesPlate(folderName, r.plate)) { out.push(`${r.plate.slice(-4)} 폴더 이름이 차량번호와 다름 — 등록 안 함`); continue; }
   const files = (run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [])
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)

@@ -20,7 +20,7 @@ export const DOCUMENT_NAME_MARKERS = ['등록증', '자동차등록', '서류', 
 
 export type ExcludeReason = 'DOCUMENT_NAME' | 'USE_RESTRICTED' | 'NOT_IMAGE' | 'FILE_TOO_LARGE' | 'OVER_PHOTO_CAP';
 export type PlanStatus = 'PLANNED' | 'SKIP_HAS_REFS' | 'HOLD_FOLDER_DUPLICATE' | 'HOLD_PRODUCT_NONE' | 'HOLD_PRODUCT_DUPLICATE'
-  | 'HOLD_DOCUMENT_RATIO' | 'HOLD_USE_RESTRICTED' | 'HOLD_NO_PHOTOS' | 'HOLD_OVER_RUN_CAP' | 'SKIP_FOLDER_UNPARSED';
+  | 'HOLD_DOCUMENT_RATIO' | 'HOLD_USE_RESTRICTED' | 'HOLD_DOCUMENT_FOLDER' | 'HOLD_NO_PHOTOS' | 'HOLD_OVER_RUN_CAP' | 'SKIP_FOLDER_UNPARSED';
 export type VehiclePlan = { plateLast4: string; folderId: string | null; status: PlanStatus; photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>;
   subfoldersIgnored: number };
 export type SupplierPlan = { supplierCode: string; allowed: boolean; vehicles: VehiclePlan[]; counts: Record<PlanStatus, number>; photosPlanned: number; documentsExcluded: number };
@@ -34,7 +34,7 @@ const isImage = (f: IntakeFile): boolean => f.mimeType !== null && (INTAKE_IMAGE
 export const last4 = (plate: string): string => String(plate).replace(/\D/g, '').slice(-4);
 
 const emptyCounts = (): Record<PlanStatus, number> => ({ PLANNED: 0, SKIP_HAS_REFS: 0, HOLD_FOLDER_DUPLICATE: 0, HOLD_PRODUCT_NONE: 0, HOLD_PRODUCT_DUPLICATE: 0,
-  HOLD_DOCUMENT_RATIO: 0, HOLD_USE_RESTRICTED: 0, HOLD_NO_PHOTOS: 0, HOLD_OVER_RUN_CAP: 0, SKIP_FOLDER_UNPARSED: 0 });
+  HOLD_DOCUMENT_RATIO: 0, HOLD_USE_RESTRICTED: 0, HOLD_DOCUMENT_FOLDER: 0, HOLD_NO_PHOTOS: 0, HOLD_OVER_RUN_CAP: 0, SKIP_FOLDER_UNPARSED: 0 });
 
 /** 한 폴더의 직계 파일을 분류한다: 사진 후보와 제외 사유별 건수. 서류 표지·비이미지·큰 파일 제외, 상한 초과분은 이름순 뒤쪽을 제외. */
 export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>; documentLike: number } {
@@ -79,6 +79,8 @@ export function planSupplierIntake(input: IntakeSupplierInput, options: { allowe
     if (folders.length > 1) { add({ folderId: null, status: 'HOLD_FOLDER_DUPLICATE', photos: [], excluded: {} }); continue; }
     const folder = folders[0]!;
     if (!folderMatchesPlate(folder.name, plate)) { add({ folderId: folder.id, status: 'SKIP_FOLDER_UNPARSED', photos: [], excluded: {} }); continue; }
+    // 폴더 이름이 서류 묶음이면(«번호 등록증») 안의 파일명에 표지가 없어도 통째로 보류한다(Codex #690 (a)).
+    if (isDocumentName(folder.name)) { add({ folderId: folder.id, status: 'HOLD_DOCUMENT_FOLDER', photos: [], excluded: {} }); continue; }
     if (isUseRestrictedName(folder.name)) { add({ folderId: folder.id, status: 'HOLD_USE_RESTRICTED', photos: [], excluded: {} }); continue; }
     const prods = productsByPlate.get(plate) ?? [];
     if (prods.length === 0) { add({ folderId: folder.id, status: 'HOLD_PRODUCT_NONE', photos: [], excluded: {} }); continue; }
@@ -111,7 +113,7 @@ export function summarizeSupplierPlan(plan: SupplierPlan): string[] {
   if (!plan.allowed) return [`${plan.supplierCode} 인입 대상 아님(플래그·허용표 밖) — 처리 안 함`];
   const c = plan.counts;
   const lines = [`${plan.supplierCode} 계획 ${c.PLANNED}대·사진 ${plan.photosPlanned}장·서류 제외 ${plan.documentsExcluded}장`,
-    `보류: 폴더중복 ${c.HOLD_FOLDER_DUPLICATE}·문서없음 ${c.HOLD_PRODUCT_NONE}·문서중복 ${c.HOLD_PRODUCT_DUPLICATE}·서류의심 ${c.HOLD_DOCUMENT_RATIO}·사용X ${c.HOLD_USE_RESTRICTED}·사진없음 ${c.HOLD_NO_PHOTOS}·상한 ${c.HOLD_OVER_RUN_CAP}`,
+    `보류: 폴더중복 ${c.HOLD_FOLDER_DUPLICATE}·문서없음 ${c.HOLD_PRODUCT_NONE}·문서중복 ${c.HOLD_PRODUCT_DUPLICATE}·서류의심 ${c.HOLD_DOCUMENT_RATIO}·사용X ${c.HOLD_USE_RESTRICTED}·서류폴더 ${c.HOLD_DOCUMENT_FOLDER}·사진없음 ${c.HOLD_NO_PHOTOS}·상한 ${c.HOLD_OVER_RUN_CAP}`,
     `건너뜀: 이미 등록 ${c.SKIP_HAS_REFS}·번호 못 읽음 ${c.SKIP_FOLDER_UNPARSED}`];
   for (const v of plan.vehicles) if (v.status !== 'PLANNED' && v.status !== 'SKIP_HAS_REFS') lines.push(`${v.plateLast4} ${v.status}`);
   return lines;

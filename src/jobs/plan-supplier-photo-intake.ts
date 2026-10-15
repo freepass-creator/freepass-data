@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
-import { intakeSuppliers, planSupplierIntake, summarizeSupplierPlan, type IntakeSupplierInput } from '../application/supplier-photo-intake-plan.js';
+import { INTAKE_MAX_VEHICLES_PER_RUN, intakeSuppliers, planSupplierIntake, summarizeSupplierPlan, type IntakeSupplierInput } from '../application/supplier-photo-intake-plan.js';
 
 export function planSupplierPhotoIntakeCli(argv: string[], env: NodeJS.ProcessEnv, log: (line: string) => void = console.log): number {
   const arg = (name: string): string | undefined => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
@@ -21,8 +21,12 @@ export function planSupplierPhotoIntakeCli(argv: string[], env: NodeJS.ProcessEn
   try { snapshot = JSON.parse(readFileSync(input, 'utf8')); } catch { log('설정 오류: 스냅숏 JSON 을 읽을 수 없음'); return 2; }
   if (!Array.isArray(snapshot.suppliers)) { log('설정 오류: suppliers 배열 없음'); return 2; }
   log('모드: DRY_RUN(쓰기 0)');
+  // 회차 상한은 공급사마다가 아니라 «전체 합산»이다(Codex #690 (b)): 앞 공급사가 쓴 대수를 뺀 나머지만 다음 공급사에 준다.
+  let remaining = maxVehicles ?? INTAKE_MAX_VEHICLES_PER_RUN;
   for (const supplier of snapshot.suppliers) {
-    for (const line of summarizeSupplierPlan(planSupplierIntake(supplier, { allowedSuppliers: targets, maxVehicles }))) log(line);
+    const plan = planSupplierIntake(supplier, { allowedSuppliers: targets, maxVehicles: remaining });
+    remaining = Math.max(0, remaining - plan.counts.PLANNED);
+    for (const line of summarizeSupplierPlan(plan)) log(line);
   }
   return 0;
 }

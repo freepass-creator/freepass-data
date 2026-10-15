@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { classifyFolderFiles, intakeSuppliers, planSupplierIntake, summarizeSupplierPlan, INTAKE_MAX_PHOTOS_PER_VEHICLE, INTAKE_MAX_FILE_BYTES,
   type IntakeFile, type IntakeFolder } from '../src/application/supplier-photo-intake-plan.js';
@@ -95,6 +98,26 @@ describe('공급사 사진 인입 계획', () => {
   it('아이카식 번호(109호NNNN)도 전체 번호로 매칭된다', () => {
     const p = plan([folder('109호1234 K5', [img('1.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
     expect(p.counts.PLANNED).toBe(1);
+  });
+
+  it('Codex #690 (a): 폴더 이름이 서류(«번호 등록증»)면 파일명에 표지가 없어도 통째 보류', () => {
+    const p = plan([folder('109호1234 등록증', [img('1.jpg'), img('2.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
+    expect(p.counts.HOLD_DOCUMENT_FOLDER).toBe(1);
+    expect(p.photosPlanned).toBe(0);
+  });
+
+  it('Codex #690 (b): 회차 차량 상한은 공급사별이 아니라 전체 합산', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'intake-'));
+    const supplier = (code: string, plates: string[]) => ({ supplierCode: code,
+      folders: plates.map(pl => folder(`${pl} 차`, [img('1.jpg')])), products: plates.map(pl => ({ plate: pl, hasPhotoRefs: false })) });
+    const file = join(dir, 's.json');
+    writeFileSync(file, JSON.stringify({ suppliers: [supplier('RP012', ['101가1001', '101가1002', '101가1003']), supplier('RP004', ['102가2001', '102가2002', '102가2003'])] }));
+    const lines: string[] = [];
+    const code = planSupplierPhotoIntakeCli(['--input', file, '--max-vehicles', '4'], { FREEPASS_DATA_PHOTO_INTAKE_SUPPLIERS: 'RP012,RP004', FREEPASS_DATA_PHOTO_COPY_SUPPLIERS: 'RP012,RP004' }, l => lines.push(l));
+    expect(code).toBe(0);
+    const planned = lines.map(l => /계획 (\d+)대/.exec(l)?.[1]).filter(Boolean).map(Number);
+    expect(planned).toEqual([3, 1]);   // 4대 합산 상한: 앞 공급사 3대 + 뒤 공급사 1대
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('CLI: 플래그가 비어 있으면 아무것도 하지 않고 정상 종료, 입력이 없으면 설정 오류', () => {
