@@ -8,9 +8,8 @@ const squash = (v: string): string => v.normalize('NFKC').toLowerCase().replace(
 const PREFIX_GLUED = /^(신형|구형|디올뉴|더올뉴|더뉴|올뉴|뉴)(?=[가-힣a-z0-9])/;
 const PREFIX_WORDS = /(^|[\s_(])(신형|구형|더\s?뉴|디\s?올\s?뉴|더\s?올\s?뉴|올\s?뉴|뉴)(?=[가-힣A-Za-z0-9])/g;
 const stripPrefixWords = (v: string): string => { let out = v.normalize('NFKC'); for (let i = 0; i < 3; i++) out = out.replace(PREFIX_WORDS, '$1'); return out; };
-/** 개발코드(영문 1~3자 + 숫자 1~2자 + 영문 1자 선택, 또는 끝의 대문자 2~4자)와 세대 표기를 뗀 핵심어. */
-const CODE = /(?<![A-Za-z0-9])([A-Za-z]{1,3}\d{1,2}[A-Za-z]?)(?![A-Za-z0-9])/g;
-const coreOf = (v: string): string => squash(stripPrefixWords(v).replace(/\([^)]*\)/g, ' ').replace(CODE, ' ').replace(/\d+\s?세대/g, ' '));
+// 원문 핵심어: 접두·괄호(코드)·N세대 표기를 뗀다. 영숫자 낱말(K5·K8)은 모델 이름일 수 있어 지우지 않는다.
+const coreOf = (v: string): string => squash(stripPrefixWords(v).replace(/\([^)]*\)/g, ' ').replace(/\d+\s?세대/g, ' '));
 const masterCoreOf = (v: string): string => coreOf(v.normalize('NFKC').replace(/\s[A-Z]{2,4}\d{0,2}[A-Z]?\s*$/, ''));
 /** 원문 낱말(영숫자·한글 단위). 접두가 글자에 붙은 «신형K5» 는 접두를 뗀 낱말도 함께 둔다. */
 const tokensOf = (raw: string): string[] => {
