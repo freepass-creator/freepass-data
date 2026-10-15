@@ -77,10 +77,17 @@
 3. 운영: B3Q 가 DRY_RUN 결과(공급사별 폴더 수·매칭·보류·서류 제외 건수)를 대표에게 한 장으로 올린 뒤 PILOT.
 4. ERP5(ERP·개발): `photo_approved_count > 0` 규칙 전환 — 구현 ① 기록 «켜는 순서» 4번과 같다.
 
-## 8. 결정 필요 (대표)
+## 8. 확정 결정 (커맨드 센터, 박대표 위임 2026-10-16)
 
-1. 인입 대상 공급사 목록 — `FREEPASS_DATA_PHOTO_COPY_SUPPLIERS` 와 같은 값으로 가도 되는가(공급사미확인·SA·아이카 제외 정책 유지).
-2. 서류 분류는 **이름·구조 규칙만**(§3.5 한계 포함)으로 시작해도 되는가, 내용 판독을 따로 설계할 것인가.
-3. 인입 주기: 일 1회 vs 시간당(카톡 사진이 올라온 뒤 반영 지연 허용 범위).
-4. 방법 코드 `SUPPLIER_FOLDER_COPY` 단일 사용(인입 잡)과 `AUTO_KAKAO_COLLECT` 공존 확인.
-5. 사본 저장 위치: 공급사별 사본 루트를 `freepasspics` 밖 별도 폴더로 둘지(원본 보존 분리, 권장) / 같은 공급사 폴더 안 `_사본` 하위로 둘지.
+1. 인입 대상 공급사 = `FREEPASS_DATA_PHOTO_COPY_SUPPLIERS` 와 같은 집합(보수적으로 시작, 넓히는 것은 PILOT 이후). 코드: 인입 플래그 ∩ 허용표.
+2. 서류 분류는 이름·구조 규칙만(내용 판독 없음). 카톡 읽기 쪽이 서류를 별도 하위 폴더로 분리한다.
+3. 주기 일 1회로 시작, 안정되면 시간당 검토.
+4. 방법 코드 `SUPPLIER_FOLDER_COPY` 와 `AUTO_KAKAO_COLLECT` 공존.
+5. 저장 위치 두 곳을 구분한다: **카톡 원본 = `freepasspics/<공급사>/<번호 차종>`(한 트리, 결정 장부)**, **압축 사본 = 별도 사본 루트**(원본 보존·분리).
+6. 진행: ② 인입 계획(DRY_RUN) → Codex → B3Q 병합. 켜기는 DRY_RUN → PILOT(공급사 1곳·5대) 깨끗하면 FULL(승인은 커맨드 센터가 한 줄로 처리).
+
+## 9. 구현 ② 기록
+
+- `src/application/supplier-photo-intake-plan.ts`: 순수 계획(매칭·서류 제외·상한). `src/jobs/plan-supplier-photo-intake.ts`: 스냅숏 JSON → 끝 4자리 요약(`npm run plan:supplier-photo-intake -- --input <json>`). 쓰기 0, 드라이브·Firestore 를 읽지도 않는다.
+- 아직 없음(③): 드라이브 열거 어댑터·사본 저장·등록 연결. 입력 스냅숏은 호출자가 읽어 준다.
+- 시험 `tests/supplier-photo-intake-plan.test.ts`.
