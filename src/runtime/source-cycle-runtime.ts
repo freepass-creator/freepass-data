@@ -452,6 +452,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
+        { const optCap = Number(env.SOURCE_CYCLE_API_OPTIONS_CAP ?? ''); if (Number.isSafeInteger(optCap) && optCap > 100 && optCap <= 400) apiPlugin.optionsRewriteCap = optCap; }
         plugins.push(apiPlugin);
       } else
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1') {

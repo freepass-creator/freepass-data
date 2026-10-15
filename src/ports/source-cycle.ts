@@ -53,6 +53,8 @@ export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngrade
   maxEnrollPerCycle?: number; minEnrollPerCycle?: number;
   /** 이번 한 회차에 한해 신규 편입 상한을 이 값(≤1000)으로 올린다. 운영 변수 + 회차 후 표식 파일로 자동 원복한다(최초 대량 편입용). */
   enrollCapOnce?: number;
+  /** 옵션 칸 채움(API_OPTIONS 사유 전용) 회차 상한 상향(기본 100, 운영 변수 SOURCE_CYCLE_API_OPTIONS_CAP, 최대 400). 다른 쓰기와 합산 상한은 그대로 적용된다. */
+  optionsRewriteCap?: number;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
   unassignedPlateCount?: number;

@@ -902,3 +902,75 @@ describe('maker rename repair (masterMaker / trimMaker / productMaker)', () => {
     expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
   });
 });
+
+// 별칭 정규화(사람 입력 보존 안전선의 유일한 예외): 확정·사람 입력 세부모델이 대상 마스터의 «등록 별칭» 일 때만 마스터 이름으로 바꾼다. 트림·제조사·모델은 그대로.
+describe('alias canonicalization of a confirmed product identity', () => {
+  beforeEach(() => {
+    store.clear();
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+  });
+  const plan = (over: Record<string, unknown> = {}) => ({ sourceDigest: 'alias-v1', masterRepairs: [], productRepairs: [],
+    productIdentityRepairs: [{ id: 'p1', from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1' },
+      evidence: '원문 차명: 현대_캐스퍼_가솔린 1.0 밴_스마트', ...over }] });
+  it('renames the confirmed sub-model to the master name when from is the target master\'s unique registered alias; trim and maker/model untouched', async () => {
+    const result = await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', trim_name: '스마트' });
+    expect(result).toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+  });
+  it('refuses when from is not a registered alias of the target master', async () => {
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: [] });
+    await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+  it('refuses when two active masters of the same family register the same alias (not unconditional)', async () => {
+    store.set('vehicle_master/m-new', { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '더 뉴 캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan())).rejects.toThrow(/not a unique registered alias/);
+  });
+  it('refuses a change of maker or model, and a locked or withdrawn product', async () => {
+    store.set('vehicle_master/m-other', { id: 'm-other', maker: '기아', model: '레이', sub_model: '레이 TAM', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan({ to: { maker: '기아', model: '레이', sub_model: '레이 TAM' } }))).rejects.toThrow(/manual or confirmed value/);
+    store.set('products/p1', { ...store.get('products/p1')!, locked_by_contract: true });
+    await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+  });
+  it('Codex #683 (a): a human-chosen or confirmed identity is never canonicalized, even when it equals the unique alias', async () => {
+    for (const marker of [{ vehicle_title_source: 'MANUAL' }, { confirmed_by: 'someone' }, { identity_manual_override: true }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+    // 기계 출처(MASTER_MATCH)·표식 없음은 허용
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_title_source: 'MASTER_MATCH' });
+    await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼 AX1' });
+  });
+  it('Codex #683 (b): maker/model must match the raw stored strings exactly (no normalization-only equality); the write never changes them', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved(plan({ from: { maker: '현대 ', model: '캐스퍼', sub_model: '캐스퍼' } }))).rejects.toThrow();
+    await expect(applyApproved(plan({ from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼 ', sub_model: '캐스퍼 AX1' } }))).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' });
+  });
+  it('Codex #683 ①: a confirmed / human-source marker blocks even an engine-temporary (vehicle_review_required) product', async () => {
+    for (const marker of [{ confirmed: true }, { vehicle_title_source: 'HUMAN_ENTRY' }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_review_required: true, ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+  });
+  it('Codex #683 ②: a from that is another active master canonical name is never moved by alias canonicalization', async () => {
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', sub_model_aliases: [] });   // 다른 활성 마스터의 정식 이름 «캐스퍼»
+    await expect(applyApproved(plan())).rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+  it('Codex #683: productRepairs / productMakerRepairs refuse human-source or confirmed products; masterCreates canonical names also block', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', confirmed: true });
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [{ id: 'p1', from: '캐스퍼', to: '캐스퍼 AX1' }] })).rejects.toThrow(/HUMAN_OR_CONFIRMED/);
+    await expect(applyApproved({ sourceDigest: 'y', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p1', from: '현대', to: '현대자동차' }] })).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', sub_model: '캐스퍼' });
+    // 같은 계획이 만드는 마스터의 정식 이름과 from 이 같으면 별칭 정규화 금지
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
+      .rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+});
