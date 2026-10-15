@@ -162,7 +162,9 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     if (m.trim.state === 'UNIQUE') {
       const trim = m.trim.name;
       // 이미 값이 있는 트림은 근거 없이 다른 등급으로 바꾸지 않는다(적용기 규칙 (c)와 같은 취지): 철자만 다른(정규화 같음) 경우만 정정, 그 밖은 보류.
-      if (p.trim_name.trim() && p.trim_name !== trim && norm(p.trim_name) !== norm(trim) && p.engineTemp !== true) {
+      // 원천 필드로 제조사·모델만 채운 문서(makerModelFromSource)의 비어 있지 않은 트림은 엔진이 쓴 적이 없다 — 사람 입력이므로 engineTemp 여도 덮어쓰지 않는다(Codex #685 ②).
+      const humanTrimOnSourceFilled = p.makerModelFromSource === true && p.trim_name.trim() !== '';
+      if (p.trim_name.trim() && p.trim_name !== trim && norm(p.trim_name) !== norm(trim) && (p.engineTemp !== true || humanTrimOnSourceFilled)) {
         held.push({ id: p.id, plate4: p.plate4, reason: 'TRIM_CONFLICT_EXISTING', candidates: [trim] });
       } else if (p.trim_name !== trim) {
         trimRepairs.push({ id: p.id, from: p.trim_name, to: trim, ...(p.trim_name.trim() ? {} : { evidence: `원문 차명: ${p.rawName}`.slice(0, 200) }) });

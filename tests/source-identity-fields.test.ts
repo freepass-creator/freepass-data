@@ -65,7 +65,7 @@ const legacyDoc = (r: SourceProductRecord, extra: Record<string, unknown> = {}) 
 describe('sourceIdentityFields(순수)', () => {
   it('빈 제조사·모델에만 원천 값을 채우고 표식을 남긴다; 기존 값·마스터 확정·표식 있는 문서는 건드리지 않는다', () => {
     const makers = new Set(['현대', '기아']);
-    expect(sourceIdentityFields(rec('12가1'), {}, false, makers)).toEqual({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼' } });
+    expect(sourceIdentityFields(rec('12가1'), {}, false, makers)).toEqual({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼', sub_model: '' } });
     // Codex #685 (c): 마스터에 없는 제조사 표기(옛 표기)·마스터 미로드는 채우지 않고 표식만
     expect(sourceIdentityFields(rec('12가1', '르노삼성', 'QM6'), {}, false, makers)).toEqual({ vehicle_maker_model_source: 'UNMAPPED' });
     expect(sourceIdentityFields(rec('12가1'), {}, false, null)).toEqual({ vehicle_maker_model_source: 'UNMAPPED' });
@@ -78,12 +78,14 @@ describe('sourceIdentityFields(순수)', () => {
     expect(sourceIdentityFields(rec('12가1', '현대', '그랜저'), { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' }, false, makers)).toEqual({});
   });
   it('원천 필드로 채운 문서도 여전히 엔진 정체성 보류다(마스터 정제가 덮어쓴다)', () => {
-    const mark = { source_cycle_record: {}, vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼' } };
-    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼' })).toBe(true);
+    const mark = { source_cycle_record: {}, vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼', sub_model: '현대_아반떼_가솔린' } };
+    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼', sub_model: '현대_아반떼_가솔린' })).toBe(true);
+    // Codex #685 ①: 사람이 세부모델을 고쳤으면 maker·model 이 그대로여도 정체성 보류가 아니다
+    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼', sub_model: '아반떼 CN7' })).toBe(false);
     expect(engineIdentityHold({ source_cycle_record: {}, vehicle_review_required: true, maker: '현대', model: '아반떼' })).toBe(false);
     // Codex #685 (a): 사람이 고친 뒤 표식만 남은 문서는 보류가 아니다(마스터 정제가 덮어쓰지 않음)
-    expect(engineIdentityHold({ ...mark, maker: '현대자동차', model: '아반떼' })).toBe(false);
-    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼 CN7' })).toBe(false);
+    expect(engineIdentityHold({ ...mark, maker: '현대자동차', model: '아반떼', sub_model: '현대_아반떼_가솔린' })).toBe(false);
+    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼 CN7', sub_model: '현대_아반떼_가솔린' })).toBe(false);
   });
 });
 
@@ -209,5 +211,68 @@ describe('Codex #685 두 번째 지적', () => {
     expect(r.warnings.join('|')).toContain('API_OPTIONS_DEFERRED:20:');   // 쓰기 상한: 편입 60 + 기존 보정 40 만, 나머지 20 이월(120 중 100 만 채움)
     const filled = [...existing, ...fresh].filter(p => decodeFields(fake.docs.get(p)?.fields ?? {}).vehicle_maker_model_source === 'SOURCE_FIELDS');
     expect(filled).toHaveLength(OPTIONS_REWRITE_CAP);
+  }, 60_000);
+});
+
+describe('Codex #685 세 번째 지적', () => {
+  it('③ 사유 없는 UPDATE(가격 변경 등)는 채움을 하지 않는다 — 양성 표식(fillSourceIdentity)이 있는 항목만 채운다', async () => {
+    const { commands, fake } = await setup();
+    // 표식이 이미 있는(UNMAPPED) 문서는 사유가 없다: 가격이 바뀌어 쓰기가 일어나도 maker·model 은 채워지지 않는다.
+    fake.put('81가1001', legacyDoc(rec('81가1001'), { vehicle_maker_model_source: 'UNMAPPED' }));
+    const r = await run(commands, [rec('81가1001', '현대', '아반떼', 520000)]);
+    expect(r.kinds).toEqual(['UPDATE']);
+    expect(decodeFields(fake.docs.get('81가1001').fields)).toMatchObject({ maker: '', model: '', price: { 36: { rent: 520000 } } });
+  });
+
+  it('② 원천 채움 문서의 사람 입력 트림은 정체성 계획이 덮어쓰지 않는다(TRIM_CONFLICT_EXISTING 보류)', async () => {
+    const { buildIdentityPromotionPlan } = await import('../src/application/identity-promotion-plan.js');
+    const master = { id: 'M', maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', model_aliases: [], sub_model_aliases: [], yearFrom: 2020, yearTo: null,
+      trims: [{ name: '프리미엄', aliases: [] }, { name: '모던', aliases: [] }] };
+    const p = { id: 'x', plate4: '3456', maker: '현대', model: '아반떼', sub_model: '현대_아반떼 CN7_가솔린 1.6_프리미엄', trim_name: '모던',
+      rawName: '현대_아반떼 CN7_가솔린 1.6_프리미엄', year: '2022', listable: true, engineTemp: true, makerModelFromSource: true };
+    const result = buildIdentityPromotionPlan([p], [master]);
+    expect(result.held.map(h => h.reason)).toContain('TRIM_CONFLICT_EXISTING');
+    expect(result.trimPlan === null || (result.trimPlan.productTrimRepairs ?? []).length === 0).toBe(true);
+  });
+});
+
+describe('Codex #688 지적(제원 입구 매핑)', () => {
+  const specRec = (plate: string, spec: Record<string, unknown>): SourceProductRecord => ({ ...rec(plate), raw: { ...rec(plate).raw, spec } });
+  it('① 형식·단위: 숫자는 정수 문자열만, 날짜·연식은 정해진 꼴, 연료는 제원 목록 안에서만', () => {
+    expect(sourceSpecFillFields({ engine_cc: '2,497', mileage: '12,000km', year: '23', first_registration_date: '2023/05', fuel_type: 'GSL' }, {})).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '2497cc' }, {})).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '2497', mileage: '12000', year: '2023', first_registration_date: '2023-05-02', fuel_type: '가솔린+LPG', seats: '7' }, {}))
+      .toEqual({ engine_cc: '2497', mileage: '12000', year: '2023', first_registration_date: '2023-05-02', fuel_type: '가솔린+LPG', seats: '7' });
+    expect(sourceSpecFillFields({ seats: '700' }, {})).toEqual({});   // 인승은 1~2자리 정수
+  });
+
+  it('② 전기·수소 차에는 배기량을 채우지 않는다(문서 연료 또는 이번에 채울 연료)', () => {
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '가솔린' }, { fuel_type: '전기' })).toEqual({});
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '전기' }, {})).toEqual({ fuel_type: '전기' });
+    expect(sourceSpecFillFields({ engine_cc: '1598', fuel_type: '수소' }, {})).toEqual({ fuel_type: '수소' });
+    expect(sourceSpecFillFields({ engine_cc: '1598' }, { fuel_type: '디젤' })).toEqual({ engine_cc: '1598' });
+  });
+
+  it('④ 이미 확인한 문서(vehicle_spec_source_checked)는 다른 변경으로 갱신돼도 제원을 다시 채우지 않는다', async () => {
+    const { sourceSpecFillFields: fill } = await import('../src/infra/source-cycle-firestore.js');
+    expect(fill({ ext_color: '흰색' }, { vehicle_spec_source_checked: true })).toEqual({});
+    const { commands, fake } = await setup();
+    const r = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' });
+    fake.put('12가4001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_spec_source_checked: true }));
+    const changed = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' }); changed.terms[0]!.monthlyRent = { state: 'KNOWN', value: 540000 };
+    expect((await run(commands, [changed])).kinds).toEqual(['UPDATE']);   // 가격 변경 쓰기
+    expect(decodeFields(fake.docs.get('12가4001').fields)).toMatchObject({ price: { 36: { rent: 540000 } } });
+    expect(decodeFields(fake.docs.get('12가4001').fields).ext_color).toBeUndefined();
+  });
+
+  it('③ 신규 편입 중 제조사·모델 없이 제원만 있는 차량도 기존 보정과 합쳐 채움 상한(100)에 센다', async () => {
+    const { commands, fake } = await setup();
+    const strip = (r: SourceProductRecord) => { delete r.raw.source_maker; delete r.raw.source_model; return r; };
+    const existing = Array.from({ length: 60 }, (_, i) => `91마${String(5000 + i)}`), fresh = Array.from({ length: 60 }, (_, i) => `92바${String(6000 + i)}`);
+    for (const p of existing) fake.put(p, legacyDoc(specRec(p, { ext_color: '흰색' }), { maker: '현대', model: '아반떼', vehicle_review_required: false }));
+    const out = await run(commands, [...existing, ...fresh].map(p => strip(specRec(p, { ext_color: '흰색' }))));
+    expect(out.kinds.filter(k => k === 'ENROLL')).toHaveLength(60);
+    const checked = [...existing, ...fresh].filter(p => decodeFields(fake.docs.get(p)?.fields ?? {}).vehicle_spec_source_checked === true);
+    expect(checked).toHaveLength(OPTIONS_REWRITE_CAP);   // 편입 60 + 기존 40(쓰기 상한), 채움 합계 100
   }, 60_000);
 });

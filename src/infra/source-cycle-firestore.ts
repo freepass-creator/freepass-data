@@ -149,29 +149,48 @@ const textOf = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 /** 원천 필드(brand·model)로 제조사·모델만 채운 문서 표식. 이 문서도 아직 마스터로 확정되지 않은 «엔진 보류»이며 정체성 정제가 마스터 이름으로 덮어쓴다. */
 export const SOURCE_FIELDS_MARK = 'SOURCE_FIELDS';
 const filledByUs = (f: Fields): boolean => {
-  const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown } | null | undefined;
+  const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown; sub_model?: unknown } | null | undefined;
+  // 사람이 maker·model «또는 세부모델»을 고쳤으면 표식만 남아도 보류가 아니다(Codex #685 ①: 세부모델도 «쓴 값 그대로»일 때만).
   return f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && !!filled && typeof filled === 'object'
-    && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model);   // 사람이 고쳤으면(값이 달라졌으면) 표식만 남아도 보류가 아니다
+    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model);
 };
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
   && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
 /** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
  * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
-export const SPEC_FILL_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc'] as const;
+export const SPEC_FILL_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
 const specBlank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+/** 차종 기준 한 장 제원 목록(연료): 가솔린·디젤·LPG·하이브리드·플러그인 하이브리드·전기·수소·가솔린+LPG. 목록 밖 표기(연료 코드 등)는 채우지 않는다. */
+export const SPEC_FUEL_ALLOWED: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
+const ELECTRIC_FUELS: ReadonlySet<string> = new Set(['전기', '수소']);
+/** 칸별 형식·단위 검증(Codex #688 ①): 숫자는 단위·쉼표 없는 정수 문자열만(2,497·2497cc 는 채우지 않음), 날짜·연식은 정해진 꼴만, 연료는 제원 목록 안에서만. */
+const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
+  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
+  first_registration_date: v => /^\d{4}-\d{2}(-\d{2})?$/.test(v),
+  year: v => /^(19|20)\d{2}$/.test(v),
+  mileage: v => /^\d{1,7}$/.test(v),
+  engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
+  seats: v => /^\d{1,2}$/.test(v) && Number(v) >= 1,
+};
 export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return {};
+  if (original.vehicle_spec_source_checked === true) return {};   // 이미 확인한 문서는 다른 변경으로 갱신돼도 다시 채우지 않는다(Codex #688 ④)
+  const src = spec as Record<string, unknown>;
   const out: Fields = {};
   for (const key of SPEC_FILL_KEYS) {
-    const v = (spec as Record<string, unknown>)[key];
-    if (specBlank(original[key]) && typeof v === 'string' && v.trim() && v.length <= 40) out[key] = v.trim();
+    const v = src[key];
+    if (specBlank(original[key]) && typeof v === 'string' && SPEC_VALID[key](v.trim())) out[key] = v.trim();
   }
+  // 전기·수소 차(문서 연료 또는 이번에 채울 연료)에는 배기량을 채우지 않는다 — 의미 충돌(Codex #688 ②).
+  const fuel = typeof original.fuel_type === 'string' && original.fuel_type.trim() ? original.fuel_type.trim() : typeof out.fuel_type === 'string' ? out.fuel_type : '';
+  if (ELECTRIC_FUELS.has(fuel)) delete out.engine_cc;
   return out;
 }
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
-export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null): Fields {
+export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = ''): Fields {
   if (refinedThisCycle) return {};
   if (textOf(original.maker) || textOf(original.model)) return {};
   if (original.vehicle_maker_model_source !== undefined && original.vehicle_maker_model_source !== null) {
@@ -183,7 +202,7 @@ export function sourceIdentityFields(r: SourceProductRecord, original: Fields, r
   // 제조사는 활성 차종 마스터에 «있는 표기»일 때만 채운다(옛 표기 르노삼성 등이 maker 에 들어가 교정 대상에서 빠지는 것을 막는다, Codex #685 (c)).
   // 마스터를 못 읽었거나(목록 없음) 마스터에 없는 표기면 채우지 않고 표식(UNMAPPED)만 남긴다 — 마스터에 제조사가 생긴 뒤의 재시도는 별도 승인(표식 초기화).
   if (!makers || !maker || !makers.has(maker)) return original.vehicle_maker_model_source === undefined || original.vehicle_maker_model_source === null ? { vehicle_maker_model_source: 'UNMAPPED' } : {};
-  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model } };
+  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model, sub_model: subModelAtFill } };
 }
 const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
 const specOf = (r: SourceProductRecord | undefined): Fields => {
@@ -247,7 +266,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 기록만으로는 알 수 없으므로 문서 상태와 표식으로 정한다 — 표식을 항상 쓰므로(채울 값이 없어도) 되풀이되지 않는다. 같은 허용 공급사·회차 상한을 쓴다.
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
     && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
-    && SPEC_FILL_KEYS.some(k => specBlank(f[k]))) rewriteReasons.push('SOURCE_SPEC');
+    && SPEC_FILL_KEYS.some(k => specBlank(f[k]) && !(k === 'engine_cc' && ELECTRIC_FUELS.has(String(f.fuel_type ?? '').trim())))) rewriteReasons.push('SOURCE_SPEC');
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -346,8 +365,11 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.deferSourceIdentity !== true ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null) : {}),
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.deferSourceIdentity !== true ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true } : {}),
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true
+      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
+    // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
+      ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -470,7 +492,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
           'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
-          'ext_color', 'fuel_type', 'mileage', 'engine_cc', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
+          'ext_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
