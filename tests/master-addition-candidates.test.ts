@@ -46,6 +46,36 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(csv).not.toMatch(/\d{2,3}[가-힣]\d{4}/);   // 전체 번호 없음
   });
 
+  it('판정: 알려진 모델 안의 새 개발코드만 RULE_CLEAR(제안 이름 = 모델 + 코드), 변형·수식어·옛 제조사·모델 없음은 REVIEW', () => {
+    const ps = [
+      product('12가5001', '현대_그랜저 (GN8)_가솔린 3.5'),
+      product('12가5002', '현대_그랜저 (GN8)_하이브리드 1.6'),
+      product('12가5003', '현대_더 뉴 그랜저 (GN8)_가솔린 3.5'),
+      product('12가5004', '기아_모하비 (HM)_디젤 3.0'),
+      product('12가5005', '현대_그랜저_가솔린 3.5'),
+    ];
+    const rows = buildMasterAdditionCandidates(ps, [master]).rows;
+    const by = (needle: string) => rows.find(r => r.rawName.includes(needle) && r.rawName.includes(needle === 'GN8' ? '가솔린 3.5' : needle))!;
+    const clear = rows.find(r => r.rawName === '현대_그랜저 (GN8)_가솔린 3.5')!;
+    expect(clear).toMatchObject({ verdict: 'RULE_CLEAR', suggestedName: '그랜저 GN8' });
+    expect(rows.find(r => r.rawName.includes('하이브리드'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['VARIANT_WORD_RULE_15_16_18']) });
+    expect(rows.find(r => r.rawName.includes('더 뉴'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['QUALIFIER_WORD_RULE_2_3_14']) });
+    expect(rows.find(r => r.rawName.includes('모하비'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['MAKER_OR_MODEL_NOT_IN_MASTER']) });
+    expect(rows.find(r => r.rawName === '현대_그랜저_가솔린 3.5')).toMatchObject({ verdict: 'REVIEW', verdictReasons: ['NO_DEVELOPMENT_CODE'] });
+    void by;
+  });
+
+  it('옛 제조사 표기 마스터·이미 있는 코드는 REVIEW, 확인 중(제조사·모델 빈) 상품은 우선', () => {
+    const oldMaker: IdentityMaster = { ...master, id: 'M2', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL' };
+    const rows = buildMasterAdditionCandidates([
+      product('12가6001', '르노코리아_아르카나 (LJ2)_가솔린 1.6'), product('12가6002', '현대_그랜저 (GN7)_가솔린 3.5 프리미엄 신형'),
+    ], [master, oldMaker]).rows;
+    expect(rows.find(r => r.rawName.includes('LJ2'))).toMatchObject({ verdict: 'REVIEW', verdictReasons: expect.arrayContaining(['MAKER_SPELLING_PENDING_RENAME']) });
+    expect(rows.every(r => r.blankIdentityCount > 0)).toBe(true);   // product() 헬퍼는 maker·model 이 빈 엔진 임시 상품
+    expect(rows[0]!.blankIdentityCount).toBeGreaterThan(0);
+    expect(candidatesToCsv(rows).split('\r\n')[0]).toContain('우선(확인 중)');
+  });
+
   it('수식 주입 방어: = + - @ 로 시작하는 원문은 앞에 작은따옴표', () => {
     const csv = candidatesToCsv(buildMasterAdditionCandidates([product('12가2001', '=HYPERLINK("x")'), product('12가2002', '+1+1'), product('12가2003', '@SUM(A1)'),
       product('12가2004', '-2+3')], [master]).rows);

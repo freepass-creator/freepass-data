@@ -15,8 +15,12 @@ export async function runMasterCandidatesCli(argv: { input?: string | undefined;
   await writeFile(argv.csv, '﻿' + candidatesToCsv(result.rows), { mode: 0o600 });
   const bySupplier: Record<string, Record<string, number>> = {};
   for (const r of result.rows) { const s = (bySupplier[r.supplier || '(미상)'] ??= {}); s[r.reason] = (s[r.reason] ?? 0) + r.count; }
+  const verdicts: Record<string, { groups: number; products: number }> = {};
+  for (const r of result.rows) { const v = (verdicts[r.verdict] ??= { groups: 0, products: 0 }); v.groups++; v.products += r.count; }
+  const priority = result.rows.filter(r => r.blankIdentityCount > 0);
   const summary = { status: 'MASTER_ADDITION_CANDIDATES', writes: 0, products: result.products, heldTotal: result.heldTotal, groups: result.rows.length,
-    reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, bySupplier };
+    reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, verdicts,
+    priority: { groups: priority.length, products: priority.reduce((a, r) => a + r.blankIdentityCount, 0) }, bySupplier };
   if (argv.summary) await writeFile(argv.summary, JSON.stringify(summary, null, 2), { mode: 0o600 });
   return summary;
 }
