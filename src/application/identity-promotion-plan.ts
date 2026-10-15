@@ -91,8 +91,11 @@ const variantsOf = (text: string): Set<string> => {
   const t = text.normalize('NFKC').toUpperCase();
   const out = new Set<string>();
   if (/플러그인/.test(t) || BOUNDED('PHEV').test(t) || /(?<![A-Z0-9])PLUG[-\s]?IN(?![A-Z0-9])/.test(t)) out.add('PHEV');
-  else if (/하이브리드/.test(t) || BOUNDED('HEV').test(t) || BOUNDED('HYBRID').test(t)) out.add('HYBRID');
-  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t) || BOUNDED('BEV').test(t)) out.add('EV');
+  else if (/하이브리드/.test(t) || BOUNDED('HEV').test(t) || BOUNDED('HYBRID').test(t)
+    || (/(가솔린|디젤|휘발유|경유)/.test(t) && /(?<![가-힣])전기(?![가-힣])/.test(t))) out.add('HYBRID');   // «가솔린+전기» 는 하이브리드 표기
+  // «전기»·«전기차» 낱말(한글 경계)도 전기 변형이다(Codex #682): 가솔린·디젤과 같이 적힌 하이브리드 표기는 위에서 이미 HYBRID 로 읽었다.
+  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t) || BOUNDED('BEV').test(t)
+    || /전기차/.test(t) || (!out.has('HYBRID') && !out.has('PHEV') && /(?<![가-힣])전기(?![가-힣])/.test(t))) out.add('EV');
   return out;
 };
 /** 원문의 변형 낱말이 모두 마스터(세부모델·모델·별칭) 이름에 있는가. 원문에 변형이 없으면 항상 true.

@@ -44,6 +44,14 @@ describe('변형 근거: 원문 낱말 + E-TECH(르노 계열) + 연료 칸', ()
     expect(matchIdentity(product({ fuel: 'BEV' }), [{ ...gas, id: 'G2' }, { ...gas, id: 'EV1', sub_model: '아르카나 EV LJL' }]).state).toBe('HOLD');
     void phev;
   });
+  it('Codex #682(재검토): 원문 «전기»·«전기차» 낱말은 EV 변형(연료 칸이 비어도), «가솔린+전기» 는 하이브리드', () => {
+    const ev: IdentityMaster = { ...gas, id: 'EV9', sub_model: '아르카나 전기 LJL' };
+    const text = '르노코리아 아르카나 LJL 전기차 이스타일';
+    expect(matchIdentity(product({ sub_model: text, rawName: text }), [gas, { ...gas, id: 'EVX', sub_model: '아르카나 EV LJL' }])).toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+    const hyb = '르노코리아 아르카나 LJL 가솔린+전기 이스타일';
+    expect(matchIdentity(product({ sub_model: hyb, rawName: hyb }), [gas])).toMatchObject({ state: 'HOLD', reason: 'VARIANT_MISMATCH' });
+    void ev;
+  });
   it('E-TECH 는 단어 경계로만 — RETECH·E-TECHNOLOGY 는 변형 근거가 아니다(Codex #682)', () => {
     for (const text of ['르노코리아 아르카나 LJL RETECH 이스타일', '르노코리아 아르카나 LJL E-TECHNOLOGY 이스타일']) {
       expect(matchIdentity(product({ sub_model: text, rawName: text }), [gas])).toMatchObject({ state: 'MATCH', master: { id: 'G' } });
