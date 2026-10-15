@@ -38,7 +38,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
     maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
     ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
-    ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}) }, plannedAt: now,
+    ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}),
+    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -265,11 +266,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
   const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && e.before?.rewriteReasons?.length === 1 && e.before.rewriteReasons[0] === 'API_OPTIONS' &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
-  const optionsAllowed = Math.max(0, OPTIONS_REWRITE_CAP - (plan.entries.length - optionsOnly.length));
+  const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
+  const optionsAllowed = Math.max(0, optionsCap - (plan.entries.length - optionsOnly.length));
   if (optionsOnly.length > optionsAllowed) {
     const deferred = new Set(optionsOnly.slice(optionsAllowed).map(e => sourceProductKey(e.after.record)));
     plan.entries = plan.entries.filter(e => !(optionsOnly.includes(e) && deferred.has(sourceProductKey(e.after.record))));
-    plan.warnings.push(`API_OPTIONS_DEFERRED:${deferred.size}:cap${OPTIONS_REWRITE_CAP}`);
+    plan.warnings.push(`API_OPTIONS_DEFERRED:${deferred.size}:cap${optionsCap}`);
   }
   const optionsRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('API_OPTIONS')).length;
   if (optionsRewrite > 0) plan.warnings.push(`API_OPTIONS_REWRITE:${optionsRewrite}`);
