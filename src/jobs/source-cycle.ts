@@ -19,6 +19,13 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     autoApprove?: boolean;
     /** 사람이 손으로 돌리는 «계획만 만들기»(--plan, 적용 없음). 이 실행의 실패는 무인 회차의 연속 실패 수·정지 상태를 바꾸지 않는다(2026-10-16 수동 plan 이 정지를 오염). */
     manualPlan?: boolean } = {}) {
+  const sw = options.syncWatch;
+  if (sw && !(Number.isFinite(sw.windowMs) && sw.windowMs > 0 && sw.windowMs <= 60 * 60_000
+    && (sw.pollMs === undefined || (Number.isFinite(sw.pollMs) && sw.pollMs >= 1_000 && sw.pollMs <= 10 * 60_000))
+    && (sw.readRetries === undefined || (Number.isInteger(sw.readRetries) && sw.readRetries >= 0 && sw.readRetries <= 5))
+    && (sw.backoffMs === undefined || (sw.backoffMs.length <= 5 && sw.backoffMs.every(ms => Number.isFinite(ms) && ms >= 1_000 && ms <= 120_000)))
+    && (sw.stallMs === undefined || (Number.isFinite(sw.stallMs) && sw.stallMs >= 10 * 60_000))))
+    throw new Error('SYNC_WATCH_OPTIONS_INVALID');
   const release = await control.acquire(plugin.sourceId);
   if (!release) return { status: 'LOCKED', writes: 0, summary: '원천 잠금: 중복 회차 생략' };
   const clock = options.now ?? Date.now;
@@ -47,33 +54,44 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       let synced: string | null = null;
       const watch = options.onlyWhenSynced ? options.syncWatch : undefined;
       const sleepWatch = options.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
-      let watched = false;
       if (options.onlyWhenSynced) {
         if (plugin.family !== 'IANCAR' || !plugin.syncedAt) throw new Error('SYNC_PROBE_UNAVAILABLE');
         if (watch) {
           // 감시: 확인 요청 오류(503 등)는 넘기고 다음 간격에 다시 본다. 갱신(마지막 반영과 다른 synced_at)이 신선도 12분 안에 보이면 즉시 읽는다.
+          // 조회 성공(값)과 조회 장애(null)를 구분한다: 마지막 «성공» 조회 값만 정지 판정에 쓰고, 조회가 전부 실패한 회차는 정지로 단정하지 않는다.
+          let probeOk = false;
           const probe = async (): Promise<string | null> => {
-            try { const v = await plugin.syncedAt!(); return v && Number.isFinite(Date.parse(v)) && Date.parse(v) <= clock() ? v : null; } catch { return null; }
+            try {
+              const v = await plugin.syncedAt!();
+              if (!v || !Number.isFinite(Date.parse(v)) || Date.parse(v) > clock()) return null;   // 값이 깨졌거나 미래면 조회 실패로 본다
+              probeOk = true; return v;
+            } catch { return null; }
           };
           const pollMs = watch.pollMs ?? 120_000, attempts = Math.max(1, Math.ceil(watch.windowMs / pollMs));
-          const fresh = (v: string | null) => !!v && v !== state.lastSyncedAt && clock() - Date.parse(v) <= 12 * 60_000;
+          const deadline = clock() + watch.windowMs;   // 절대 종료 시각: 조회 소요 시간도 창에 포함
+          // 신선도 10분·역행 검사는 감시 여부와 무관하게 아래 공통 경로에서 그대로 적용한다. 여기서는 «읽기를 시작할 만한 새 갱신인가»만 본다.
+          const fresh = (v: string | null) => !!v && v !== state.lastSyncedAt && clock() - Date.parse(v) <= 10 * 60_000
+            && !(state.lastSyncedAt && Date.parse(v) < Date.parse(state.lastSyncedAt));
           let seen = await probe();
-          for (let i = 0; i < attempts && !fresh(seen); i++) { await sleepWatch(pollMs); seen = (await probe()) ?? seen; }
+          for (let i = 0; i < attempts && !fresh(seen) && clock() < deadline; i++) {
+            await sleepWatch(Math.max(0, Math.min(pollMs, deadline - clock())));
+            seen = (await probe()) ?? seen;
+          }
+          if (seen && state.lastSyncedAt && Date.parse(seen) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
           if (!fresh(seen)) {
-            const stalled = !!seen && clock() - Date.parse(seen) >= (watch.stallMs ?? 2 * 60 * 60_000);
+            const stalled = probeOk && !!seen && clock() - Date.parse(seen) >= (watch.stallMs ?? 2 * 60 * 60_000);
             state.error = stalled ? 'UPSTREAM_STALLED' : null;
             await control.save(plugin.sourceId, state);
             await control.heartbeat(plugin.sourceId, state, null);
             if (stalled) await control.alert(plugin.sourceId, 'UPSTREAM_STALLED');
-            return { status: 'UNCHANGED_SYNC', writes: 0, summary: stalled ? `원천 정지: synced_at ${seen} 이 2시간 이상 그대로(우리 쪽 문제 아님)` : '감시 창 안에 새 갱신 없음(다음 감시에서 다시 확인)' };
+            return { status: 'UNCHANGED_SYNC', writes: 0, summary: stalled ? `원천 갱신 정지 의심: 조회에 성공했으나 synced_at ${seen} 이 ${Math.round((watch.stallMs ?? 2 * 60 * 60_000) / 60_000)}분 이상 그대로`
+              : !probeOk ? '감시 창 안에 synced_at 조회가 모두 실패(원천 정지 판정 보류)' : '감시 창 안에 새 갱신 없음(다음 감시에서 다시 확인)' };
           }
           synced = seen;
-          watched = true;
         } else {
         synced = await plugin.syncedAt();
         }
         if (!synced || !Number.isFinite(Date.parse(synced)) || Date.parse(synced) > clock()) throw new Error('SYNC_PROBE_INVALID');
-        if (!watched) {
         // 상세 읽기에 약 5분이 걸리고 상류 신선도 창은 15분이다. 갱신 후 10분이 넘었으면 이번 갱신은 창 안에 끝낼 수 없어 다음 갱신을 기다린다
         // (넘긴 채 읽으면 DETAIL_SOURCE_DRIFT 로 5분마다 되풀이 실패하며 공급사 API 만 소모한다).
         if (clock() - Date.parse(synced) > 10 * 60_000 && synced !== state.lastSyncedAt) {
@@ -89,7 +107,6 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
           return { status: 'UNCHANGED_SYNC', writes: 0, summary: 'synced_at 동일: 원천 수집 생략' };
         }
         if (state.lastSyncedAt && Date.parse(synced) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
-        }
       }
       let read = await plugin.read();
       // 감시 회차: 일시 오류는 회차를 실패로 만들기 전에 지수 백오프로 다시 읽는다(신선도 창 11분을 넘기면 중단).
@@ -98,8 +115,11 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         for (let i = 0; i < (watch.readRetries ?? 2); i++) {
           const text = `${String((read as { error?: unknown }).error ?? '')} ${String((read as { detail?: unknown }).detail ?? '')}`;
           if (read.complete || !/HTTP_50[234]|TIMEOUT|TimeoutError|NO_RESPONSE/i.test(text)) break;
-          if (synced && clock() - Date.parse(synced) > 11 * 60_000) break;
-          await sleepWatch(backoff[i] ?? 60_000);
+          // 대기 «후»에도 신선도 10분 안이어야 다시 읽는다(대기 전 값으로 판단하면 10분50초 + 60초 = 11분50초에 읽게 된다).
+          const wait = backoff[i] ?? 60_000;
+          if (synced && clock() + wait - Date.parse(synced) > 10 * 60_000) break;
+          await sleepWatch(wait);
+          if (synced && clock() - Date.parse(synced) > 10 * 60_000) break;
           read = await plugin.read();
         }
       }

@@ -447,7 +447,7 @@ describe('runner safety and heartbeat', () => {
     const sleeps: number[] = [];
     const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async ms => { sleeps.push(ms); }, syncWatch: { windowMs: 6 * 60_000, pollMs: 120_000 } });
     expect(r.status).toBe('UNCHANGED_SYNC');
-    expect(r.summary).toContain('원천 정지');
+    expect(r.summary).toContain('정지 의심');
     expect(alerts).toContain('UPSTREAM_STALLED');
     expect(sleeps).toHaveLength(3);
     expect(read).not.toHaveBeenCalled();
@@ -467,6 +467,52 @@ describe('runner safety and heartbeat', () => {
     expect(calls).toBe(3);
     expect(sleeps).toEqual([5_000, 15_000]);
     expect((await ctrl.load(config.sourceId)).failures).toBe(0);
+  });
+
+  const watchPlugin = (read: () => Promise<any>, synced: () => Promise<string>) =>
+    sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, synced);
+  it('sync watch keeps the 10-minute freshness limit: an update seen 11 minutes after it happened is not read', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 11 * 60_000).toISOString();
+    const r = await runSourceCycle(watchPlugin(read, async () => old), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async () => {}, syncWatch: { windowMs: 4 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('sync watch refuses a regressed synced_at (older than the last applied one) instead of treating it as a new update', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const state = await ctrl.load(config.sourceId); state.lastSyncedAt = time; await ctrl.save(config.sourceId, state);
+    const older = new Date(Date.parse(time) - 5 * 60_000).toISOString();
+    const r = await runSourceCycle(watchPlugin(read, async () => older), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async () => {}, syncWatch: { windowMs: 4 * 60_000, pollMs: 120_000 } });
+    expect(r.status).not.toBe('DRY_RUN');
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('sync watch: when every synced_at probe fails, no UPSTREAM_STALLED is declared from a remembered old value', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const r = await runSourceCycle(watchPlugin(read, async () => { throw new Error('IANCAR_ONE_API_HTTP_503'); }), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async () => {}, syncWatch: { windowMs: 4 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(r.summary).toContain('조회가 모두 실패');
+    expect(alerts).not.toContain('UPSTREAM_STALLED');
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('sync watch: a retry whose wait would cross the 10-minute freshness limit is not attempted', async () => {
+    const { ctrl } = control(), m = memory();
+    const start = Date.parse(time);
+    let clockMs = start + 9 * 60_000 + 50_000;   // 갱신 후 9분50초
+    let calls = 0;
+    const read = vi.fn(async () => { calls++; throw Object.assign(new Error('IANCAR_ONE_API_HTTP_503'), { status: 503 }); });
+    const r = await runSourceCycle(watchPlugin(read, async () => time), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => clockMs, sleepMs: async ms => { clockMs += ms; },
+        syncWatch: { windowMs: 20 * 60_000, backoffMs: [60_000, 60_000], readRetries: 2 } });
+    expect(calls).toBe(1);
+    expect(r.status).not.toBe('DRY_RUN');
+  });
+  it('sync watch rejects invalid options before taking the lock', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([]), synced_at: time }));
+    for (const bad of [{ windowMs: 0 }, { windowMs: 20 * 60_000, pollMs: 0 }, { windowMs: 20 * 60_000, readRetries: 99 }, { windowMs: 9 * 60 * 60_000 }])
+      await expect(runSourceCycle(watchPlugin(read, async () => time), m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), syncWatch: bad })).rejects.toThrow('SYNC_WATCH_OPTIONS_INVALID');
   });
 
   it('CLI cannot enable scheduled writes', async () => {
