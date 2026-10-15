@@ -117,11 +117,14 @@ const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
 // «휴대폰 무선충전»·«블루투스 핸즈프리 전화» 같은 정상 옵션을 과차단하지 않도록 전화·휴대폰·핸드폰·문의 낱말 단독은 개인정보로 보지 않는다(번호는 OPTION_PHONE 이 막는다, Codex #687 ①).
 const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락처|연락주|연락요|계좌|주민|이메일|성명|실명|카톡\s?ID|카톡아이디)/;
 const OPTION_PHONE = /(?<!\d)\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
-const OPTION_MONEY = /\d[\d,.]*\s*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)\s*\d/i;   // 통화기호·통화코드가 숫자 앞에 오는 꼴(₩50,000)도 막는다(Codex #687 ③)
+// 숫자와 단위 사이 공백·하이픈·점·괄호, 통화기호 뒤 괄호까지 허용해 막는다(₩(50,000)·50,000-원, Codex #687 (a)).
+const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;
+const INVISIBLE = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u034f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u180b-\\u180e\\u200b-\\u200f\\u2028-\\u202f\\u2060-\\u206f\\u3164\\ufe00-\\ufe0f\\ufeff]', 'g');   // 통화기호·통화코드가 숫자 앞에 오는 꼴(₩50,000)도 막는다(Codex #687 ③)
 const OPTION_FORBIDDEN_COMPACT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
 const safeOptionName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
-  const text = value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  // 보이지 않는 문자(제로폭·방향 제어·소프트 하이픈 등)는 먼저 지운다 — «고​객»·«010​-1234» 우회 방지(Codex #687 (b)).
+  const text = value.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
   if (!text || text.length > OPTION_NAME_MAX) return null;
   const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
   if (BLOCKED_TEXT.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;

@@ -59,6 +59,14 @@ describe('공개 피드 옵션 선택 필드', () => {
     expect(r.option_basic).toEqual(ok);
   });
 
+  it('Codex #687 재지적: 괄호·하이픈이 낀 금액과 제로폭 문자로 쪼갠 개인정보·전화는 거른다', () => {
+    const zw = String.fromCharCode(0x200b), soft = String.fromCharCode(0x00ad);
+    const bad = ['HUD ₩(50,000)', 'HUD 50,000-원', 'HUD (50,000) 원', '고' + zw + '객 홍길동', '010' + zw + '-1234' + zw + '-5678', '수' + soft + '수료'];
+    const ok = ['HUD(헤드업디스플레이)', '휴대폰 무선충전'];
+    const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [...bad, ...ok].map(name => ({ name })), api_options_paid: [] });
+    expect(r.option_basic).toEqual(ok);
+  });
+
   it('이름 하나가 규칙에 걸려도 피드 전체는 던지지 않는다; 숫자·번호 꼴은 개별로 버림', () => {
     const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [{ name: '12가3456 전용' }, { name: 'A'.repeat(17) }, { name: '정상 옵션' }, { name: 3 }, null],
       api_options_paid: [{ name: '유상', amount_state: 'KNOWN', amount_krw: -5 }, { name: '유상2', amount_state: 'KNOWN', amount_krw: 700000 }] });
