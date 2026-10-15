@@ -492,7 +492,7 @@ describe('2026-10-16 «마스터가 작동을 안 한다»: 모델은 마스터 
 
   it('순수: 마스터 모델 이름(공백·대소문자 차이만 허용)만 쓰고, 괄호·세대·«신형/더 뉴/디 올뉴» 표기와 마스터 목록이 없을 때는 쓰지 않는다', () => {
     expect(sourceIdentityFields(rec('12가1', '현대', '아반떼'), {}, false, makers, '', models)).toMatchObject({ maker: '현대', model: '아반떼' });
-    expect(sourceIdentityFields(rec('12가1', '기아', 'k5'), {}, false, makers, '', models)).toMatchObject({ maker: '기아', model: 'k5' });   // 대소문자만 다름 — 원천 표기 그대로(마스터 이름과 같은 키)
+    expect(sourceIdentityFields(rec('12가1', '기아', 'k5'), {}, false, makers, '', models)).toMatchObject({ maker: '기아', model: 'K5' });   // 대소문자만 다름 — 정식 마스터 이름으로 씀
     for (const bad of ['더 뉴아반떼(CN7)', '디 올뉴그랜저 하이브리드', '신형 카니발', '스포티지 5세대', '투싼 (NX4)', '신형쏘렌토(MQ4)']) {
       const out = sourceIdentityFields(rec('12가1', '기아', bad), {}, false, makers, '', models);
       expect(out.maker, bad).toBe('기아');
@@ -504,16 +504,48 @@ describe('2026-10-16 «마스터가 작동을 안 한다»: 모델은 마스터 
 
   it('되돌리기: 입구 매핑이 이미 쓴 모델이 마스터 이름이 아니면 모델만 비운다(사람·정제 값·트림 있는 문서는 제외)', () => {
     const filled = { maker: '현대', model: '더 뉴아반떼(CN7)', sub_model: '현대_더 뉴아반떼(CN7)_가솔린' };
-    const doc = { maker: filled.maker, model: filled.model, sub_model: filled.sub_model, trim_name: '', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: filled };
+    const doc = { maker: filled.maker, model: filled.model, sub_model: filled.sub_model, trim_name: '', vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: filled };
     expect(sourceIdentityFields(rec('12가1', '현대', '더 뉴아반떼(CN7)'), doc, false, makers, '', models))
       .toEqual({ model: '', vehicle_maker_model_filled: { maker: '현대', model: '', sub_model: filled.sub_model } });
     // 사람이 모델을 고쳤으면(채움 값과 다름) 비접촉
     expect(sourceIdentityFields(rec('12가1', '현대', '더 뉴아반떼(CN7)'), { ...doc, model: '아반떼 직접입력' }, false, makers, '', models)).toEqual({});
     // 트림이 있으면(사람 입력) 비접촉
     expect(sourceIdentityFields(rec('12가1', '현대', '더 뉴아반떼(CN7)'), { ...doc, trim_name: '모던' }, false, makers, '', models)).toEqual({});
+    // 사람이 값을 승인하고 검토를 끝낸 문서(검토 필요 false)는 비접촉(Codex #706 ②)
+    expect(sourceIdentityFields(rec('12가1', '현대', '더 뉴아반떼(CN7)'), { ...doc, vehicle_review_required: false }, false, makers, '', models)).toEqual({});
     // 이미 마스터 이름이면 비접촉
     const ok = { ...doc, model: '아반떼', vehicle_maker_model_filled: { ...filled, model: '아반떼' } };
     expect(sourceIdentityFields(rec('12가1', '현대', '아반떼'), ok, false, makers, '', models)).toEqual({});
+  });
+
+  it('Codex #706: 별칭 자체는 쓰지 않고 정식 이름으로 변환, 검토 완료·트림 있는 문서는 선정되지 않고 선정·쓰기가 같은 조건이다', async () => {
+    const aliased = sourceModelsOf({ 기아: ['카니발'] }, { 기아: { '신형 카니발': '카니발', '카니발 4세대': '카니발' } });
+    // 신규 유입: 별칭 «신형 카니발» 은 정식 «카니발» 로 쓴다(별칭 문자열 그대로 쓰지 않음)
+    expect(sourceIdentityFields(rec('12가1', '기아', '신형 카니발'), {}, false, makers, '', aliased)).toMatchObject({ maker: '기아', model: '카니발' });
+    // 별칭도 정식도 아닌 표기는 비움
+    expect(sourceIdentityFields(rec('12가1', '기아', '카니발 5세대(KA5)'), {}, false, makers, '', aliased)).toMatchObject({ maker: '기아', model: '' });
+    // 되돌리기: 이미 별칭 표기로 쓴 문서는 정식 이름으로 바꾼다
+    const filled = { maker: '기아', model: '신형 카니발', sub_model: '기아_신형 카니발_디젤' };
+    const doc = { maker: filled.maker, model: filled.model, sub_model: filled.sub_model, trim_name: '', vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: filled };
+    expect(sourceIdentityFields(rec('12가1', '기아', '신형 카니발'), doc, false, makers, '', aliased)).toMatchObject({ model: '카니발' });
+  });
+
+  it('Codex #706 ③④: 선정과 쓰기가 같은 조건 — 트림이 있는 문서는 되돌리기 사유가 없고, 통합 쓰기는 APPLIED·uncertain 0·verified 건수 일치', async () => {
+    const { commands, fake } = await setup();
+    const withTrim = rec('59바2001', '현대', '더 뉴아반떼(CN7)');
+    const plain = rec('59바2002', '현대', '더 뉴아반떼(CN7)');
+    const filled = (r: SourceProductRecord) => ({ maker: '현대', model: '더 뉴아반떼(CN7)', vehicle_maker_model_source: 'SOURCE_FIELDS',
+      vehicle_maker_model_filled: { maker: '현대', model: '더 뉴아반떼(CN7)', sub_model: r.vehicleText } });
+    fake.put('59바2001', legacyDoc(withTrim, { ...filled(withTrim), trim_name: '모던' }));   // 트림이 있으면 사람 입력 — 선정 안 됨
+    fake.put('59바2002', legacyDoc(plain, filled(plain)));
+    const result = await run(commands, [withTrim, plain]);
+    // 두 문서 모두 제원 확인 표식 때문에 항목은 생기지만(다른 사유), 모델 되돌리기는 트림 없는 문서에만 일어난다 — 선정만 되고 안 써져 반복되는 일이 없다
+    expect(result.applied?.status).toBe('APPLIED');
+    expect(result.applied?.uncertain).toEqual([]);
+    expect(result.applied?.verified).toBe(result.kinds.length);
+    expect((await run(commands, [withTrim, plain])).kinds).toEqual([]);   // 한 번 뒤 되풀이 없음
+    expect(decodeFields(fake.docs.get('59바2001').fields)).toMatchObject({ model: '더 뉴아반떼(CN7)', trim_name: '모던' });
+    expect(decodeFields(fake.docs.get('59바2002').fields)).toMatchObject({ model: '' });
   });
 
   it('쓰기: 마스터 이름이 아닌 모델은 쓰지 않고(정제 대기), 이미 쓴 128건형 문서는 한 번에 모델만 비워지며 되풀이하지 않는다', async () => {

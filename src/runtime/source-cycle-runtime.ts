@@ -120,15 +120,23 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      // 허용 집합 = 마스터 «정식 모델 이름»만. 별칭은 정식 이름으로 변환하는 표(modelAliases)로만 쓴다(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
       models: (() => {
         const out: Record<string, Set<string>> = {};
         for (const m of masters) {
-          const maker = m.maker.trim();
-          if (!maker) continue;
-          const set = out[maker] ??= new Set<string>();
-          for (const name of [m.model, ...m.model_aliases]) if (name.trim()) set.add(name.trim());
+          const maker = m.maker.trim(), model = m.model.trim();
+          if (maker && model) (out[maker] ??= new Set<string>()).add(model);
         }
         return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v].sort()]));
+      })(),
+      modelAliases: (() => {
+        const out: Record<string, Record<string, string>> = {};
+        for (const m of masters) {
+          const maker = m.maker.trim(), model = m.model.trim();
+          if (!maker || !model) continue;
+          for (const alias of m.model_aliases) if (alias.trim() && alias.trim() !== model) (out[maker] ??= {})[alias.trim()] = model;
+        }
+        return out;
       })() } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };

@@ -36,7 +36,9 @@ export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: s
   /** 활성 차종 마스터에 있는 제조사 이름 목록(입구 매핑이 마스터에 없는 원천 표기를 maker 에 넣지 않게 하는 근거). 없으면 입구 매핑은 채우지 않는다. */
   makers?: readonly string[];
   /** 제조사별 마스터 «모델 이름 + 별칭» 목록(입구 매핑이 모델을 마스터에 있는 이름일 때만 쓰게 하는 근거, 차종 기준 한 장: 이름은 마스터에 있는 이름만, 괄호·세대·수식어 안 씀). 없으면 입구 매핑은 모델을 쓰지 않는다(fail-closed). */
-  models?: Readonly<Record<string, readonly string[]>> };
+  models?: Readonly<Record<string, readonly string[]>>;
+  /** 제조사별 «별칭 → 정식 모델 이름». 원천 표기가 마스터에 등록된 별칭이면 «정식 이름»으로 바꿔 쓴다(별칭 문자열 자체는 쓰지 않는다 — Codex #706). */
+  modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>> };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {
