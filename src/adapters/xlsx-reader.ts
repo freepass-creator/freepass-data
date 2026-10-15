@@ -25,16 +25,21 @@ function readZip(buffer: Buffer): Map<string, Buffer> {
     const name = buffer.toString('utf8', at + 46, at + 46 + nameLength);
     at += 46 + nameLength + extraLength + commentLength;
     if (name.includes('..') || name.startsWith('/') || name.endsWith('/')) continue;
-    total += size;
-    if (total > MAX_TOTAL) throw new XlsxError('XLSX_TOO_LARGE');
+    if (size > MAX_TOTAL) throw new XlsxError('XLSX_TOO_LARGE');   // 신고값은 거절 근거로만 쓴다 — 누적은 «실제 해제 크기»로 센다
     if (local + 30 > buffer.length || buffer.readUInt32LE(local) !== 0x04034b50) throw new XlsxError('XLSX_ZIP_CORRUPT');
     const start = local + 30 + buffer.readUInt16LE(local + 26) + buffer.readUInt16LE(local + 28);
     const data = buffer.subarray(start, start + compressed);
-    if (method === 0) out.set(name, Buffer.from(data));
+    let content: Buffer;
+    if (method === 0) content = Buffer.from(data);
     else if (method === 8) {
-      const inflated = inflateRawSync(data, { maxOutputLength: MAX_TOTAL });
-      out.set(name, inflated);
+      // 해제 한도는 남은 한도(누적 기준)로 건다 — 헤더 신고 크기가 작아도 실제 해제가 한도를 넘으면 거절한다(압축 폭탄).
+      try { content = inflateRawSync(data, { maxOutputLength: Math.max(1, MAX_TOTAL - total) }); }
+      catch { throw new XlsxError('XLSX_TOO_LARGE'); }
     } else throw new XlsxError('XLSX_UNSUPPORTED_COMPRESSION');
+    total += content.length;
+    if (total > MAX_TOTAL) throw new XlsxError('XLSX_TOO_LARGE');
+    if (content.length !== size) throw new XlsxError('XLSX_ZIP_CORRUPT');   // 신고 크기와 실제가 다르면 손상
+    out.set(name, content);
   }
   return out;
 }
@@ -79,7 +84,11 @@ export function readXlsx(buffer: Buffer): XlsxSheet[] {
         if (column < 0 || column >= MAX_COLS) { if (column >= MAX_COLS) throw new XlsxError('XLSX_TOO_MANY_COLUMNS'); continue; }
         const type = attr(c[1]!, 't'), body = c[2] ?? '';
         let value = '';
-        if (type === 's') value = shared[Number(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? NaN)] ?? '';
+        if (type === 's') {
+          // 공유 문자열 색인: 숫자가 아니면(빈 <v></v> 포함) 빈 값이다 — Number('')=0 이 첫 문자열로 읽히지 않게(Codex #670 ③).
+          const indexText = /<v>([\s\S]*?)<\/v>/.exec(body)?.[1]?.trim() ?? '';
+          value = /^\d+$/.test(indexText) ? (shared[Number(indexText)] ?? '') : '';
+        }
         else if (type === 'inlineStr') value = textOf(body);
         else if (type === 'b') value = /<v>1<\/v>/.test(body) ? 'TRUE' : 'FALSE';
         else value = entity(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? '');

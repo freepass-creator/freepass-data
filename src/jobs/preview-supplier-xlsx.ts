@@ -8,9 +8,9 @@ import { readXlsx } from '../adapters/xlsx-reader.js';
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 
 /** 개인·식별 정보 가림: 완전한 차량번호는 끝 4자리만, 전화번호 꼴은 통째로. */
-export function maskCell(value: string): string {
+export function maskCell(value: string): string {   // 시트 이름·차명 등 출력되는 모든 문자열에 쓴다
   return value
-    .replace(/\d{2,3}\s?[가-힣]\s?(\d{4})/g, '****$1')
+    .replace(/\d{2,3}[\s\u00a0\u3000]*[가-힣][\s\u00a0\u3000]*(\d{4})/g, '****$1')
     .replace(/0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}/g, '[전화]')
     .slice(0, 60);
 }
@@ -31,7 +31,7 @@ export async function previewSupplierXlsx(file: string, maxRows = 80) {
   const sheets = readXlsx(await readFile(file));
   return sheets.map(sheet => {
     const rows = sheet.rows.map((cells, index) => ({ row: index + 1, cells })).filter(r => r.cells.some(c => c.trim()));
-    return { sheet: sheet.name, rowCount: rows.length, maxColumns: Math.max(0, ...sheet.rows.map(r => r.length)),
+    return { sheet: maskCell(sheet.name), rowCount: rows.length, maxColumns: Math.max(0, ...sheet.rows.map(r => r.length)),
       rows: rows.slice(0, maxRows).map(r => ({ row: r.row, filled: r.cells.filter(c => c.trim()).length,
         cells: r.cells.map((c, i) => ({ col: i, kind: cellKind(c), text: maskCell(c) })).filter(c => c.kind !== 'empty') })) };
   });

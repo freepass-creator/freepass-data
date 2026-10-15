@@ -77,6 +77,20 @@ describe('마음카 XLSX 변환', () => {
       spec: { year: '2023', fuel_type: '가솔린', ext_color: '블랙', mileage: '12345' } });
   });
 
+  it('Codex #670 ①: 출고여부는 «즉시»(·«즉시(마음카)») 정확 일치만 출고가능 — «즉시 출고불가» 등은 보류', () => {
+    const rows = (status: string) => convertMaumcarWorkbook([{ name: 'S', rows: [['NO', '차량명', '차량번호', '36개월', '출고여부'], ['1', '레이', '12가3456', '30/40', status]] }], input);
+    for (const ok of ['즉시', '즉시(마음카)', '즉시 (마음카)']) expect(rows(ok).records, ok).toHaveLength(1);
+    for (const bad of ['즉시 출고불가', '즉시마감', '즉시 불가', '즉시 / 9월', '46310']) { const r = rows(bad); expect(r.records, bad).toHaveLength(0); expect(r.held[0]!.reason).toBe('STATUS_UNKNOWN'); }
+  });
+
+  it('Codex #670 ④: 차량명이 빈 줄도 번호 중복 검사를 받는다(같은 번호의 중복이 차명 누락에 가려지지 않음)', () => {
+    const r = convertMaumcarWorkbook([{ name: 'S', rows: [['NO', '차량명', '차량번호', '36개월', '출고여부'],
+      ['1', '레이', '12가3456', '30/40', '즉시'], ['2', '', '12가3456', '30/40', '즉시'], ['3', '', '34나5678', '30/40', '즉시']] }], input);
+    expect(r.duplicatePlates).toHaveLength(1);
+    expect(r.held.map(h => [h.row, h.reason])).toEqual([[3, 'DUPLICATE_PLATE'], [4, 'VEHICLE_NAME_MISSING']]);
+    expect(r.records).toHaveLength(1);
+  });
+
   it('엑셀 일련번호 날짜(1900 체계)', () => {
     expect(excelSerialDate('46023')).toBe('2026-01-01');
     expect(excelSerialDate('46310')).toBe('2026-10-15');

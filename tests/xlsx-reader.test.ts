@@ -12,7 +12,7 @@ const crc32 = (buf: Buffer) => {
   for (const byte of buf) { c = (crc ^ byte) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; }
   return ~crc >>> 0;
 };
-function zip(files: Record<string, string>, store = false): Buffer {
+function zip(files: Record<string, string>, store = false, declaredSize?: number): Buffer {
   const locals: Buffer[] = [], central: Buffer[] = [];
   let offset = 0;
   for (const [name, text] of Object.entries(files)) {
@@ -21,7 +21,7 @@ function zip(files: Record<string, string>, store = false): Buffer {
     local.writeUInt32LE(crc32(raw), 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(raw.length, 22); local.writeUInt16LE(nameBuf.length, 26);
     locals.push(local, nameBuf, data);
     const entry = Buffer.alloc(46); entry.writeUInt32LE(0x02014b50, 0); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt16LE(store ? 0 : 8, 10);
-    entry.writeUInt32LE(crc32(raw), 16); entry.writeUInt32LE(data.length, 20); entry.writeUInt32LE(raw.length, 24); entry.writeUInt16LE(nameBuf.length, 28); entry.writeUInt32LE(offset, 42);
+    entry.writeUInt32LE(crc32(raw), 16); entry.writeUInt32LE(data.length, 20); entry.writeUInt32LE(declaredSize ?? raw.length, 24); entry.writeUInt16LE(nameBuf.length, 28); entry.writeUInt32LE(offset, 42);
     central.push(entry, nameBuf);
     offset += 30 + nameBuf.length + data.length;
   }
@@ -61,6 +61,21 @@ describe('XLSX 읽기(의존성 없음)', () => {
     }
   });
 
+  it('Codex #670 ②: the size limit counts the REAL inflated size, not the header-declared size (zip bomb with a tiny declared size is refused)', () => {
+    const bomb = zip({ 'xl/workbook.xml': 'x'.repeat(25 * 1024 * 1024) }, false, 10);   // 신고 크기 10바이트, 실제 25MB
+    expect(() => readXlsx(bomb)).toThrow('XLSX_TOO_LARGE');
+    const mismatch = zip({ 'xl/workbook.xml': workbook, 'xl/_rels/workbook.xml.rels': rels }, false, 3);
+    expect(() => readXlsx(mismatch)).toThrow('XLSX_ZIP_CORRUPT');   // 신고 크기 ≠ 실제 해제 크기
+  });
+
+  it('Codex #670 ③: an empty or non-numeric shared-string index is an empty value, not the first shared string', () => {
+    const sheet = '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v></v></c><c r="B1" t="s"><v>x</v></c><c r="C1" t="s"><v>0</v></c><c r="D1" t="s"/></row></sheetData></worksheet>';
+    const book = zip({ 'xl/workbook.xml': '<workbook><sheets><sheet name="S" r:id="rId1"/></sheets></workbook>',
+      'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      'xl/sharedStrings.xml': '<sst><si><t>첫 문자열</t></si></sst>', 'xl/worksheets/sheet1.xml': sheet });
+    expect(readXlsx(book)[0]!.rows[0]).toEqual(['', '', '첫 문자열', '']);
+  });
+
   it('rejects non-zip bytes, corrupt zips, missing parts and unsupported archives without guessing', () => {
     expect(() => readXlsx(Buffer.from('not a zip at all'))).toThrow(XlsxError);
     expect(() => readXlsx(Buffer.alloc(0))).toThrow('XLSX_NOT_ZIP');
@@ -74,6 +89,9 @@ describe('공급사 XLSX 구조 미리보기(비식별)', () => {
   it('masks plates to the last 4 digits and phone-like text, classifies cell shapes without guessing units/meanings', () => {
     expect(maskCell('서울 12가3456 차')).toBe('서울 ****3456 차');
     expect(maskCell('123가 4567')).toBe('****4567');
+    expect(maskCell('12가   3456')).toBe('****3456');            // Codex #670 ⑥: 공백 개수·종류 무관
+    expect(maskCell('12 가\u00a03456')).toBe('****3456');
+    expect(maskCell('12\u3000가\u30003456')).toBe('****3456');
     expect(maskCell('문의 010-1234-5678')).toBe('문의 [전화]');
     expect(maskCell('x'.repeat(100)).length).toBe(60);
     expect([cellKind(''), cellKind('91'), cellKind('0.1'), cellKind('90/90'), cellKind('2026-09-22'), cellKind('9/9(마음카)'), cellKind('***5355'), cellKind('즉시')])

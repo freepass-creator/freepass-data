@@ -2,7 +2,7 @@
  *  - 변환 대상은 «차량번호가 있는 표»(머리글에 차량명·차량번호·출고여부)뿐이다. 번호 없는 선출고 예정 표와 머리글 없는 시트는 보고 전용(쓰기 없음).
  *  - 요금 칸 «a/b» = 보증금(a)/월렌탈료(b), 만원 단위(공급사 확인 2026-10-15 09:48: «90/90 은 보증금/월렌탈료, 만원 단위»).
  *  - 값이 «-»·빈칸이면 그 기간은 제안 없음. 숫자 하나만 있는 칸은 뜻을 모르므로 쓰지 않는다(노트). 보증금 0 은 확정 0원이 아니므로 UNKNOWN.
- *  - 출고여부 «즉시…» 만 출고가능. 날짜·그 밖의 값은 상태를 모르므로 보류(STATUS_UNKNOWN).
+ *  - 출고여부 «즉시»(·«즉시(마음카)») 정확 일치만 출고가능. 날짜·그 밖의 값은 상태를 모르므로 보류(STATUS_UNKNOWN).
  *  - 수수료 규칙이 없다 → 수수료 «확인 필요»(raw.fee_state). 파일에 없는 차는 하향하지 않는다(플러그인이 부재 판정을 막음).
  * 이름·값을 지어내지 않는다: 읽을 수 없는 칸은 비우고 사유 코드를 남긴다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
@@ -71,16 +71,18 @@ export function convertMaumcarWorkbook(sheets: readonly XlsxSheet[], input: { ob
       const first = clean(cells[0]);
       if (!cells.some(c => clean(c))) return;
       if (/^[*※]/.test(first) || (!name && !plateText && !/^\d+$/.test(first))) { note('SEPARATOR_OR_NOTE_ROWS'); return; }
-      if (!name) { held.push({ sheet: sheet.name, row: index + 1, reason: 'VEHICLE_NAME_MISSING' }); return; }
+      // 번호 검증·중복 검사가 차명 검사보다 먼저다(차명이 빈 줄이 같은 번호의 중복을 가리지 않게 — Codex #670 ④).
       if (!/^\d{2,3}[가-힣]\d{4}$/.test(plateText) || !isAssignedPlate(plateText)) {
         held.push({ sheet: sheet.name, row: index + 1, reason: plateText ? 'PLATE_INVALID' : 'PLATE_MISSING' }); return;
       }
       const plate = plateIdentityKey(plateText);
       if (seen.has(plate)) { duplicates.add(plate); held.push({ sheet: sheet.name, row: index + 1, reason: 'DUPLICATE_PLATE' }); return; }
       seen.add(plate);
+      if (!name) { held.push({ sheet: sheet.name, row: index + 1, reason: 'VEHICLE_NAME_MISSING' }); return; }
       const availability = at('출고여부');
       const serial = excelSerialDate(availability);
-      if (!/^즉시/.test(availability)) {
+      // «즉시» 정확 일치(공급사 표기 «즉시(마음카)» 허용). «즉시 출고불가»·«즉시 마감» 같은 문구는 출고가능이 아니다(Codex #670 ①).
+      if (!/^즉시(?:\s*\(마음카\))?$/.test(availability)) {
         held.push({ sheet: sheet.name, row: index + 1, reason: 'STATUS_UNKNOWN' });
         note(serial ? 'AVAILABLE_FROM_DATE_HELD' : 'STATUS_VALUE_HELD');
         return;

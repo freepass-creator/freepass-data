@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { readXlsx } from '../adapters/xlsx-reader.js';
 import { convertMaumcarWorkbook } from '../adapters/maumcar-file.js';
+import { maskCell } from './preview-supplier-xlsx.js';
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 
@@ -18,10 +19,12 @@ export async function previewMaumcarConversion(file: string) {
   return {
     fileSha256: sha, fileBytes: bytes.length,
     converted: out.records.length, held: out.held.length, heldByReason, duplicatePlates: out.duplicatePlates.length,
-    reportOnly: out.reportOnly, notes: out.notes,
-    vehicles: out.records.map(r => ({ plate4: String(r.plate).slice(-4), name: r.vehicleText, status: r.status.raw,
+    reportOnly: { ...out.reportOnly, headerlessSheets: out.reportOnly.headerlessSheets.map(s => ({ ...s, sheet: maskCell(s.sheet) })),
+      convertedSheets: out.reportOnly.convertedSheets.map(maskCell) },
+    notes: out.notes,
+    vehicles: out.records.map(r => ({ plate4: String(r.plate).slice(-4), name: maskCell(r.vehicleText), status: r.status.raw,
       terms: r.terms.map(t => ({ months: t.months, deposit: t.deposit.state === 'KNOWN' ? t.deposit.value : t.deposit.state, rent: t.monthlyRent.state === 'KNOWN' ? t.monthlyRent.value : t.monthlyRent.state })) })),
-    heldRows: out.held.map(h => ({ sheet: h.sheet, row: h.row, reason: h.reason })),
+    heldRows: out.held.map(h => ({ sheet: maskCell(h.sheet), row: h.row, reason: h.reason })),
   };
 }
 
