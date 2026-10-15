@@ -39,8 +39,19 @@ export type SalesSheetPlan = {
 
 const STATUS_LABEL: Record<string, string> = { AVAILABLE: '출고가능', CONTRACTING: '계약중', CONSULT_REQUIRED: '출고협의', UNAVAILABLE: '출고불가', UNKNOWN: NEEDS_CHECK };
 const FORBIDDEN_FIELD = /vin|fee|commission|payout|billing|margin|partner_memo|sales_notes|memo|source|raw|audit|lock|원문|수수료|원가|정산/i;
-const FORBIDDEN_TEXT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
+const FORBIDDEN_TEXT_COMPACT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/;
+const FORBIDDEN_TEXT_WORD = /(^|[^a-z])f[\s\p{P}\p{S}_]*e[\s\p{P}\p{S}_]*e[\s\p{P}\p{S}_]*s?(?![a-z])/u;
 const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+const INVISIBLE = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u034f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u180b-\\u180e\\u200b-\\u200f\\u2028-\\u202f\\u2060-\\u206f\\u3164\\ufe00-\\ufe0f\\ufeff]', 'g');
+/** 금지 문구 검사 전 정규화: NFKC·소문자·제로폭/제어 문자 제거. 공백·구두점을 모두 지운 꼴과 단어 경계 꼴을 둘 다 본다(«수 수 료»·«f e e» 우회 방지). */
+const hasForbiddenText = (cell: string): boolean => {
+  const base = cell.normalize('NFKC').toLowerCase().replace(INVISIBLE, '');
+  const compact = base.replace(/[\s\p{P}\p{S}_]+/gu, '');
+  const isUrl = /^https?:\/\//.test(base);   // 사진 주소 경로에 coffee 같은 낱말이 있어도 막지 않는다
+  return FORBIDDEN_TEXT_COMPACT.test(compact) || (!isUrl && FORBIDDEN_TEXT_WORD.test(base));
+};
+/** 요약·셀에 나가는 상품 구분은 대문자 코드 꼴만 통과(원문 차명·번호 등이 새지 않게). */
+const productTypeLabel = (v: unknown) => { const t = text(v); return /^[A-Z][A-Z0-9_]{1,39}$/.test(t) ? t : (t ? '기타' : ''); };
 const won = (v: number | null) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? String(v) : '');
 
 /** 버전 탭 이름: 재고_YYYYMMDD_HHmm (한국 시각). generatedAt 이 시각이 아니면 던진다(발행 근거 없음). */
@@ -62,12 +73,14 @@ export function planSalesInventorySheet(feed: SalesFeed, options: SalesSheetOpti
   const seenPlates = new Set<string>(), seenKeys = new Set<string>();
   if (feed.count !== feed.products.length) violations.push({ code: 'FEED_COUNT_MISMATCH', detail: `${feed.count}/${feed.products.length}` });
   for (const column of header) if (!SALES_SHEET_ALLOWED_COLUMNS.has(column)) violations.push({ code: 'COLUMN_NOT_ALLOWED', detail: column });
-  for (const p of feed.products) {
+  // 위반 detail 에는 값·필드명·키를 싣지 않는다(번호·개인정보가 들어 있을 수 있음) — 행 순번만.
+  for (const [index, p] of feed.products.entries()) {
+    const where = `row#${index}`;
     const key = text(p.publicProductKey);
-    if (!key) { violations.push({ code: 'PRODUCT_KEY_MISSING', detail: '' }); continue; }
-    if (seenKeys.has(key)) violations.push({ code: 'PRODUCT_KEY_DUPLICATE', detail: key.slice(-4) });
+    if (!key) { violations.push({ code: 'PRODUCT_KEY_MISSING', detail: where }); continue; }
+    if (seenKeys.has(key)) violations.push({ code: 'PRODUCT_KEY_DUPLICATE', detail: where });
     seenKeys.add(key);
-    for (const field of Object.keys(p)) if (FORBIDDEN_FIELD.test(field)) violations.push({ code: 'FORBIDDEN_FIELD_IN_FEED', detail: field });
+    if (Object.keys(p).some(field => FORBIDDEN_FIELD.test(field))) violations.push({ code: 'FORBIDDEN_FIELD_IN_FEED', detail: where });
     const plate = text(p.car_number);
     if (plate) {
       if (seenPlates.has(plate)) violations.push({ code: 'PLATE_DUPLICATE', detail: plate.slice(-4) });
@@ -81,18 +94,18 @@ export function planSalesInventorySheet(feed: SalesFeed, options: SalesSheetOpti
     if (photo) summary.photoRows++;
     const terms = SALES_SHEET_TERMS.flatMap(months => {
       const row = p.price?.[String(months)];
-      return [won(row?.rent ?? null), row ? (row.depositState === 'KNOWN' || row.depositState === 'ZERO' ? won(row.deposit) : NEEDS_CHECK) : ''];
+      return [won(row?.rent ?? null), row && (row.depositState === 'KNOWN' || row.depositState === 'ZERO') ? won(row.deposit) : NEEDS_CHECK];
     });
     if (terms.every(t => t === '' || t === NEEDS_CHECK)) summary.priceMissingRows++;
     const cells = [
       plate || NEEDS_CHECK, names[0] || (nameReview ? REVIEW_NAME : ''), names[1] || '', names[2] || '', text(p.trim_name),
       text(p.fuel_type), p.year === null || p.year === undefined ? '' : String(p.year), p.mileage === null || p.mileage === undefined ? '' : String(p.mileage), text(p.ext_color),
-      text(p.product_type), status, ...terms, String(Object.keys(p.price ?? {}).length), photo,
+      productTypeLabel(p.product_type), status, ...terms, String(Object.keys(p.price ?? {}).length), photo,
       ...(providerColumn ? [text(p.provider_name)] : []),
     ];
-    for (const cell of cells) if (FORBIDDEN_TEXT.test(cell)) { violations.push({ code: 'FORBIDDEN_TEXT_IN_CELL', detail: key.slice(-4) }); break; }
+    for (const cell of cells) if (hasForbiddenText(cell)) { violations.push({ code: 'FORBIDDEN_TEXT_IN_CELL', detail: where }); break; }
     summary.byStatus[status] = (summary.byStatus[status] ?? 0) + 1;
-    const type = text(p.product_type) || NEEDS_CHECK;
+    const type = productTypeLabel(p.product_type) || NEEDS_CHECK;
     summary.byProductType[type] = (summary.byProductType[type] ?? 0) + 1;
     rows.push(cells);
   }

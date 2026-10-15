@@ -92,6 +92,31 @@ describe('영업자용 재고 시트 계획', () => {
     expect(plan.rows[0]![0]).toBe('12가3456');
   });
 
+  it('금지 문구 우회(영문 fee·띄어쓰기·제로폭·전각)를 막고 사진 주소의 낱말은 막지 않는다', () => {
+    for (const trim of ['fee 포함', '수 수 료', '수​수료', 'ＦＥＥ', 'Com​mission', '정­산']) {
+      const plan = planSalesInventorySheet(feedOf(item({ trim_name: trim })), { snapshotId: 'S1', generatedAt: at });
+      expect(plan.validation.violations.map(v => v.code), trim).toContain('FORBIDDEN_TEXT_IN_CELL');
+    }
+    const ok = planSalesInventorySheet(feedOf(item({ trim_name: 'Feel 프리미엄', photo_link: 'https://example.test/coffee/1.jpg' })), { snapshotId: 'S1', generatedAt: at });
+    expect(ok.validation.ok).toBe(true);
+  });
+
+  it('위반 detail·요약 키에 원문 값·필드명이 새지 않는다', () => {
+    const leak = { ...item(), ['partner_memo_12가3456']: 'x' } as SalesFeedProduct;
+    const plan = planSalesInventorySheet(feedOf({ ...leak, product_type: '12가3456 원문' } as SalesFeedProduct), { snapshotId: 'S1', generatedAt: at });
+    const dump = JSON.stringify({ v: plan.validation, s: plan.summary, r: plan.rows });
+    expect(plan.validation.violations.some(v => v.code === 'FORBIDDEN_FIELD_IN_FEED' && v.detail === 'row#0')).toBe(true);
+    expect(JSON.stringify(plan.validation)).not.toContain('partner_memo');
+    expect(plan.summary.byProductType).toEqual({ 기타: 1 });
+    expect(dump.includes('원문')).toBe(false);
+  });
+
+  it('가격 객체가 없는 기간도 보증금은 확인 필요', () => {
+    const plan = planSalesInventorySheet(feedOf(item({ price: {} })), { snapshotId: 'S1', generatedAt: at });
+    expect(plan.rows[0]![plan.header.indexOf('12개월 보증금')]).toBe('확인 필요');
+    expect(plan.rows[0]![plan.header.indexOf('12개월 대여료')]).toBe('');
+  });
+
   it('CLI 함수는 쓰기 없이 계획·대조·발행 가능 여부를 낸다', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'sales-plan-'));
     const feedPath = join(dir, 'feed.json'), freshPath = join(dir, 'fresh.json');
