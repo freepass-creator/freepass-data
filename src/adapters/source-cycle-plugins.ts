@@ -39,6 +39,7 @@ export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   /** 이번 한 회차 한정 신규 편입 상한 상향(최초 대량 편입). 원천 잠금 안에서 «적용 전에» 표식을 원자적으로 기록해 소진시키고(claimEnrollCapOnce), 기록 실패 시 올리지 않는다. */
   enrollCapOnce?: number; enrollCapOnceMarker?: string;
   optionsRewriteCap?: number;
+  specValidation?: boolean;
   syncedAt?: () => Promise<string | null>;
   syncedAtOfRead?(read: SourceRead<T>): string | null;
 }
