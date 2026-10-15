@@ -75,6 +75,13 @@ describe('공개 피드 옵션 선택 필드', () => {
     expect(r.option_basic).toEqual(ok);
   });
 
+  it('Codex #687 잔여: 퍼센트는 금액이 아니므로 통과, 원 생략 금액(50만)은 거르고 거리·기간 단위(20만km)는 통과', () => {
+    const bad = ['썬팅 50만', '썬팅 5 만', '블랙박스 3천', '썬팅 50만원', '１０％ 할인'];
+    const ok = ['자외선 99% 차단', '20만km 보증', '10만 km 무상 보증', '3년 보증'];
+    const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [...bad, ...ok].map(name => ({ name })), api_options_paid: [] });
+    expect(r.option_basic).toEqual(ok);
+  });
+
   it('이름 하나가 규칙에 걸려도 피드 전체는 던지지 않는다; 숫자·번호 꼴은 개별로 버림', () => {
     const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [{ name: '12가3456 전용' }, { name: 'A'.repeat(17) }, { name: '정상 옵션' }, { name: 3 }, null],
       api_options_paid: [{ name: '유상', amount_state: 'KNOWN', amount_krw: -5 }, { name: '유상2', amount_state: 'KNOWN', amount_krw: 700000 }] });

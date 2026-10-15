@@ -118,17 +118,20 @@ const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
 const OPTION_PERSONAL_WORDS = /(고객|담당자?|연락처|연락주|연락요|계좌|주민|이메일|성명|실명|카톡\s?ID|카톡아이디)/;
 const OPTION_PHONE = /(?<!\d)\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
 // 숫자와 단위 사이 공백·하이픈·점·괄호, 통화기호 뒤 괄호까지 허용해 막는다(₩(50,000)·50,000-원, Codex #687 (a)).
-const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만\s?원|천\s?원|억|%|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;   // «50,000(원)» 처럼 단위가 괄호 안인 꼴도 막는다
+const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만(?!\s?(?:km|㎞|킬로|년|개월))|천(?!\s?(?:km|㎞|킬로|년|개월))|억|KRW|WON)|(?:[₩￦$€¥£]|KRW|WON|USD)[\s(\[]*\d/i;
+// «50,000(원)»·«썬팅 50만»(원 생략)은 막고, «자외선 99% 차단»(퍼센트는 금액이 아님)·«20만km 보증»(거리·기간 단위)은 통과시킨다(Codex #687 잔여).
 // 보이지 않는 문자 전체: 제어·서식(Cf: 제로폭·방향 제어·소프트 하이픈)·결합/변형 선택자(Mn: U+FE00·U+E0100 포함)·줄/문단 구분·사설 영역(Codex #687).
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Mn}\p{Zl}\p{Zp}\p{Co}]/gu;
-const OPTION_FORBIDDEN_COMPACT = /(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
+const OPTION_BLOCKED_WORDS = /(수수료|청구|지급|마진|할인|commission|payout)/i;
+const OPTION_FORBIDDEN_COMPACT =/(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
 const safeOptionName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   // 보이지 않는 문자(제로폭·방향 제어·소프트 하이픈 등)는 먼저 지운다 — «고​객»·«010​-1234» 우회 방지(Codex #687 (b)).
   const text = value.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
   if (!text || text.length > OPTION_NAME_MAX) return null;
   const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
-  if (BLOCKED_TEXT.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
+  // 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 옵션이 사라진다 — 옵션 이름은 금액 꼴(OPTION_MONEY)·금지어(할인 포함)로 따로 본다(Codex #687 잔여).
+  if (OPTION_BLOCKED_WORDS.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
   // 개인정보 낱말·금지어는 «공백·기호를 지운 꼴»에서도 본다(고 객 홍길동·수 수 료, Codex #687 ②).
   if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
   if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(compact)) return null;
