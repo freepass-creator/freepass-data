@@ -6,6 +6,7 @@ import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, 
 import { planSourceCycle, applySourceCycle, OPTIONS_REWRITE_CAP } from '../src/application/source-cycle.js';
 import { compactRaw, compactRecord, type SourceProductRecord } from '../src/domain/source-engine.js';
 import type { VehicleIdentityRefiner } from '../src/ports/source-cycle.js';
+import { identityProductsFromPlainDocs } from '../src/adapters/identity-snapshot.js';
 
 // 입구 매핑(대표 2026-10-16): 손오공 brand·model → 빈 maker·model 에만. 기본 꺼짐, 공급사별 허용. 값은 전부 합성.
 const time = '2026-10-16T05:00:00.000Z', now = Date.parse('2026-10-16T05:05:00.000Z'), source = 'RP012';
@@ -182,4 +183,31 @@ describe('제원 입구 매핑(기존 문서의 빈 칸에만)', () => {
     fake.put('12가3002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false }));
     expect((await run(commands, [r])).kinds).toEqual([]);
   });
+});
+
+describe('Codex #685 두 번째 지적', () => {
+  it('(a) 스냅샷: 표식 + «이 경로가 쓴 값 그대로»일 때만 원천 채움으로 본다(사람이 고친 값은 현재 값 그대로 대조)', () => {
+    const base = { car_number: '12가3456', provider_company_code: 'RP012', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT', 원문: { 차명: '현대_아반떼_가솔린' },
+      sub_model: '현대_아반떼_가솔린', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼' } };
+    const items = identityProductsFromPlainDocs([
+      { id: 'a', data: { ...base, maker: '현대', model: '아반떼' } },          // 쓴 값 그대로 → 원천 채움
+      { id: 'b', data: { ...base, maker: '현대자동차', model: '아반떼' } },    // 사람이 고침 → 아님
+      { id: 'c', data: { ...base, maker: '현대', model: '아반떼', vehicle_maker_model_filled: undefined } },   // 표식만 → 아님
+    ], { includeAll: true });
+    const byId = Object.fromEntries(items.map(i => [i.id, i]));
+    expect(byId.a!.makerModelFromSource).toBe(true);
+    expect(byId.b!.makerModelFromSource).toBeUndefined();
+    expect(byId.c!.makerModelFromSource).toBeUndefined();
+  });
+
+  it('(b) 신규 편입(ENROLL)도 채움 상한에 센다: 편입 + 기존 보정 합산이 100대를 넘지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const existing = Array.from({ length: 60 }, (_, i) => `71가${String(1000 + i)}`), fresh = Array.from({ length: 60 }, (_, i) => `72나${String(2000 + i)}`);
+    for (const p of existing) fake.put(p, legacyDoc(rec(p)));
+    const r = await run(commands, [...existing, ...fresh].map(p => rec(p)));
+    expect(r.kinds.filter(k => k === 'ENROLL')).toHaveLength(60);
+    expect(r.warnings.join('|')).toContain('API_OPTIONS_DEFERRED:20:');   // 쓰기 상한: 편입 60 + 기존 보정 40 만, 나머지 20 이월(120 중 100 만 채움)
+    const filled = [...existing, ...fresh].filter(p => decodeFields(fake.docs.get(p)?.fields ?? {}).vehicle_maker_model_source === 'SOURCE_FIELDS');
+    expect(filled).toHaveLength(OPTIONS_REWRITE_CAP);
+  }, 60_000);
 });
