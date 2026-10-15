@@ -77,7 +77,8 @@
     "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts",
     "apply:period-fee-ledger": "tsx src/jobs/apply-period-fee-ledger.ts",
     "test:source-cycle-ci": "node --test tests/source-cycle-dry-run-ci.node.mjs",
-    "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts"
+    "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts",
+    "classify:identity-holds": "tsx src/jobs/classify-identity-holds.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
