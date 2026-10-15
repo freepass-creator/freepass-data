@@ -962,4 +962,15 @@ describe('alias canonicalization of a confirmed product identity', () => {
     await expect(applyApproved(plan())).rejects.toThrow(/canonical name|manual or confirmed value/);
     expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
   });
+  it('Codex #683: productRepairs / productMakerRepairs refuse human-source or confirmed products; masterCreates canonical names also block', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', confirmed: true });
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [{ id: 'p1', from: '캐스퍼', to: '캐스퍼 AX1' }] })).rejects.toThrow(/HUMAN_OR_CONFIRMED/);
+    await expect(applyApproved({ sourceDigest: 'y', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p1', from: '현대', to: '현대자동차' }] })).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', sub_model: '캐스퍼' });
+    // 같은 계획이 만드는 마스터의 정식 이름과 from 이 같으면 별칭 정규화 금지
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
+      .rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
 });

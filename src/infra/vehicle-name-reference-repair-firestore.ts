@@ -527,6 +527,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (PRODUCT_NAME_KINDS.has(targets[index]!.kind)) {
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
+      // 세부모델·제조사를 바꾸는 상품 정정은 사람 입력·확정 표식이 있으면 거절한다(Codex #683: productRepairs·productMakerRepairs 경로 누락).
+      if ((targets[index]!.kind === 'product' || targets[index]!.kind === 'productMaker') && hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
     }
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
     const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
@@ -840,6 +842,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         if (stored.docs.some((doc) => doc.data().retired !== true && family(doc) && clean(doc.data().sub_model) === from && !(activeKeys[targetKey] ?? []).includes(doc.id))) {
           throw new Error(`transaction productIdentity from is a manual or confirmed value (from is another active master's canonical name) ${x.ref.path}`);
         }
+        // 같은 계획이 만드는 마스터(masterCreates)의 정식 이름과 같아도 금지한다.
+        if ((plan.masterCreates ?? []).some((c) => clean(c.data.maker) === clean(x.item.to.maker) && clean(c.data.model) === clean(x.item.to.model) && clean(c.data.sub_model) === from && !(activeKeys[targetKey] ?? []).includes(c.id))) {
+          throw new Error(`transaction productIdentity from is a manual or confirmed value (from is another created master's canonical name) ${x.ref.path}`);
+        }
         const owners = stored.docs.filter((doc) => doc.data().retired !== true && family(doc) && aliasesOf(doc.data()).includes(from)).map((doc) => doc.id);
         for (const c of plan.masterCreates ?? []) if (clean(c.data.maker) === clean(x.item.to.maker) && clean(c.data.model) === clean(x.item.to.model) && aliasesOf(c.data).includes(from)) owners.push(c.id);
         const targetIds = activeKeys[targetKey] ?? [];
@@ -1002,6 +1008,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (PRODUCT_NAME_KINDS.has(targets[index]!.kind)) {
         const blocked = productWriteBlock(snapshot.data());
         if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
+        if ((targets[index]!.kind === 'product' || targets[index]!.kind === 'productMaker') && hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`transaction product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
       }
       const { kind, item, field, ref } = targets[index]!;
       const aliasField = ALIAS_FIELD[kind];
