@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 import { vehiclePhotoKey } from '../../dist/src/domain/consumer-output-contract.js';
-import { isDocumentName, isUseRestrictedName } from '../../dist/src/application/supplier-photo-intake-plan.js';   // 서류·사용X 이름 제외(공급사 사본 방법 전용)
+import { classifyFolderFiles, isDocumentHeavy, isDocumentName, isUseRestrictedName } from '../../dist/src/application/supplier-photo-intake-plan.js';   // 서류·사용X 이름 제외(공급사 사본 방법 전용)
 import { parsePhotoCopySuppliers } from '../../dist/src/domain/consumer-output-contract.js';
 import { folderMatchesPlate, plateFoldersFromChildren } from '../../dist/src/domain/photo-folder-match.js';   // 폴더↔차량번호 일치 검증(Codex 검토)
 
@@ -98,7 +98,13 @@ for (const r of rows) {
   if (FOLDER_COPY && isUseRestrictedName(folderName)) { out.push(`${r.plate.slice(-4)} 사용X 폴더 — 등록 안 함`); continue; }
   if (FOLDER_COPY && isDocumentName(folderName)) { out.push(`${r.plate.slice(-4)} 서류 이름 폴더 — 등록 안 함`); continue; }
   if (!folderMatchesPlate(folderName, r.plate)) { out.push(`${r.plate.slice(-4)} 폴더 이름이 차량번호와 다름 — 등록 안 함`); continue; }
-  const files = (run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [])
+  const listed = run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [];
+  // 서류 의심 비율은 계획 모듈과 같은 판정(Codex #690 재검토): «등록증.jpg» 와 이름 없는 스캔 «001.jpg» 가 함께 있으면 폴더 통째 보류.
+  if (FOLDER_COPY) {
+    const cls = classifyFolderFiles(listed.map(x => ({ id: x.id, name: String(x.name ?? ''), mimeType: x.mimeType ?? null, size: Number(x.size) || null })));
+    if (isDocumentHeavy(cls.documentLike, cls.photos.length)) { out.push(`${r.plate.slice(-4)} 서류 의심 비율 높음 — 폴더 보류`); continue; }
+  }
+  const files = listed
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
     .filter(x => !FOLDER_COPY || !(isDocumentName(String(x.name)) || isUseRestrictedName(String(x.name))))
     .sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { numeric: true })).slice(0, MAX);

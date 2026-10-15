@@ -55,6 +55,10 @@ export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: Int
   return { photos, excluded, documentLike };
 }
 
+/** 서류 의심 비율 판정(계획 모듈과 등록 도구가 같은 함수를 쓴다 — Codex #690 재검토): 서류 표지 파일이 있고 «서류 / (사진 후보 + 서류)» 가 기준 이상이면 폴더 통째 보류. */
+export const isDocumentHeavy = (documentLike: number, photoCandidates: number): boolean =>
+  documentLike > 0 && documentLike + photoCandidates > 0 && documentLike / (documentLike + photoCandidates) >= INTAKE_DOCUMENT_HOLD_RATIO;
+
 export function planSupplierIntake(input: IntakeSupplierInput, options: { allowedSuppliers: ReadonlySet<string>; maxVehicles?: number | undefined }): SupplierPlan {
   const counts = emptyCounts();
   const allowed = options.allowedSuppliers.has(input.supplierCode);
@@ -89,8 +93,7 @@ export function planSupplierIntake(input: IntakeSupplierInput, options: { allowe
     const cls = classifyFolderFiles(folder.files);
     documentsExcluded += cls.documentLike;
     const subfoldersIgnored = folder.subfolderCount ?? 0;
-    const imageCandidates = cls.photos.length + cls.documentLike;
-    if (cls.documentLike > 0 && imageCandidates > 0 && cls.documentLike / imageCandidates >= INTAKE_DOCUMENT_HOLD_RATIO) {
+    if (isDocumentHeavy(cls.documentLike, cls.photos.length)) {
       add({ folderId: folder.id, status: 'HOLD_DOCUMENT_RATIO', photos: [], excluded: cls.excluded, subfoldersIgnored }); continue;
     }
     if (cls.photos.length === 0) { add({ folderId: folder.id, status: 'HOLD_NO_PHOTOS', photos: [], excluded: cls.excluded, subfoldersIgnored }); continue; }

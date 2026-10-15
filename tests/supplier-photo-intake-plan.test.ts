@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classifyFolderFiles, intakeSuppliers, planSupplierIntake, summarizeSupplierPlan, INTAKE_MAX_PHOTOS_PER_VEHICLE, INTAKE_MAX_FILE_BYTES,
+import { classifyFolderFiles, isDocumentHeavy, intakeSuppliers, planSupplierIntake, summarizeSupplierPlan, INTAKE_MAX_PHOTOS_PER_VEHICLE, INTAKE_MAX_FILE_BYTES,
   type IntakeFile, type IntakeFolder } from '../src/application/supplier-photo-intake-plan.js';
 import { parsePhotoCopySuppliers } from '../src/domain/consumer-output-contract.js';
 import { planSupplierPhotoIntakeCli } from '../src/jobs/plan-supplier-photo-intake.js';
@@ -104,6 +104,17 @@ describe('공급사 사진 인입 계획', () => {
     const p = plan([folder('109호1234 등록증', [img('1.jpg'), img('2.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
     expect(p.counts.HOLD_DOCUMENT_FOLDER).toBe(1);
     expect(p.photosPlanned).toBe(0);
+  });
+
+  it('Codex #690 재검토: 서류 비율 판정은 계획 모듈·등록 도구가 같은 함수(등록증.jpg + 001.jpg 는 보류)', () => {
+    expect(isDocumentHeavy(1, 1)).toBe(true);
+    expect(isDocumentHeavy(1, 3)).toBe(false);
+    expect(isDocumentHeavy(0, 5)).toBe(false);
+    expect(isDocumentHeavy(0, 0)).toBe(false);
+    const c = classifyFolderFiles([img('등록증.jpg'), img('001.jpg')]);
+    expect(isDocumentHeavy(c.documentLike, c.photos.length)).toBe(true);
+    const p = plan([folder('109호1234', [img('등록증.jpg'), img('001.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
+    expect(p.counts.HOLD_DOCUMENT_RATIO).toBe(1);
   });
 
   it('Codex #690 (b): 회차 차량 상한은 공급사별이 아니라 전체 합산', () => {
