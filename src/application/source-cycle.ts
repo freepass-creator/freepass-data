@@ -286,6 +286,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     .sort((a, b) => Number(!!b.after.listable) - Number(!!a.after.listable) || sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   const overFill = fillEntries.slice(optionsCap);   // 채움 상한도 옵션 상한 설정(기본 100, 최대 400)을 따른다 — 첫 적용 때 여러 회차로 늘어지지 않게
   for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
+  // 정체성 정제(VEHICLE_IDENTITY): «양성 표식»을 받은 기존 문서만 정제한다(상한은 회차당 optionsCap, 키 순서). 가격 변경·재노출 등으로 이미 쓰는 문서도 표식이 없으면 정제하지 않아
+  // 상한을 우회하지 못한다. 옵션 전용 쓰기는 위 합산 예산이 먼저 이월한다. 정제 대상은 다음 회차에 사유가 그대로 남아 순서대로 처리된다(되풀이 아님: 정제되면 사유가 사라진다).
+  const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
+    .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
+  if (refineEntries.length > optionsCap) plan.warnings.push(`VEHICLE_IDENTITY_DEFERRED:${refineEntries.length - optionsCap}:cap${optionsCap}`);
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
@@ -336,10 +342,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, rewriteReasons: _planReasons, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;

@@ -375,7 +375,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
   // 기존 문서의 하향·철회(after 가 노출 안 함·철회 표식)에는 정체성 정제를 섞지 않는다(Codex #704 (c)): 철회 작업이 이름까지 바꾸지 않게.
   const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
-  const identity = opts.identity && !withdrawing && (isNew || engineIdentityHold(original))
+  // 기존 문서는 계획이 양성 표식(refineIdentity)을 준 항목만 정제한다 — 이미 쓰는 문서(가격 변경·재노출)가 회차 상한을 우회하지 못한다(Codex #704 잔여). 신규 편입은 편입 상한이 건다.
+  const identity = opts.identity && !withdrawing && (isNew || (p.refineIdentity === true && engineIdentityHold(original)))
     ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;

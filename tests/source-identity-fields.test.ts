@@ -156,6 +156,18 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
       expect((await run(commands, plates.map(p => rec(p)))).kinds).toHaveLength(20);   // 다음 회차에 나머지
     }, 60_000);
 
+    it('(a-2) 가격 변경처럼 이미 쓰는 문서도 양성 표식이 있는 항목만 정제한다(상한 우회 불가)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const total = OPTIONS_REWRITE_CAP + 20, plates = Array.from({ length: total }, (_, i) => `57라${String(1000 + i)}`);
+      for (const p of plates) fake.put(p, legacyDoc(rec(p, '현대', '아반떼', 500000)));
+      const changed = plates.map(p => rec(p, '현대', '아반떼', 600000));   // 가격이 바뀌어 전부 쓰는 회차
+      const result = await run(commands, changed);
+      expect(result.kinds).toHaveLength(total);                                // 가격 변경은 상한 없이 쓴다
+      const refined = plates.filter(p => decodeFields(fake.docs.get(p).fields).vehicle_title_source === 'MASTER_MATCH').length;
+      expect(refined).toBe(OPTIONS_REWRITE_CAP);                               // 정제는 상한 안에서만
+      expect(result.warnings.some(w => /^VEHICLE_IDENTITY_DEFERRED:20:/.test(w))).toBe(true);
+    }, 60_000);
+
     it('(b) 제조사·모델이 비어도 사람이 입력한 세부모델·트림은 덮어쓰지 않고 검토 필요도 풀지 않는다', async () => {
       const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
       fake.put('56다2001', legacyDoc(rec('56다2001'), { sub_model: '내가 고른 세부모델' }));

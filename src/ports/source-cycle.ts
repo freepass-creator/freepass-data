@@ -15,6 +15,8 @@ export type CycleProduct = {
   /** 계획이 정한 «이 회차에 입구 매핑(제조사·모델·제원 채움)을 한다»(회차 상한 안, 사유가 있거나 신규 편입인 항목만). 이 표식이 없으면 쓰기가 일어나도 채움은 없다 —
    * 사유 없는 UPDATE·재노출 등에서 채움이 상한을 우회하지 못하게 하는 «양성» 표식이다(Codex #685 ③). */
   fillSourceIdentity?: boolean;
+  /** 계획이 정한 «이 회차에 정체성 정제(마스터 이름 채움)를 한다»(기존 문서, 회차 상한 안, VEHICLE_IDENTITY 사유 항목만 — Codex #704 잔여). 이 표식이 없으면 쓰기가 일어나도 기존 문서는 정제하지 않는다(신규 편입은 편입 상한이 따로 건다). */
+  refineIdentity?: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
