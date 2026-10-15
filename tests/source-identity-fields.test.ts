@@ -37,12 +37,13 @@ function fakeFirestore() {
   }) as unknown as typeof fetch;
   return { docs, fetcher, put: (uid: string, f: Record<string, unknown>) => docs.set(uid, doc(uid, encodeFields(f as never))) };
 }
-async function setup(sourceIdentitySources: string[] = ['RP012'], identity?: VehicleIdentityRefiner) {
+const knownMakers: VehicleIdentityRefiner = { digest: 't', match: () => null, makers: ['현대', '기아'] };
+async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers) {
   const dir = await mkdtemp(join(tmpdir(), 'source-identity-')); dirs.push(dir);
   const fake = fakeFirestore();
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
     supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } }, sourceIdentitySources,
-    ...(identity ? { identity: async () => identity } : {}) });
+    identity: async () => identity });
   return { commands, fake };
 }
 const run = async (commands: Awaited<ReturnType<typeof setup>>['commands'], records: SourceProductRecord[]) => {
@@ -62,18 +63,26 @@ const legacyDoc = (r: SourceProductRecord, extra: Record<string, unknown> = {}) 
 
 describe('sourceIdentityFields(순수)', () => {
   it('빈 제조사·모델에만 원천 값을 채우고 표식을 남긴다; 기존 값·마스터 확정·표식 있는 문서는 건드리지 않는다', () => {
-    expect(sourceIdentityFields(rec('12가1'), {}, false)).toEqual({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' });
-    expect(sourceIdentityFields(rec('12가1'), { maker: '기아' }, false)).toEqual({});
-    expect(sourceIdentityFields(rec('12가1'), { model: 'K5' }, false)).toEqual({});
-    expect(sourceIdentityFields(rec('12가1'), {}, true)).toEqual({});   // 이번 회차 마스터 확정이 이긴다
-    expect(sourceIdentityFields(rec('12가1', null, null), {}, false)).toEqual({ vehicle_maker_model_source: 'ABSENT' });
-    expect(sourceIdentityFields(rec('12가1'), { vehicle_maker_model_source: 'ABSENT' }, false)).toEqual({});
+    const makers = new Set(['현대', '기아']);
+    expect(sourceIdentityFields(rec('12가1'), {}, false, makers)).toEqual({ maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼' } });
+    // Codex #685 (c): 마스터에 없는 제조사 표기(옛 표기)·마스터 미로드는 채우지 않고 표식만
+    expect(sourceIdentityFields(rec('12가1', '르노삼성', 'QM6'), {}, false, makers)).toEqual({ vehicle_maker_model_source: 'UNMAPPED' });
+    expect(sourceIdentityFields(rec('12가1'), {}, false, null)).toEqual({ vehicle_maker_model_source: 'UNMAPPED' });
+    expect(sourceIdentityFields(rec('12가1'), { maker: '기아' }, false, makers)).toEqual({});
+    expect(sourceIdentityFields(rec('12가1'), { model: 'K5' }, false, makers)).toEqual({});
+    expect(sourceIdentityFields(rec('12가1'), {}, true, makers)).toEqual({});   // 이번 회차 마스터 확정이 이긴다
+    expect(sourceIdentityFields(rec('12가1', null, null), {}, false, makers)).toEqual({ vehicle_maker_model_source: 'ABSENT' });
+    expect(sourceIdentityFields(rec('12가1'), { vehicle_maker_model_source: 'ABSENT' }, false, makers)).toEqual({});
     // 이미 원천으로 채운 문서는 원천 값이 바뀌면 갱신(제조사·모델이 여전히 «원천 값» 일 때만)
-    expect(sourceIdentityFields(rec('12가1', '현대', '그랜저'), { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' }, false)).toEqual({});
+    expect(sourceIdentityFields(rec('12가1', '현대', '그랜저'), { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' }, false, makers)).toEqual({});
   });
   it('원천 필드로 채운 문서도 여전히 엔진 정체성 보류다(마스터 정제가 덮어쓴다)', () => {
-    expect(engineIdentityHold({ source_cycle_record: {}, vehicle_review_required: true, maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS' })).toBe(true);
+    const mark = { source_cycle_record: {}, vehicle_review_required: true, vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_maker_model_filled: { maker: '현대', model: '아반떼' } };
+    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼' })).toBe(true);
     expect(engineIdentityHold({ source_cycle_record: {}, vehicle_review_required: true, maker: '현대', model: '아반떼' })).toBe(false);
+    // Codex #685 (a): 사람이 고친 뒤 표식만 남은 문서는 보류가 아니다(마스터 정제가 덮어쓰지 않음)
+    expect(engineIdentityHold({ ...mark, maker: '현대자동차', model: '아반떼' })).toBe(false);
+    expect(engineIdentityHold({ ...mark, maker: '현대', model: '아반떼 CN7' })).toBe(false);
   });
 });
 
@@ -124,4 +133,23 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     expect(first.warnings.some(w => w.startsWith('API_OPTIONS_DEFERRED:7:'))).toBe(true);
     expect((await run(commands, plates.map(p => rec(p)))).kinds).toHaveLength(7);
   }, 60_000);
+
+  it('Codex #685 (b): 가격 변경과 겹친 문서도 채움은 회차 상한(100) 안 — 초과분은 쓰기는 하되 채움만 미룬다', async () => {
+    const { commands, fake } = await setup();
+    const total = OPTIONS_REWRITE_CAP + 6, plates = Array.from({ length: total }, (_, i) => `56다${String(8000 + i)}`);
+    for (const p of plates) fake.put(p, legacyDoc(rec(p)));
+    const changed = plates.map(p => rec(p, '현대', '아반떼', 510000));   // 모두 가격도 바뀜 → 쓰기는 전부 일어난다
+    const r = await run(commands, changed);
+    expect(r.kinds).toHaveLength(total);
+    expect(r.warnings.some(w => w.startsWith('SOURCE_IDENTITY_DEFERRED:6:'))).toBe(true);
+    const filled = plates.filter(p => decodeFields(fake.docs.get(p).fields).vehicle_maker_model_source === 'SOURCE_FIELDS');
+    expect(filled).toHaveLength(OPTIONS_REWRITE_CAP);
+  }, 60_000);
+
+  it('Codex #685 (c): 마스터에 없는 제조사 표기는 maker 에 들어가지 않는다(UNMAPPED 표식, 교정 대상에서 빠지지 않음)', async () => {
+    const { commands, fake } = await setup();
+    fake.put('78라9001', legacyDoc(rec('78라9001', '르노삼성', 'QM6')));
+    await run(commands, [rec('78라9001', '르노삼성', 'QM6')]);
+    expect(decodeFields(fake.docs.get('78라9001').fields)).toMatchObject({ maker: '', model: '', vehicle_maker_model_source: 'UNMAPPED' });
+  });
 });

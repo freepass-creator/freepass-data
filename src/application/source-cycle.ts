@@ -274,7 +274,21 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const optionsRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('API_OPTIONS')).length;
   if (optionsRewrite > 0) plan.warnings.push(`API_OPTIONS_REWRITE:${optionsRewrite}`);
-  const sourceIdentityRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('SOURCE_IDENTITY')).length;
+  // 입구 매핑(제조사·모델 채움)은 회차당 OPTIONS_REWRITE_CAP 대까지만: 초과분은 다른 변경과 겹쳐 쓰이더라도 채움만 미룬다(deferSourceIdentity). 쓰기가 «채움뿐»인 초과분은 계획에서 뺀다(Codex #685 (b)).
+  const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.includes('SOURCE_IDENTITY'))
+    .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  const overFill = fillEntries.slice(OPTIONS_REWRITE_CAP);
+  if (overFill.length) {
+    const drop = new Set<(typeof plan.entries)[number]>();
+    for (const e of overFill) {
+      e.after.deferSourceIdentity = true;
+      const onlyFill = e.before!.rewriteReasons!.every(r => r === 'SOURCE_IDENTITY') && e.kind === 'UPDATE' && e.before!.listable === e.after.listable && deepEqual(facts(e.before!.record), facts(e.after.record));
+      if (onlyFill) drop.add(e);
+    }
+    plan.entries = plan.entries.filter(e => !drop.has(e));
+    plan.warnings.push(`SOURCE_IDENTITY_DEFERRED:${overFill.length}:cap${OPTIONS_REWRITE_CAP}`);
+  }
+  const sourceIdentityRewrite = fillEntries.length - overFill.length;
   if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);
   const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
