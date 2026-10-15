@@ -9,6 +9,12 @@ import { fileCycleControl } from '../adapters/source-cycle-control.js';
 export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
+    /** 시험용 대기 주입. */
+    sleepMs?: (ms: number) => Promise<void>;
+    /** 상류 갱신 감시(독립 판독기, 대표 2026-10-16 «시각 맞추기를 그만두고 구조를 바꿔라»): onlyWhenSynced 와 함께, 창 안에서 pollMs 마다 synced_at 만 확인해
+     * «갱신이 확인되면 즉시 읽기»(신선도 12분 안일 때만). 일시 오류(502/503/504·시간 초과)는 backoffMs 로 readRetries 번 다시 읽는다. 창이 끝나도 갱신이 없고
+     * synced_at 이 stallMs(기본 2시간) 이상 그대로면 UPSTREAM_STALLED 알림(우리 쪽 문제가 아님을 구분). 기본 꺼짐(옵션을 주지 않으면 종전). */
+    syncWatch?: { windowMs: number; pollMs?: number; readRetries?: number; backoffMs?: readonly number[]; stallMs?: number };
     /** 같은 회차에서 방금 읽어 세운 계획을 바로 적용한다(무인 회차 전용). 사람이 검토한 계획 파일 승인 경로(approvedPlan)와 섞지 않는다. */
     autoApprove?: boolean;
     /** 사람이 손으로 돌리는 «계획만 만들기»(--plan, 적용 없음). 이 실행의 실패는 무인 회차의 연속 실패 수·정지 상태를 바꾸지 않는다(2026-10-16 수동 plan 이 정지를 오염). */
@@ -39,10 +45,35 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     state.readCount = 0; state.heldCount = 0;
     try {
       let synced: string | null = null;
+      const watch = options.onlyWhenSynced ? options.syncWatch : undefined;
+      const sleepWatch = options.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+      let watched = false;
       if (options.onlyWhenSynced) {
         if (plugin.family !== 'IANCAR' || !plugin.syncedAt) throw new Error('SYNC_PROBE_UNAVAILABLE');
+        if (watch) {
+          // 감시: 확인 요청 오류(503 등)는 넘기고 다음 간격에 다시 본다. 갱신(마지막 반영과 다른 synced_at)이 신선도 12분 안에 보이면 즉시 읽는다.
+          const probe = async (): Promise<string | null> => {
+            try { const v = await plugin.syncedAt!(); return v && Number.isFinite(Date.parse(v)) && Date.parse(v) <= clock() ? v : null; } catch { return null; }
+          };
+          const pollMs = watch.pollMs ?? 120_000, attempts = Math.max(1, Math.ceil(watch.windowMs / pollMs));
+          const fresh = (v: string | null) => !!v && v !== state.lastSyncedAt && clock() - Date.parse(v) <= 12 * 60_000;
+          let seen = await probe();
+          for (let i = 0; i < attempts && !fresh(seen); i++) { await sleepWatch(pollMs); seen = (await probe()) ?? seen; }
+          if (!fresh(seen)) {
+            const stalled = !!seen && clock() - Date.parse(seen) >= (watch.stallMs ?? 2 * 60 * 60_000);
+            state.error = stalled ? 'UPSTREAM_STALLED' : null;
+            await control.save(plugin.sourceId, state);
+            await control.heartbeat(plugin.sourceId, state, null);
+            if (stalled) await control.alert(plugin.sourceId, 'UPSTREAM_STALLED');
+            return { status: 'UNCHANGED_SYNC', writes: 0, summary: stalled ? `원천 정지: synced_at ${seen} 이 2시간 이상 그대로(우리 쪽 문제 아님)` : '감시 창 안에 새 갱신 없음(다음 감시에서 다시 확인)' };
+          }
+          synced = seen;
+          watched = true;
+        } else {
         synced = await plugin.syncedAt();
+        }
         if (!synced || !Number.isFinite(Date.parse(synced)) || Date.parse(synced) > clock()) throw new Error('SYNC_PROBE_INVALID');
+        if (!watched) {
         // 상세 읽기에 약 5분이 걸리고 상류 신선도 창은 15분이다. 갱신 후 10분이 넘었으면 이번 갱신은 창 안에 끝낼 수 없어 다음 갱신을 기다린다
         // (넘긴 채 읽으면 DETAIL_SOURCE_DRIFT 로 5분마다 되풀이 실패하며 공급사 API 만 소모한다).
         if (clock() - Date.parse(synced) > 10 * 60_000 && synced !== state.lastSyncedAt) {
@@ -58,8 +89,20 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
           return { status: 'UNCHANGED_SYNC', writes: 0, summary: 'synced_at 동일: 원천 수집 생략' };
         }
         if (state.lastSyncedAt && Date.parse(synced) < Date.parse(state.lastSyncedAt)) throw new Error('SYNC_REGRESSED');
+        }
       }
-      const read = await plugin.read();
+      let read = await plugin.read();
+      // 감시 회차: 일시 오류는 회차를 실패로 만들기 전에 지수 백오프로 다시 읽는다(신선도 창 11분을 넘기면 중단).
+      if (watch) {
+        const backoff = watch.backoffMs ?? [20_000, 60_000];
+        for (let i = 0; i < (watch.readRetries ?? 2); i++) {
+          const text = `${String((read as { error?: unknown }).error ?? '')} ${String((read as { detail?: unknown }).detail ?? '')}`;
+          if (read.complete || !/HTTP_50[234]|TIMEOUT|TimeoutError|NO_RESPONSE/i.test(text)) break;
+          if (synced && clock() - Date.parse(synced) > 11 * 60_000) break;
+          await sleepWatch(backoff[i] ?? 60_000);
+          read = await plugin.read();
+        }
+      }
       // 읽기 자체가 던진 실패는 detail 이 사유 코드에 이미 합쳐진다. 읽기는 됐지만 불완전한 경우에만 별도로 남긴다.
       readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
       // 상류 원천의 갱신 시각 때문에 읽기를 마치지 못한 경우(정지 UPSTREAM_STALE, 상세를 읽는 사이 신선도 창을 넘긴 DETAIL_SOURCE_DRIFT)는 우리 쪽 실패가 아니다.
@@ -197,7 +240,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
  * 그 계획을 바로 적용한다. blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·문서별 CAS·백업·되읽기·3회 실패 정지가 그대로
  * 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. 변경이 없으면 적용하지 않는다(stage PLAN). */
 export async function runUnattendedSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
-  options: { onlyWhenSynced?: boolean; now?: () => number } = {}) {
+  options: { onlyWhenSynced?: boolean; now?: () => number; sleepMs?: (ms: number) => Promise<void>; syncWatch?: { windowMs: number; pollMs?: number; readRetries?: number; backoffMs?: readonly number[]; stallMs?: number } } = {}) {
   const result = await runSourceCycle(plugin, commands, control, { ...options, autoApprove: true });
   const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN';
   const noChange = result.status === 'DRY_RUN' && 'plan' in result && result.plan && result.plan.entries.length === 0;

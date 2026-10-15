@@ -427,6 +427,48 @@ describe('runner safety and heartbeat', () => {
     expect(read).not.toHaveBeenCalled();
     expect((await ctrl.load(config.sourceId))).toMatchObject({ failures: 0, stopped: false, lastSyncedAt: null });   // 토큰을 소비하지 않는다
   });
+  it('sync watch (opt-in): polls synced_at until a fresh update appears, then reads immediately regardless of the run start time', async () => {
+    const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const stale = new Date(Date.parse(time) - 30 * 60_000).toISOString();
+    let synced = stale;
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => synced);
+    const sleeps: number[] = [];
+    const sleepMs = async (ms: number) => { sleeps.push(ms); if (sleeps.length === 3) synced = time; };
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs, syncWatch: { windowMs: 20 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('DRY_RUN');
+    expect(sleeps).toEqual([120_000, 120_000, 120_000]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('sync watch: no update inside the window → UNCHANGED_SYNC, and a synced_at unchanged for 2h+ raises UPSTREAM_STALLED (not our failure, no read)', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 3 * 60 * 60_000).toISOString();
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => old);
+    const sleeps: number[] = [];
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async ms => { sleeps.push(ms); }, syncWatch: { windowMs: 6 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(r.summary).toContain('원천 정지');
+    expect(alerts).toContain('UPSTREAM_STALLED');
+    expect(sleeps).toHaveLength(3);
+    expect(read).not.toHaveBeenCalled();
+    expect(await ctrl.load(config.sourceId)).toMatchObject({ failures: 0, stopped: false, error: 'UPSTREAM_STALLED' });
+  });
+
+  it('sync watch: a transient 503 on read is retried with backoff inside the freshness window instead of failing the run', async () => {
+    const { ctrl } = control(), m = memory();
+    let calls = 0;
+    const read = vi.fn(async () => { calls++; if (calls < 3) throw Object.assign(new Error('IANCAR_ONE_API_HTTP_503'), { status: 503 }); return { ...capture([record('a', 'AVAILABLE')]), synced_at: time }; });
+    const fresh = new Date(Date.parse(time) - 60_000).toISOString();
+    const p = sourceCyclePlugin({ sourceId: config.sourceId, kind: 'IANCAR', scopes: ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time, async () => time);
+    const sleeps: number[] = [];
+    const r = await runSourceCycle(p, m.commands, ctrl, { onlyWhenSynced: true, now: () => Date.parse(time), sleepMs: async ms => { sleeps.push(ms); },
+      syncWatch: { windowMs: 20 * 60_000, backoffMs: [5_000, 15_000], readRetries: 2 } });
+    expect(r.status, String(r.summary)).toBe('DRY_RUN');
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([5_000, 15_000]);
+    expect((await ctrl.load(config.sourceId)).failures).toBe(0);
+  });
+
   it('CLI cannot enable scheduled writes', async () => {
     await expect(sourceCycleCli(['--runtime', 'unused', '--apply'])).rejects.toThrow('SCHEDULED_APPLY_NOT_AUTHORIZED');
   });

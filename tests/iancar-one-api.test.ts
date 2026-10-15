@@ -1023,3 +1023,26 @@ describe('ONE GET 시간 초과 한 번 재시도', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('일시 오류(502/503/504) 재시도 간격 설정(상류 갱신 감시용)', () => {
+  const ok = () => new Response('{"success":true,"data":{}}', { status: 200 });
+  it('기본은 두 번 더(500·1500ms)이고, retryDelaysMs 를 주면 그 횟수만큼 더 시도한다', async () => {
+    let calls = 0;
+    const always503 = (async () => { calls++; return new Response('unavailable', { status: 503 }); }) as typeof fetch;
+    await expect(createIancarOneApiClient(config, always503).getVehicle('V1')).rejects.toThrow('IANCAR_ONE_API_HTTP_503');
+    expect(calls).toBe(3);
+    calls = 0;
+    const thenOk = (async () => { calls++; return calls < 4 ? new Response('unavailable', { status: 503 }) : ok(); }) as typeof fetch;
+    await createIancarOneApiClient({ ...config, retryDelaysMs: [100, 100, 100] }, thenOk).getVehicle('V1');
+    expect(calls).toBe(4);
+  });
+
+  it('429 는 재시도하지 않고, 허용 범위 밖 간격은 거절한다', async () => {
+    let calls = 0;
+    const f429 = (async () => { calls++; return new Response('slow down', { status: 429 }); }) as typeof fetch;
+    await expect(createIancarOneApiClient({ ...config, retryDelaysMs: [100, 100] }, f429).getVehicle('V1')).rejects.toThrow('IANCAR_ONE_API_HTTP_429');
+    expect(calls).toBe(1);
+    expect(() => createIancarOneApiClient({ ...config, retryDelaysMs: [50] })).toThrow('IANCAR_ONE_API_RETRY_NOT_ALLOWED');
+    expect(() => createIancarOneApiClient({ ...config, retryDelaysMs: [100, 100, 100, 100, 100, 100] })).toThrow('IANCAR_ONE_API_RETRY_NOT_ALLOWED');
+  });
+});
