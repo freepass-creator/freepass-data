@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 import { vehiclePhotoKey } from '../../dist/src/domain/consumer-output-contract.js';
-import { classifyFolderFiles, isDocumentHeavy, isDocumentName, isUseRestrictedName } from '../../dist/src/application/supplier-photo-intake-plan.js';   // 서류·사용X 이름 제외(공급사 사본 방법 전용)
+import { classifyFolderFiles, intakeNameCompare, isDocumentHeavy, isDocumentName, isUseRestrictedName } from '../../dist/src/application/supplier-photo-intake-plan.js';   // 서류·사용X 이름 제외(공급사 사본 방법 전용)
 import { parsePhotoCopySuppliers } from '../../dist/src/domain/consumer-output-contract.js';
 import { folderMatchesPlate, plateFoldersFromChildren } from '../../dist/src/domain/photo-folder-match.js';   // 폴더↔차량번호 일치 검증(Codex 검토)
 
@@ -26,6 +26,11 @@ const SUPPLIER_COPY = { IANCAR_COMPRESSED_COPY: 'RP031' };
 // 그 공급사 문서이고 사진 칸이 비어 있을 때만 쓴다. 파일명에 서류 표지·«사용X» 가 있는 파일은 빼고, 폴더명에 «사용X» 가 있으면 등록하지 않는다.
 const supplierAt = process.argv.indexOf('--supplier'); const SUPPLIER = supplierAt > 0 ? String(process.argv[supplierAt + 1] ?? '').toUpperCase() : null;
 const FOLDER_COPY = METHOD === 'SUPPLIER_FOLDER_COPY';
+// --max 는 «차량당 사진 장수» 상한이다(차량 수가 아니다). 공급사 폴더 사본은 차량 수 상한 --vehicles 를 따로 둔다: 적용(--apply)에는 필수(PILOT = 5대 등).
+const vehiclesAt = process.argv.indexOf('--vehicles'); const VEHICLES = vehiclesAt > 0 ? Number(process.argv[vehiclesAt + 1]) : null;
+if (VEHICLES !== null && (!Number.isInteger(VEHICLES) || VEHICLES < 1 || VEHICLES > 50)) throw new Error('VEHICLES_INVALID');
+if (FOLDER_COPY && apply && VEHICLES === null) throw new Error('VEHICLES_REQUIRED_FOR_APPLY');
+let plannedVehicles = 0;
 if (!['AUTO_KAKAO_COLLECT', 'SUPPLIER_FOLDER_COPY', ...Object.keys(SUPPLIER_COPY)].includes(METHOD)) throw new Error('METHOD_NOT_ALLOWED');
 if (FOLDER_COPY) {
   if (!ROOT) throw new Error('SUPPLIER_FOLDER_COPY_REQUIRES_ROOT');
@@ -109,17 +114,19 @@ for (const r of rows) {
   if (pagesExceeded) { out.push(`${r.plate.slice(-4)} 폴더 파일이 너무 많음 — 폴더 보류`); continue; }
   // 서류 의심 비율은 계획 모듈과 같은 판정(Codex #690 재검토): «등록증.jpg» 와 이름 없는 스캔 «001.jpg» 가 함께 있으면 폴더 통째 보류.
   if (FOLDER_COPY) {
-    const cls = classifyFolderFiles(listed.map(x => ({ id: x.id, name: String(x.name ?? ''), mimeType: x.mimeType ?? null, size: Number(x.size) || null })));
+    const cls = classifyFolderFiles(listed.map(x => ({ id: x.id, name: String(x.name ?? ''), mimeType: x.mimeType ?? null, size: Number(x.size) || null, sha256: x.sha256Checksum ?? null })));
     if (isDocumentHeavy(cls.documentLike, cls.candidates)) { out.push(`${r.plate.slice(-4)} 서류 의심 비율 높음 — 폴더 보류`); continue; }
   }
   const files = listed
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
     .filter(x => !FOLDER_COPY || !(isDocumentName(String(x.name)) || isUseRestrictedName(String(x.name))))
-    .sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { numeric: true })).slice(0, MAX);
+    .sort((a, b) => intakeNameCompare(a.name, b.name)).slice(0, MAX);
   if (!files.length) { out.push(`${r.plate.slice(-4)} 폴더 이미지 없음/체크섬 없음`); continue; }
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
   const refs = files.map(x => ({ driveFileId: x.id, sha256: x.sha256Checksum, mediaType: MEDIA[x.mimeType], role: 'VEHICLE_PHOTO', zone: '차량사진', vehicleKey: key, approvedAt: now,
     vehiclePhotoVerifiedBy: BY, vehiclePhotoVerificationMethod: METHOD, vehiclePhotoVerifiedAt: now }));
+  if (FOLDER_COPY && VEHICLES !== null && plannedVehicles >= VEHICLES) { out.push(`${r.plate.slice(-4)} 차량 상한(${VEHICLES}대) — 이번 회차 제외`); continue; }
+  plannedVehicles++;
   const prior = Array.isArray(f.photo_original_refs) ? f.photo_original_refs.length : 0;
   out.push(`${r.plate.slice(-4)} 계획 ${refs.length}장(기존 ${prior}장) ${apply ? '' : '(시험)'}`);
   if (!apply) continue;

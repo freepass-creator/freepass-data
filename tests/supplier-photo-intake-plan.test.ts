@@ -50,7 +50,7 @@ describe('공급사 사진 인입 계획', () => {
     const files = [img('1.jpg'), img('자동차등록증.jpg'), img('견적서.png'), img('doc.pdf', 1000, 'application/pdf'), img('big.jpg', INTAKE_MAX_FILE_BYTES + 1), img('2.jpg'), img('3.jpg'), img('4.jpg')];
     const c = classifyFolderFiles(files);
     expect(c.photos.map(f => f.name)).toEqual(['1.jpg', '2.jpg', '3.jpg', '4.jpg']);
-    expect(c.excluded).toMatchObject({ DOCUMENT_NAME: 2, NOT_IMAGE: 1, FILE_TOO_LARGE: 1 });
+    expect(c.excluded).toMatchObject({ DOCUMENT_NAME: 2, DOCUMENT_PDF: 1, FILE_TOO_LARGE: 1 });
   });
 
   it('서류 의심이 절반 이상이면 폴더 통째 보류', () => {
@@ -130,6 +130,23 @@ describe('공급사 사진 인입 계획', () => {
     expect(isDocumentHeavy(big.documentLike, big.candidates)).toBe(false);
     const p = plan([folder('109호1234', [...docs, ...photos])], [{ plate: '109호1234', hasPhotoRefs: false }]);
     expect(p.counts.PLANNED).toBe(1);
+  });
+
+  it('Codex #690 4차: 이름 없는 PDF 도 서류, 체크섬 없는 이미지는 등록 도구와 같이 제외, 정렬 기준 일치', () => {
+    const pdf = classifyFolderFiles([img('001.pdf', 1000, 'application/pdf'), img('002.jpg')]);
+    expect(pdf.documentLike).toBe(1);
+    expect(pdf.excluded.DOCUMENT_PDF).toBe(1);
+    expect(isDocumentHeavy(pdf.documentLike, pdf.candidates)).toBe(true);
+    const sha = 'a'.repeat(64);
+    const withSha = (name: string, sha256: string | null): IntakeFile => ({ ...img(name), sha256 });
+    const c = classifyFolderFiles([withSha('1.jpg', sha), withSha('2.jpg', null), withSha('3.jpg', 'xyz')]);
+    expect(c.photos.map(f => f.name)).toEqual(['1.jpg']);
+    expect(c.excluded.NO_CHECKSUM).toBe(2);
+    // 체크섬 키가 없으면(스냅숏이 모르면) 검사하지 않는다
+    expect(classifyFolderFiles([img('1.jpg')]).photos).toHaveLength(1);
+    // 숫자 인식 정렬: 2 < 10 (등록 도구와 같은 기준)
+    const order = classifyFolderFiles([img('10.jpg'), img('2.jpg'), img('1.jpg')]).photos.map(f => f.name);
+    expect(order).toEqual(['1.jpg', '2.jpg', '10.jpg']);
   });
 
   it('Codex #690 (b): 회차 차량 상한은 공급사별이 아니라 전체 합산', () => {

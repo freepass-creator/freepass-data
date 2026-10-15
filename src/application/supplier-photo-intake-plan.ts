@@ -3,7 +3,8 @@
  *  원칙: 불확실하면 보류(fail-closed). 번호 매칭 키는 «같은 공급사 안 전체 번호»이며 끝 4자리는 표시 전용이다. */
 import { folderMatchesPlate, plateFromFolderName } from '../domain/photo-folder-match.js';
 
-export type IntakeFile = { id: string; name: string; mimeType: string | null; size: number | null };
+/** sha256 = 드라이브가 준 체크섬. 키가 있으면(null 포함) 64자리 16진이 아닌 이미지는 «체크섬 없음»으로 제외한다(등록 도구와 같은 판정). 키가 없으면 검사하지 않는다. */
+export type IntakeFile = { id: string; name: string; mimeType: string | null; size: number | null; sha256?: string | null | undefined };
 /** files = 번호 폴더의 직계 파일만(하위 폴더는 subfolderCount 로만 전달 — 서류 하위 폴더는 통째로 읽지 않는다). */
 export type IntakeFolder = { id: string; name: string; files: IntakeFile[]; subfolderCount?: number };
 export type IntakeProduct = { plate: string; hasPhotoRefs: boolean };
@@ -18,7 +19,7 @@ export const INTAKE_DOCUMENT_HOLD_RATIO = 0.5;
 /** 파일명에 들어 있으면 서류로 보는 표지. 늘리는 쪽으로만 바꾼다(시험으로 고정). */
 export const DOCUMENT_NAME_MARKERS = ['등록증', '자동차등록', '서류', '사업자', '보험', '계약', '신분', '면허', '인감', '명의', '통장', '견적', '영수'] as const;
 
-export type ExcludeReason = 'DOCUMENT_NAME' | 'USE_RESTRICTED' | 'NOT_IMAGE' | 'FILE_TOO_LARGE' | 'OVER_PHOTO_CAP';
+export type ExcludeReason = 'DOCUMENT_NAME' | 'DOCUMENT_PDF' | 'NO_CHECKSUM' | 'USE_RESTRICTED' | 'NOT_IMAGE' | 'FILE_TOO_LARGE' | 'OVER_PHOTO_CAP';
 export type PlanStatus = 'PLANNED' | 'SKIP_HAS_REFS' | 'HOLD_FOLDER_DUPLICATE' | 'HOLD_PRODUCT_NONE' | 'HOLD_PRODUCT_DUPLICATE'
   | 'HOLD_DOCUMENT_RATIO' | 'HOLD_USE_RESTRICTED' | 'HOLD_DOCUMENT_FOLDER' | 'HOLD_NO_PHOTOS' | 'HOLD_OVER_RUN_CAP' | 'SKIP_FOLDER_UNPARSED';
 export type VehiclePlan = { plateLast4: string; folderId: string | null; status: PlanStatus; photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>;
@@ -36,6 +37,9 @@ export const last4 = (plate: string): string => String(plate).replace(/\D/g, '')
 const emptyCounts = (): Record<PlanStatus, number> => ({ PLANNED: 0, SKIP_HAS_REFS: 0, HOLD_FOLDER_DUPLICATE: 0, HOLD_PRODUCT_NONE: 0, HOLD_PRODUCT_DUPLICATE: 0,
   HOLD_DOCUMENT_RATIO: 0, HOLD_USE_RESTRICTED: 0, HOLD_DOCUMENT_FOLDER: 0, HOLD_NO_PHOTOS: 0, HOLD_OVER_RUN_CAP: 0, SKIP_FOLDER_UNPARSED: 0 });
 
+/** 파일 정렬 기준(등록 도구와 같은 값): 영문 로케일·숫자 인식(2 < 10). */
+export const intakeNameCompare = (a: string, b: string): number => String(a).localeCompare(String(b), 'en', { numeric: true });
+
 /** 한 폴더의 직계 파일을 분류한다: 사진 후보와 제외 사유별 건수. 서류 표지·비이미지·큰 파일 제외, 상한 초과분은 이름순 뒤쪽을 제외. */
 export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>; documentLike: number; /** 장수 상한을 자르기 «전» 사진 후보 수(서류 비율 계산용). */ candidates: number } {
   const excluded: Partial<Record<ExcludeReason, number>> = {};
@@ -45,11 +49,14 @@ export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: Int
   for (const f of files) {
     if (isUseRestrictedName(f.name)) { bump('USE_RESTRICTED'); continue; }
     if (isDocumentName(f.name)) { documentLike++; bump('DOCUMENT_NAME'); continue; }
+    // PDF 는 사진 폴더에서 서류로 본다(이름에 표지가 없어도 «001.pdf»): 서류 비율에 넣고 사진 후보에서 뺀다(Codex #690).
+    if ((f.mimeType ?? '').toLowerCase() === 'application/pdf') { documentLike++; bump('DOCUMENT_PDF'); continue; }
     if (!isImage(f)) { bump('NOT_IMAGE'); continue; }
+    if (f.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(f.sha256 ?? '')) { bump('NO_CHECKSUM'); continue; }
     if (f.size === null || f.size > INTAKE_MAX_FILE_BYTES || f.size <= 0) { bump('FILE_TOO_LARGE'); continue; }
     kept.push(f);
   }
-  kept.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  kept.sort((a, b) => intakeNameCompare(a.name, b.name) || a.id.localeCompare(b.id));
   const photos = kept.slice(0, INTAKE_MAX_PHOTOS_PER_VEHICLE);
   for (let i = photos.length; i < kept.length; i++) bump('OVER_PHOTO_CAP');
   return { photos, excluded, documentLike, candidates: kept.length };
