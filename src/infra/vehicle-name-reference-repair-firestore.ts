@@ -139,9 +139,14 @@ function assertReviewedMasters(review: VehicleNameReviewedSnapshot, masters: Rev
     if (hits.length !== 1 || hits[0]!.id !== expected.masterId) {
       throw new Error(`reviewed target must match exactly one active master ${expected.id}`);
     }
-    if (expected.trimName !== undefined && !trims.some(t => t.data.retired !== true
-      && t.data.master_id === expected.masterId && t.data.trim === expected.trimName)) {
-      throw new Error(`reviewed target trim missing from active master ${expected.id}`);
+    if (expected.trimName !== undefined) {
+      // Same authority rule as identityMastersFromSnapshot: active linked rows first;
+      // only with no active linked rows may the existing master's trims list supply names.
+      const linked = trims.filter(t => t.data.retired !== true && t.data.master_id === expected.masterId);
+      const names = linked.length ? linked.map(t => t.data.trim) : hits[0]!.data.trims;
+      if (!Array.isArray(names) || !names.some(name => typeof name === 'string' && name.trim() === expected.trimName)) {
+        throw new Error(`reviewed target trim missing from active master ${expected.id}`);
+      }
     }
   }
 }

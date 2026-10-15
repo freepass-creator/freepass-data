@@ -208,6 +208,16 @@ describe('reviewed product snapshot binding', () => {
     noBusinessWrites();
   });
 
+  it('preserves the existing top-level trims fallback only when no active linked rows exist', async () => {
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄'] });
+    store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, retired: true });
+    const plan = seal();
+    await expect(apply(plan)).resolves.toMatchObject({ productTrimCount: 1 });
+    store.set(productPath, { ...store.get(productPath)!, trim_name: '' });
+    store.set('vehicle_trim_master/active-other', { master_id: 'm-gn7', trim: '다른등급' });
+    expect(() => seal()).toThrow(/target trim missing/); // no top-level fallback around an active linked row
+  });
+
   it('rejects forged coverage, changed plan target, wrong master binding, and mixed master writes', async () => {
     const plan = seal();
     await expect(apply({ ...plan, reviewedSnapshot: { ...plan.reviewedSnapshot!, products: [] } })).rejects.toThrow(/coverage/);
