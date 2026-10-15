@@ -70,6 +70,8 @@ export type IancarOneApiConfig = {
   apiKey: string;
   baseUrl?: string | null;
   timeoutMs?: number;
+  /** 일시 오류(502/503/504) 재시도 간격(ms). 기본 [500, 1500]. 상류 갱신 감시 회차는 더 길게 준다(지수 백오프, 각 100~120000ms·최대 5회). */
+  retryDelaysMs?: readonly number[];
 };
 
 export type IancarOneListPage = {
@@ -137,7 +139,10 @@ function normalizedConfig(config: IancarOneApiConfig) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000)
     throw new IancarOneApiError('IANCAR_ONE_API_TIMEOUT_NOT_ALLOWED');
 
-  return { origin: url.origin, apiKey, timeoutMs };
+  const retry = config.retryDelaysMs;
+  if (retry !== undefined && (retry.length > 5 || retry.some(ms => !Number.isSafeInteger(ms) || ms < 100 || ms > 120_000)))
+    throw new IancarOneApiError('IANCAR_ONE_API_RETRY_NOT_ALLOWED');
+  return { origin: url.origin, apiKey, timeoutMs, retryDelaysMs: retry ?? [500, 1500] };
 }
 
 function apiUrl(origin: string, path: string) {
@@ -189,7 +194,7 @@ export function createIancarOneApiClient(
 
   // GET 은 멱등이라 공급사 일시 오류(502/503/504)만 짧게 두 번 더 시도한다. 인증·404·429 는 재시도하지 않는다(신선도 15분 창 안에서만).
   const TRANSIENT_STATUS = new Set([502, 503, 504]);
-  const RETRY_DELAYS_MS = [500, 1500];
+  const RETRY_DELAYS_MS = normalized.retryDelaysMs;
   const requestJson = async (path: string): Promise<Json> => {
     let response: Response | undefined;
     let timeouts = 0;
@@ -961,10 +966,12 @@ export function summarizeJsonShape(value: Json, maxDepth = 5) {
 
 export function iancarOneApiConfigFromEnv(env = process.env): IancarOneApiConfig {
   const timeout = clean(env.EANCAR_ONE_API_TIMEOUT_MS);
+  const retry = clean(env.EANCAR_ONE_API_RETRY_DELAYS_MS);
   return {
     apiKey: clean(env.EANCAR_ONE_API_KEY),
     baseUrl: clean(env.EANCAR_ONE_API_BASE_URL) || IANCAR_ONE_API_ORIGIN,
-    ...(timeout ? { timeoutMs: Number(timeout) } : {})
+    ...(timeout ? { timeoutMs: Number(timeout) } : {}),
+    ...(retry ? { retryDelaysMs: retry.split(',').map(v => Number(v.trim())) } : {})
   };
 }
 
