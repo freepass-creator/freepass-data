@@ -29,6 +29,9 @@ import { captureVehicleMasterSnapshotReadOnly } from '../jobs/data-access-runtim
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { createHash } from 'node:crypto';
+import { readXlsx } from '../adapters/xlsx-reader.js';
+import { convertMaumcarWorkbook, MAUMCAR_SOURCE_ID, type MaumcarConversion } from '../adapters/maumcar-file.js';
 
 /** ERP4 단독 수집 원천(손오공 RP012·오토플러스 RP023)의 관측 전용 플러그인. 엔진은 쓰지 않고, 공급사 문서 전체(source 값과 무관)를 세며
  * 관측 시각은 «지금»이 아니라 노출 문서의 마지막 수정 시각이다 — 수집기가 멈추면 시각이 늙어 신선도 감시가 STALE 로 잡는다
@@ -70,6 +73,23 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<boolean> {
   try { await writeFile(tmp, JSON.stringify(value), { mode: 0o600 }); await rename(tmp, path); return true; }
   catch { await unlink(tmp).catch(() => undefined); return false; }
 }
+/** 마음카(RP034) 파일 원천 플러그인(대표 2026-10-14·커맨드 센터 2026-10-16): 공급사가 보낸 XLSX 를 변환해 엔진 입력으로 넘긴다.
+ * 파일은 «스냅숏»이지 전체 목록의 권위가 아니다 — 파일에 없는 차는 하향하지 않고(부재 판정 보류, 공급사 확인 필요) 보류 건수에 항상 1건을 더해 부재 하향을 막는다.
+ * 같은 파일을 다시 적용해도 내용이 같으면 계획이 비어 쓰기가 없다(해시는 raw.source_file_sha256 로 기록). 번호 중복이 있으면 불완전. */
+export function maumcarFilePlugin(ratio: number, collect: () => Promise<{ conversion: MaumcarConversion; observedAt: string }>) {
+  return sourceCyclePlugin({ sourceId: MAUMCAR_SOURCE_ID, kind: 'FILE', scopes: ['file'], maxDowngradeRatio: ratio }, async () => {
+    const { conversion, observedAt } = await collect();
+    const duplicates = conversion.duplicatePlates.length > 0;
+    const report = conversion.reportOnly;
+    return { observedAt, complete: !duplicates, completedScopes: duplicates ? [] : ['file'], visibilityComplete: true,
+      ...(duplicates ? { incompleteReason: 'DUPLICATE_PLATES' } : {}),
+      notes: [...conversion.notes, `PRE_RELEASE_REPORT_ONLY:${report.preReleaseRows}`, ...report.headerlessSheets.map(s => `HEADERLESS_SHEET_REPORT_ONLY:${s.rows}`)],
+      heldCount: conversion.held.length + 1,
+      heldReasons: [...conversion.held.map(h => `${h.reason}:UPSTREAM_ROW_HOLD`), 'ABSENCE_NOT_AUTHORITATIVE:UPSTREAM_ROW_HOLD'],
+      rows: conversion.records.map(record => ({ scope: 'file', record })) } as CycleCapture;
+  }) as ReturnType<typeof sourceCyclePlugin>;
+}
+
 /** 손오공 공식 API 쓰기 플러그인: API 읽기 결과(번호 키·계약중=선점 표시·요금·사진)를 엔진 레코드로 넘긴다. 읽기가 불완전하면 부재 하향·적용이 막힌다. */
 export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<SonogongApiRead>) {
   return sourceCyclePlugin({ sourceId: 'RP012', kind: 'SONOGONG', scopes: ['api'], maxDowngradeRatio: ratio }, async () => {
@@ -225,6 +245,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
         undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+    } else if (kind === 'MAUMCAR') {
+      // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
+      const file = required('SOURCE_CYCLE_MAUMCAR_FILE');
+      plugins.push(plateUidPlugin(maumcarFilePlugin(ratio, async () => {
+        const bytes = await readFile(file);
+        const observedAt = new Date().toISOString();
+        const fileSha256 = createHash('sha256').update(bytes).digest('hex');
+        return { conversion: convertMaumcarWorkbook(readXlsx(bytes), { observedAt, fileSha256 }), observedAt };
+      })));
     } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
       // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
       // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.

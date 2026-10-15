@@ -8,13 +8,13 @@ export const SHEET_NOT_SELLABLE_STATUS: ReadonlySet<string> = new Set(['출고�
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
 
-export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION';
+export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION' | 'FILE';
 export type CycleSourceDefinition = {
   sourceId: string; kind: CycleSourceKind; scopes: string[]; maxDowngradeRatio: number;
 };
 export const AICA_SCOPES = ['장기특별이벤트', '신차선출고', '중고재렌트', '월렌트'] as const;
 export const CYCLE_FAMILIES: Record<CycleSourceKind, SourceFamily> = {
-  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER', DECISION: 'OTHER',
+  F05: 'SHARED_SHEET', AICA: 'AICA', IANCAR: 'IANCAR', IRON: 'OTHER', AUTOPLUS: 'OTHER', SONOGONG: 'OTHER', DECISION: 'OTHER', FILE: 'OTHER',
 };
 /** Transport/converter outputs from existing collectors. UID must be an upstream stable key;
  * no row-number or plate fallback. Scope names are config, never guessed from legacy products. */
@@ -80,7 +80,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
         const r = structuredClone(row.record), provided = r.status.raw.trim();
         // «계약중» 계열(대표 2026-10-14): 모든 원천에서 원문을 «계약중» 으로 통일 — 판매 가능(선점 표시 노출), 공급사 표기는 raw.provider_status.
         // 엔진 작성 계약중 판정(engineWroteContracted)이 원문 «계약중» 을 보므로 표시만이 아니라 원문을 바꾼다. 출고불가·판매완료만 내린다.
-        const contracted = def.kind !== 'AUTOPLUS' && def.kind !== 'SONOGONG' && isContractedStatus(provided);
+        const contracted = def.kind !== 'AUTOPLUS' && def.kind !== 'SONOGONG' && def.kind !== 'FILE' && isContractedStatus(provided);
         if (contracted && provided !== '계약중') { r.status.raw = '계약중'; r.raw = { ...r.raw, provider_status: provided }; }
         const status = contracted ? '계약중' : provided;
         // Presence is kept even for excluded rows: explicit not-sellable is distinct from absence.
@@ -104,7 +104,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           case 'IRON': r.status.saleAvailable = status === '게시' ? true : ['비게시', '출고불가', '판매완료', '출고완료'].includes(status) ? false :
             r.status.saleAvailable === true ? true : r.status.saleAvailable === false ? false : null; break;
           // These collectors already provide normalized status, never infer it from old catalog values.
-          case 'AUTOPLUS': case 'SONOGONG': break;
+          case 'AUTOPLUS': case 'SONOGONG': case 'FILE': break;
         }
         records.push(r);
       }
