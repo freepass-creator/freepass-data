@@ -47,20 +47,33 @@ export function deriveHybridName(subModel: string): string {
   if (code && name.length > code.length && name.toUpperCase().endsWith(code.toUpperCase())) return `${name.slice(0, name.length - code.length).trim()} 하이브리드 ${code}`;
   return `${name} 하이브리드`;
 }
-/** 변형 낱말이 «하이브리드 하나뿐»인가(플러그인·전기가 섞이면 아님). */
-const isHybridOnly = (text: string) => /(하이브리드|(?<![A-Z0-9])HEV(?![A-Z0-9])|(?<![A-Z0-9])HYBRID(?![A-Z0-9]))/i.test(text) && !/(플러그인|(?<![A-Z0-9])PHEV(?![A-Z0-9])|일렉트릭|(?<![A-Z0-9])EV(?![A-Z0-9])|전기)/i.test(text);
+const B = (word: string) => new RegExp(`(?<![A-Z0-9])${word}(?![A-Z0-9])`, 'i');
+/** 변형 낱말 집합(원문과 연료 칸을 따로 읽어 합친다 — 연료를 «하이브리드 여부»로만 줄이지 않는다, Codex #684 ①). */
+export function variantSet(text: string): Set<'HYBRID' | 'PHEV' | 'EV'> {
+  const t = text.normalize('NFKC');
+  const out = new Set<'HYBRID' | 'PHEV' | 'EV'>();
+  if (/플러그인/.test(t) || B('PHEV').test(t) || /(?<![A-Z0-9])PLUG[-\s]?IN(?![A-Z0-9])/i.test(t)) out.add('PHEV');
+  else if (/하이브리드/.test(t) || B('HEV').test(t) || B('HYBRID').test(t) || (/(가솔린|디젤|휘발유|경유)/.test(t) && /전기/.test(t) && !/^(전기|전기차)$/.test(t.replace(/\s+/g, '')))) out.add('HYBRID');
+  if (/일렉트릭/.test(t) || B('ELECTRIC').test(t) || B('EV').test(t) || B('BEV').test(t) || /^(전기|전기차)$/.test(t.replace(/\s+/g, ''))) out.add('EV');
+  return out;
+}
+/** 변형이 «하이브리드 하나뿐»인가: 원문과 연료 칸 각각이 PHEV·EV 를 담지 않고, 둘 중 하나는 하이브리드. */
+const isHybridOnly = (rawText: string, fuel: string) => {
+  const sets = [variantSet(rawText), variantSet(fuel)];
+  return sets.some(v => v.has('HYBRID')) && sets.every(v => !v.has('PHEV') && !v.has('EV'));
+};
 
 /** VARIANT_MISMATCH 후보: 가장 가까운 일반 행에서 하이브리드 행 이름을 도출한다. 이름은 규칙 15·18 로 기계 도출되고, 그 세대에 하이브리드가 실제로 있는지는 엔카·다나와 대조가 남는다(규칙 8). */
 export function classifyVariantCandidate(rawText: string, fuel: string, nearest: IdentityMaster | undefined, masters: readonly IdentityMaster[]): { verdict: CandidateRow['verdict']; reasons: string[]; suggestedName: string } {
   const review = (...why: string[]) => ({ verdict: 'REVIEW' as const, reasons: why, suggestedName: '' });
   if (!nearest) return review('NO_NEAREST_MASTER');
-  const evidence = `${rawText} ${/(하이브리드|HEV)/i.test(fuel) ? '하이브리드' : ''}`;
-  if (!isHybridOnly(evidence)) return review('VARIANT_NOT_HYBRID_ONLY');
+  if (!isHybridOnly(rawText, fuel)) return review('VARIANT_NOT_HYBRID_ONLY');
   if (!HYBRID_DOMESTIC_MAKERS.has(nearest.maker.trim())) return review('MAKER_NOT_DOMESTIC_RULE_15');
-  if (/(하이브리드|HEV|EV|일렉트릭|플러그인|PHEV)/i.test(nearest.sub_model)) return review('NEAREST_ROW_ALREADY_VARIANT');
+  if (/[()\[\]{}（）]/.test(nearest.sub_model)) return review('NAME_HAS_PARENTHESES');   // 괄호 금지(기준 한 장 규칙 1·2): 이름 도출을 하지 않는다
+  if (variantSet(nearest.sub_model).size) return review('NEAREST_ROW_ALREADY_VARIANT');
   const name = deriveHybridName(nearest.sub_model);
   if (masters.some(m => m.maker === nearest.maker && m.model === nearest.model && m.sub_model.replace(/\s+/g, ' ') === name)) return review('HYBRID_ROW_EXISTS_NAME_MATCH_ISSUE');
-  return { verdict: 'RULE_CLEAR', reasons: ['HYBRID_ROW_DERIVED_RULE_15_18'], suggestedName: name };
+  return { verdict: 'RULE_CLEAR', reasons: ['HYBRID_ROW_DERIVED_RULE_15_18'], suggestedName: maskSensitive(name) };
 }
 
 /** 규칙상 이의가 없는 «세부모델 추가» 후보만 RULE_CLEAR. 이름은 모델 + 개발코드(규칙 1)만 제안하며, 마스터에 이미 있는 제조사·모델 안에서 «새 개발코드»일 때만. */
@@ -77,7 +90,7 @@ export function classifyCandidate(reason: string, decomposed: CandidateRow['deco
   if (family.some(m => OLD_MAKER_SPELLINGS.has(m.maker.trim()))) why.push('MAKER_SPELLING_PENDING_RENAME');
   if (family.some(m => generationCode(m.sub_model).toUpperCase() === decomposed.code.toUpperCase())) why.push('CODE_ALREADY_IN_MASTER_ALIAS_OR_NAME_ISSUE');
   if (why.length) return { verdict: 'REVIEW', reasons: why, suggestedName: '' };
-  return { verdict: 'RULE_CLEAR', reasons: ['NEW_CODE_IN_KNOWN_MODEL_RULE_1'], suggestedName: `${decomposed.model.trim()} ${decomposed.code.trim()}` };
+  return { verdict: 'RULE_CLEAR', reasons: ['NEW_CODE_IN_KNOWN_MODEL_RULE_1'], suggestedName: maskSensitive(`${decomposed.model.trim()} ${decomposed.code.trim()}`) };
 }
 
 const REASONS = new Set(['NO_MASTER_MATCH', 'AMBIGUOUS_TRIM', 'VARIANT_MISMATCH', 'NO_TRIM_MATCH', 'AMBIGUOUS_MASTER', 'GENERATION_EVIDENCE_MISSING',

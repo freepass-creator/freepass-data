@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildMasterAdditionCandidates, candidatesToCsv, classifyVariantCandidate, decomposeSonogongName, deriveHybridName, maskSensitive } from '../src/application/master-addition-candidates.js';
+import { buildMasterAdditionCandidates, candidatesToCsv, classifyVariantCandidate, decomposeSonogongName, deriveHybridName, maskSensitive, variantSet } from '../src/application/master-addition-candidates.js';
 import { runMasterCandidatesCli } from '../src/jobs/build-master-addition-candidates.js';
 import type { IdentityMaster } from '../src/application/identity-promotion-plan.js';
 
@@ -90,6 +90,21 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(classifyVariantCandidate('현대 싼타페', '하이브리드', santafe, [santafe]).verdict).toBe('RULE_CLEAR');   // 연료 칸 근거
     const already: IdentityMaster = { ...santafe, id: 'S2', sub_model: '더 뉴 싼타페 하이브리드 TM' };
     expect(classifyVariantCandidate('HEV', '', santafe, [santafe, already]).reasons).toEqual(['HYBRID_ROW_EXISTS_NAME_MATCH_ISSUE']);
+  });
+
+  it('Codex #684: 연료 PHEV·EV 는 버리지 않고(원문 하이브리드+연료 전기·플러그인도 보류), 괄호 이름은 도출하지 않고, 제안 이름은 마스킹', () => {
+    const santafe: IdentityMaster = { ...master, id: 'S', maker: '현대', model: '싼타페', sub_model: '더 뉴 싼타페 TM', trims: [] };
+    expect(variantSet('플러그인 하이브리드').has('PHEV')).toBe(true);
+    expect(variantSet('Plug-in Hybrid').has('PHEV')).toBe(true);
+    expect(variantSet('가솔린+전기').has('HYBRID')).toBe(true);
+    expect(variantSet('전기').has('EV')).toBe(true);
+    expect(classifyVariantCandidate('현대 싼타페', '플러그인 하이브리드', santafe, [santafe]).reasons).toEqual(['VARIANT_NOT_HYBRID_ONLY']);
+    expect(classifyVariantCandidate('현대 싼타페 하이브리드', '전기', santafe, [santafe]).reasons).toEqual(['VARIANT_NOT_HYBRID_ONLY']);
+    expect(classifyVariantCandidate('현대 싼타페 HEV', 'BEV', santafe, [santafe]).reasons).toEqual(['VARIANT_NOT_HYBRID_ONLY']);
+    const hg: IdentityMaster = { ...santafe, id: 'HG', model: '그랜저', sub_model: '그랜저(HG)' };
+    expect(classifyVariantCandidate('현대 그랜저 하이브리드', '', hg, [hg])).toMatchObject({ verdict: 'REVIEW', reasons: ['NAME_HAS_PARENTHESES'], suggestedName: '' });
+    const withNumber: IdentityMaster = { ...santafe, id: 'N', sub_model: '더 뉴 싼타페 12가3456 TM' };
+    expect(classifyVariantCandidate('HEV', '', withNumber, [withNumber]).suggestedName).not.toMatch(/\d{2,3}[가-힣]\d{4}/);
   });
 
   it('수식 주입 방어: = + - @ 로 시작하는 원문은 앞에 작은따옴표', () => {
