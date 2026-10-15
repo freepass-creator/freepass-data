@@ -23,6 +23,8 @@ export type IdentityProduct = {
   listable: boolean;
   /** 엔진 임시 표식 문서(vehicle_review_required·RAW_VEHICLE_TEXT): 칸 값이 «원문 덩어리» 임시 값이라 근거가 유일하면 덮어써도 된다. 없으면 false. */
   engineTemp?: boolean;
+  /** 문서 연료 칸(제원, «차 한 대 사실» — 기준 한 장 3절). 원문이 파워트레인을 안 적어도 하이브리드·전기 변형 근거가 된다. 없으면 ''. */
+  fuel?: string;
 };
 export type IdentityMasterTrim = { name: string; aliases: string[] };
 export type IdentityMaster = {
@@ -75,13 +77,25 @@ export type IdentityMatch =
   | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
 /** 변형 낱말 집합(규칙 15·16): HYBRID(하이브리드·HEV), PHEV(플러그인·PHEV), EV(일렉트릭·단독 EV). 영숫자 단어 경계로만 본다(CHEVROLET 의 HEV·EV6 의 EV 는 변형이 아니다).
  * LPG 는 연료 사양이라 변형으로 보지 않는다. */
+/** 연료 칸 → 변형 낱말(변형 점검 입력). 가솔린·디젤·LPG 는 변형이 아니다. */
+export function fuelVariantWord(fuel: string): string {
+  const f = fuel.normalize('NFKC').replace(/\s+/g, '');
+  if (!f) return '';
+  if (/플러그인|PHEV|PLUG-?IN/i.test(f)) return '플러그인 하이브리드';
+  if (/하이브리드|HEV|HYBRID/i.test(f) || (/(가솔린|디젤|휘발유|경유)/.test(f) && /전기/.test(f))) return '하이브리드';
+  if (/^(전기|전기차|일렉트릭|EV|BEV|ELECTRIC)$/i.test(f)) return 'EV';
+  return '';
+}
 const BOUNDED = (word: string) => new RegExp(`(?<![A-Z0-9])${word}(?![A-Z0-9])`);
 const variantsOf = (text: string): Set<string> => {
   const t = text.normalize('NFKC').toUpperCase();
   const out = new Set<string>();
-  if (/플러그인/.test(t) || BOUNDED('PHEV').test(t)) out.add('PHEV');
-  else if (/하이브리드/.test(t) || BOUNDED('HEV').test(t) || BOUNDED('HYBRID').test(t)) out.add('HYBRID');
-  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t)) out.add('EV');
+  if (/플러그인/.test(t) || BOUNDED('PHEV').test(t) || /(?<![A-Z0-9])PLUG[-\s]?IN(?![A-Z0-9])/.test(t)) out.add('PHEV');
+  else if (/하이브리드/.test(t) || BOUNDED('HEV').test(t) || BOUNDED('HYBRID').test(t)
+    || (/(가솔린|디젤|휘발유|경유)/.test(t) && /(?<![가-힣])전기(?![가-힣])/.test(t))) out.add('HYBRID');   // «가솔린+전기» 는 하이브리드 표기
+  // «전기»·«전기차» 낱말(한글 경계)도 전기 변형이다(Codex #682): 가솔린·디젤과 같이 적힌 하이브리드 표기는 위에서 이미 HYBRID 로 읽었다.
+  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t) || BOUNDED('BEV').test(t)
+    || /전기차/.test(t) || (!out.has('HYBRID') && !out.has('PHEV') && /(?<![가-힣])전기(?![가-힣])/.test(t))) out.add('EV');
   return out;
 };
 /** 원문의 변형 낱말이 모두 마스터(세부모델·모델·별칭) 이름에 있는가. 원문에 변형이 없으면 항상 true.
@@ -91,6 +105,9 @@ const variantCovered = (rawText: string, master: IdentityMaster, masters: readon
   if (!raw.size) return true;
   const names = (m: IdentityMaster) => [m.sub_model, m.model, ...m.sub_model_aliases, ...m.model_aliases].join(' ');
   const have = variantsOf(names(master));
+  // 마스터 쪽도 같은 규칙(Codex #682 ③): 르노 계열 마스터 이름에 E-TECH 가 있으면 하이브리드 이름으로 본다.
+  const renaultMaker = ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
+  if (renaultMaker && /(?<![A-Z0-9])E[-\s]?TECH(?![A-Z0-9])/i.test(names(master).normalize('NFKC'))) have.add('HYBRID');
   return [...raw].every(v => {
     if (have.has(v)) return true;
     if (v !== 'EV') return false;
@@ -126,8 +143,16 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   }
   // 변형 낱말(규칙 15·16: 하이브리드·플러그인 하이브리드·EV 는 세부모델을 따로 둔다): 원문에 있는데 고른 마스터 이름에 없으면 일반 세대를 잘못 고른 것 — 보류(R4).
   // 이미 세부모델이 채워진 상품도 원문 차명이 있으면 같은 검사를 받는다(빈칸 조건문 안에 두면 채워진 상품이 우회한다).
-  const variantText = p.rawName || (engineRawProduct ? p.sub_model : '');
-  if (variantText && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
+  // 변형 근거는 원문 낱말 + (르노 계열) E-TECH + 문서 연료 칸(하이브리드·플러그인·전기). 연료는 차 한 대 사실이라 원문이 침묵해도 쓴다.
+  const baseVariantText = p.rawName || (engineRawProduct ? p.sub_model : '');
+  // 영숫자 단어 경계로만(RETECH·E-TECHNOLOGY 는 E-TECH 가 아니다, Codex #682).
+  const etech = /(?<![A-Z0-9])E[-\s]?TECH(?![A-Z0-9])/i.test(baseVariantText.normalize('NFKC')) && ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
+  const fuelWord = fuelVariantWord(p.fuel ?? '');
+  // 상충 근거는 합치지 않고 보류한다(Codex #682): 원문의 변형과 연료 칸의 변형이 서로 다르면(원문 «전기» + 연료 «하이브리드» 등) 어느 쪽이 맞는지 모르므로 확정하지 않는다.
+  const rawSet = variantsOf([baseVariantText, etech ? '하이브리드' : ''].filter(Boolean).join(' ')), fuelSet = variantsOf(fuelWord);
+  if (rawSet.size && fuelSet.size && (rawSet.size !== fuelSet.size || [...rawSet].some(v => !fuelSet.has(v)))) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
+  const variantText = [baseVariantText, fuelWord, etech ? '하이브리드' : ''].filter(Boolean).join(' ');
+  if (variantText.trim() && !variantCovered(variantText, master, masters)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
   const trimHits = master.trims.map(t => ({ t, len: Math.max(0, ...[t.name, ...t.aliases].map(norm).filter(n => n.length >= 2 && raw.includes(n)).map(n => n.length)) })).filter(x => x.len > 0);
