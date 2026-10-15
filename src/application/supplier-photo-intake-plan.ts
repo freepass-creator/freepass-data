@@ -37,7 +37,7 @@ const emptyCounts = (): Record<PlanStatus, number> => ({ PLANNED: 0, SKIP_HAS_RE
   HOLD_DOCUMENT_RATIO: 0, HOLD_USE_RESTRICTED: 0, HOLD_DOCUMENT_FOLDER: 0, HOLD_NO_PHOTOS: 0, HOLD_OVER_RUN_CAP: 0, SKIP_FOLDER_UNPARSED: 0 });
 
 /** 한 폴더의 직계 파일을 분류한다: 사진 후보와 제외 사유별 건수. 서류 표지·비이미지·큰 파일 제외, 상한 초과분은 이름순 뒤쪽을 제외. */
-export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>; documentLike: number } {
+export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: IntakeFile[]; excluded: Partial<Record<ExcludeReason, number>>; documentLike: number; /** 장수 상한을 자르기 «전» 사진 후보 수(서류 비율 계산용). */ candidates: number } {
   const excluded: Partial<Record<ExcludeReason, number>> = {};
   const bump = (r: ExcludeReason) => { excluded[r] = (excluded[r] ?? 0) + 1; };
   const kept: IntakeFile[] = [];
@@ -52,7 +52,7 @@ export function classifyFolderFiles(files: readonly IntakeFile[]): { photos: Int
   kept.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const photos = kept.slice(0, INTAKE_MAX_PHOTOS_PER_VEHICLE);
   for (let i = photos.length; i < kept.length; i++) bump('OVER_PHOTO_CAP');
-  return { photos, excluded, documentLike };
+  return { photos, excluded, documentLike, candidates: kept.length };
 }
 
 /** 서류 의심 비율 판정(계획 모듈과 등록 도구가 같은 함수를 쓴다 — Codex #690 재검토): 서류 표지 파일이 있고 «서류 / (사진 후보 + 서류)» 가 기준 이상이면 폴더 통째 보류. */
@@ -93,7 +93,7 @@ export function planSupplierIntake(input: IntakeSupplierInput, options: { allowe
     const cls = classifyFolderFiles(folder.files);
     documentsExcluded += cls.documentLike;
     const subfoldersIgnored = folder.subfolderCount ?? 0;
-    if (isDocumentHeavy(cls.documentLike, cls.photos.length)) {
+    if (isDocumentHeavy(cls.documentLike, cls.candidates)) {
       add({ folderId: folder.id, status: 'HOLD_DOCUMENT_RATIO', photos: [], excluded: cls.excluded, subfoldersIgnored }); continue;
     }
     if (cls.photos.length === 0) { add({ folderId: folder.id, status: 'HOLD_NO_PHOTOS', photos: [], excluded: cls.excluded, subfoldersIgnored }); continue; }

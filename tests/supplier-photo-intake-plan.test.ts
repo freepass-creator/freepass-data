@@ -117,6 +117,21 @@ describe('공급사 사진 인입 계획', () => {
     expect(p.counts.HOLD_DOCUMENT_RATIO).toBe(1);
   });
 
+  it('Codex #690 재검토 3건: PDF 서류도 비율에 포함, 장수 상한으로 자르기 전 전체로 비율 계산', () => {
+    const pdf = classifyFolderFiles([img('등록증.pdf', 1000, 'application/pdf'), img('001.jpg')]);
+    expect(pdf.documentLike).toBe(1);
+    expect(isDocumentHeavy(pdf.documentLike, pdf.candidates)).toBe(true);
+    // 서류 200 + 정상 300: 실제 40% → 보류 아님(자른 200장으로 계산하면 50% 가 돼 과보류)
+    const docs = Array.from({ length: 200 }, (_, i) => img(`등록증${i}.jpg`));
+    const photos = Array.from({ length: 300 }, (_, i) => img(`${String(i).padStart(4, '0')}.jpg`));
+    const big = classifyFolderFiles([...docs, ...photos]);
+    expect(big.photos).toHaveLength(INTAKE_MAX_PHOTOS_PER_VEHICLE);
+    expect(big.candidates).toBe(300);
+    expect(isDocumentHeavy(big.documentLike, big.candidates)).toBe(false);
+    const p = plan([folder('109호1234', [...docs, ...photos])], [{ plate: '109호1234', hasPhotoRefs: false }]);
+    expect(p.counts.PLANNED).toBe(1);
+  });
+
   it('Codex #690 (b): 회차 차량 상한은 공급사별이 아니라 전체 합산', () => {
     const dir = mkdtempSync(join(tmpdir(), 'intake-'));
     const supplier = (code: string, plates: string[]) => ({ supplierCode: code,

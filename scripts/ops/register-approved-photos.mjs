@@ -98,11 +98,19 @@ for (const r of rows) {
   if (FOLDER_COPY && isUseRestrictedName(folderName)) { out.push(`${r.plate.slice(-4)} 사용X 폴더 — 등록 안 함`); continue; }
   if (FOLDER_COPY && isDocumentName(folderName)) { out.push(`${r.plate.slice(-4)} 서류 이름 폴더 — 등록 안 함`); continue; }
   if (!folderMatchesPlate(folderName, r.plate)) { out.push(`${r.plate.slice(-4)} 폴더 이름이 차량번호와 다름 — 등록 안 함`); continue; }
-  const listed = run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [];
+  // 공급사 폴더 사본은 이미지뿐 아니라 직계 «파일 전부»(PDF 서류 포함)를 끝 페이지까지 읽어 서류 비율에 넣는다(Codex #690 재검토 (a)(b)). 다른 방법은 종전 조회 그대로.
+  const listed = []; let filePage = null, pages = 0, pagesExceeded = false;
+  do {
+    const q = FOLDER_COPY ? `'${r.folder}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'` : `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`;
+    const page = run(['drive', 'files', 'list'], { q, fields: 'nextPageToken,files(id,name,mimeType,size,sha256Checksum)', pageSize: FOLDER_COPY ? 1000 : 200, supportsAllDrives: true, includeItemsFromAllDrives: true, ...(filePage ? { pageToken: filePage } : {}) });
+    listed.push(...(page.files ?? [])); filePage = FOLDER_COPY ? page.nextPageToken : null; pages++;
+    if (filePage && pages >= 20) { pagesExceeded = true; break; }
+  } while (filePage);
+  if (pagesExceeded) { out.push(`${r.plate.slice(-4)} 폴더 파일이 너무 많음 — 폴더 보류`); continue; }
   // 서류 의심 비율은 계획 모듈과 같은 판정(Codex #690 재검토): «등록증.jpg» 와 이름 없는 스캔 «001.jpg» 가 함께 있으면 폴더 통째 보류.
   if (FOLDER_COPY) {
     const cls = classifyFolderFiles(listed.map(x => ({ id: x.id, name: String(x.name ?? ''), mimeType: x.mimeType ?? null, size: Number(x.size) || null })));
-    if (isDocumentHeavy(cls.documentLike, cls.photos.length)) { out.push(`${r.plate.slice(-4)} 서류 의심 비율 높음 — 폴더 보류`); continue; }
+    if (isDocumentHeavy(cls.documentLike, cls.candidates)) { out.push(`${r.plate.slice(-4)} 서류 의심 비율 높음 — 폴더 보류`); continue; }
   }
   const files = listed
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
