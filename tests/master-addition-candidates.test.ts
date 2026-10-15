@@ -107,6 +107,9 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     const s = await runMasterCandidatesCli({ input, csv, summary });
     expect(s).toMatchObject({ status: 'MASTER_ADDITION_CANDIDATES', writes: 0 });
     expect(s.bySupplier.RP012!.NO_MASTER_MATCH).toBe(3);
+    // 판정 근거 분포: 공급사|사유별 코드와 건수(번호·이름 없음)
+    expect(s.verdictReasons['RP012|NO_MASTER_MATCH']).toBeDefined();
+    expect(Object.values(s.verdictReasons['RP012|NO_MASTER_MATCH']!).reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(3);
     expect((await readFile(csv, 'utf8')).charCodeAt(0)).toBe(0xFEFF);
     await expect(runMasterCandidatesCli({ input, csv: undefined })).rejects.toThrow('MASTER_CANDIDATES_ARGS_REQUIRED');
   });

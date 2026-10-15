@@ -17,9 +17,16 @@ export async function runMasterCandidatesCli(argv: { input?: string | undefined;
   for (const r of result.rows) { const s = (bySupplier[r.supplier || '(미상)'] ??= {}); s[r.reason] = (s[r.reason] ?? 0) + r.count; }
   const verdicts: Record<string, { groups: number; products: number }> = {};
   for (const r of result.rows) { const v = (verdicts[r.verdict] ??= { groups: 0, products: 0 }); v.groups++; v.products += r.count; }
+  // 판정 근거 분포(공급사·보류사유별): RULE_CLEAR 가 왜 적은지 한눈에 본다(이름·번호 없음, 코드와 건수만).
+  const verdictReasons: Record<string, Record<string, number>> = {};
+  for (const r of result.rows) {
+    const key = `${r.supplier || '(미상)'}|${r.reason}`;
+    const bucket = (verdictReasons[key] ??= {});
+    for (const why of r.verdictReasons.length ? r.verdictReasons : ['(none)']) bucket[why] = (bucket[why] ?? 0) + r.count;
+  }
   const priority = result.rows.filter(r => r.blankIdentityCount > 0);
   const summary = { status: 'MASTER_ADDITION_CANDIDATES', writes: 0, products: result.products, heldTotal: result.heldTotal, groups: result.rows.length,
-    reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, verdicts,
+    reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, verdicts, verdictReasons,
     priority: { groups: priority.length, products: priority.reduce((a, r) => a + r.blankIdentityCount, 0) }, bySupplier };
   if (argv.summary) await writeFile(argv.summary, JSON.stringify(summary, null, 2), { mode: 0o600 });
   return summary;
