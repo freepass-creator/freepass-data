@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildMasterAdditionCandidates, candidatesToCsv, decomposeSonogongName, maskSensitive } from '../src/application/master-addition-candidates.js';
+import { buildMasterAdditionCandidates, candidatesToCsv, classifyVariantCandidate, decomposeSonogongName, deriveHybridName, maskSensitive } from '../src/application/master-addition-candidates.js';
 import { runMasterCandidatesCli } from '../src/jobs/build-master-addition-candidates.js';
 import type { IdentityMaster } from '../src/application/identity-promotion-plan.js';
 
@@ -74,6 +74,22 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(rows.every(r => r.blankIdentityCount > 0)).toBe(true);   // product() 헬퍼는 maker·model 이 빈 엔진 임시 상품
     expect(rows[0]!.blankIdentityCount).toBeGreaterThan(0);
     expect(candidatesToCsv(rows).split('\r\n')[0]).toContain('우선(확인 중)');
+  });
+
+  it('하이브리드 행 이름 도출(규칙 15·18): 일반 행 이름에서 모델명 뒤·코드 앞에 하이브리드, 수식어는 그대로, 국산·쉐보레만', () => {
+    expect(deriveHybridName('더 뉴 싼타페 TM')).toBe('더 뉴 싼타페 하이브리드 TM');
+    expect(deriveHybridName('K8 GL3')).toBe('K8 하이브리드 GL3');
+    expect(deriveHybridName('EQ900')).toBe('EQ900 하이브리드');
+    const santafe: IdentityMaster = { ...master, id: 'S', maker: '현대', model: '싼타페', sub_model: '더 뉴 싼타페 TM', trims: [] };
+    const clear = classifyVariantCandidate('현대_더 뉴 싼타페_HEV 1.6 2WD', '', santafe, [santafe]);
+    expect(clear).toMatchObject({ verdict: 'RULE_CLEAR', suggestedName: '더 뉴 싼타페 하이브리드 TM', reasons: ['HYBRID_ROW_DERIVED_RULE_15_18'] });
+    expect(classifyVariantCandidate('현대_더 뉴 싼타페_PHEV 1.6', '', santafe, [santafe]).verdict).toBe('REVIEW');   // 플러그인은 도출 대상 아님
+    expect(classifyVariantCandidate('코나 EV', '', santafe, [santafe]).reasons).toEqual(['VARIANT_NOT_HYBRID_ONLY']);
+    const benz: IdentityMaster = { ...santafe, id: 'B', maker: '벤츠', model: 'E-클래스', sub_model: 'E-클래스 W214' };
+    expect(classifyVariantCandidate('벤츠 E 300 e 하이브리드', '', benz, [benz]).reasons).toEqual(['MAKER_NOT_DOMESTIC_RULE_15']);
+    expect(classifyVariantCandidate('현대 싼타페', '하이브리드', santafe, [santafe]).verdict).toBe('RULE_CLEAR');   // 연료 칸 근거
+    const already: IdentityMaster = { ...santafe, id: 'S2', sub_model: '더 뉴 싼타페 하이브리드 TM' };
+    expect(classifyVariantCandidate('HEV', '', santafe, [santafe, already]).reasons).toEqual(['HYBRID_ROW_EXISTS_NAME_MATCH_ISSUE']);
   });
 
   it('수식 주입 방어: = + - @ 로 시작하는 원문은 앞에 작은따옴표', () => {

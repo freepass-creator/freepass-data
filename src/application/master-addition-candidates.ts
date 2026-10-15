@@ -33,10 +33,35 @@ export function decomposeSonogongName(raw: string): CandidateRow['decomposed'] {
   return { maker: parts[0]!, model: (m ? m[1]! : parts[1]!).trim(), code: m ? m[2]!.trim() : '', powertrain: parts.slice(2).join('_').trim() };
 }
 
-const VARIANT_WORDS = /(하이브리드|플러그인|일렉트릭|전기|\bEV\b|\bHEV\b|\bPHEV\b|\bHYBRID\b|\bELECTRIC\b)/i;
+const VARIANT_WORDS = /(하이브리드|플러그인|일렉트릭|전기|(?<![A-Z0-9])EV(?![A-Z0-9])|(?<![A-Z0-9])HEV(?![A-Z0-9])|(?<![A-Z0-9])PHEV(?![A-Z0-9])|(?<![A-Z0-9])HYBRID(?![A-Z0-9])|(?<![A-Z0-9])ELECTRIC(?![A-Z0-9]))/i;
 const QUALIFIER_WORDS = /(더\s?뉴|올\s?뉴|디\s?올|\bFL\b|F\/L|페이스리프트|신형|뉴\s)/i;
 const OLD_MAKER_SPELLINGS = new Set(['르노코리아', 'KG모빌리티']);
 const keyOf = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.]/g, '').toLowerCase();
+
+/** 하이브리드 행 이름 도출(규칙 15·16·18, 기계적): 기존 일반 행 이름에서 «모델명 뒤·개발코드 앞»에 «하이브리드» 를 넣는다. 앞 수식어(더 뉴 등)는 그대로(규칙 18).
+ * 국산·쉐보레만(규칙 15: 제조사가 하이브리드를 모델 이름에 쓰는 차). 개발코드가 없으면 이름 끝에 붙인다. */
+const HYBRID_DOMESTIC_MAKERS = new Set(['현대', '기아', 'KGM', '쉐보레']);
+export function deriveHybridName(subModel: string): string {
+  const name = subModel.trim().replace(/\s+/g, ' ');
+  const code = generationCode(name);
+  if (code && name.length > code.length && name.toUpperCase().endsWith(code.toUpperCase())) return `${name.slice(0, name.length - code.length).trim()} 하이브리드 ${code}`;
+  return `${name} 하이브리드`;
+}
+/** 변형 낱말이 «하이브리드 하나뿐»인가(플러그인·전기가 섞이면 아님). */
+const isHybridOnly = (text: string) => /(하이브리드|(?<![A-Z0-9])HEV(?![A-Z0-9])|(?<![A-Z0-9])HYBRID(?![A-Z0-9]))/i.test(text) && !/(플러그인|(?<![A-Z0-9])PHEV(?![A-Z0-9])|일렉트릭|(?<![A-Z0-9])EV(?![A-Z0-9])|전기)/i.test(text);
+
+/** VARIANT_MISMATCH 후보: 가장 가까운 일반 행에서 하이브리드 행 이름을 도출한다. 이름은 규칙 15·18 로 기계 도출되고, 그 세대에 하이브리드가 실제로 있는지는 엔카·다나와 대조가 남는다(규칙 8). */
+export function classifyVariantCandidate(rawText: string, fuel: string, nearest: IdentityMaster | undefined, masters: readonly IdentityMaster[]): { verdict: CandidateRow['verdict']; reasons: string[]; suggestedName: string } {
+  const review = (...why: string[]) => ({ verdict: 'REVIEW' as const, reasons: why, suggestedName: '' });
+  if (!nearest) return review('NO_NEAREST_MASTER');
+  const evidence = `${rawText} ${/(하이브리드|HEV)/i.test(fuel) ? '하이브리드' : ''}`;
+  if (!isHybridOnly(evidence)) return review('VARIANT_NOT_HYBRID_ONLY');
+  if (!HYBRID_DOMESTIC_MAKERS.has(nearest.maker.trim())) return review('MAKER_NOT_DOMESTIC_RULE_15');
+  if (/(하이브리드|HEV|EV|일렉트릭|플러그인|PHEV)/i.test(nearest.sub_model)) return review('NEAREST_ROW_ALREADY_VARIANT');
+  const name = deriveHybridName(nearest.sub_model);
+  if (masters.some(m => m.maker === nearest.maker && m.model === nearest.model && m.sub_model.replace(/\s+/g, ' ') === name)) return review('HYBRID_ROW_EXISTS_NAME_MATCH_ISSUE');
+  return { verdict: 'RULE_CLEAR', reasons: ['HYBRID_ROW_DERIVED_RULE_15_18'], suggestedName: name };
+}
 
 /** 규칙상 이의가 없는 «세부모델 추가» 후보만 RULE_CLEAR. 이름은 모델 + 개발코드(규칙 1)만 제안하며, 마스터에 이미 있는 제조사·모델 안에서 «새 개발코드»일 때만. */
 export function classifyCandidate(reason: string, decomposed: CandidateRow['decomposed'], masters: readonly IdentityMaster[]): { verdict: CandidateRow['verdict']; reasons: string[]; suggestedName: string } {
@@ -102,7 +127,12 @@ export function buildMasterAdditionCandidates(products: readonly CandidateProduc
       const decomposed = decomposedRaw ? { maker: decomposedRaw.maker, model: decomposedRaw.model, code: decomposedRaw.code, powertrain: decomposedRaw.powertrain } : null;
       const candidates = hold.candidates.map(maskSensitive);
       g = { row: { supplier, reason: hold.reason, count: 0, rawName: maskSensitive(rawName), decomposed, yearRange: '', plate4Samples: [], masterCandidates: candidates,
-        proposal: proposalFor(hold.reason, decomposed, candidates), ...(() => { const c = classifyCandidate(hold.reason, decomposed, masters); return { verdict: c.verdict, verdictReasons: c.reasons, suggestedName: c.suggestedName }; })(),
+        proposal: proposalFor(hold.reason, decomposed, candidates), ...(() => {
+          const c = hold.reason === 'VARIANT_MISMATCH'
+            ? classifyVariantCandidate(`${p.rawName} ${p.sub_model}`, (p as { fuel?: string }).fuel ?? '', masters.find(m => m.sub_model === hold.candidates[0]), masters)
+            : classifyCandidate(hold.reason, decomposed, masters);
+          return { verdict: c.verdict, verdictReasons: c.reasons, suggestedName: c.suggestedName };
+        })(),
         blankIdentityCount: 0 }, years: [], plates: new Set() };
       groups.set(key, g);
     }
