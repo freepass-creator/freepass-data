@@ -65,6 +65,11 @@ export type PublicProduct = {
   photo_approved_count: number;
   /** 옵션(대표 2026-10-16 «손오공은 유상옵션이 있다»). 운영 변수 FREEPASS_DATA_PUBLIC_OPTIONS=1 일 때만 나가고 목록(list) 모드에서는 나가지 않는다. 값은 손오공 API 의 분류 후 이름뿐이며
    * 금액 꼴·번호 꼴 이름은 개별로 버린다(피드 전체를 던지지 않는다). option_state: PRESENT(옵션 있음)·NONE(원천이 옵션 없음이라 함)·UNKNOWN(미확인 — 원천에 옵션 필드 없음 포함). */
+  /** 2트랙(대표 2026-10-16): 공급사 원문 표기(읽기 전용 파생·표시용)와 정제 상태. 정제 칸 값이 있으면 항상 그 값이 이기고, 비어 있고 PENDING 이면 원문을 «정제 대기»와 함께 쓴다.
+   * FREEPASS_DATA_PUBLIC_SOURCE_RAW=0 이면 나가지 않는다(기본 켜짐). */
+  source_raw_name?: string | null;
+  refine_state?: 'REFINED' | 'PENDING';
+  refine_missing?: Array<'maker' | 'model' | 'sub_model'>;
   option_state?: 'PRESENT' | 'NONE' | 'UNKNOWN';
   option_basic?: string[];
   /** 유상 옵션. amount_krw 가 null 이면 «금액 확인 중». 가격 계산에는 쓰지 않는다(표시 전용). */
@@ -124,11 +129,11 @@ const OPTION_MONEY = /\d[\d,.]*[\s\-–—.·)\]]*[(\[]?\s*(원|만(?!\s?(?:km|�
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Mn}\p{Zl}\p{Zp}\p{Co}]/gu;
 const OPTION_BLOCKED_WORDS = /(수수료|청구|지급|마진|할인|commission|payout)/i;
 const OPTION_FORBIDDEN_COMPACT =/(수수료|청구|지급|마진|원가|정산|commission|payout|billing|margin)/i;
-const safeOptionName = (value: unknown): string | null => {
+const safeOptionName = (value: unknown, maxLength: number = OPTION_NAME_MAX): string | null => {
   if (typeof value !== 'string') return null;
   // 보이지 않는 문자(제로폭·방향 제어·소프트 하이픈 등)는 먼저 지운다 — «고​객»·«010​-1234» 우회 방지(Codex #687 (b)).
   const text = value.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
-  if (!text || text.length > OPTION_NAME_MAX) return null;
+  if (!text || text.length > maxLength) return null;
   const compact = text.replace(/[\s\p{P}\p{S}_]+/gu, '');
   // 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 옵션이 사라진다 — 옵션 이름은 금액 꼴(OPTION_MONEY)·금지어(할인 포함)로 따로 본다(Codex #687 잔여).
   if (OPTION_BLOCKED_WORDS.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text)) return null;
@@ -136,6 +141,39 @@ const safeOptionName = (value: unknown): string | null => {
   if (OPTION_PHONE.test(text) || OPTION_MONEY.test(text) || OPTION_PERSONAL_WORDS.test(text) || OPTION_PERSONAL_WORDS.test(compact) || OPTION_FORBIDDEN_COMPACT.test(compact)) return null;
   if (/\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(compact)) return null;
   return text;
+};
+const RAW_NAME_MAX = 120;
+const refineText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+/** 공급사 원문 표기(표시용 읽기 전용 파생): 문서 car_name → 없으면 원문.차명. 밑줄 구분을 공백으로, 보이지 않는 문자·연속 공백 정리, 120자 상한.
+ * 옵션 이름과 같은 안전 필터(전화·번호·금액 꼴·개인정보·금지어)에 걸리면 null. 문서·원문은 바꾸지 않는다. */
+export const sourceRawName = (product: Rec): string | null => {
+  const original = product['원문'] && typeof product['원문'] === 'object' ? product['원문'] as Rec : {};
+  const raw = refineText(product.car_name) || refineText(original['차명']);
+  if (!raw) return null;
+  let text = raw.replace(INVISIBLE, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (text.length > RAW_NAME_MAX) text = `${text.slice(0, RAW_NAME_MAX - 1)}…`;
+  // 공급사 시트에 제조사 열이 있으나 차명에는 빠지는 경우(아이카): 원문 보존 칸의 source_maker 가 있으면 읽기 전용 접두로만 붙인다.
+  const source = (product.raw && typeof product.raw === 'object' ? product.raw : original['source'] && typeof original['source'] === 'object' ? original['source'] : {}) as Rec;
+  // 제조사: 손오공 raw.source_maker, 아이카 시트 원본 칸(raw.original['제조사'] 또는 headers/cells 의 «제조사» 열). 문서에 값을 새로 쓰지 않는다.
+  const headers = Array.isArray(source.headers) ? source.headers : [], cells = Array.isArray(source.cells) ? source.cells : [];
+  const headerAt = headers.findIndex(h => typeof h === 'string' && h.trim() === '제조사');
+  const originalRow = source.original && typeof source.original === 'object' ? source.original as Rec : {};
+  const maker = refineText(source.source_maker) || refineText(originalRow['제조사']) || (headerAt >= 0 ? refineText(cells[headerAt]) : '');
+  if (maker && maker.length <= 20 && !text.replace(/\s+/g, '').startsWith(maker.replace(/\s+/g, ''))) text = `${maker} ${text}`;
+  return safeOptionName(text, RAW_NAME_MAX + 16);
+};
+/** 정제 상태(커맨드 센터·B3Q 집계 반영): «실제 값» 기준이다 — 제조사·모델·세부모델 중 빈 칸, 세부모델에 밑줄(«원문 형태»),
+ * 엔진 임시 표식이 있고 세부모델이 원문 차명 그대로인 문서(표식만 남은 정제 완료 문서는 REFINED)는 PENDING. «확인 중» 은 저장된 문자열이 아니라
+ * 소비처가 네 칸이 비었을 때 보여 주는 값이므로 문자열 매칭하지 않는다. 문서 값만 본다(마스터 재대조 없음). */
+export const refineState = (product: Rec): Required<Pick<PublicProduct, 'refine_state' | 'refine_missing'>> => {
+  const missing = (['maker', 'model', 'sub_model'] as const).filter(field => !refineText(product[field]));
+  const squash = (value: string): string => value.normalize('NFKC').replace(/[\s_]+/g, '').toLowerCase();
+  const sub = refineText(product.sub_model);
+  const original = product['원문'] && typeof product['원문'] === 'object' ? product['원문'] as Rec : {};
+  const rawText = refineText(product.car_name) || refineText(original['차명']);
+  const markerEquals = (product.vehicle_title_source === 'RAW_VEHICLE_TEXT' || product.vehicle_review_required === true) && !!sub && !!rawText && squash(sub) === squash(rawText);
+  const rawShape = sub.includes('_');
+  return { refine_state: missing.length > 0 || rawShape || markerEquals ? 'PENDING' : 'REFINED', refine_missing: [...missing] };
 };
 export const publicOptions = (product: Rec): Pick<PublicProduct, 'option_state' | 'option_basic' | 'option_paid'> => {
   const state = product.api_options_state;
@@ -354,7 +392,10 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
   if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product));
-  assertNoForbiddenValue(result);
+  if (process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW !== '0') Object.assign(result, { source_raw_name: sourceRawName(product), ...refineState(product) });
+  // 옵션·원문 표기는 자기 안전 필터(safeOptionName)로 이미 거른다 — 공용 BLOCKED_TEXT 는 «%» 도 막아 «자외선 99% 차단» 같은 정상 값 하나로 피드 전체를 던지게 하므로 여기서는 뺀다.
+  const { option_basic: _ob, option_paid: _op, source_raw_name: _sr, ...checked } = result;
+  assertNoForbiddenValue(checked);
   return result;
 };
 
