@@ -360,7 +360,9 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (item.level !== undefined && item.level !== 'MODEL') throw new Error(`productIdentity ${item.id} level must be MODEL when present`);
     const modelLevel = item.level === 'MODEL';
     for (const field of PRODUCT_IDENTITY_FIELDS) {
-      if (!clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      // 모델 수준에서 저장 세부모델이 «빈칸»이면 to.sub_model 도 빈칸으로 둔다(제조사·모델 채우기만, 제목이 비어 있는 시트 공급사 문서). 칸은 쓰지 않는다.
+      const keepsBlankSubModel = modelLevel && field === 'sub_model' && item.from.sub_model === '' && item.to.sub_model === '';
+      if (!clean(item.to[field]) && !keepsBlankSubModel) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
       // 모델 수준에서 sub_model 은 «현재 저장값 그대로»를 유지하므로(원문형 문자열일 수 있다) 정규화 요구를 걸지 않고 from 과 같음을 요구한다.
       if (modelLevel && field === 'sub_model') continue;
       if (item.to[field] !== clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} must be normalized text`);
@@ -720,7 +722,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     for (const field of PRODUCT_IDENTITY_FIELDS) {
       if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
-      // 모델 수준은 세부모델을 저장된 글자 그대로 쓴다(정규화해 쓰면 의도하지 않은 변경).
+      // 모델 수준은 세부모델을 저장된 글자 그대로 쓴다(정규화해 쓰면 의도하지 않은 변경). 저장 세부모델이 빈칸이면 그 칸은 쓰지 않는다.
+      if (item.level === 'MODEL' && field === 'sub_model' && item.from.sub_model === '') continue;
       entry.fields[field] = item.level === 'MODEL' && field === 'sub_model' ? item.to[field] : clean(item.to[field]);
     }
     byPath[ref.path] = entry;
@@ -1101,7 +1104,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const want = productIdentityToObject(identityTargets[index]!.item);
     const data = snapshot.data();
     const modelLevel = identityTargets[index]!.item.level === 'MODEL';
-    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => (modelLevel && field === 'sub_model' ? data?.[field] !== want[field] : clean(data?.[field]) !== want[field]))) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
+    const blankSub = modelLevel && identityTargets[index]!.item.from.sub_model === '';   // 쓰지 않은 칸: 저장값이 빈칸/없음 그대로인지만 본다
+    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => {
+      if (blankSub && field === 'sub_model') return clean(data?.[field]) !== '';
+      return modelLevel && field === 'sub_model' ? data?.[field] !== want[field] : clean(data?.[field]) !== want[field];
+    })) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
   });
   const sourceCorrectionReadback = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   sourceCorrectionReadback.forEach((snapshot, index) => {

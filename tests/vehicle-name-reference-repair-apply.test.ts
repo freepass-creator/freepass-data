@@ -660,6 +660,19 @@ describe('product identity applier guards (Codex 적용기 검토 5건)', () => 
     await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).rejects.toThrow(/manual or confirmed value/);
   });
 
+  it('모델 수준 + 저장 세부모델 빈칸: 제조사·모델만 채우고 세부모델 칸은 쓰지 않는다(없던 칸이 생기지 않음), 값이 있으면 종전 규칙', async () => {
+    const blank = { id: 'p-nosub', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: '' }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-nosub', { maker: '', model: '' });   // sub_model 칸 자체가 없음
+    await expect(applyApproved(plan({ productIdentityRepairs: [blank] }))).resolves.toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+    expect(store.get('products/p-nosub')).toMatchObject({ maker: 'Maker', model: 'Model A' });
+    expect(store.get('products/p-nosub')).not.toHaveProperty('sub_model');
+    // 마스터에 없는 모델은 여전히 거절
+    store.set('products/p-nosub', { maker: '', model: '' });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, to: { maker: 'Maker', model: 'Nope', sub_model: '' } }] }))).rejects.toThrow(/exactly one active vehicle_master/);
+    // 전체 정정(level 없음)은 여전히 to.sub_model 필수
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, level: undefined }] }))).rejects.toThrow(/requires a non-empty value/);
+  });
+
   it('Codex #664 확인: false·빈 문자열·null·undefined 는 «잠금/철회 아님»이고, 빈 객체·문자열·true 는 표식 있음(보수)', async () => {
     for (const value of [null, undefined, false, '']) {
       store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: value, publication_withdrawal: value });
