@@ -149,16 +149,17 @@ const textOf = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 /** 원천 필드(brand·model)로 제조사·모델만 채운 문서 표식. 이 문서도 아직 마스터로 확정되지 않은 «엔진 보류»이며 정체성 정제가 마스터 이름으로 덮어쓴다. */
 export const SOURCE_FIELDS_MARK = 'SOURCE_FIELDS';
 const filledByUs = (f: Fields): boolean => {
-  const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown } | null | undefined;
+  const filled = f.vehicle_maker_model_filled as { maker?: unknown; model?: unknown; sub_model?: unknown } | null | undefined;
+  // 사람이 maker·model «또는 세부모델»을 고쳤으면 표식만 남아도 보류가 아니다(Codex #685 ①: 세부모델도 «쓴 값 그대로»일 때만).
   return f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && !!filled && typeof filled === 'object'
-    && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model);   // 사람이 고쳤으면(값이 달라졌으면) 표식만 남아도 보류가 아니다
+    && typeof filled.sub_model === 'string' && textOf(f.maker) === textOf(filled.maker) && textOf(f.model) === textOf(filled.model) && textOf(f.sub_model) === textOf(filled.sub_model);
 };
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
   && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
-export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null): Fields {
+export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = ''): Fields {
   if (refinedThisCycle) return {};
   if (textOf(original.maker) || textOf(original.model)) return {};
   if (original.vehicle_maker_model_source !== undefined && original.vehicle_maker_model_source !== null) {
@@ -170,7 +171,7 @@ export function sourceIdentityFields(r: SourceProductRecord, original: Fields, r
   // 제조사는 활성 차종 마스터에 «있는 표기»일 때만 채운다(옛 표기 르노삼성 등이 maker 에 들어가 교정 대상에서 빠지는 것을 막는다, Codex #685 (c)).
   // 마스터를 못 읽었거나(목록 없음) 마스터에 없는 표기면 채우지 않고 표식(UNMAPPED)만 남긴다 — 마스터에 제조사가 생긴 뒤의 재시도는 별도 승인(표식 초기화).
   if (!makers || !maker || !makers.has(maker)) return original.vehicle_maker_model_source === undefined || original.vehicle_maker_model_source === null ? { vehicle_maker_model_source: 'UNMAPPED' } : {};
-  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model } };
+  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model, sub_model: subModelAtFill } };
 }
 const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
 const specOf = (r: SourceProductRecord | undefined): Fields => {
@@ -328,7 +329,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.deferSourceIdentity !== true ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null) : {}),
+    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true
+      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
