@@ -12,6 +12,8 @@ export type SalesFeedProduct = {
   provider_name: string | null; product_type: string | null; vehicle_status: string | null;
   price: Record<string, { rent: number | null; deposit: number | null; depositState: string }>;
   image_url: string | null; photo_link: string | null;
+  /** 옵션(공개 피드 선택 필드와 같은 모양, 상세 기준). 없으면 «미확인». */
+  option_state?: 'PRESENT' | 'NONE' | 'UNKNOWN'; option_basic?: string[]; option_paid?: Array<{ name: string; amount_krw: number | null }>;
 };
 export type SalesFeed = { contractVersion: string; count: number; products: SalesFeedProduct[] };
 
@@ -19,14 +21,30 @@ export const SALES_SHEET_TERMS = [12, 24, 36, 48, 60] as const;
 export const SALES_SHEET_BASE_COLUMNS = ['차량번호', '제조사', '모델', '세부모델', '세부트림', '연료', '연식', '주행거리(km)', '외부색상', '상품 구분', '출고 상태'] as const;
 const termColumns = SALES_SHEET_TERMS.flatMap(m => [`${m}개월 대여료`, `${m}개월 보증금`]);
 export const SALES_SHEET_TAIL_COLUMNS = ['요금 조건 수', '사진 링크'] as const;
+/** 옵션 칸(includeOptions 일 때만): 기본 옵션·유상 옵션. 상태가 PRESENT/NONE 이 아니면 «미확인»(이안카 등 원천에 옵션이 없는 공급사 포함). */
+export const SALES_SHEET_OPTION_COLUMNS = ['기본 옵션', '유상 옵션'] as const;
+const OPTION_CELL_MAX = 300;
+const joinOptions = (items: string[]) => {
+  const text = items.join(' / ');
+  return text.length <= OPTION_CELL_MAX ? text : `${text.slice(0, OPTION_CELL_MAX)}… 외 ${items.length}개 중 일부`;
+};
+/** 옵션 셀 두 칸. 금액이 확인된 유상은 «이름(금액 원)», 금액이 없으면 «이름(금액 확인 중)». */
+export function salesOptionCells(p: Pick<SalesFeedProduct, 'option_state' | 'option_basic' | 'option_paid'>): [string, string] {
+  if (p.option_state === 'NONE') return ['옵션 없음', '옵션 없음'];
+  if (p.option_state !== 'PRESENT') return ['미확인', '미확인'];
+  const basic = (p.option_basic ?? []).filter(n => typeof n === 'string' && n.trim()).map(n => n.trim());
+  const paid = (p.option_paid ?? []).filter(o => o && typeof o.name === 'string' && o.name.trim())
+    .map(o => (typeof o.amount_krw === 'number' && Number.isSafeInteger(o.amount_krw) && o.amount_krw > 0 ? `${o.name.trim()}(${o.amount_krw.toLocaleString('en-US')}원)` : `${o.name.trim()}(금액 확인 중)`));
+  return [basic.length ? joinOptions(basic) : '없음', paid.length ? joinOptions(paid) : '없음'];
+}
 /** 칸 허용 목록: 머리글은 이 집합 안에서만 나온다(수수료·원가·메모·잠금·원문 류가 새 칸으로 들어올 수 없다). */
-export const SALES_SHEET_ALLOWED_COLUMNS: ReadonlySet<string> = new Set([...SALES_SHEET_BASE_COLUMNS, ...termColumns, ...SALES_SHEET_TAIL_COLUMNS, '공급사']);
+export const SALES_SHEET_ALLOWED_COLUMNS: ReadonlySet<string> = new Set([...SALES_SHEET_BASE_COLUMNS, ...termColumns, ...SALES_SHEET_TAIL_COLUMNS, ...SALES_SHEET_OPTION_COLUMNS, '공급사']);
 const NEEDS_CHECK = '확인 필요';
 const REVIEW_NAME = '차량 정보 확인 중';
 
 /** 영업자용(sales, 기본) = 공급사명 표시, 소비자용(consumer) = 숨김. */
 export type SalesAudience = 'sales' | 'consumer';
-export type SalesSheetOptions = { snapshotId: string; generatedAt: string; audience?: SalesAudience };
+export type SalesSheetOptions = { snapshotId: string; generatedAt: string; audience?: SalesAudience; includeOptions?: boolean };
 export type SalesSheetViolation = { code: string; detail: string };
 export type SalesSheetPlan = {
   versionTab: string;
@@ -65,7 +83,8 @@ export function salesVersionTabName(generatedAt: string): string {
 export function planSalesInventorySheet(feed: SalesFeed, options: SalesSheetOptions): SalesSheetPlan {
   if (!options.snapshotId.trim()) throw new Error('SALES_SHEET_SNAPSHOT_ID_REQUIRED');
   const providerColumn = (options.audience ?? 'sales') === 'sales';
-  const header = [...SALES_SHEET_BASE_COLUMNS, ...termColumns, ...SALES_SHEET_TAIL_COLUMNS, ...(providerColumn ? ['공급사'] : [])];
+  const optionColumns = options.includeOptions === true;
+  const header = [...SALES_SHEET_BASE_COLUMNS, ...termColumns, ...SALES_SHEET_TAIL_COLUMNS, ...(optionColumns ? SALES_SHEET_OPTION_COLUMNS : []), ...(providerColumn ? ['공급사'] : [])];
   const violations: SalesSheetViolation[] = [];
   const rows: string[][] = [];
   const summary: SalesSheetPlan['summary'] = { snapshotId: options.snapshotId, generatedAt: options.generatedAt, feedCount: feed.products.length, rowCount: 0,
@@ -101,6 +120,7 @@ export function planSalesInventorySheet(feed: SalesFeed, options: SalesSheetOpti
       plate || NEEDS_CHECK, names[0] || (nameReview ? REVIEW_NAME : ''), names[1] || '', names[2] || '', text(p.trim_name),
       text(p.fuel_type), p.year === null || p.year === undefined ? '' : String(p.year), p.mileage === null || p.mileage === undefined ? '' : String(p.mileage), text(p.ext_color),
       productTypeLabel(p.product_type), status, ...terms, String(Object.keys(p.price ?? {}).length), photo,
+      ...(optionColumns ? salesOptionCells(p) : []),
       ...(providerColumn ? [text(p.provider_name)] : []),
     ];
     for (const cell of cells) if (hasForbiddenText(cell)) { violations.push({ code: 'FORBIDDEN_TEXT_IN_CELL', detail: where }); break; }

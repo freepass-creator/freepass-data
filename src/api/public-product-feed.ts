@@ -63,6 +63,12 @@ export type PublicProduct = {
   photo_link: string | null;
   /** 사본 서빙이 보장된 승인 사진 수(이안카 압축 사본 refs 가 검증됐을 때만 > 0). 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
   photo_approved_count: number;
+  /** 옵션(대표 2026-10-16 «손오공은 유상옵션이 있다»). 운영 변수 FREEPASS_DATA_PUBLIC_OPTIONS=1 일 때만 나가고 목록(list) 모드에서는 나가지 않는다. 값은 손오공 API 의 분류 후 이름뿐이며
+   * 금액 꼴·번호 꼴 이름은 개별로 버린다(피드 전체를 던지지 않는다). option_state: PRESENT(옵션 있음)·NONE(원천이 옵션 없음이라 함)·UNKNOWN(미확인 — 원천에 옵션 필드 없음 포함). */
+  option_state?: 'PRESENT' | 'NONE' | 'UNKNOWN';
+  option_basic?: string[];
+  /** 유상 옵션. amount_krw 가 null 이면 «금액 확인 중». 가격 계산에는 쓰지 않는다(표시 전용). */
+  option_paid?: Array<{ name: string; amount_krw: number | null }>;
   _policy: PublicPolicy | null;
 };
 
@@ -104,6 +110,37 @@ const CONTROL_OR_PRIVATE = /[\u0000-\u001f\u007f]|<[^>]*>|https?:\/\/|(?:^|\/)(?
 const PUBLIC_KEY = /^[A-Za-z0-9가-힣][A-Za-z0-9가-힣_-]{0,79}$/;
 const PRICE_KEY = /^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$/;
 const DATE = /^\d{4}-\d{2}(?:-\d{2})?$/;
+
+const OPTION_NAME_MAX = 80, OPTION_LIST_MAX = 300;
+/** 옵션 이름 하나: 길이·금액 꼴·번호 꼴·제어/내부 값이 걸리면 null(그 항목만 버린다). */
+const safeOptionName = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > OPTION_NAME_MAX) return null;
+  if (BLOCKED_TEXT.test(text) || BLOCKED_PUBLIC_VALUE.test(text) || CONTROL_OR_PRIVATE.test(text) || /\d{2,3}\s?[가-힣]\s?\d{4}/.test(text) || /\d{7,}/.test(text)) return null;
+  return text;
+};
+export const publicOptions = (product: Rec): Pick<PublicProduct, 'option_state' | 'option_basic' | 'option_paid'> => {
+  const state = product.api_options_state;
+  if (state !== 'PRESENT' && state !== 'NONE') return { option_state: 'UNKNOWN', option_basic: [], option_paid: [] };
+  const seen = new Set<string>();
+  const basic: string[] = [];
+  for (const item of Array.isArray(product.api_options_basic) ? product.api_options_basic : []) {
+    const name = safeOptionName(item && typeof item === 'object' ? (item as Rec).name : null);
+    if (name && !seen.has(name) && basic.length < OPTION_LIST_MAX) { seen.add(name); basic.push(name); }
+  }
+  const paid: Array<{ name: string; amount_krw: number | null }> = [];
+  const paidSeen = new Set<string>();
+  for (const item of Array.isArray(product.api_options_paid) ? product.api_options_paid : []) {
+    const rec = item && typeof item === 'object' ? item as Rec : {};
+    const name = safeOptionName(rec.name);
+    if (!name || paidSeen.has(name) || paid.length >= OPTION_LIST_MAX) continue;
+    paidSeen.add(name);
+    const amount = rec.amount_state === 'KNOWN' && typeof rec.amount_krw === 'number' && Number.isSafeInteger(rec.amount_krw) && rec.amount_krw > 0 ? rec.amount_krw : null;
+    paid.push({ name, amount_krw: amount });
+  }
+  return { option_state: state, option_basic: basic, option_paid: paid };
+};
 
 const cleanText = (value: unknown, maxLength: number, field: string): string | null => {
   if (value == null || value === '') return null;
@@ -299,6 +336,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   }
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
+  if (process.env.FREEPASS_DATA_PUBLIC_OPTIONS === '1' && !listMode) Object.assign(result, publicOptions(product));
   assertNoForbiddenValue(result);
   return result;
 };
