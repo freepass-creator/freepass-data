@@ -367,8 +367,10 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     }
     if (modelLevel) {
       if (item.to.sub_model !== item.from.sub_model) throw new Error(`productIdentity ${item.id} MODEL level must keep sub_model unchanged`);
-      if (item.from.model !== '') throw new Error(`productIdentity ${item.id} MODEL level requires blank from.model`);
-      if (item.from.maker !== '' && item.from.maker !== item.to.maker) throw new Error(`productIdentity ${item.id} MODEL level must not change a stored maker`);
+      // «빈칸» 은 빈 문자열뿐 아니라 공백만 있는 저장값도 포함한다(시트 공급사 문서: 제조사·모델이 공백 문자열). 저장값과의 대조는 아래 matchesIdentityFrom 이
+      // «글자 그대로» 한다(공백이면 저장값도 같은 공백이어야 함). 값이 있는 저장 제조사는 바꾸지 않는다.
+      if (clean(item.from.model) !== '') throw new Error(`productIdentity ${item.id} MODEL level requires blank from.model`);
+      if (clean(item.from.maker) !== '' && item.from.maker !== item.to.maker) throw new Error(`productIdentity ${item.id} MODEL level must not change a stored maker`);
     }
     if (PRODUCT_IDENTITY_FIELDS.every((field) => clean(item.from[field]) === clean(item.to[field]))) throw new Error(`no-op productIdentity:${item.id}`);
   }

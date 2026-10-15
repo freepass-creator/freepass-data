@@ -660,6 +660,26 @@ describe('product identity applier guards (Codex 적용기 검토 5건)', () => 
     await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).rejects.toThrow(/manual or confirmed value/);
   });
 
+  it('모델 수준 + 저장 제조사 빈칸(시트 공급사 문서): 엔진 임시 표식이 없어도 세부모델이 원문 차명(원문.차명 또는 car_name)과 같으면 쓴다, 다르면 사람 입력으로 거절', async () => {
+    const raw = '현대 아반떼 가솔린 1.6';
+    const model = { id: 'p-blank', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: raw }, to: { maker: 'Maker', model: 'Model A', sub_model: raw }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-blank', { maker: '', model: '', sub_model: raw, 원문: { 차명: raw } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).resolves.toMatchObject({ productIdentityCount: 1 });
+    expect(store.get('products/p-blank')).toMatchObject({ maker: 'Maker', model: 'Model A', sub_model: raw });
+    store.set('products/p-blank', { maker: '', model: '', sub_model: raw, car_name: raw });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).resolves.toMatchObject({ productIdentityCount: 1 });
+    // 저장 제조사·모델이 공백 문자열인 문서(from 도 같은 공백 그대로)
+    const spaced = { ...model, from: { maker: ' ', model: '  ', sub_model: raw } };
+    store.set('products/p-blank', { maker: ' ', model: '  ', sub_model: raw, car_name: raw });
+    await expect(applyApproved(plan({ productIdentityRepairs: [spaced] }))).resolves.toMatchObject({ productIdentityCount: 1 });
+    expect(store.get('products/p-blank')).toMatchObject({ maker: 'Maker', model: 'Model A', sub_model: raw });
+    // 값이 있는 저장 제조사는 바꾸지 않는다
+    store.set('products/p-blank', { maker: 'Other', model: '', sub_model: raw, car_name: raw });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...model, from: { maker: 'Other', model: '', sub_model: raw } }] }))).rejects.toThrow(/must not change a stored maker/);
+    store.set('products/p-blank', { maker: '', model: '', sub_model: raw, car_name: '다른 차명' });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).rejects.toThrow(/manual or confirmed value/);
+  });
+
   it('Codex #664 확인: false·빈 문자열·null·undefined 는 «잠금/철회 아님»이고, 빈 객체·문자열·true 는 표식 있음(보수)', async () => {
     for (const value of [null, undefined, false, '']) {
       store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: value, publication_withdrawal: value });
