@@ -44,11 +44,12 @@ export function buildMakerRenamePlans(input: MakerRenameInput): MakerRenameResul
     if (m.retired === true) { skip('RETIRED_MASTER'); continue; }
     const rows = rowsByMaster.get(m.id) ?? [];
     if (rows.some(r => clean(r.maker) !== from)) { skip('TRIM_ROW_MAKER_DIFFERS'); continue; }
+    // 표시명: 비어 있으면 그대로(악화 없음), 표준형(옛 제조사 + 세부모델)이면 함께 정정, 그 밖은 이 마스터 정정을 건너뛴다(적용기도 같은 규칙으로 중단).
     const titleOld = clean(m.title), titleFrom = clean(`${from} ${m.sub_model}`);
+    if (titleOld && titleOld !== titleFrom) { skip('TITLE_NOT_STANDARD'); continue; }
     const masterMakerRepairs = [{ id: m.id, from, to }];
     const trimMakerRepairs = rows.map(r => ({ id: r.id, from, to }));
-    const masterTitleRepairs = titleOld && titleOld === titleFrom ? [{ id: m.id, from: m.title!, to: clean(`${to} ${m.sub_model}`) }] : [];
-    if (titleOld && !masterTitleRepairs.length) skip('TITLE_NOT_MAKER_PLUS_SUBMODEL_LEFT_AS_IS');
+    const masterTitleRepairs = titleOld ? [{ id: m.id, from: m.title!, to: clean(`${to} ${m.sub_model}`) }] : [];
     groups.push({ items: { masterMakerRepairs, trimMakerRepairs, masterTitleRepairs } });
     renamedMasters.add(m.id);
   }

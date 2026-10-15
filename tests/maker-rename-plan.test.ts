@@ -50,6 +50,15 @@ describe('제조사명 정정 계획 생성(읽기 전용)', () => {
     expect(r.productPlans[0]!.productMakerRepairs!.map(x => x.id)).toEqual(['p2']);
   });
 
+  it('비표준 표시명 마스터는 건너뛰고(그 마스터·상품 제외), 빈 표시명은 표시명 정정 없이 진행', () => {
+    const input = base();
+    input.masters[0] = { ...input.masters[0]!, title: '르노 아르카나(구형 표기)' };
+    const r = buildMakerRenamePlans(input);
+    expect(r.masterPlans[0]!.masterMakerRepairs!.map(x => x.id)).toEqual(['m2']);
+    expect(r.summary.skipped.TITLE_NOT_STANDARD).toBe(1);
+    expect(r.masterPlans[0]!.masterTitleRepairs).toBeUndefined();
+  });
+
   it('이미 새 표기와 같은 마스터가 있으면(값 하나) 상품은 모호로 건너뛴다', () => {
     const input = base();
     input.masters.push({ id: 'm9', maker: '르노', model: '아르카나', sub_model: '아르카나 LJL' } as never);

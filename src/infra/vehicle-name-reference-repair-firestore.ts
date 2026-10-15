@@ -423,7 +423,7 @@ type AliasField = 'trim_aliases' | 'sub_model_aliases' | 'model_aliases' | 'gen_
 const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
   trim: 'trim_aliases', master: 'sub_model_aliases', trimSubModel: 'sub_model_aliases',
   masterModel: 'model_aliases', trimModel: 'model_aliases', masterGenCode: 'gen_code_aliases',
-  masterMaker: 'maker_aliases', trimMaker: 'maker_aliases',
+  masterMaker: 'maker_aliases', trimMaker: 'maker_aliases', productMaker: 'maker_aliases',
 };
 
 /**
@@ -465,6 +465,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
   if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
   if ((plan.productIdentityRepairs ?? []).length && options.approvedPlanDigest === undefined) throw new Error('approved plan digest required for productIdentity repairs');
+  // 제조사명 정정(마스터·행·상품)은 계획 전체 digest 승인 없이는 적용하지 않는다 — 함수를 직접 호출해도 같다(Codex #680 (c)).
+  if (((plan.masterMakerRepairs ?? []).length || (plan.trimMakerRepairs ?? []).length || (plan.productMakerRepairs ?? []).length) && options.approvedPlanDigest === undefined) {
+    throw new Error('approved plan digest required for maker repairs');
+  }
   const db = getFirestore(getTargetFirebaseApp());
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -759,6 +763,18 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     for (const t of targets) if (t.kind === 'master') finalMasterSubModels[t.ref.id] = clean(t.item.to);
     const finalMasterMakers: Record<string, string> = {};
     for (const t of targets) if (t.kind === 'masterMaker') finalMasterMakers[t.ref.id] = clean(t.item.to);
+    // 제조사를 옮기는 마스터의 표시명(title)은 «옛 제조사 + 세부모델» 표준형이어야 하고 같은 계획에서 새 제조사 + 세부모델로 함께 정정돼야 한다.
+    // 비어 있거나 없으면 그대로 둔다(악화 없음). 비표준 title 은 그 마스터 정정을 포함한 계획 전체를 중단한다(Codex #680 (a)).
+    const titleRepairIds = new Set(targets.filter((t) => t.kind === 'masterTitle').map((t) => t.ref.id));
+    targets.forEach((t, index) => {
+      if (t.kind !== 'masterMaker') return;
+      const data = current[index]?.data();
+      const stored = data?.title;
+      if (stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '')) return;
+      const standard = clean(`${clean(t.item.from)} ${finalMasterSubModels[t.ref.id] ?? clean(data?.sub_model)}`);
+      if (typeof stored !== 'string' || clean(stored) !== standard) throw new Error(`master title is not the standard maker + sub_model form ${t.ref.path}`);
+      if (!titleRepairIds.has(t.ref.id)) throw new Error(`master maker rename requires a masterTitle repair in the same plan ${t.ref.path}`);
+    });
     targets.forEach((t, index) => {
       if (t.kind !== 'masterTitle') return;
       const data = current[index]?.data();
