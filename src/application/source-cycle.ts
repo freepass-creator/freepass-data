@@ -38,7 +38,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const plan: CyclePlan = { schema: 'source-cycle/v1', config: { sourceId: config.sourceId, family: config.family,
     maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
     ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
-    ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}) }, plannedAt: now,
+    ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}),
+    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
