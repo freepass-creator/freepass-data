@@ -283,8 +283,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string'
       || (!!e.after.record.raw?.spec && typeof e.after.record.raw.spec === 'object' && Object.keys(e.after.record.raw.spec as object).length > 0))))
     .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
-  const overFill = fillEntries.slice(OPTIONS_REWRITE_CAP);
-  for (const e of fillEntries.slice(0, OPTIONS_REWRITE_CAP)) e.after.fillSourceIdentity = true;
+  const overFill = fillEntries.slice(optionsCap);   // 채움 상한도 옵션 상한 설정(기본 100, 최대 400)을 따른다 — 첫 적용 때 여러 회차로 늘어지지 않게
+  for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
@@ -292,7 +292,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (onlyFill) drop.add(e);
     }
     plan.entries = plan.entries.filter(e => !drop.has(e));
-    plan.warnings.push(`SOURCE_IDENTITY_DEFERRED:${overFill.length}:cap${OPTIONS_REWRITE_CAP}`);
+    plan.warnings.push(`SOURCE_IDENTITY_DEFERRED:${overFill.length}:cap${optionsCap}`);
   }
   const sourceIdentityRewrite = fillEntries.length - overFill.length;
   if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);

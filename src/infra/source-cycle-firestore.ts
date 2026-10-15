@@ -168,7 +168,7 @@ export const engineIdentityHold = (f: Fields): boolean =>
   && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
 /** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
  * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
-export const SPEC_FILL_KEYS = ['ext_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
+export const SPEC_FILL_KEYS = ['ext_color', 'int_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
 const specBlank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
 /** 차종 기준 한 장 제원 목록(연료): 가솔린·디젤·LPG·하이브리드·플러그인 하이브리드·전기·수소·가솔린+LPG. 목록 밖 표기(연료 코드 등)는 채우지 않는다. */
 export const SPEC_FUEL_ALLOWED: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
@@ -188,6 +188,7 @@ const realCalendarDate = (v: string): boolean => {
 };
 const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
   ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
   fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
   first_registration_date: v => realCalendarDate(v),
   year: v => /^(19|20)\d{2}$/.test(v),
@@ -514,7 +515,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
           'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
-          'ext_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
+          'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
