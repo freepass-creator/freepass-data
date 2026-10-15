@@ -117,6 +117,27 @@ describe('영업자용 재고 시트 계획', () => {
     expect(plan.rows[0]![plan.header.indexOf('12개월 대여료')]).toBe('');
   });
 
+  it('옵션 칸(includeOptions): 금액 있음/«금액 확인 중»/미확인/옵션 없음을 구분, 기본은 칸 없음', () => {
+    const base = planSalesInventorySheet(feedOf(item()), { snapshotId: 'S1', generatedAt: at });
+    expect(base.header).not.toContain('기본 옵션');
+    const feed = feedOf(
+      item({ publicProductKey: 'A', car_number: '11가1111', option_state: 'PRESENT', option_basic: ['전방 충돌방지', '후방 카메라'],
+        option_paid: [{ name: '파노라마 선루프', amount_krw: 1200000 }, { name: '패키지', amount_krw: null }] }),
+      item({ publicProductKey: 'B', car_number: '22나2222', option_state: 'UNKNOWN' }),
+      item({ publicProductKey: 'C', car_number: '33다3333' }),
+      item({ publicProductKey: 'D', car_number: '44라4444', option_state: 'NONE' }),
+    );
+    const plan = planSalesInventorySheet(feed, { snapshotId: 'S1', generatedAt: at, includeOptions: true });
+    expect(plan.validation.ok).toBe(true);
+    const col = (name: string) => plan.header.indexOf(name);
+    expect(plan.rows[0]![col('기본 옵션')]).toBe('전방 충돌방지 / 후방 카메라');
+    expect(plan.rows[0]![col('유상 옵션')]).toBe('파노라마 선루프(1,200,000원) / 패키지(금액 확인 중)');
+    expect(plan.rows[1]![col('기본 옵션')]).toBe('미확인');
+    expect(plan.rows[2]![col('유상 옵션')]).toBe('미확인');   // 옵션 필드가 없는 원천(이안카 등)
+    expect(plan.rows[3]![col('유상 옵션')]).toBe('옵션 없음');
+    expect(plan.header.every(c => SALES_SHEET_ALLOWED_COLUMNS.has(c))).toBe(true);
+  });
+
   it('CLI 함수는 쓰기 없이 계획·대조·발행 가능 여부를 낸다', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'sales-plan-'));
     const feedPath = join(dir, 'feed.json'), freshPath = join(dir, 'fresh.json');

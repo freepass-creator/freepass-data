@@ -106,6 +106,8 @@ export function comparableRecord(record: SourceProductRecord): SourceProductReco
   if (smallSpec(compact.raw.spec)) compact.raw.spec = specDigest(compact.raw.spec);
   if (photoListKept(compact, compact.raw.images)) compact.raw.images = specDigest(compact.raw.images);
   delete compact.raw.api_options;   // 변경 판정에서 제외(상세 digest 가 이미 옵션 변화를 담는다)
+  delete compact.raw.source_maker;  // 원천 제조사·모델: 목록 digest 가 이미 변화를 담는다(옛 저장 기록에는 이 칸이 없다)
+  delete compact.raw.source_model;
   return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,

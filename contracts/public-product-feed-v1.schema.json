@@ -298,6 +298,30 @@
           "minimum": 0,
           "maximum": 200
         },
+        "option_state": {
+          "description": "옵션 상태(선택 필드, 운영 변수로만 나감). UNKNOWN = 미확인.",
+          "enum": ["PRESENT", "NONE", "UNKNOWN"]
+        },
+        "option_basic": {
+          "description": "기본(무상) 옵션 이름 목록(선택 필드).",
+          "type": "array",
+          "maxItems": 300,
+          "items": { "type": "string", "maxLength": 80 }
+        },
+        "option_paid": {
+          "description": "유상 옵션(선택 필드). amount_krw null = 금액 확인 중. 가격 계산에는 쓰지 않는다.",
+          "type": "array",
+          "maxItems": 300,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "amount_krw"],
+            "properties": {
+              "name": { "type": "string", "maxLength": 80 },
+              "amount_krw": { "type": ["integer", "null"], "minimum": 1 }
+            }
+          }
+        },
         "_policy": { "$ref": "#/$defs/policy" }
       }
     },
