@@ -62,6 +62,7 @@
     "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
     "copy:iancar-photos": "tsx src/jobs/copy-iancar-photos-to-drive.ts",
     "copy:iancar-photos:daily": "tsx src/jobs/iancar-photo-daily.ts",
+    "report:sonogong-conformance": "tsx src/jobs/report-sonogong-spec-conformance.ts",
     "plan:supplier-photo-intake": "tsx src/jobs/plan-supplier-photo-intake.ts",
     "source:aica:capture": "tsx src/jobs/collect-aica.ts",
     "source:iron:capture": "tsx src/jobs/collect-iron.ts",
