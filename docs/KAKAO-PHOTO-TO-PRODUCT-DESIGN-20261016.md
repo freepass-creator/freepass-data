@@ -91,3 +91,12 @@
 - `src/application/supplier-photo-intake-plan.ts`: 순수 계획(매칭·서류 제외·상한). `src/jobs/plan-supplier-photo-intake.ts`: 스냅숏 JSON → 끝 4자리 요약(`npm run plan:supplier-photo-intake -- --input <json>`). 쓰기 0, 드라이브·Firestore 를 읽지도 않는다.
 - 아직 없음(③): 드라이브 열거 어댑터·사본 저장·등록 연결. 입력 스냅숏은 호출자가 읽어 준다.
 - 시험 `tests/supplier-photo-intake-plan.test.ts`.
+
+## 10. 아이카(RP004) PILOT 경로 (커맨드 센터 2026-10-16: 카비에게 받은 사진 → freepasspics/아이카/<번호 차종>)
+
+③ 전체(압축 사본·열거 어댑터)를 기다리지 않고, **기존 등록 도구에 «공급사 폴더 사본» 방법을 더해** 바로 DRY_RUN 할 수 있게 했다(원본 파일을 승인 refs 로 등록 — 서빙은 렌디션).
+- 도구: `node scripts/ops/register-approved-photos.mjs --root <freepasspics/아이카 폴더> --method SUPPLIER_FOLDER_COPY --supplier RP004`(기본 DRY_RUN, `--apply` 는 승인 뒤).
+- 가드: 사본 허용표(`FREEPASS_DATA_PHOTO_COPY_SUPPLIERS`)에 RP004 가 있어야 시작(RP031 은 이 방법 불가), 그 공급사 문서·사진 칸이 빈 문서만 쓴다, 파일명 서류 표지·«사용X»·폴더명 «사용X» 는 제외/보류, 번호는 같은 공급사 전체 번호 일치(번호 뒤 숫자 접두 금지).
+- 아이카 번호 형식: 전체 번호 «109호NNNN»(숫자 2~3자리 + 한글 1자 + 숫자 4자리)은 폴더 매칭 키로 읽힌다. **지역 접두(예: «서울12가3456»)가 붙은 폴더명은 «번호 못 읽음»으로 건너뛴다**(추정하지 않음) — DRY_RUN 의 «번호 아님» 건수로 확인.
+- 켜는 순서(운영): ① 빌드(`dist`) ② `FREEPASS_DATA_PHOTO_COPY_SUPPLIERS` 에 RP004 추가 ③ DRY_RUN 결과(올릴 대수·확인 필요) 확인 ④ `--apply --max 5` PILOT ⑤ 되읽기 MATCH 확인 뒤 나머지.
+- «사용X» 의미는 아직 확정 전 → 안전 쪽(제외)으로 해석했다. 의미가 확정되면 이 표지 목록만 바꾼다.

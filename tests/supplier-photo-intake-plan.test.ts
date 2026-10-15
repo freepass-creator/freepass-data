@@ -83,6 +83,20 @@ describe('공급사 사진 인입 계획', () => {
     expect(intakeSuppliers(undefined, copy).size).toBe(0);
   });
 
+  it('사용X 표지: 파일은 제외, 폴더면 통째 보류(대소문자·공백 무시)', () => {
+    const c = classifyFolderFiles([img('1.jpg'), img('사용X_2.jpg'), img('사용 x 3.jpg'), img('사용불가.png')]);
+    expect(c.photos.map(f => f.name)).toEqual(['1.jpg']);
+    expect(c.excluded.USE_RESTRICTED).toBe(3);
+    const p = plan([folder('109호1234 K5 사용X', [img('1.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
+    expect(p.counts.HOLD_USE_RESTRICTED).toBe(1);
+    expect(p.photosPlanned).toBe(0);
+  });
+
+  it('아이카식 번호(109호NNNN)도 전체 번호로 매칭된다', () => {
+    const p = plan([folder('109호1234 K5', [img('1.jpg')])], [{ plate: '109호1234', hasPhotoRefs: false }]);
+    expect(p.counts.PLANNED).toBe(1);
+  });
+
   it('CLI: 플래그가 비어 있으면 아무것도 하지 않고 정상 종료, 입력이 없으면 설정 오류', () => {
     const lines: string[] = [];
     expect(planSupplierPhotoIntakeCli(['--input', 'x.json'], {}, l => lines.push(l))).toBe(0);

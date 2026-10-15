@@ -10,6 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 import { vehiclePhotoKey } from '../../dist/src/domain/consumer-output-contract.js';
+import { isDocumentName, isUseRestrictedName } from '../../dist/src/application/supplier-photo-intake-plan.js';   // 서류·사용X 이름 제외(공급사 사본 방법 전용)
+import { parsePhotoCopySuppliers } from '../../dist/src/domain/consumer-output-contract.js';
 import { folderMatchesPlate, plateFoldersFromChildren } from '../../dist/src/domain/photo-folder-match.js';   // 폴더↔차량번호 일치 검증(Codex 검토)
 
 const rootAt = process.argv.indexOf('--root'); const ROOT = rootAt > 0 ? process.argv[rootAt + 1] : null;
@@ -20,7 +22,16 @@ const byAt = process.argv.indexOf('--by'); const BY = (byAt > 0 ? process.argv[b
 const methodAt = process.argv.indexOf('--method'); const METHOD = methodAt > 0 ? process.argv[methodAt + 1] : 'AUTO_KAKAO_COLLECT';
 // 공급사 사본 등록 방법 → 허용 공급사(그 공급사 문서이고 사진 칸이 비어 있을 때만 쓴다).
 const SUPPLIER_COPY = { IANCAR_COMPRESSED_COPY: 'RP031' };
-if (!['AUTO_KAKAO_COLLECT', ...Object.keys(SUPPLIER_COPY)].includes(METHOD)) throw new Error('METHOD_NOT_ALLOWED');
+// SUPPLIER_FOLDER_COPY(설계 KAKAO-PHOTO-TO-PRODUCT-DESIGN-20261016): 공급사 폴더 사본 — --supplier RPxxx 필수(사본 허용표 FREEPASS_DATA_PHOTO_COPY_SUPPLIERS 안, RP031 제외),
+// 그 공급사 문서이고 사진 칸이 비어 있을 때만 쓴다. 파일명에 서류 표지·«사용X» 가 있는 파일은 빼고, 폴더명에 «사용X» 가 있으면 등록하지 않는다.
+const supplierAt = process.argv.indexOf('--supplier'); const SUPPLIER = supplierAt > 0 ? String(process.argv[supplierAt + 1] ?? '').toUpperCase() : null;
+const FOLDER_COPY = METHOD === 'SUPPLIER_FOLDER_COPY';
+if (!['AUTO_KAKAO_COLLECT', 'SUPPLIER_FOLDER_COPY', ...Object.keys(SUPPLIER_COPY)].includes(METHOD)) throw new Error('METHOD_NOT_ALLOWED');
+if (FOLDER_COPY) {
+  if (!ROOT) throw new Error('SUPPLIER_FOLDER_COPY_REQUIRES_ROOT');
+  const allowed = parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS);
+  if (!SUPPLIER || SUPPLIER === 'RP031' || !allowed.has(SUPPLIER)) throw new Error('SUPPLIER_NOT_IN_COPY_ALLOWLIST');
+} else if (SUPPLIER) throw new Error('SUPPLIER_ONLY_WITH_SUPPLIER_FOLDER_COPY');
 if (!csvPath && !ROOT) throw new Error('usage: register-approved-photos <csv | --root <폴더>> [--apply] [--max N] [--by 이름] [--method AUTO_KAKAO_COLLECT|IANCAR_COMPRESSED_COPY]');
 const project = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR || '.';
@@ -73,6 +84,10 @@ for (const r of rows) {
   const doc = await res.json(); const f = dec({ mapValue: { fields: doc.fields } });
   const key = vehiclePhotoKey(f);
   if (!key) { out.push(`${r.plate.slice(-4)} vehicleKey 불가(공급사 코드 없음)`); continue; }
+  if (FOLDER_COPY) {
+    if (f.provider_company_code !== SUPPLIER) { out.push(`${r.plate.slice(-4)} ${SUPPLIER} 문서 아님`); continue; }
+    if (Array.isArray(f.photo_original_refs) && f.photo_original_refs.length) { out.push(`${r.plate.slice(-4)} 이미 사진 있음(빈 칸만 씀)`); continue; }
+  }
   if (SUPPLIER_COPY[METHOD]) {
     if (f.provider_company_code !== SUPPLIER_COPY[METHOD]) { out.push(`${r.plate.slice(-4)} ${SUPPLIER_COPY[METHOD]} 문서 아님`); continue; }
     if (Array.isArray(f.photo_original_refs) && f.photo_original_refs.length) { out.push(`${r.plate.slice(-4)} 이미 사진 있음(빈 칸만 씀)`); continue; }
@@ -80,9 +95,11 @@ for (const r of rows) {
   // 공유 드라이브(freepasserp.com) 폴더도 읽는다: supportsAllDrives·includeItemsFromAllDrives.
   let folderName = '';
   try { folderName = run(['drive', 'files', 'get'], { fileId: r.folder, fields: 'name', supportsAllDrives: true }).name || ''; } catch { out.push(`${r.plate.slice(-4)} 폴더 이름 조회 실패 — 등록 안 함`); continue; }
+  if (FOLDER_COPY && isUseRestrictedName(folderName)) { out.push(`${r.plate.slice(-4)} 사용X 폴더 — 등록 안 함`); continue; }
   if (!folderMatchesPlate(folderName, r.plate)) { out.push(`${r.plate.slice(-4)} 폴더 이름이 차량번호와 다름 — 등록 안 함`); continue; }
   const files = (run(['drive', 'files', 'list'], { q: `'${r.folder}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name,mimeType,size,sha256Checksum)', pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true }).files ?? [])
     .filter(x => MEDIA[x.mimeType] && /^[a-f0-9]{64}$/.test(x.sha256Checksum ?? '') && Number(x.size) > 0 && Number(x.size) <= 8 * 1024 * 1024)
+    .filter(x => !FOLDER_COPY || !(isDocumentName(String(x.name)) || isUseRestrictedName(String(x.name))))
     .sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { numeric: true })).slice(0, MAX);
   if (!files.length) { out.push(`${r.plate.slice(-4)} 폴더 이미지 없음/체크섬 없음`); continue; }
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
