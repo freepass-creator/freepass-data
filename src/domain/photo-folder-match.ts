@@ -3,9 +3,20 @@ const squash = (value: unknown): string => [...String(value ?? '').normalize('NF
 const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
 export function folderMatchesPlate(folderName: unknown, plate: unknown): boolean {
-  const name = squash(folderName), want = squash(plate);
+  const want = squash(plate);
   if (!want) return false;
-  return name === want || (name.startsWith(want) && !isDigit(name.charAt(want.length)));
+  // 원본 이름(공백 보존)에서 번호를 앞에서부터 맞춘다(번호 안의 공백은 건너뜀). 번호 «바로 뒤» 글자가 숫자면 다른 번호(133하45310),
+  // 공백 뒤 숫자는 차종(«109호4100 5시리즈» — 공백을 지운 «41005시리즈» 로 오판하지 않는다).
+  const name = String(folderName ?? '').normalize('NFC');
+  let matched = 0, i = 0;
+  for (; i < name.length && matched < want.length; i++) {
+    const ch = name.charAt(i);
+    if (ch.trim() === '') continue;
+    if (ch !== want.charAt(matched)) return false;
+    matched++;
+  }
+  if (matched < want.length) return false;
+  return i >= name.length || !isDigit(name.charAt(i));
 }
 
 /** 공급사 사진 폴더(«번호» 또는 «번호 차종…») 이름에서 차량번호를 꺼낸다. 첫 낱말이 번호 모양이 아니면 null(추정하지 않는다). */
