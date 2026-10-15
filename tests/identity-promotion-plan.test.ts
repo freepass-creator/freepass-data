@@ -99,4 +99,36 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(amb.held.map(h => h.reason)).toEqual(['AMBIGUOUS_TRIM']);
     expect(amb.held[0]!.candidates).toEqual(['노블레스', '프리미엄']);
   });
+
+  it('R4: 원문에 하이브리드·HEV 가 있는데 고른 마스터 이름에 없으면 일반 세대를 잘못 고른 것 — 보류, 하이브리드 마스터가 있으면 그쪽', () => {
+    const plain = master({ id: 'm-dn8', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', yearFrom: 2019, trims: [{ name: '모던', aliases: [] }] });
+    const hybrid = master({ id: 'm-dn8h', maker: '현대', model: '쏘나타', sub_model: '쏘나타 하이브리드 DN8', yearFrom: 2019, trims: [{ name: '모던', aliases: [] }] });
+    const raw = '현대_쏘나타(DN8) 하이브리드_2.0 HEV / 모던';
+    // 하이브리드 마스터가 없으면: 일반 세대(쏘나타 DN8)를 고르지 않고 보류
+    const without = buildIdentityPromotionPlan([product({ id: 'v1', rawName: raw, year: '2022' })], [plain]);
+    expect(without.held.map(h => h.reason)).toEqual(['VARIANT_MISMATCH']);
+    expect(without.plan.productIdentityRepairs).toBeUndefined();
+    // 하이브리드 마스터가 있고 원문에 그 이름이 통째로 들어 있으면 그쪽을 고른다
+    const withHybrid = buildIdentityPromotionPlan([product({ id: 'v2', rawName: '현대 쏘나타 하이브리드 DN8 모던', year: '2022' })], [plain, hybrid]);
+    expect(withHybrid.plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('쏘나타 하이브리드 DN8');
+    // 원문에 변형이 없으면 영향 없음
+    const normal = buildIdentityPromotionPlan([product({ id: 'v3', rawName: '현대 쏘나타 DN8 모던', year: '2022' })], [plain]);
+    expect(normal.plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('쏘나타 DN8');
+    // 플러그인 하이브리드는 하이브리드와 다른 변형
+    const phev = buildIdentityPromotionPlan([product({ id: 'v4', rawName: '기아 K5 DL3 플러그인 하이브리드', year: '2022' })],
+      [master({ id: 'k5', maker: '기아', model: 'K5', sub_model: 'K5 DL3', yearFrom: 2019 })]);
+    expect(phev.held.map(h => h.reason)).toEqual(['VARIANT_MISMATCH']);
+  });
+
+  it('이미 값이 있는 트림은 근거 없이 다른 등급으로 바꾸지 않는다(TRIM_CONFLICT_EXISTING), 빈칸 채우기·철자만 다른 정정은 그대로', () => {
+    const m = master({ id: 'm-x', maker: '기아', model: '카니발', sub_model: '카니발 KA4', yearFrom: 2020,
+      trims: [{ name: '노블레스', aliases: [] }, { name: '그래비티', aliases: [] }, { name: '프레스티지', aliases: [] }] });
+    const r = buildIdentityPromotionPlan([
+      product({ id: 'c1', maker: '기아', model: '카니발', sub_model: '카니발 KA4', trim_name: '노블레스', rawName: '카니발 KA4 그래비티', year: '2022' }),   // 다른 등급으로 덮어쓰기 → 보류
+      product({ id: 'c2', maker: '기아', model: '카니발', sub_model: '카니발 KA4', trim_name: '', rawName: '카니발 KA4 프레스티지', year: '2022' }),       // 빈칸 → 값
+      product({ id: 'c3', maker: '기아', model: '카니발', sub_model: '카니발 KA4', trim_name: '프레스 티지', rawName: '카니발 KA4 프레스티지', year: '2022' }), // 철자만 다름 → 정정
+    ], [m]);
+    expect(r.held.filter(h => h.reason === 'TRIM_CONFLICT_EXISTING').map(h => [h.id, h.candidates])).toEqual([['c1', ['그래비티']]]);
+    expect(r.plan.productTrimRepairs?.map(i => [i.id, i.to]).sort()).toEqual([['c2', '프레스티지'], ['c3', '프레스티지']]);
+  });
 });

@@ -28,7 +28,7 @@ export type IdentityMaster = {
   /** 세대 생산 시작·끝 연도(없으면 null = 제한 없음). */ yearFrom: number | null; yearTo: number | null;
   trims: IdentityMasterTrim[];
 };
-export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | GenerationGuardReason; candidates: string[] };
+export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | 'TRIM_CONFLICT_EXISTING' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
 export type IdentityPromotionResult = {
   plan: VehicleNameRepairPlan;
   /** 정체성 정정과 같은 상품의 세부트림 정정. 정정 경로는 한 계획에 같은 상품을 겹쳐 받지 않으므로(one product per plan)
@@ -70,7 +70,23 @@ function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]
  *  - 세부트림: 원문 차명에 통째로 들어 있는 트림 이름(별칭) 중 가장 긴 것이 정확히 하나일 때만(UNIQUE), 둘 이상이면 AMBIGUOUS, 없으면 NONE. */
 export type IdentityMatch =
   | { state: 'MATCH'; master: IdentityMaster; trim: { state: 'UNIQUE'; name: string } | { state: 'AMBIGUOUS'; candidates: string[] } | { state: 'NONE' } }
-  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason; candidates: string[] };
+  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
+/** 변형 낱말 집합(규칙 15·16): HYBRID(하이브리드·HEV), PHEV(플러그인·PHEV). EV·LPG 는 차명 자체(EV6)나 연료 사양과 섞여 변형으로 보지 않는다. */
+const variantsOf = (text: string): Set<string> => {
+  const t = text.normalize('NFKC').toUpperCase();
+  const out = new Set<string>();
+  if (/PHEV|플러그인/.test(t)) out.add('PHEV');
+  else if (/하이브리드|HEV|HYBRID/.test(t)) out.add('HYBRID');
+  return out;
+};
+/** 원문의 변형 낱말이 모두 마스터(세부모델·모델·별칭) 이름에 있는가. 원문에 변형이 없으면 항상 true. */
+const variantCovered = (rawText: string, master: IdentityMaster): boolean => {
+  const raw = variantsOf(rawText);
+  if (!raw.size) return true;
+  const have = variantsOf([master.sub_model, master.model, ...master.sub_model_aliases, ...master.model_aliases].join(' '));
+  return [...raw].every(v => have.has(v));
+};
+
 export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
   let cands = masterCandidates(p, masters);
   if (!cands.length) return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
@@ -87,8 +103,11 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   // 세대 구분 근거(R1·R2): 원문 부분 일치로 마스터를 고른 경우에만 점검한다(상품의 세부모델 칸을 마스터 이름과 «정확히» 대조한 경우는 해당 없음).
   const engineRawProduct = !p.maker.trim() && !p.model.trim();
   if (engineRawProduct || !norm(p.sub_model)) {
-    const guard = generationGuard({ rawName: p.rawName || (engineRawProduct ? p.sub_model : ''), year: p.year, master, masters });
+    const rawText = p.rawName || (engineRawProduct ? p.sub_model : '');
+    const guard = generationGuard({ rawName: rawText, year: p.year, master, masters });
     if (guard) return { state: 'HOLD', reason: guard, candidates: [master.sub_model] };
+    // 변형 낱말(규칙 15·16: 하이브리드·플러그인 하이브리드는 세부모델을 따로 둔다): 원문에 있는데 고른 마스터 이름에 없으면 일반 세대를 잘못 고른 것 — 보류(R4).
+    if (!variantCovered(rawText, master)) return { state: 'HOLD', reason: 'VARIANT_MISMATCH', candidates: [master.sub_model] };
   }
   // 세부트림: 원문 차명에 «통째로» 들어 있는 트림 이름(별칭 포함) 중 가장 긴 것이 정확히 하나일 때만. 근거가 없으면 지어내지 않고 보류.
   const raw = norm(p.rawName || (!p.maker.trim() && !p.model.trim() ? p.sub_model : ''));
@@ -120,7 +139,10 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     }
     if (m.trim.state === 'UNIQUE') {
       const trim = m.trim.name;
-      if (p.trim_name !== trim) {
+      // 이미 값이 있는 트림은 근거 없이 다른 등급으로 바꾸지 않는다(적용기 규칙 (c)와 같은 취지): 철자만 다른(정규화 같음) 경우만 정정, 그 밖은 보류.
+      if (p.trim_name.trim() && p.trim_name !== trim && norm(p.trim_name) !== norm(trim)) {
+        held.push({ id: p.id, plate4: p.plate4, reason: 'TRIM_CONFLICT_EXISTING', candidates: [trim] });
+      } else if (p.trim_name !== trim) {
         trimRepairs.push({ id: p.id, from: p.trim_name, to: trim, ...(p.trim_name.trim() ? {} : { evidence: `원문 차명: ${p.rawName}`.slice(0, 200) }) });
       }
     } else if (m.trim.state === 'AMBIGUOUS') {
