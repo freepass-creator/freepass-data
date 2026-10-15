@@ -64,7 +64,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
       // 상류 원천의 갱신 시각 때문에 읽기를 마치지 못한 경우(정지 UPSTREAM_STALE, 상세를 읽는 사이 신선도 창을 넘긴 DETAIL_SOURCE_DRIFT)는 우리 쪽 실패가 아니다.
       const upstreamTiming = !read.complete && (read.detail === 'UPSTREAM_STALE' || read.detail === 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' ||
-        read.detail === 'SONOGONG_API_PASS_INTERVAL');   // 마지막 완전 읽기 후 55분 안: 공급사 API 부하 방어로 읽지 않는다(우리 쪽 실패 아님)
+        read.detail === 'SONOGONG_API_PASS_INTERVAL');   // 마지막 완전 읽기 후 45분 안: 공급사 API 부하 방어로 읽지 않는다(우리 쪽 실패 아님)
       if (read.raw === null && read.error && !upstreamTiming) throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
       if (upstreamTiming) {
         // 상류 원천(공급사)이 갱신되지 않은 것이다 — 우리 쪽 실패가 아니므로 연속 실패로 세거나 정지하지 않는다(정지하면 공급사가 다시

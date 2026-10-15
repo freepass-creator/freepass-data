@@ -13,7 +13,7 @@ import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache
 
 export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
-  maxDetails: 600, minPassIntervalMinutes: 55,
+  maxDetails: 600, minPassIntervalMinutes: 45,   // 정시 회차는 읽기 «시작»(회차 앞 단계·상류 갱신 대기 후) 시각이 기준이라 55 분이면 다음 정시에 번갈아 걸렸다(B3Q 10-16): 45 분 = 같은 정시 중복 읽기만 막고 15분 여유를 둔다
 });
 export const SONOGONG_API_TABS = ['rent', 'sub', 'pick'] as const;
 export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
