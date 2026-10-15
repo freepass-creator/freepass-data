@@ -332,8 +332,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       writes++; stage = 'READ';
       const reread = await commands.read(e.after.record.sourceId, e.after.record.uid);
       // 계획 표식(fillSourceIdentity)은 쓰기 지시일 뿐 문서에서 되읽히는 값이 아니다 — 비교에서 뺀다.
+      // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       const { fillSourceIdentity: _planFlag, ...afterStable } = e.after;
-      if (!deepEqual(reread, afterStable)) {
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, ...rest }) => rest)(reread) : reread;
+      if (!deepEqual(rereadStable, afterStable)) {
         const a = e.after as unknown as Record<string, unknown>, b = (reread ?? {}) as unknown as Record<string, unknown>;
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
