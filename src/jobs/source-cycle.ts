@@ -127,7 +127,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE', 'RENT_REVIEW_REQUIRED',
         'IANCAR_ONE_RATES_EMPTY', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW', 'IANCAR_ONE_DUPLICATE_RATE',
         // 읽는 동안 상태가 바뀐 차(목록·상세 시차): 행(번호·상태)은 읽기 결과에 있고 그 차만 보류한다 — 다른 차의 부재 하향은 막지 않는다.
-        'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', 'IANCAR_ONE_LIST_CHANGED_DURING_READ']);
+        'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', 'IANCAR_ONE_DETAIL_SOURCE_DRIFT', 'IANCAR_ONE_LIST_CHANGED_DURING_READ']);
       const benign = converted.held.filter(h => h.reasons.length > 0 &&
         h.reasons.every(r => r.split(',').map(s => s.trim()).filter(Boolean).every(s => VALUE_CLASS_HOLDS.has(s)))).length;
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
