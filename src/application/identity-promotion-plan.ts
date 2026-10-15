@@ -81,18 +81,18 @@ export type IdentityMatch =
 export function fuelVariantWord(fuel: string): string {
   const f = fuel.normalize('NFKC').replace(/\s+/g, '');
   if (!f) return '';
-  if (/플러그인|PHEV/i.test(f)) return '플러그인 하이브리드';
+  if (/플러그인|PHEV|PLUG-?IN/i.test(f)) return '플러그인 하이브리드';
   if (/하이브리드|HEV|HYBRID/i.test(f) || (/(가솔린|디젤|휘발유|경유)/.test(f) && /전기/.test(f))) return '하이브리드';
-  if (/^(전기|일렉트릭|EV|ELECTRIC)$/i.test(f)) return 'EV';
+  if (/^(전기|전기차|일렉트릭|EV|BEV|ELECTRIC)$/i.test(f)) return 'EV';
   return '';
 }
 const BOUNDED = (word: string) => new RegExp(`(?<![A-Z0-9])${word}(?![A-Z0-9])`);
 const variantsOf = (text: string): Set<string> => {
   const t = text.normalize('NFKC').toUpperCase();
   const out = new Set<string>();
-  if (/플러그인/.test(t) || BOUNDED('PHEV').test(t)) out.add('PHEV');
+  if (/플러그인/.test(t) || BOUNDED('PHEV').test(t) || /(?<![A-Z0-9])PLUG[-\s]?IN(?![A-Z0-9])/.test(t)) out.add('PHEV');
   else if (/하이브리드/.test(t) || BOUNDED('HEV').test(t) || BOUNDED('HYBRID').test(t)) out.add('HYBRID');
-  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t)) out.add('EV');
+  if (/일렉트릭/.test(t) || BOUNDED('ELECTRIC').test(t) || BOUNDED('EV').test(t) || BOUNDED('BEV').test(t)) out.add('EV');
   return out;
 };
 /** 원문의 변형 낱말이 모두 마스터(세부모델·모델·별칭) 이름에 있는가. 원문에 변형이 없으면 항상 true.
@@ -102,6 +102,9 @@ const variantCovered = (rawText: string, master: IdentityMaster, masters: readon
   if (!raw.size) return true;
   const names = (m: IdentityMaster) => [m.sub_model, m.model, ...m.sub_model_aliases, ...m.model_aliases].join(' ');
   const have = variantsOf(names(master));
+  // 마스터 쪽도 같은 규칙(Codex #682 ③): 르노 계열 마스터 이름에 E-TECH 가 있으면 하이브리드 이름으로 본다.
+  const renaultMaker = ['르노', '르노코리아'].includes(master.maker.normalize('NFKC').replace(/\s+/g, ''));
+  if (renaultMaker && /(?<![A-Z0-9])E[-\s]?TECH(?![A-Z0-9])/i.test(names(master).normalize('NFKC'))) have.add('HYBRID');
   return [...raw].every(v => {
     if (have.has(v)) return true;
     if (v !== 'EV') return false;
