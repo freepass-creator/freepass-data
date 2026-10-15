@@ -163,9 +163,14 @@ const engineOwnedIdentity = (original: Fields, isNew: boolean, r: SourceProductR
   const rawText = textOf((original.원문 as Fields | undefined)?.차명) || textOf(original.car_name) || textOf(r.vehicleText);
   return textOf(original.trim_name) === '' && (textOf(original.sub_model) === '' || (rawText !== '' && textOf(original.sub_model) === rawText));
 };
+/** 빈 제조사·모델 문서도 세부모델·트림을 사람이 입력했으면 엔진 보류가 아니다(Codex #704 (b)): 트림이 비어 있고 세부모델이 비었거나 엔진이 복사한 원문 차명 그대로일 때만. */
+const engineCopiedIdentity = (f: Fields): boolean => {
+  const rawText = textOf((f.원문 as Fields | undefined)?.차명) || textOf(f.car_name);
+  return textOf(f.trim_name) === '' && (textOf(f.sub_model) === '' || (rawText !== '' && textOf(f.sub_model) === rawText));
+};
 export const engineIdentityHold = (f: Fields): boolean =>
   f.source_cycle_record !== undefined && f.source_cycle_record !== null && f.vehicle_review_required === true
-  && ((!textOf(f.maker) && !textOf(f.model)) || filledByUs(f));
+  && ((!textOf(f.maker) && !textOf(f.model) && engineCopiedIdentity(f)) || filledByUs(f));
 /** 제원 입구 매핑(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야»): 원천이 준 제원(색상·연료·최초등록·연식·주행거리·배기량)을 «기존 문서의 빈 칸에만» 채운다.
  * 지금까지는 새 문서에만 실렸다(sheetSpecFields). 기존 값(사람 입력 포함)은 비접촉 — 값이 다르면 덮어쓰지 않는다(불일치는 쓰지 않음). 짧은 문자열만(≤40자). */
 export const SPEC_FILL_KEYS = ['ext_color', 'int_color', 'fuel_type', 'first_registration_date', 'year', 'mileage', 'engine_cc', 'seats'] as const;
@@ -368,7 +373,9 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const r = p.record;
   const isNew = !Object.keys(original).length;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
-  const identity = opts.identity && (isNew || engineIdentityHold(original))
+  // 기존 문서의 하향·철회(after 가 노출 안 함·철회 표식)에는 정체성 정제를 섞지 않는다(Codex #704 (c)): 철회 작업이 이름까지 바꾸지 않게.
+  const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
+  const identity = opts.identity && !withdrawing && (isNew || engineIdentityHold(original))
     ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;

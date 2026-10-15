@@ -142,6 +142,43 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
     expect(decodeFields(inside.fake.docs.get('12가2106').fields)).toMatchObject({ sub_model: '아반떼 CN7', vehicle_title_source: 'MASTER_MATCH' });
   });
 
+  describe('Codex #704 결함 3건(정체성 정제 쓰기 경로)', () => {
+    const refiner: VehicleIdentityRefiner = { digest: 'd', makers: ['현대'],
+      match: () => ({ maker: '현대', model: '아반떼', sub_model: '아반떼 CN7', trim_name: null, master_id: 'm1' }) };
+
+    it('(a) 회차 쓰기 상한(100)을 옵션·입구 매핑과 합산해 적용한다 — 초과분은 이월', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const total = OPTIONS_REWRITE_CAP + 20, plates = Array.from({ length: total }, (_, i) => `56다${String(1000 + i)}`);
+      for (const p of plates) fake.put(p, legacyDoc(rec(p)));
+      const first = await run(commands, plates.map(p => rec(p)));
+      expect(first.kinds).toHaveLength(OPTIONS_REWRITE_CAP);
+      expect(first.warnings.some(w => /_DEFERRED:20:/.test(w))).toBe(true);
+      expect((await run(commands, plates.map(p => rec(p)))).kinds).toHaveLength(20);   // 다음 회차에 나머지
+    }, 60_000);
+
+    it('(b) 제조사·모델이 비어도 사람이 입력한 세부모델·트림은 덮어쓰지 않고 검토 필요도 풀지 않는다', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      fake.put('56다2001', legacyDoc(rec('56다2001'), { sub_model: '내가 고른 세부모델' }));
+      fake.put('56다2002', legacyDoc(rec('56다2002'), { trim_name: '내가 고른 트림' }));
+      const r = await run(commands, [rec('56다2001'), rec('56다2002')]);
+      expect(r.kinds).toEqual([]);
+      expect(decodeFields(fake.docs.get('56다2001').fields)).toMatchObject({ sub_model: '내가 고른 세부모델', vehicle_review_required: true, maker: '' });
+      expect(decodeFields(fake.docs.get('56다2002').fields)).toMatchObject({ trim_name: '내가 고른 트림', vehicle_review_required: true, maker: '' });
+    });
+
+    it('(c) 하향·철회 쓰기에는 정체성 정제를 섞지 않는다(이름·MASTER_MATCH 변경 없음)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const stale = { ...rec('56다3001'), status: { raw: '출고불가', saleAvailable: false } } as SourceProductRecord;
+      fake.put('56다3001', legacyDoc(rec('56다3001')));
+      const r = await run(commands, [stale]);
+      expect(r.kinds).toEqual(['DOWNGRADE']);
+      const doc = decodeFields(fake.docs.get('56다3001').fields);
+      expect(doc.listable).toBe(false);
+      expect(doc).toMatchObject({ maker: '', model: '', vehicle_review_required: true });
+      expect(doc.vehicle_title_source).not.toBe('MASTER_MATCH');
+    });
+  });
+
   it('입구 매핑만 채우는 다시 쓰기는 옵션 쓰기와 같은 회차 상한 안에서 이월된다', async () => {
     const { commands, fake } = await setup();
     const total = OPTIONS_REWRITE_CAP + 7, plates = Array.from({ length: total }, (_, i) => `34나${String(7000 + i)}`);
