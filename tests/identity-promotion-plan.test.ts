@@ -131,4 +131,44 @@ describe('정체성 승격 계획서 생성기(읽기 전용)', () => {
     expect(r.held.filter(h => h.reason === 'TRIM_CONFLICT_EXISTING').map(h => [h.id, h.candidates])).toEqual([['c1', ['그래비티']]]);
     expect(r.plan.productTrimRepairs?.map(i => [i.id, i.to]).sort()).toEqual([['c2', '프레스티지'], ['c3', '프레스티지']]);
   });
+
+  it('Codex #669 ①: EV·일렉트릭 변형 — 같은 모델에 EV 형제 마스터가 있으면 일반 마스터는 보류, EV 전용 모델(형제 없음)은 통과', () => {
+    const kona = master({ id: 'kona', maker: '현대', model: '코나', sub_model: '코나 SX2', yearFrom: 2023 });
+    const konaEv = master({ id: 'kona-ev', maker: '현대', model: '코나', sub_model: '코나 일렉트릭 SX2', yearFrom: 2023 });
+    const ioniq5 = master({ id: 'io5', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE', sub_model_aliases: ['아이오닉5'], yearFrom: 2021 });
+    const run = (rawName: string, masters: IdentityMaster[]) => buildIdentityPromotionPlan([product({ id: 'e', rawName, year: '2024' })], masters);
+    expect(run('현대 코나 SX2 EV 롱레인지', [kona, konaEv]).held.map(h => h.reason)).toEqual(['VARIANT_MISMATCH']);   // 코나 EV → 코나 통과 금지
+    expect(run('현대 코나 SX2 일렉트릭', [kona, konaEv]).held.map(h => h.reason)).toEqual(['VARIANT_MISMATCH']);
+    expect(run('현대 코나 일렉트릭 SX2', [kona, konaEv]).plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('코나 일렉트릭 SX2');
+    expect(run('현대 아이오닉5 EV 롱레인지', [ioniq5]).plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('아이오닉 5 NE');   // EV 전용 → 통과
+  });
+
+  it('Codex #669 ②: 변형 낱말은 단어 경계로만 본다 — CHEVROLET 의 HEV·EV6 의 EV 는 변형이 아니다', () => {
+    const trax = master({ id: 'tx', maker: '쉐보레', model: '트랙스', sub_model: '트랙스 크로스오버', yearFrom: 2023 });
+    const ev6 = master({ id: 'ev6', maker: '기아', model: 'EV6', sub_model: 'EV6 CV', yearFrom: 2021 });
+    const a = buildIdentityPromotionPlan([product({ id: 'c', rawName: 'CHEVROLET 트랙스 크로스오버', year: '2024' })], [trax]);
+    expect(a.held.map(h => h.reason)).not.toContain('VARIANT_MISMATCH');
+    expect(a.plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('트랙스 크로스오버');
+    const b = buildIdentityPromotionPlan([product({ id: 'd', rawName: '기아 EV6 CV 롱레인지', year: '2022' })], [ev6]);
+    expect(b.held.map(h => h.reason)).not.toContain('VARIANT_MISMATCH');
+    expect(b.plan.productIdentityRepairs?.[0]?.to.sub_model).toBe('EV6 CV');
+  });
+
+  it('Codex #669 ③: 이미 세부모델이 채워진 상품도 원문에 변형이 있으면 같은 검사를 받는다(빈칸 조건문 우회 없음)', () => {
+    const plain = master({ id: 'm-dn8', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', yearFrom: 2019 });
+    const filled = product({ id: 'f1', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', rawName: '현대_쏘나타(DN8) 하이브리드_2.0 HEV', year: '2022' });
+    const r = buildIdentityPromotionPlan([filled], [plain]);
+    expect(r.held.map(h => h.reason)).toEqual(['VARIANT_MISMATCH']);
+    expect(r.stats.alreadyMatched).toBe(0);
+  });
+
+  it('Codex #669 ④: 엔진 임시 표식 문서의 트림은 근거가 유일하면 덮어쓴다(표식 없는 확정 값은 계속 보류)', () => {
+    const m = master({ id: 'm-t', maker: '기아', model: '카니발', sub_model: '카니발 KA4', yearFrom: 2020,
+      trims: [{ name: '노블레스', aliases: [] }, { name: '그래비티', aliases: [] }] });
+    const base = { maker: '기아', model: '카니발', sub_model: '카니발 KA4', trim_name: '노블레스', rawName: '카니발 KA4 그래비티', year: '2022' };
+    const temp = buildIdentityPromotionPlan([product({ id: 't1', ...base, engineTemp: true })], [m]);
+    expect(temp.plan.productTrimRepairs?.map(i => [i.id, i.from, i.to])).toEqual([['t1', '노블레스', '그래비티']]);
+    const confirmed = buildIdentityPromotionPlan([product({ id: 't2', ...base })], [m]);
+    expect(confirmed.held.map(h => h.reason)).toEqual(['TRIM_CONFLICT_EXISTING']);
+  });
 });
