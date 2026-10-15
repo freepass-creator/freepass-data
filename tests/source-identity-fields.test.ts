@@ -168,6 +168,18 @@ describe('입구 매핑 쓰기(기본 꺼짐·공급사별)', () => {
       expect(result.warnings.some(w => /^VEHICLE_IDENTITY_DEFERRED:20:/.test(w))).toBe(true);
     }, 60_000);
 
+    it('(a-3) 하향되는 문서가 정제 상한을 소모해 뒤쪽 정상 문서를 굶기지 않는다(선정은 공개 문서만)', async () => {
+      const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
+      const down = Array.from({ length: OPTIONS_REWRITE_CAP }, (_, i) => `58마${String(1000 + i)}`);   // 키 순서가 앞섬, 원천에서 판매 불가 → 하향
+      const live = Array.from({ length: 5 }, (_, i) => `58마${String(5000 + i)}`);                        // 키 순서가 뒤, 가격이 바뀌는 정상 문서
+      for (const p of down) fake.put(p, legacyDoc(rec(p)));
+      for (const p of live) fake.put(p, legacyDoc(rec(p, '현대', '아반떼', 500000)));
+      const records = [...down.map(p => ({ ...rec(p), status: { raw: '출고불가', saleAvailable: false } } as SourceProductRecord)), ...live.map(p => rec(p, '현대', '아반떼', 600000))];
+      await run(commands, records);
+      for (const p of live) expect(decodeFields(fake.docs.get(p).fields).vehicle_title_source, p).toBe('MASTER_MATCH');
+      for (const p of down) expect(decodeFields(fake.docs.get(p).fields).vehicle_title_source, p).not.toBe('MASTER_MATCH');
+    }, 60_000);
+
     it('(b) 제조사·모델이 비어도 사람이 입력한 세부모델·트림은 덮어쓰지 않고 검토 필요도 풀지 않는다', async () => {
       const { commands, fake } = await setup([], refiner, { identityRefineSources: ['RP012'] });
       fake.put('56다2001', legacyDoc(rec('56다2001'), { sub_model: '내가 고른 세부모델' }));

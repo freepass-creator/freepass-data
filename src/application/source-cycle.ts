@@ -288,7 +288,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
   // 정체성 정제(VEHICLE_IDENTITY): «양성 표식»을 받은 기존 문서만 정제한다(상한은 회차당 optionsCap, 키 순서). 가격 변경·재노출 등으로 이미 쓰는 문서도 표식이 없으면 정제하지 않아
   // 상한을 우회하지 못한다. 옵션 전용 쓰기는 위 합산 예산이 먼저 이월한다. 정제 대상은 다음 회차에 사유가 그대로 남아 순서대로 처리된다(되풀이 아님: 정제되면 사유가 사라진다).
-  const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
+  // 선정 전에 «실제 정제될 수 있는 공개 문서»로 제한한다(Codex #704 잔여): 하향·비노출·철회 문서는 쓰기에서 정제를 건너뛰므로 상한을 소모해 뒤쪽 정상 문서를 굶기면 안 된다.
+  const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.after.listable && (e.after.publication_withdrawal === null || e.after.publication_withdrawal === undefined)
+    && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
     .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
   if (refineEntries.length > optionsCap) plan.warnings.push(`VEHICLE_IDENTITY_DEFERRED:${refineEntries.length - optionsCap}:cap${optionsCap}`);
