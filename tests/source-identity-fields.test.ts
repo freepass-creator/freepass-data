@@ -401,6 +401,11 @@ describe('Codex #697 비차단: 제원 채움을 마친 문서의 내장색 보�
     const { commands, fake } = await setup();
     const r = withInterior('95자5002', null);
     fake.put('95자5002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true }));
-    expect((await run(commands, [r])).kinds).toEqual([]);
+    const first = await run(commands, [r]);
+    expect(first.applied?.status).toBe('APPLIED');
+    const doc = decodeFields(fake.docs.get('95자5002').fields);
+    expect(doc.vehicle_int_color_source_checked).toBe(true);   // 값은 비우고 표식만
+    expect(doc.int_color ?? '').toBe('');
+    expect((await run(commands, [r])).kinds).toEqual([]);      // 다시 쓰지 않는다
   });
 });
