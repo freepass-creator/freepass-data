@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
-import { judgeSheetCount, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
+import { judgeSheetCount, parseSheetCountState, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
 import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
@@ -173,11 +173,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 기준 수는 오토플러스 시트와 같은 방식(비공개 폴더, 임시 파일 + 이름 바꾸기)으로 공급사마다 따로 둔다. 노출 문서 수는 필요할 때만 센다.
   const sheetCountGuard = async (sourceId: string, capture: CycleCapture): Promise<CycleCapture> => {
     const countFile = join(directory, `sheet-count-${sourceId}.json`);
-    let previous = 0, stateError: string | null = null;
-    try {
-      const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-      if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
-    } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+    let countText: string | null = null, countReadError = false;
+    try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+    const countState = parseSheetCountState(countText, countReadError);
+    const previous = countState.previous, stateError: string | null = countState.stateError;
     const rows = capture.rows.length + capture.heldCount;
     const needExposed = capture.complete && (stateError !== null || previous === 0 || rows < previous * SHEET_SHRINK_RATIO);
     const exposed = needExposed ? (await commands.documents(sourceId)).filter(d => {
@@ -188,7 +187,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     }).length : 0;
     const verdict = judgeSheetCount({ complete: capture.complete, rows, previousCount: previous, exposedUnlockedDocs: exposed, stateError });
     let complete = verdict.complete, reason = verdict.incompleteReason;
-    if (verdict.saveCount !== null) {
+    if (verdict.saveCount !== null && verdict.saveCount > 0) {
       await mkdir(directory, { recursive: true, mode: 0o700 }).catch(() => undefined);
       if (!(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: capture.observedAt })) && complete) { complete = false; reason = 'SHEET_COUNT_STATE_WRITE_FAILED'; }
     }
@@ -479,16 +478,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             return f.listable === true && !locked;
           }).length;
           const countFile = join(directory, 'autoplus-sheet-count.json');
-          let previous = 0, stateError: string | null = null;
-          try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
-          } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+          let countText: string | null = null, countReadError = false;
+          try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+          const countState = parseSheetCountState(countText, countReadError);
+          const previous = countState.previous, stateError: string | null = countState.stateError;
           const floor = autoplusSheetRowFloor(exposedDocs, previous);
           let complete = read.complete, reason = read.incompleteReason;
           if (complete && read.rowCount < floor) { complete = false; reason = 'SHEET_SHRUNK'; }
           if (complete && stateError) { complete = false; reason = stateError; }
-          if (complete) {
+          if (complete && read.rowCount > 0) {
             const tmp = `${countFile}.${process.pid}.tmp`;
             try { await writeFile(tmp, JSON.stringify({ count: read.rowCount, at: observedAt }), { mode: 0o600 }); await rename(tmp, countFile); }
             catch { await unlink(tmp).catch(() => undefined); }

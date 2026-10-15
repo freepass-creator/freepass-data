@@ -20,3 +20,16 @@ export function judgeSheetCount(input: { complete: boolean; rows: number; previo
   if (belowExposed && belowPrevious) return { complete: false, incompleteReason: 'SOURCE_SHRUNK', saveCount: null };
   return { complete: true, saveCount: rows };
 }
+
+/** 직전 정상 수 상태 파일 해석(순수). text=null 은 파일 없음(첫 회차). 읽기 오류·깨진 JSON·음수·비정수만 상태 오류다.
+ * count 0 은 «이전 없음»이다 — 빈 시트가 완전으로 읽힌 회차가 0 을 남겼어도(예전 동작) 영구히 상태 오류로 막히지 않는다(2026-10-16 PT-0026·RP033). */
+export function parseSheetCountState(text: string | null, readError = false): { previous: number; stateError: string | null } {
+  if (readError) return { previous: 0, stateError: 'SHEET_COUNT_STATE_INVALID' };
+  if (text === null) return { previous: 0, stateError: null };
+  try {
+    const parsed = JSON.parse(text) as { count?: unknown } | null;
+    const count = parsed && typeof parsed === 'object' ? parsed.count : undefined;
+    return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0
+      ? { previous: count, stateError: null } : { previous: 0, stateError: 'SHEET_COUNT_STATE_INVALID' };
+  } catch { return { previous: 0, stateError: 'SHEET_COUNT_STATE_INVALID' }; }
+}
