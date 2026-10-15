@@ -530,6 +530,26 @@ describe('runner safety and heartbeat', () => {
     expect(r.status).toBe('UNCHANGED_SYNC');
     expect(read).not.toHaveBeenCalled();
   });
+  it('sync watch: a read retry is not attempted once the absolute end time has passed, even if the update is still fresh', async () => {
+    const { ctrl } = control(), m = memory();
+    let clockMs = Date.parse(time);
+    let calls = 0;
+    const read = vi.fn(async () => { calls++; throw Object.assign(new Error('IANCAR_ONE_API_HTTP_503'), { status: 503 }); });
+    const r = await runSourceCycle(watchPlugin(read, async () => time), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => clockMs, sleepMs: async ms => { clockMs += ms; },
+        syncWatch: { windowMs: 30_000, pollMs: 1_000, backoffMs: [20_000, 20_000], readRetries: 2 } });
+    expect(calls).toBe(2);   // 첫 읽기 503 → 백오프 20초 뒤는 종료 시각(30초) 안이라 1회 재시도, 두 번째 백오프는 종료 시각을 넘어 중단
+    expect(r.status).not.toBe('DRY_RUN');
+  });
+  it('sync watch: success first and then only failures does not raise UPSTREAM_STALLED even inside the 5-minute allowance', async () => {
+    const { ctrl, alerts } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([record('a', 'AVAILABLE')]), synced_at: time }));
+    const old = new Date(Date.parse(time) - 3 * 60 * 60_000).toISOString();
+    let clockMs = Date.parse(time), probes = 0;
+    const r = await runSourceCycle(watchPlugin(read, async () => { probes++; if (probes === 1) return old; throw new Error('IANCAR_ONE_API_HTTP_503'); }), m.commands, ctrl,
+      { onlyWhenSynced: true, now: () => clockMs, sleepMs: async ms => { clockMs += ms; }, syncWatch: { windowMs: 4 * 60_000, pollMs: 120_000 } });
+    expect(r.status).toBe('UNCHANGED_SYNC');
+    expect(alerts).not.toContain('UPSTREAM_STALLED');
+  });
   it('sync watch rejects invalid options before taking the lock', async () => {
     const { ctrl } = control(), m = memory(), read = vi.fn(async () => ({ ...capture([]), synced_at: time }));
     for (const bad of [{ windowMs: 0 }, { windowMs: 20 * 60_000, pollMs: 0 }, { windowMs: 20 * 60_000, readRetries: 99 }, { windowMs: 9 * 60 * 60_000 }])
