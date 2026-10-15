@@ -107,6 +107,15 @@ describe('마스터 추가 후보 표(읽기 전용)', () => {
     expect(classifyVariantCandidate('HEV', '', withNumber, [withNumber]).suggestedName).not.toMatch(/\d{2,3}[가-힣]\d{4}/);
   });
 
+  it('Codex #684: 같은 원문명이라도 연료가 다르면 다른 묶음 — 입력 순서에 따라 판정이 바뀌지 않는다', () => {
+    const santafe: IdentityMaster = { ...master, id: 'S', maker: '현대', model: '싼타페', sub_model: '더 뉴 싼타페 TM', trims: [] };
+    const hev = { ...product('12가7001', '현대_더 뉴 싼타페_가솔린 1.6'), fuel: '하이브리드' };
+    const phev = { ...product('12가7002', '현대_더 뉴 싼타페_가솔린 1.6'), fuel: '플러그인 하이브리드' };
+    const verdicts = (ps: typeof hev[]) => buildMasterAdditionCandidates(ps, [santafe]).rows.map(r => `${r.verdict}:${r.count}`).sort();
+    expect(verdicts([hev, phev])).toEqual(verdicts([phev, hev]));
+    expect(buildMasterAdditionCandidates([hev, phev], [santafe]).rows.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('수식 주입 방어: = + - @ 로 시작하는 원문은 앞에 작은따옴표', () => {
     const csv = candidatesToCsv(buildMasterAdditionCandidates([product('12가2001', '=HYPERLINK("x")'), product('12가2002', '+1+1'), product('12가2003', '@SUM(A1)'),
       product('12가2004', '-2+3')], [master]).rows);

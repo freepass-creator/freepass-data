@@ -133,7 +133,9 @@ export function buildMasterAdditionCandidates(products: readonly CandidateProduc
     reasonCounts[hold.reason] = (reasonCounts[hold.reason] ?? 0) + 1;
     const supplier = p.supplier ?? '';
     const rawName = (p.rawName || p.sub_model || '').trim();
-    const key = [supplier, hold.reason, normName(maskSensitive(rawName))].join('\u0000');
+    // 그룹 키에 연료의 변형 집합을 넣는다: 같은 원문명이어도 연료가 하이브리드·플러그인·전기로 갈리면 다른 묶음(판정이 입력 순서에 따라 바뀌지 않게, Codex #684).
+    const fuelKey = [...variantSet((p as { fuel?: string }).fuel ?? '')].sort().join('+');
+    const key = [supplier, hold.reason, normName(maskSensitive(rawName)), fuelKey].join('|');
     let g = groups.get(key);
     if (!g) {
       const decomposedRaw = supplier === 'RP012' ? decomposeSonogongName(maskSensitive(rawName)) : null;
