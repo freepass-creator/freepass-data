@@ -269,6 +269,22 @@ describe('shared sheet local source to Canonical', () => {
       expect(stableDigest(await s.store.listOffers())).toBe(before);
     } finally { vi.useRealTimers(); }
   });
+  it('refreshes status/rent when stored source facts differ only by normalizer ruleVersion, but still holds a real fact change', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const asset = (await s.store.listVehicleAssets())[0]!;
+      const old = structuredClone(asset) as any;
+      old.sourceVehicleFacts.ruleVersion = 'shared-sheet-normalizer/0';
+      for (const [key, fact] of Object.entries(old.sourceVehicleFacts.fields) as [string, any][]) if (key !== 'supplierStatus') fact.ruleVersion = 'shared-sheet-normalizer/0';
+      delete old.sourceVehicleFacts.fields.vehicleIdentitySource;
+      await s.store.seed({ vehicleAssets: [old] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r1 = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r1.report).toMatchObject({ committed: 1, held: 0 });
+    } finally { vi.useRealTimers(); }
+  });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
