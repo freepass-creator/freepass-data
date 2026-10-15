@@ -66,16 +66,10 @@ export function normalizedMasterCandidate(input: { rawName: string; year: string
   if (pool.length !== 1) return null;
   const hit = pool[0]!;
   if (!inYear(hit.m)) return null;
-  // 원문에 명시된 N세대: 마스터에는 세대 번호가 없어 «같은 제조사·모델 마스터를 시작 연도순으로 놓은 순서»만 알 수 있다. 마스터에 옛 세대가 빠져 있을 수 있으므로
-  // 순서가 N 과 정확히 같을 때만 후보로 인정한다(다르거나 검증 불가면 내지 않음 — NO_MASTER_MATCH 유지, 세대 증거 보존, Codex #712 ④).
-  const generation = /(\d+)\s?세대/.exec(raw.normalize('NFKC'));
-  if (generation) {
-    const sameModel = masters.filter(m => m.maker === hit.m.maker && m.model === hit.m.model && m.yearFrom !== null)
-      .map(m => m.yearFrom as number);
-    const order = [...new Set(sameModel)].sort((a, b) => a - b);
-    const position = hit.m.yearFrom === null ? -1 : order.indexOf(hit.m.yearFrom) + 1;
-    if (position !== Number(generation[1])) return null;
-  }
+  // 원문에 명시된 N세대: 마스터에 명시적 세대 번호 메타데이터가 없으므로 «검증 불가»다 → 후보를 내지 않는다(NO_MASTER_MATCH 유지, 세대 증거 보존, Codex #712 ④).
+  // 마스터 순서(시작 연도순)로 세대 번호를 추정하지 않는다: 옛 세대가 마스터에 빠져 있으면 순번이 우연히 맞아도 실제 세대가 아니다. 한계: N세대가 적힌 원문은
+  // 마스터에 세대 번호 칸이 생기기 전까지(대표 소관) 정규화 후보에서 빠지고 마스터 추가·수동 확인 경로에 남는다.
+  if (/\d+\s?세대/.test(raw.normalize('NFKC'))) return null;
   // 원문에 개발코드(괄호 코드·영문 2~4자+숫자)가 있는데 후보 이름에 그 코드가 없으면 후보로 내지 않는다: «아반떼(CN8)» 처럼 마스터에 없는 새 세대를
   // 기존 세대로 잘못 묶어 «마스터 추가 후보» 목록에서 가리지 않게 한다(NO_MASTER_MATCH 유지). 코드가 이름의 일부(GV70·K5)면 통과한다.
   const nameTokens = new Set([hit.m.sub_model, ...hit.m.sub_model_aliases].flatMap(n => n.normalize('NFKC').toUpperCase().split(/[^0-9A-Z]+/u).filter(Boolean)));

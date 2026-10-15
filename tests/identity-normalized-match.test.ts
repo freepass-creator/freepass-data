@@ -17,9 +17,9 @@ const product = (id: string, rawName: string, year: string, maker = ''): Identit
 describe('정규화 후보(확정 아님)', () => {
   it('접두·세대 표기가 있는 원문은 핵심어 + 연식으로 세대 후보 하나를 낸다', () => {
     expect(normalizedMasterCandidate({ rawName: '신형 카니발 9인승 디젤', year: '2023' }, masters)?.master.id).toBe('ka4');
-    // 명시된 N세대는 마스터 순서와 정확히 같을 때만 인정(마스터에 옛 세대가 빠져 있으면 검증 불가 → 후보 없음, Codex #712 ④).
+    // 명시된 N세대는 마스터에 세대 번호 메타데이터가 없어 검증 불가 → 후보 없음(순번 추정 금지, Codex #712 ④). 번호가 맞든 틀리든 같다.
     expect(normalizedMasterCandidate({ rawName: '더뉴카니발 4세대 리무진', year: '2022' }, masters)).toBeNull();
-    expect(normalizedMasterCandidate({ rawName: '더뉴카니발 2세대 리무진', year: '2022' }, masters)?.master.id).toBe('ka4');
+    expect(normalizedMasterCandidate({ rawName: '더뉴카니발 2세대 리무진', year: '2022' }, masters)).toBeNull();
     expect(normalizedMasterCandidate({ rawName: '기아_카니발_가솔린 3.5', year: '2016' }, masters)?.master.id).toBe('yp');
   });
 
