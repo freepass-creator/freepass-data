@@ -378,3 +378,29 @@ describe('2026-10-16 17:00 RP012 REEXPOSE 되읽기 불일치(rewriteReasons)', 
     expect(wide.warnings.some(w => /_DEFERRED:/.test(w))).toBe(false);
   });
 });
+
+describe('Codex #697 비차단: 제원 채움을 마친 문서의 내장색 보완', () => {
+  const withInterior = (plate: string, interior: string | null): SourceProductRecord => {
+    const r = rec(plate);
+    return { ...r, raw: { ...r.raw, spec: { ext_color: '빨간색', ...(interior ? { int_color: interior } : {}) } } } as SourceProductRecord;
+  };
+  it('제원 확인(vehicle_spec_source_checked)을 이미 마친 문서도 내장색만 한 번 보완하고 표식을 남겨 되풀이하지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = withInterior('95자5001', '블랙');
+    fake.put('95자5001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true, ext_color: '흰색' }));
+    const first = await run(commands, [r]);
+    expect(first.applied?.status).toBe('APPLIED');
+    const doc = decodeFields(fake.docs.get('95자5001').fields);
+    expect(doc.int_color).toBe('블랙');
+    expect(doc.ext_color).toBe('흰색');                        // 기존 값 비접촉
+    expect(doc.vehicle_int_color_source_checked).toBe(true);
+    const second = await run(commands, [r]);
+    expect(second.kinds).toEqual([]);                          // 되풀이 쓰기 없음
+  });
+  it('원천에 내장색이 없어도 표식만 한 번 남기고(값은 비움) 다시 쓰지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = withInterior('95자5002', null);
+    fake.put('95자5002', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true }));
+    expect((await run(commands, [r])).kinds).toEqual([]);
+  });
+});
