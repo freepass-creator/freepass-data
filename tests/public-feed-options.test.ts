@@ -52,6 +52,13 @@ describe('공개 피드 옵션 선택 필드', () => {
     expect(buildPublicProductQuote(snapshot({ api_options_state: 'NONE', api_options_basic: [], api_options_paid: [] }), 'P1', {})!.product.option_state).toBe('NONE');
   });
 
+  it('Codex #687: 전화·개인정보 낱말·금액(공백 단위)·쪼갠 금지어는 이름 단위로 거른다', () => {
+    const bad = ['HUD 010-1234-5678', 'HUD 010 1234 5678', '고객 홍길동', '담당자 연락 요망', 'HUD 100,000 원', 'HUD 100,000 KRW', 'HUD 5 만 원', '수 수 료', '수-수-료 포함', '청 구', '１０％ 할인', '문의 카톡'];
+    const ok = ['HUD(헤드업디스플레이)', '17인치 알로이 휠', '파노라마 선루프', 'LED 헤드램프', '스마트 크루즈 컨트롤'];
+    const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [...bad, ...ok].map(name => ({ name })), api_options_paid: [] });
+    expect(r.option_basic).toEqual(ok);
+  });
+
   it('이름 하나가 규칙에 걸려도 피드 전체는 던지지 않는다; 숫자·번호 꼴은 개별로 버림', () => {
     const r = publicOptions({ api_options_state: 'PRESENT', api_options_basic: [{ name: '12가3456 전용' }, { name: 'A'.repeat(17) }, { name: '정상 옵션' }, { name: 3 }, null],
       api_options_paid: [{ name: '유상', amount_state: 'KNOWN', amount_krw: -5 }, { name: '유상2', amount_state: 'KNOWN', amount_krw: 700000 }] });
