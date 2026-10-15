@@ -41,11 +41,11 @@ function fakeFirestore() {
   }) as unknown as typeof fetch;
   return { docs, fetcher, put: (uid: string, f: Record<string, unknown>) => docs.set(uid, doc(uid, encodeFields(f as never))) };
 }
-async function setup() {
+async function setup(writeApiOptions = true) {
   const dir = await mkdtemp(join(tmpdir(), 'sonogong-options-')); dirs.push(dir);
   const fake = fakeFirestore();
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
-    supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } } });
+    supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } }, writeApiOptions });
   return { commands, fake };
 }
 const run = async (commands: Awaited<ReturnType<typeof setup>>['commands'], records: SourceProductRecord[]) => {
@@ -122,6 +122,23 @@ describe('저장 기록의 옵션은 분류 후·제한된 꼴만 (Codex #674)',
     const base = rec('12가7');
     expect(apiOptionFields({ ...base, raw: { api_options: { state: 'PRESENT', basic: [{ name: 3 }], paid: [] } } }, {})).toEqual({ api_options_state: 'NO_DETAIL', api_options_observed_at: time });
     expect(apiOptionFields({ ...base, raw: { api_options: 'x' } }, {})).toMatchObject({ api_options_state: 'NO_DETAIL' });
+  });
+});
+
+describe('API 옵션 쓰기 게이트(대표 승인 전 기본 꺼짐)', () => {
+  it('플래그가 꺼져 있으면 사유도 쓰기도 없다 — 옵션 칸이 없는 문서·새 문서 모두', async () => {
+    const { commands, fake } = await setup(false);
+    fake.put('12가9001', legacyDoc(rec('12가9001')));
+    const first = await run(commands, [rec('12가9001')]);
+    expect(first.kinds).toEqual([]);
+    expect(first.warnings.some(w => w.startsWith('API_OPTIONS_'))).toBe(false);
+    expect(decodeFields(fake.docs.get('12가9001').fields)).not.toHaveProperty('api_options_state');
+    const enrolled = await run(commands, [rec('12가9001'), rec('12가9002')]);
+    expect(enrolled.kinds).toEqual(['ENROLL']);
+    expect(decodeFields(fake.docs.get('12가9002').fields)).not.toHaveProperty('api_options_state');
+    // 기본 호출(옵션 인자 없음)도 꺼짐
+    const fields = nativeCycleFields({ record: compactRecord(rec('12가9003')), listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null }, {});
+    expect(fields).not.toHaveProperty('api_options_state');
   });
 });
 
