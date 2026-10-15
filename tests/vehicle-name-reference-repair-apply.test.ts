@@ -10,7 +10,7 @@ const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${i
 // Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
 const sortKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])])) : v;
 // A snapshot is fixed at read time, like Firestore's DocumentSnapshot (later writes do not show through it).
-const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { ref: r, exists: at !== undefined, updateTime: updateTimes.get(r.path), data: () => (at === undefined ? undefined : structuredClone(at)) }; };
+const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { id: r.id, ref: r, exists: at !== undefined, updateTime: updateTimes.get(r.path), data: () => (at === undefined ? undefined : structuredClone(at)) }; };
 // 문서별 updateTime(백업 시점 고정 검증용)과 쓰기 때 걸린 precondition 기록.
 const updateTimes = new Map<string, unknown>();
 const preconditions: Array<[string, unknown]> = [];
@@ -40,9 +40,9 @@ const runQuery = (q: Query) => {
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
-  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
+  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f), limit: (n: number) => query(c).limit(n) }),
   getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
-  runTransaction: async (fn: (t: unknown) => Promise<void>) => {
+  runTransaction: async (fn: (t: unknown) => Promise<unknown>, _options?: { readOnly?: boolean }) => {
     const writes: Array<() => void> = [];
     const t = {
       getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
@@ -53,8 +53,9 @@ const db = {
         store.set(r.path, structuredClone(d));
       }),
     };
-    await fn(t);
+    const result = await fn(t);
     writes.forEach((w) => w());
+    return result;
   },
 };
 vi.mock('firebase-admin/firestore', () => ({
@@ -64,7 +65,8 @@ vi.mock('firebase-admin/firestore', () => ({
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents,
+  sealVehicleNameRepairPlan, captureVehicleNameRepairReview } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 // 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
 const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
@@ -75,6 +77,152 @@ beforeEach(() => {
   store.set('vehicle_trim_master/t1', { model: '그랜저', sub_model: '그랜저 GN7', master_id: 'm-gn7', trim: '프리미엄', fuel: '하이브리드' });
   store.set('vehicle_trim_master/t2', { model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5', master_id: 'm-mx5', trim: '익스클루시브', sub_model_aliases: ['싼타페 MX5 신형'] });
   store.set('vehicle_master/m-mx5', { id: 'm-mx5', maker: '현대', model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5' });
+});
+
+describe('reviewed product snapshot binding', () => {
+  const productPath = 'products/p-reviewed';
+  const trimPlan = () => ({ sourceDigest: 'reviewed-facts', masterRepairs: [], productRepairs: [],
+    productTrimRepairs: [{ id: 'p-reviewed', from: '', to: '프리미엄', evidence: '공급사 원문 프리미엄' }] });
+  const rows = (collection: string) => [...store.entries()].filter(([path]) => path.startsWith(`${collection}/`))
+    .map(([path, data]) => ({ id: path.split('/')[1]!, data: structuredClone(data) }));
+  const seal = () => sealVehicleNameRepairPlan(trimPlan(), { products: [snap(ref('products', 'p-reviewed'))],
+    masters: rows('vehicle_master'), trims: rows('vehicle_trim_master') });
+  const apply = (plan: ReturnType<typeof seal>) => applyVehicleNameReferenceRepair(plan, {
+    approvedPlanDigest: stableDigest(plan), requireReviewedSnapshot: true,
+  });
+  const noBusinessWrites = () => {
+    expect(store.get(productPath)!.trim_name).toBe('');
+    expect([...store.keys()].filter(k => k.startsWith('audit_events/'))).toHaveLength(0);
+  };
+  beforeEach(() => {
+    store.set(productPath, { maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', trim_name: '',
+      year: '2024', fuel_type: '가솔린', car_name: '그랜저 GN7 프리미엄', 원문: { 차명: '그랜저 GN7 프리미엄' },
+      price: { '36': { price: 500000 } }, image_urls: ['https://example.test/original.jpg'], status: '출고가능',
+      policy_id: 'policy-original' });
+    updateTimes.set(productPath, { seconds: 100, nanoseconds: 123456789 });
+  });
+
+  it('captures one read-only review window, then changes only the requested field and existing audit metadata', async () => {
+    const before = structuredClone(store.get(productPath)!);
+    const spy = vi.spyOn(db, 'runTransaction');
+    const plan = await captureVehicleNameRepairReview(trimPlan());
+    expect(spy.mock.calls[0]![1]).toEqual({ readOnly: true });
+    spy.mockRestore();
+    noBusinessWrites();
+    const result = await apply(plan);
+    expect(result).toMatchObject({ productTrimCount: 1, auditCount: 1, readbackCount: 1 });
+    const { trim_name, vehicle_name_reference_checked_at, vehicle_name_reference_source_digest, ...unchanged } = store.get(productPath)!;
+    expect(trim_name).toBe('프리미엄');
+    expect(vehicle_name_reference_checked_at).toBe('ts');
+    expect(vehicle_name_reference_source_digest).toBe('reviewed-facts');
+    const { trim_name: _oldTrim, ...expected } = before;
+    expect(unchanged).toEqual(expected);
+    expect(store.get(productPath)).not.toHaveProperty('reviewedSnapshot');
+  });
+
+  it('refuses an unsealed operational product apply, without changing legacy plan validation', async () => {
+    await expect(apply(trimPlan())).rejects.toThrow(/reviewed snapshot required/);
+    noBusinessWrites();
+  });
+
+  it.each([
+    ['year', '2025'], ['fuel_type', '하이브리드'], ['car_name', '다른 원문'],
+    ['원문', { 차명: '다른 세대 원문' }], ['price', { '36': { price: 1 } }],
+  ])('rejects reviewed %s drift before the writer backup even when trim from is unchanged', async (field, value) => {
+    const plan = seal();
+    store.set(productPath, { ...store.get(productPath)!, [field as string]: value });
+    await expect(apply(plan)).rejects.toThrow(/reviewed product snapshot changed/);
+    noBusinessWrites();
+  });
+
+  it('rejects updateTime-only drift with nanosecond precision', async () => {
+    const plan = seal();
+    updateTimes.set(productPath, { seconds: 100, nanoseconds: 123456790 });
+    await expect(apply(plan)).rejects.toThrow(/reviewed product snapshot changed/);
+    noBusinessWrites();
+  });
+
+  it.each(['human_confirmed', 'manual_verified', 'reviewed_by'])('protects trim edits from %s markers even on legacy callers', async field => {
+    store.set(productPath, { ...store.get(productPath)!, [field]: true });
+    await expect(applyVehicleNameReferenceRepair(trimPlan())).rejects.toThrow(/HUMAN_OR_CONFIRMED/);
+    noBusinessWrites();
+  });
+
+  it('checks human confirmation again inside the legacy trim transaction', async () => {
+    const original = db.runTransaction;
+    db.runTransaction = async fn => {
+      store.set(productPath, { ...store.get(productPath)!, human_confirmed: true });
+      return original(fn);
+    };
+    try { await expect(applyVehicleNameReferenceRepair(trimPlan())).rejects.toThrow(/transaction product write refused HUMAN_OR_CONFIRMED/); }
+    finally { db.runTransaction = original; }
+    noBusinessWrites();
+  });
+
+  it('requires approval of the whole sealed plan and rejects a forged trim identity', async () => {
+    const plan = seal();
+    await expect(applyVehicleNameReferenceRepair(plan)).rejects.toThrow(/approved plan digest required/);
+    await expect(applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: 'old-plan-digest' })).rejects.toThrow(/digest mismatch/);
+    const forged = structuredClone(plan);
+    forged.reviewedSnapshot!.products[0]!.identity.model = '다른모델';
+    await expect(apply(forged)).rejects.toThrow(/reviewed trim product identity changed/);
+    noBusinessWrites();
+  });
+
+  it.each(['product', 'master', 'trim', 'new sibling'])('rejects %s changes between backup and transaction, with zero committed writes', async kind => {
+    const plan = seal(), original = db.runTransaction;
+    db.runTransaction = async fn => {
+      if (kind === 'product') store.set(productPath, { ...store.get(productPath)!, model: '새 모델' });
+      if (kind === 'master') store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, year_end: '2023' });
+      if (kind === 'trim') store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, retired: true });
+      if (kind === 'new sibling') store.set('vehicle_master/new-generation', { maker: '현대', model: '그랜저', sub_model: '새 그랜저', year_start: '2024' });
+      return original(fn);
+    };
+    try { await expect(apply(plan)).rejects.toThrow(/reviewed (product snapshot|master\/trim content) changed/); }
+    finally { db.runTransaction = original; }
+    noBusinessWrites();
+  });
+
+  it('refuses a target trim absent from the active master and permits multiple powertrain rows of one trim name', async () => {
+    const missing = { ...trimPlan(), productTrimRepairs: [{ id: 'p-reviewed', from: '', to: '없는등급', evidence: 'source' }] };
+    expect(() => sealVehicleNameRepairPlan(missing, { products: [snap(ref('products', 'p-reviewed'))],
+      masters: rows('vehicle_master'), trims: rows('vehicle_trim_master') })).toThrow(/target trim missing/);
+    store.set('vehicle_trim_master/another-powertrain', { master_id: 'm-gn7', trim: '프리미엄', fuel: '가솔린' });
+    await expect(apply(seal())).resolves.toMatchObject({ productTrimCount: 1 });
+  });
+
+  it('rejects master/trim alias drift before backup', async () => {
+    const plan = seal();
+    store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, trim_aliases: ['이제 다른 근거'] });
+    await expect(apply(plan)).rejects.toThrow(/reviewed master\/trim content changed/);
+    noBusinessWrites();
+  });
+
+  it('rejects forged coverage, changed plan target, wrong master binding, and mixed master writes', async () => {
+    const plan = seal();
+    await expect(apply({ ...plan, reviewedSnapshot: { ...plan.reviewedSnapshot!, products: [] } })).rejects.toThrow(/coverage/);
+    await expect(apply({ ...plan, productTrimRepairs: [{ id: 'p-reviewed', from: '', to: '다른등급', evidence: 'source' }] })).rejects.toThrow(/bind repair target/);
+    const wrong = structuredClone(plan);
+    wrong.reviewedSnapshot!.products[0]!.masterId = 'm-mx5';
+    await expect(apply(wrong)).rejects.toThrow(/exactly one active master/);
+    await expect(apply({ ...plan, masterRepairs: [{ id: 'm-gn7', from: '그랜저 GN7', to: '새 이름' }] })).rejects.toThrow(/must not mix/);
+    noBusinessWrites();
+  });
+
+  it('binds identity generation evidence and forces the second trim stage to be freshly captured after readback', async () => {
+    store.set(productPath, { maker: '', model: '', sub_model: '공급사 원문', trim_name: '', year: '2024', vehicle_review_required: true });
+    const plan = { sourceDigest: 'identity', masterRepairs: [], productRepairs: [], productIdentityRepairs: [{ id: 'p-reviewed',
+      from: { maker: '', model: '', sub_model: '공급사 원문' }, to: { maker: '현대', model: '그랜저', sub_model: '그랜저 GN7' }, evidence: '연식2024' }] };
+    expect(() => seal()).toThrow(/exactly one active master/);
+    const sealed = sealVehicleNameRepairPlan(plan, { products: [snap(ref('products', 'p-reviewed'))], masters: rows('vehicle_master'), trims: rows('vehicle_trim_master') });
+    store.set(productPath, { ...store.get(productPath)!, year: '2020' });
+    await expect(apply(sealed)).rejects.toThrow(/reviewed product snapshot changed/);
+    store.set(productPath, { ...store.get(productPath)!, year: '2024' });
+    await apply(sealed);
+    const trimStage = seal();
+    expect(trimStage.reviewedSnapshot!.products[0]!.documentDigest).not.toBe(sealed.reviewedSnapshot!.products[0]!.documentDigest);
+    await expect(apply(trimStage)).resolves.toMatchObject({ productTrimCount: 1 });
+  });
 });
 
 const hevMaster = { id: 'm-gn7-hev', data: { id: 'm-gn7-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7', origin: '국산', variants: [{ turbo: true, label: '하이브리드 1.6', fuel: '하이브리드', trims: ['프리미엄'] }], trims: ['프리미엄'] }, evidence: '규칙 15·18' };

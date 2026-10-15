@@ -40,6 +40,8 @@ export type ProductSourceCorrectionItem = {
 
 export type VehicleNameRepairPlan = {
   sourceDigest: string;
+  /** Reviewed facts, not a snapshot captured implicitly at write time. Never written into public products. */
+  reviewedSnapshot?: VehicleNameReviewedSnapshot;
   masterRepairs: VehicleNameRepairItem[];
   productRepairs: VehicleNameRepairItem[];
   /** products.maker/model/sub_model repaired together after matching an active vehicle_master identity. */
@@ -83,6 +85,114 @@ export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>
 export type VehicleMasterVariantRepair = { id: string; fromDigest: string; to: Record<string, unknown>[]; evidence: string; trims?: string[]; fromTrimsDigest?: string };
 /** `into` = the master that replaces it (must exist or be created by the same plan). */
 export type VehicleMasterRetire = { id: string; into: string; evidence: string };
+
+export type VehicleNameReviewedSnapshot = {
+  schema: 'vehicle-name-reviewed-snapshot/v1';
+  masterContentDigest: string;
+  products: Array<{
+    id: string; documentDigest: string; updateTime: { seconds: number; nanoseconds: number };
+    masterId: string; identity: { maker: string; model: string; sub_model: string }; trimName?: string;
+  }>;
+};
+type ReviewMasterRow = { id: string; data: Record<string, unknown> };
+type ReviewProductSnapshot = {
+  id: string; exists: boolean; updateTime?: unknown;
+  data(): Record<string, unknown> | undefined;
+};
+
+/** Content only: Firestore readTime changes on every read and must not enter this binding. */
+export function vehicleNameMasterContentDigest(masters: ReviewMasterRow[], trims: ReviewMasterRow[]) {
+  const sorted = (rows: ReviewMasterRow[]) => [...rows].sort((a, b) => a.id.localeCompare(b.id, 'en-US'));
+  return stableDigest({ masters: sorted(masters), trims: sorted(trims) });
+}
+
+function reviewUpdateTime(value: unknown): { seconds: number; nanoseconds: number } {
+  const stamp = value as { seconds?: unknown; nanoseconds?: unknown } | null;
+  if (!stamp || !Number.isSafeInteger(stamp.seconds) || !Number.isInteger(stamp.nanoseconds)
+    || Number(stamp.nanoseconds) < 0 || Number(stamp.nanoseconds) >= 1_000_000_000) {
+    throw new Error('reviewed snapshot requires exact Firestore updateTime');
+  }
+  return { seconds: stamp.seconds as number, nanoseconds: stamp.nanoseconds as number };
+}
+
+function assertReviewedProducts(review: VehicleNameReviewedSnapshot, snapshots: ReviewProductSnapshot[]) {
+  const byId = new Map(snapshots.map(s => [s.id, s]));
+  for (const expected of review.products) {
+    const snapshot = byId.get(expected.id);
+    if (!snapshot?.exists || stableDigest(snapshot.data()) !== expected.documentDigest
+      || stableDigest(reviewUpdateTime(snapshot.updateTime)) !== stableDigest(expected.updateTime)) {
+      throw new Error(`reviewed product snapshot changed ${expected.id}`);
+    }
+    if (expected.trimName !== undefined && !PRODUCT_IDENTITY_FIELDS.every(f => snapshot.data()?.[f] === expected.identity[f])) {
+      throw new Error(`reviewed trim product identity changed ${expected.id}`);
+    }
+  }
+}
+
+function assertReviewedMasters(review: VehicleNameReviewedSnapshot, masters: ReviewMasterRow[], trims: ReviewMasterRow[]) {
+  if (vehicleNameMasterContentDigest(masters, trims) !== review.masterContentDigest) {
+    throw new Error('reviewed master/trim content changed');
+  }
+  for (const expected of review.products) {
+    const hits = masters.filter(m => m.data.retired !== true
+      && PRODUCT_IDENTITY_FIELDS.every(f => m.data[f] === expected.identity[f]));
+    if (hits.length !== 1 || hits[0]!.id !== expected.masterId) {
+      throw new Error(`reviewed target must match exactly one active master ${expected.id}`);
+    }
+    if (expected.trimName !== undefined && !trims.some(t => t.data.retired !== true
+      && t.data.master_id === expected.masterId && t.data.trim === expected.trimName)) {
+      throw new Error(`reviewed target trim missing from active master ${expected.id}`);
+    }
+  }
+}
+
+/** Existing planning path may seal already reviewed input before requesting independent review.
+ * This is a pure capture of facts, not a matcher and not an approval. */
+export function sealVehicleNameRepairPlan(plan: VehicleNameRepairPlan, input: {
+  products: ReviewProductSnapshot[]; masters: ReviewMasterRow[]; trims: ReviewMasterRow[];
+}): VehicleNameRepairPlan {
+  const byId = new Map(input.products.map(p => [p.id, p]));
+  const items = [...(plan.productIdentityRepairs ?? []).map(item => ({ id: item.id, identity: item.to, trimName: undefined as string | undefined })),
+    ...(plan.productTrimRepairs ?? []).map(item => {
+      const data = byId.get(item.id)?.data();
+      return { id: item.id, identity: { maker: clean(data?.maker), model: clean(data?.model), sub_model: clean(data?.sub_model) }, trimName: item.to };
+    })];
+  const review: VehicleNameReviewedSnapshot = {
+    schema: 'vehicle-name-reviewed-snapshot/v1', masterContentDigest: vehicleNameMasterContentDigest(input.masters, input.trims),
+    products: items.map(item => {
+      const snapshot = byId.get(item.id);
+      if (!snapshot?.exists) throw new Error(`reviewed product snapshot missing ${item.id}`);
+      const hits = input.masters.filter(m => m.data.retired !== true && PRODUCT_IDENTITY_FIELDS.every(f => m.data[f] === item.identity[f]));
+      if (hits.length !== 1) throw new Error(`reviewed target must match exactly one active master ${item.id}`);
+      return { id: item.id, documentDigest: stableDigest(snapshot.data()), updateTime: reviewUpdateTime(snapshot.updateTime),
+        masterId: hits[0]!.id, identity: item.identity, ...(item.trimName === undefined ? {} : { trimName: item.trimName }) };
+    })
+  };
+  const sealed = { ...plan, reviewedSnapshot: review };
+  validateVehicleNameRepairPlan(sealed);
+  assertReviewedMasters(review, input.masters, input.trims);
+  return sealed;
+}
+
+/** Read-only preparation for independent review. No backup, audit or business writes.
+ * Both collections and every product come from one Firestore read-only transaction. */
+export async function captureVehicleNameRepairReview(plan: VehicleNameRepairPlan): Promise<VehicleNameRepairPlan> {
+  validateVehicleNameRepairPlan(plan);
+  const db = getFirestore(getTargetFirebaseApp());
+  const ids = [...new Set([...(plan.productIdentityRepairs ?? []), ...(plan.productTrimRepairs ?? [])].map(item => item.id))];
+  if (!ids.length) throw new Error('reviewed product snapshot requires product identity/trim targets');
+  return db.runTransaction(async transaction => {
+    const products = await transaction.getAll(...ids.map(id => db.collection('products').doc(id)));
+    const masters = await transaction.get(db.collection('vehicle_master').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+    const trims = await transaction.get(db.collection('vehicle_trim_master').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+    if (masters.docs.length > MAX_MASTER_IDENTITY_SCAN || trims.docs.length > MAX_MASTER_IDENTITY_SCAN) {
+      throw new Error('reviewed master/trim scan would be unbounded');
+    }
+    return sealVehicleNameRepairPlan(plan, { products,
+      masters: masters.docs.map(doc => ({ id: doc.id, data: doc.data() })),
+      trims: trims.docs.map(doc => ({ id: doc.id, data: doc.data() })) });
+  }, { readOnly: true });
+}
 
 /** One transaction carries every target write plus one audit per target — keep well under Firestore's 500-write limit. */
 export const MAX_VEHICLE_NAME_REPAIR_TARGETS = 200;
@@ -228,6 +338,36 @@ const currentCorrectionKeptInHistory = (current: unknown, history: Record<string
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
+  if (plan.reviewedSnapshot !== undefined) {
+    const review = plan.reviewedSnapshot;
+    const hex = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+    const sensitive = [...(plan.productIdentityRepairs ?? []), ...(plan.productTrimRepairs ?? [])];
+    if (!review || review.schema !== 'vehicle-name-reviewed-snapshot/v1' || !hex(review.masterContentDigest)
+      || !Array.isArray(review.products) || !sensitive.length || review.products.length !== sensitive.length) {
+      throw new Error('invalid reviewed snapshot coverage');
+    }
+    // A bound product plan cannot also mutate the master evidence it reviewed.
+    if (Object.entries(plan).some(([key, value]) => Array.isArray(value)
+      && key !== 'productIdentityRepairs' && key !== 'productTrimRepairs' && value.length)) {
+      throw new Error('reviewed product snapshot plan must not mix other repairs');
+    }
+    const seen = new Set<string>();
+    for (const expected of review.products) {
+      if (!expected || !isDocId(expected.id) || seen.has(expected.id) || !isDocId(expected.masterId)
+        || !hex(expected.documentDigest) || !expected.identity
+        || !PRODUCT_IDENTITY_FIELDS.every(f => typeof expected.identity[f] === 'string'
+          && expected.identity[f] !== '' && expected.identity[f] === clean(expected.identity[f]))) {
+        throw new Error('invalid reviewed product snapshot');
+      }
+      reviewUpdateTime(expected.updateTime);
+      seen.add(expected.id);
+      const identity = plan.productIdentityRepairs?.find(item => item.id === expected.id);
+      const trim = plan.productTrimRepairs?.find(item => item.id === expected.id);
+      if (identity ? expected.trimName !== undefined || !PRODUCT_IDENTITY_FIELDS.every(f => expected.identity[f] === identity.to[f])
+        : !trim || expected.trimName !== trim.to) throw new Error('reviewed snapshot does not bind repair target');
+    }
+    if (sensitive.some(item => !seen.has(item.id))) throw new Error('reviewed snapshot missing product');
+  }
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
     ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' })),
@@ -477,9 +617,18 @@ export function hasHumanOrConfirmedMarker(data: Record<string, unknown> | undefi
 const aliasNormalizationAllowedFor = (data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }) =>
   isAliasNormalizationCandidate(from, to) && !hasHumanOrConfirmedMarker(data);
 
-export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
+export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: {
+  approvedPlanDigest?: string | undefined;
+  /** Operational CLI requires review binding; legacy programmatic/master callers retain their existing contract. */
+  requireReviewedSnapshot?: boolean;
+} = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
   const planDigest = stableDigest(plan);
+  if (options.requireReviewedSnapshot && ((plan.productIdentityRepairs ?? []).length || (plan.productTrimRepairs ?? []).length)
+    && !plan.reviewedSnapshot) throw new Error('reviewed snapshot required for product identity/trim apply');
+  if (plan.reviewedSnapshot && options.approvedPlanDigest === undefined) {
+    throw new Error('approved plan digest required for reviewed snapshot repairs');
+  }
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
   if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
   if ((plan.productIdentityRepairs ?? []).length && options.approvedPlanDigest === undefined) throw new Error('approved plan digest required for productIdentity repairs');
@@ -528,7 +677,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
       // 세부모델·제조사를 바꾸는 상품 정정은 사람 입력·확정 표식이 있으면 거절한다(Codex #683: productRepairs·productMakerRepairs 경로 누락).
-      if ((targets[index]!.kind === 'product' || targets[index]!.kind === 'productMaker') && hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
+      if (hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
     }
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
     const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
@@ -545,6 +694,18 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
         && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to))) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
+  const review = plan.reviewedSnapshot;
+  const reviewRows = (query: { docs: Array<{ id: string; data(): Record<string, unknown> }> }): ReviewMasterRow[] => {
+    if (query.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error('reviewed master/trim scan would be unbounded');
+    return query.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+  };
+  if (review) {
+    // Before creating a backup: refuse evidence drift even if `from` cells still look unchanged.
+    assertReviewedProducts(review, [...identitySnapshots, ...snapshots]);
+    const masterRows = reviewRows(await db.collection('vehicle_master').limit(MAX_MASTER_IDENTITY_SCAN + 1).get());
+    const trimRows = reviewRows(await db.collection('vehicle_trim_master').limit(MAX_MASTER_IDENTITY_SCAN + 1).get());
+    assertReviewedMasters(review, masterRows, trimRows);
+  }
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
   const lockedDigest: Record<string, string> = {};
@@ -743,6 +904,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const current = refs.length ? await transaction.getAll(...refs) : [];
     const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
     const sourceCorrectionCurrent = sourceCorrectionRefs.length ? await transaction.getAll(...sourceCorrectionRefs) : [];
+    if (review) {
+      assertReviewedProducts(review, [...identityCurrent, ...current]);
+      const masterRows = reviewRows(await transaction.get(db.collection('vehicle_master').limit(MAX_MASTER_IDENTITY_SCAN + 1)));
+      const trimRows = reviewRows(await transaction.get(db.collection('vehicle_trim_master').limit(MAX_MASTER_IDENTITY_SCAN + 1)));
+      assertReviewedMasters(review, masterRows, trimRows);
+    }
     identityCurrent.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
         throw new Error(`transaction productIdentity precondition changed ${snapshot.ref.path}`);
@@ -1008,7 +1175,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (PRODUCT_NAME_KINDS.has(targets[index]!.kind)) {
         const blocked = productWriteBlock(snapshot.data());
         if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
-        if ((targets[index]!.kind === 'product' || targets[index]!.kind === 'productMaker') && hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`transaction product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
+        if (hasHumanOrConfirmedMarker(snapshot.data())) throw new Error(`transaction product write refused HUMAN_OR_CONFIRMED ${snapshot.ref.path}`);
       }
       const { kind, item, field, ref } = targets[index]!;
       const aliasField = ALIAS_FIELD[kind];
