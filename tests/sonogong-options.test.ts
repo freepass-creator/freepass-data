@@ -30,10 +30,25 @@ describe('손오공 옵션 투영', () => {
   });
 
   it('빈 이름·중복·배열 아님을 안전하게 처리한다', () => {
-    const p = projectSonogongOptions([{ category: 'A', name: ' ' }, { category: 'A', name: 'ＡＢＳ' }, { category: 'A', name: 'ABS' }, null, 3]);
-    expect(p.basic).toEqual([{ category: 'A', name: 'ABS' }]);
+    const p = projectSonogongOptions([{ category: 'SAFETY', name: ' ' }, { category: 'SAFETY', name: 'ＡＢＳ' }, { category: 'SAFETY', name: 'ABS' }, null, 3]);
+    expect(p.basic).toEqual([{ category: 'SAFETY', name: 'ABS' }]);
     expect(p.notes).toMatchObject({ inputCount: 5, droppedEmptyName: 3, duplicates: 1 });
     expect(projectSonogongOptions(undefined).notes.inputCount).toBe(0);
+  });
+
+  it('알려진 무상 코드 밖의 구분은 무상으로 확정하지 않고 분포 키로도 원문을 내지 않는다', () => {
+    const p = projectSonogongOptions([
+      { category: 'SAFETY', name: 'A', amount: null },
+      { category: '12가3456 옵션 900000원', name: 'B', amount: null },
+      { category: '', name: 'C', amount: null },
+    ]);
+    expect(p.basic).toEqual([{ category: 'SAFETY', name: 'A' }]);
+    expect(p.unclassified).toEqual([{ name: 'B' }, { name: 'C' }]);
+    expect(p.notes.unknownCategory).toBe(2);
+    const s = summarizeOptionProjections([p]);
+    expect(s.byCategory).toEqual({ SAFETY: 1, UNKNOWN_CATEGORY: 2 });
+    expect(s.unclassifiedTotal).toBe(2);
+    expect(JSON.stringify(s)).not.toContain('12가3456');
   });
 
   it('집계는 값을 내지 않고 건수만 낸다', async () => {
