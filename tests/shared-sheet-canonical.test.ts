@@ -264,7 +264,8 @@ describe('shared sheet local source to Canonical', () => {
       vi.setSystemTime(new Date('2026-10-04T01:15:01.000Z'));
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'HOLD' });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(JSON.stringify(result.report)).toMatch(/REVIEWED_SOURCE_CHANGE_REJECTED/);
       expect(stableDigest(await s.store.listOffers())).toBe(before);
     } finally { vi.useRealTimers(); }
   });
@@ -280,7 +281,8 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'HOLD', reason: 'CANONICAL_COMMAND_REJECTED' });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(result.report).toHaveProperty('rejectedByCode');
       expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
     } finally { vi.useRealTimers(); }
   });
