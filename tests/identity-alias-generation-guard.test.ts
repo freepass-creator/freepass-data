@@ -27,8 +27,16 @@ describe('별칭으로 고른 마스터도 세대 근거 점검을 받는다', (
     expect(m.state).toBe('MATCH');
   });
 
-  it('원문 차명이 없으면 별칭 점검을 하지 않는다(근거 없음 — 기존 동작)', () => {
-    const m = matchIdentity(product({ rawName: '' }), masters);
-    expect(m).toMatchObject({ state: 'MATCH', master: { id: 'A' } });
+  it('원문 차명이 없거나 공백이면 별칭 일치를 확정하지 않고 보류한다(Codex #679)', () => {
+    for (const rawName of ['', '   ']) {
+      expect(matchIdentity(product({ rawName }), masters)).toMatchObject({ state: 'HOLD', reason: 'GENERATION_EVIDENCE_MISSING' });
+    }
+    const missing = { ...product({}) } as Record<string, unknown>;
+    delete missing.rawName;
+    expect(matchIdentity(missing as unknown as IdentityProduct, masters)).toMatchObject({ state: 'HOLD', reason: 'GENERATION_EVIDENCE_MISSING' });
+  });
+
+  it('원문이 없어도 세부모델 칸이 마스터 이름과 정확히 같으면 기존처럼 확정된다', () => {
+    expect(matchIdentity(product({ sub_model: '팰리세이드 LX2', rawName: '' }), masters)).toMatchObject({ state: 'MATCH', master: { id: 'A' } });
   });
 });

@@ -116,7 +116,9 @@ export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMast
   const engineRawProduct = !p.maker.trim() && !p.model.trim();
   // 별칭으로 고른 경우(상품 세부모델 칸이 마스터 세부모델 이름이 아니라 «팰리세이드» 같은 별칭·기본 이름)도 원문 차명이 있으면 같은 점검을 받는다(2026-10-16:
   // 원문 «더 뉴팰리세이드» 상품이 세부모델 칸 «팰리세이드» 별칭으로 일반 «팰리세이드 LX2» 에 매칭되던 우회 — 세부모델 칸이 채워졌다는 이유로 R1 이 건너뛰어졌다).
-  const aliasMatched = !!norm(p.sub_model) && norm(p.sub_model) !== norm(master.sub_model) && !!(p.rawName ?? '').trim();
+  // 원문 근거가 없으면(rawName 누락·빈 문자열·공백) 별칭 일치를 확정하지 않고 보류한다(Codex #679: 근거 없는 별칭 일치가 세대 점검을 우회해 기존 세부모델을 바꾸던 경로).
+  const aliasMatched = !!norm(p.sub_model) && norm(p.sub_model) !== norm(master.sub_model);
+  if (aliasMatched && !(p.rawName ?? '').trim() && !engineRawProduct) return { state: 'HOLD', reason: 'GENERATION_EVIDENCE_MISSING', candidates: [master.sub_model] };
   if (engineRawProduct || !norm(p.sub_model) || aliasMatched) {
     const rawText = p.rawName || (engineRawProduct ? p.sub_model : '');
     const guard = generationGuard({ rawName: rawText, year: p.year, master, masters });
