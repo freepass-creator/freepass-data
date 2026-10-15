@@ -241,6 +241,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       }
       summary += ` · 번호미배정 ${unassigned}`;
       if (plan.warnings.length) summary += ` · ${plan.warnings.join(',')}`;
+      if (built.reasonCensus) summary += ` · ${built.reasonCensus}`;   // 진단 전용: 계획 digest 밖
       const readNotes = (read.raw as { notes?: unknown } | null)?.notes;
       if (Array.isArray(readNotes) && readNotes.length) summary += ` · ${readNotes.filter((n): n is string => typeof n === 'string' && /^[A-Z0-9_:가-힣]{3,60}$/.test(n)).join(',')}`;
       if (plugin.family === 'AICA') {

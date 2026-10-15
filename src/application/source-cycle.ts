@@ -267,10 +267,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC', 'VEHICLE_IDENTITY']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
   // 사유 집계(진단 전용, 상한 이월 «전»): 이월로 계획에서 빠지는 항목은 이후 경고(VEHICLE_IDENTITY_REFINE 등)가 세지 못한다 —
   // 정제 사유가 상한에 밀려 보이지 않는지 가리는 근거(2026-10-16 00:00 회차: 정제 0건이 «사유 없음»인지 «이월»인지 구분 불가). 쓰기·계획 내용은 바꾸지 않는다.
+  // 계획(plan.warnings)에 넣지 않는다: 계획 digest·재계획 비교에 들어가면 진단만으로 승인 계획이 달라진다. 계획 밖 보고 필드(reasonCensus)로만 돌려준다.
+  let reasonCensus: string | null = null;
   {
     const census = new Map<string, number>();
     for (const e of plan.entries) for (const r of new Set(e.before?.rewriteReasons ?? [])) if (CAPPED_REASONS.has(r)) census.set(r, (census.get(r) ?? 0) + 1);
-    if (census.size) plan.warnings.push(`REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`);
+    if (census.size) reasonCensus = `REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`;
   }
   const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
@@ -316,7 +318,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
-  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
+  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products), reasonCensus };
 }
 
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,
