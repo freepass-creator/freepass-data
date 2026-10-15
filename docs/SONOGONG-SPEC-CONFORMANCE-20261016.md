@@ -46,3 +46,8 @@ npm run report:sonogong-conformance -- --capture <erp5-source-capture.json>     
 npm run report:sonogong-conformance -- --capture <erp5-source-capture.json> --json  # 전/후 비교용
 ```
 캡처는 `export:identity-snapshot` 가 읽는 것과 같은 `erp5-source-capture/1` 파일이다. 18:00 회차 입구 매핑·제원 적용 «전/후» 두 번 돌려 필드별 채움률·위반 건수·사례 3개(끝 4자리)를 비교한다. 코드: `src/application/sonogong-spec-conformance.ts`(순수, 시험 4건).
+
+## 5. 구조 필드 전수 확인(B3Q, 손오공 원문 355문서, 값 없음)
+- 목록 키: id·tab·carNumber·brand·model·detailName·manufactureYearMonth·mileageKm·fuel·displacementCc·exteriorColor·thumbnailUrl·hasActiveContract·prices.
+- 상세 키: 위 + carName·tabLabel·interiorColor·description·newCarOptionNote·images·options·inspection·insuranceHistory·insurance.
+- 구동·변속기·인승·출고 가능일에 해당하는 **구조 필드는 없다**. 자유 텍스트(description·newCarOptionNote·detailName)·옵션명에만 있을 수 있어(구동 낱말 152·변속 101·«N인승» 52·출고 낱말 198문서) 텍스트 파싱은 «값을 만들지 않는다» 원칙상 입구 매핑에 넣지 않는다 — 차종 마스터/세부모델에서 구동·인승을 가져오는 쪽이 정답이고, 출고 가능일은 API 에 없다(상태는 hasActiveContract 뿐).
