@@ -23,6 +23,8 @@ export type IdentityProduct = {
   listable: boolean;
   /** 엔진 임시 표식 문서(vehicle_review_required·RAW_VEHICLE_TEXT): 칸 값이 «원문 덩어리» 임시 값이라 근거가 유일하면 덮어써도 된다. 없으면 false. */
   engineTemp?: boolean;
+  /** 제조사·모델이 «원천 필드로 채운 값»(입구 매핑 표식 SOURCE_FIELDS): 마스터 대조에서는 빈칸으로 본다(원천 표기가 마스터 이름과 달라 후보에서 떨어지지 않게). */
+  makerModelFromSource?: boolean;
   /** 문서 연료 칸(제원, «차 한 대 사실» — 기준 한 장 3절). 원문이 파워트레인을 안 적어도 하이브리드·전기 변형 근거가 된다. 없으면 ''. */
   fuel?: string;
 };
@@ -116,7 +118,8 @@ const variantCovered = (rawText: string, master: IdentityMaster, masters: readon
   });
 };
 
-export function matchIdentity(p: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
+export function matchIdentity(input: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
+  const p: IdentityProduct = input.makerModelFromSource ? { ...input, maker: '', model: '' } : input;
   let cands = masterCandidates(p, masters);
   if (!cands.length) return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
   // 연식으로 세대를 좁힌다: 연식이 있고 후보가 둘 이상일 때만, 범위 안에 들어가는 후보가 «정확히 하나»여야 한다.
@@ -184,7 +187,9 @@ export function buildIdentityPromotionPlan(products: readonly IdentityProduct[],
     if (m.trim.state === 'UNIQUE') {
       const trim = m.trim.name;
       // 이미 값이 있는 트림은 근거 없이 다른 등급으로 바꾸지 않는다(적용기 규칙 (c)와 같은 취지): 철자만 다른(정규화 같음) 경우만 정정, 그 밖은 보류.
-      if (p.trim_name.trim() && p.trim_name !== trim && norm(p.trim_name) !== norm(trim) && p.engineTemp !== true) {
+      // 원천 필드로 제조사·모델만 채운 문서(makerModelFromSource)의 비어 있지 않은 트림은 엔진이 쓴 적이 없다 — 사람 입력이므로 engineTemp 여도 덮어쓰지 않는다(Codex #685 ②).
+      const humanTrimOnSourceFilled = p.makerModelFromSource === true && p.trim_name.trim() !== '';
+      if (p.trim_name.trim() && p.trim_name !== trim && norm(p.trim_name) !== norm(trim) && (p.engineTemp !== true || humanTrimOnSourceFilled)) {
         held.push({ id: p.id, plate4: p.plate4, reason: 'TRIM_CONFLICT_EXISTING', candidates: [trim] });
       } else if (p.trim_name !== trim) {
         trimRepairs.push({ id: p.id, from: p.trim_name, to: trim, ...(p.trim_name.trim() ? {} : { evidence: `원문 차명: ${p.rawName}`.slice(0, 200) }) });

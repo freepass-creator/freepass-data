@@ -304,7 +304,10 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
         terms, observedAt,
         raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
-          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
+          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}),
+          // 원천이 별도 필드로 주는 제조사·모델(brand·model). 짧은 문자열이라 압축 뒤에도 남고, 변경 판정에서는 제외된다(comparableRecord).
+          ...(typeof (detail?.brand ?? row.brand) === 'string' && String(detail?.brand ?? row.brand).trim() ? { source_maker: String(detail?.brand ?? row.brand).trim().slice(0, 60) } : {}),
+          ...(typeof (detail?.model ?? row.model) === 'string' && String(detail?.model ?? row.model).trim() ? { source_model: String(detail?.model ?? row.model).trim().slice(0, 60) } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
       accepted.set(plate, { tab, ym: ymRaw, index: records.length - 1 });
     }
