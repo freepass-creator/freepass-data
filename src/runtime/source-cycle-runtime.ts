@@ -379,7 +379,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const observedAt = new Date().toISOString();
           const soft = (reason: string): SonogongApiRead => ({ observedAt, complete: false, incompleteReason: reason, tabsRead: [], listed: 0, detailsRead: 0,
             notes: [], records: [], held: [], duplicatePlates: [] });
-          // 부하 방어: 마지막 완전 읽기 후 55분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
+          // 부하 방어: 마지막 완전 읽기 후 45분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
           // 간격 기록은 «무인 정시 회차»만 남기고 지킨다: 수동 계획(DRY_RUN) 읽기가 간격을 소비해 같은 시간대 무인 APPLY 를 막지 않게 한다(B3Q 10-14).
           const unattended = env.SOURCE_CYCLE_UNATTENDED === '1';
           if (unattended) try {

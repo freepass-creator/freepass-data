@@ -16,7 +16,7 @@
 
 ## 동작
 
-- 읽기: 3탭(rent → sub → pick) 목록 + 상세, 직렬·간격 1.5초·재시도 0, 429/401/403 즉시 정지, 상세 최대 600건. 마지막 완전 읽기 후 55분 안에는 읽지 않는다(`SONOGONG_API_PASS_INTERVAL` 소프트 보류).
+- 읽기: 3탭(rent → sub → pick) 목록 + 상세, 직렬·간격 1.5초·재시도 0, 429/401/403 즉시 정지, 상세 최대 600건. 마지막 완전 읽기 후 45분 안에는 읽지 않는다(2026-10-16: 55→45, 정시 회차가 읽기 시작 시각 지터로 번갈아 보류되던 문제)(`SONOGONG_API_PASS_INTERVAL` 소프트 보류).
 - 키: 차량번호(번호 우선). 같은 번호가 다른 탭에도 있으면 rent > sub > pick 우선순위로 하나만 채택하고 `CROSS_TAB_DUPLICATE:n`, 제조연월이 다르면 `CROSS_TAB_GENERATION_DIFFERENCE:n` 경고(불완전 아님). 같은 탭 안 중복은 불완전.
 - 상태: `hasActiveContract` → «계약중»(문서 유지·선점 표시 노출, 출고가능 비교 제외), 그 밖 «출고가능». 계약중 판단은 보조 키로만(장부 잠금이 있으면 잠금이 이긴다).
 - 요금: 탭별 반납형(rent=RENT_RETURN, sub·pick=SUBSCRIBE_RETURN) 개월별 월 대여료, 보증금은 상세에서만. 인수형(SUBSCRIBE_BUYOUT)은 raw 에 원문 보존. 사진 `images[].url`(https 만, 없으면 사진 없음), 원문 전 필드는 `raw.list`·`raw.detail`·`raw.prices`.
