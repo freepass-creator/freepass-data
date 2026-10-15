@@ -39,3 +39,29 @@
 
 ## 6. 하지 않는 것
 마스터에 없는 이름 생성, 사람 입력 덮어쓰기, 옵션(대표 결정: 손오공 «미확인», 이안카 «해당 없음» — 쓰기 없음), 트림 추정(손오공·이안카 API 에 트림 없음 — 마스터 정제로만).
+
+## 7. 제원 입구 매핑 확대(대표 2026-10-16 «제원하고 모든 게 다 API 에 있을 거야») — 갭 표(코드 기준, 읽기 전용)
+«API 에 있음/상품에 없음/화면에 없음» 3분류. API 필드는 어댑터(`sonogong-api.ts`)가 읽는 것과 상세 원문(`source_raw`) 구조 기준이며, 전수 필드 목록은 수집 손오공 세션의 전수 확인과 대조해 채운다(아래 «미확인» 칸).
+| 손오공 API 필드 | 어댑터 | 상품 칸 | 상태 |
+|---|---|---|---|
+| carNumber | uid·plate | car_number | 반영됨 |
+| brand / model | source_maker·source_model(이 PR) | maker·model | **상품에 없음 → 입구 매핑(빈 칸만)** |
+| detailName / carName | vehicleText | car_name·sub_model(원문, 새 문서) | 반영됨(정제 전 원문) |
+| fuel | spec.fuel_type(공통 연료 목록으로만) | fuel_type | **새 문서에만** → 기존 문서 입구 매핑(이 PR); 목록 밖 표기 86대 FUEL_UNRESOLVED |
+| displacementCc | spec.engine_cc | engine_cc | **상품에 없음**(새 문서에도 안 실렸음) → 입구 매핑(이 PR) |
+| manufactureYearMonth | spec.year·manufacture_year_month | year | 새 문서에만 → 입구 매핑(이 PR; manufacture_year_month 는 상품 칸 없음) |
+| firstRegistrationDate(상세) | spec.first_registration_date | first_registration_date | 새 문서에만 → 입구 매핑(이 PR) |
+| exteriorColor | spec.ext_color | ext_color | 새 문서에만 → 입구 매핑(이 PR) |
+| mileageKm | spec.mileage | mileage | 새 문서에만 → 입구 매핑(이 PR) |
+| prices·deposit | terms | price | 반영됨 |
+| images·thumbnailUrl | images | image_urls·image_url | 반영됨(사진 없는 문서) |
+| hasActiveContract | status | status·vehicle_status | 반영됨 |
+| options(상세) | raw.detail → api_options_* | api_options_* | 반영됨(게이트 뒤, 99대) / 화면은 ERP·개발 허용 목록 필요 |
+| interiorColor | **안 읽음** | int_color(칸 있음) | **API 에 있음/어댑터에 없음** → 다음 단계(어댑터 한 줄) |
+| description·newCarOptionNote | 안 읽음 | 없음 | 비공개 메모 판정(옵션 설계 5절) — 화면 제외 |
+| inspection·insuranceHistory·insurance | 안 읽음 | 없음 | 별도 설계(점검·보험) |
+| 구동·변속기·인승·차종 구분·출고 가능일·정비 | **미확인(API 에 있는지 전수 확인 대기)** | drive_type·transmission·seats·vehicle_class·(없음) | 수집 손오공 전수 확인 결과와 대조 |
+- **규칙**: 기존 문서의 «빈 칸에만» 채운다. 이미 있는 값(사람 입력 포함)은 비접촉이고 다르면 쓰지 않는다(불일치 로그는 계획 경고로 별도 집계 예정). 값은 짧은 문자열(≤40자)만, 연료·구동·배기량 표기는 차종 기준 한 장의 제원 목록 규칙을 따른다(어댑터가 연료를 공통 목록으로만 통과시킴).
+- **확인 표식**: `vehicle_spec_source_checked`(채울 값이 없어도 한 번 확인하면 표식 — 되풀이 쓰기 방지).
+- **게이트**: 입구 매핑 허용 공급사 변수(`SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES`)와 같은 변수·같은 회차 상한(100)·기본 꺼짐.
+- **화면 표시**: ERP5 `/api/catalog`·화면에 이미 읽히는 칸(fuel_type·ext_color·mileage·year 등)은 문서에 값이 생기면 그대로 보인다. 읽지 않는 칸(engine_cc 가 허용 목록에 있는지, int_color)은 ERP·개발 허용 목록 확인이 필요하다.
