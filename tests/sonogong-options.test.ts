@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { projectSonogongOptions, summarizeOptionProjections } from '../src/application/sonogong-options.js';
+import { projectSonogongOptions, summarizeOptionProjections } from '../src/domain/sonogong-options.js';
 import { runSonogongOptionsPlan } from '../src/jobs/plan-sonogong-options.js';
 
 describe('손오공 옵션 투영', () => {

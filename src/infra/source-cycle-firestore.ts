@@ -9,6 +9,7 @@ import type { CycleCommands, CycleProduct, SupplierFields, VehicleIdentityRefine
 import { rawEntryOfRecord, rawEntryOfHeld } from '../domain/source-raw.js';
 import { salePriceMap, compactRecord, isPhotoUrlList, PHOTO_URL_LIST_SOURCES, representativeTerms, type SourceAmount, type SourceProductRecord } from '../domain/source-engine.js';
 import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
+import { boundedOptions, asBoundedOptions, OPTIONS_MAX_ITEMS } from '../domain/sonogong-options.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 
@@ -109,6 +110,23 @@ export function apiPhotoFields(r: SourceProductRecord, original: Fields): Fields
   if (!isPhotoUrlList(urls) || !urls.length) return {};
   return { image_urls: [...urls], image_url: urls[0]! };
 }
+/** 손오공 API 옵션(대표 2026-10-15 승인, 설계 docs/SONOGONG-OPTIONS-DESIGN-20261016.md): 상세 raw.detail.options → 새 칸 api_options_*.
+ * 과거 시트 유래 칸(옵션·options·정제옵션)과 섞지 않는다. 유상 구분 근거는 API category «선택옵션» 하나이며 표시 전용(가격 계산 비반영).
+ * 상세가 없거나 options 가 배열이 아니면 «모르는 값»으로 기존 옵션을 지우지 않는다 — 칸이 한 번도 없던 문서에만 확인 표식(api_options_state)을 남겨
+ * 되풀이 쓰기(API_OPTIONS 사유)를 막는다. 옵션이 바뀌면 상세 digest 가 바뀌어 일반 변경으로 다시 쓴다. */
+export const API_OPTIONS_MAX_ITEMS = OPTIONS_MAX_ITEMS;
+export function apiOptionFields(r: SourceProductRecord, original: Fields): Fields {
+  if (r.sourceId !== 'RP012') return {};
+  // 상세가 있으면 거기서(분류+제한), 계획·저장 단계의 압축 레코드면 저장된 제한 꼴(raw.api_options)에서 읽는다. 분류 전 원문은 저장하지 않는다.
+  const kept = boundedOptions((r.raw?.detail as { options?: unknown } | null | undefined)?.options) ?? asBoundedOptions(r.raw?.api_options);
+  const hadMark = original.api_options_state !== undefined && original.api_options_state !== null;
+  if (!kept) return hadMark ? {} : { api_options_state: 'NO_DETAIL', api_options_observed_at: r.observedAt };
+  if (kept.state === 'TOO_MANY') return hadMark ? {} : { api_options_state: 'TOO_MANY', api_options_observed_at: r.observedAt };
+  const { basic, paid } = kept;
+  return { api_options_basic: basic, api_options_paid: paid, api_options_state: kept.state, api_options_source: 'RP012-api',
+    api_options_unclassified_count: kept.unclassified_count,
+    api_options_digest: stableDigest({ basic, paid }).slice(0, 32), api_options_observed_at: r.observedAt };
+}
 /** 엔진 기록(source_cycle_record)이 없는 옛 문서의 관측 기준 시각. 기본은 source_observed_at, 없으면 문서 updateTime.
  * 이안카(RP031) 옛 발행 문서는 사진·정책 연결 쓰기가 updateTime 을 원천 갱신 시각보다 늦게 밀어 엔진이 OBSERVATION_ORDER 로 영영 갱신하지 못했다.
  * 그래서 RP031 은 updateTime 을 쓰지 않고 옛 발행기가 남긴 원천 시각(iancar_phase_one.sourceSyncedAt → _direct_ingest_at)을 쓰고, 둘 다 없으면 «관측 없음»(epoch)으로 본다.
@@ -182,6 +200,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 손오공 API 사진(대표 10-15): 사진이 하나도 없는 노출 문서인데 저장 기록에 API 사진 주소가 있으면 한 번 다시 써서 image_urls 를 채운다.
   // 쓰면 image_urls 가 생겨 되풀이되지 않는다. 사진 목록이 같은 문서는 이 사유 없이는 다시 쓰지 않는다(일괄 UPDATE 없음).
   if (engineOwned && PHOTO_URL_LIST_SOURCES.has(String(f.provider_company_code)) && !hasAnyPhoto(f) && recordHasPhotoUrls(record)) rewriteReasons.push('PHOTO_URLS');
+  // 손오공 API 옵션(대표 10-15 승인): 옵션 확인 표식(api_options_state)이 한 번도 없던 노출 문서는 한 번 다시 써서 칸을 채운다.
+  // 쓰면 표식이 생겨 되풀이되지 않는다(상세가 없으면 NO_DETAIL 표식). 회차당 상한은 계획 단계(API_OPTIONS_DEFERRED)가 건다.
+  if (engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
     && typeof record.raw?.vehicle_id === 'string' && record.raw.vehicle_id.trim()) rewriteReasons.push('IANCAR_VEHICLE_ID');
@@ -278,6 +299,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...iancarVehicleIdFields(r, original),
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
+    ...apiOptionFields(r, original),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -391,7 +413,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type',
           'image_urls', 'image_url', 'photo_cache', 'photo_original_refs', 'iancar_one_vehicle_id', '_direct_ingest_at',
           // 정체성 정제 판정(engineIdentityHold·identityYear)이 읽는 칸 — 목록과 전체 문서의 envelope 가 같아야 백업 대조가 맞는다.
-          'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date']) query.append('mask.fieldPaths', fieldPath(field));
+          'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date',
+          // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
+          'api_options_state']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);

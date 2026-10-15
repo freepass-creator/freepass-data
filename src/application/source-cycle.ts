@@ -9,6 +9,8 @@ import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvid
 export * from '../ports/source-cycle.js';
 
 export const deepEqual = (a: unknown, b: unknown) => stableDigest(a) === stableDigest(b);
+/** 손오공 API 옵션 칸만 채우는 다시 쓰기의 회차당 상한(첫 반영 규모 283건 → 3회차에 걸쳐). */
+export const OPTIONS_REWRITE_CAP = 100;
 // 계약 잠금 = 저장소가 판정한 locked_by_contract(계약 원장·ERP 가 건 잠금, 엔진이 쓴 계약중 상태는 제외 — infra envelope). 원천 원문이 계약중이라는 이유만으로는
 // 잠그지 않는다: 계약중 노출 정책에서 그 문서는 엔진이 계속 갱신(출고가능 복귀·철회)해야 한다.
 const locked = (p: CycleProduct) => p.locked_by_contract;
@@ -258,6 +260,19 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   // 엔진 정체성 정제(대표 2026-10-15): 보류 문서 중 이번 마스터로 하나로 특정돼 다시 쓰는 수, 그리고 쓰기가 있는 계획에는 대조에 쓴 마스터 digest 를 남긴다 —
   // 승인 계획을 나중에 적용할 때 마스터가 바뀌었으면 재계획(replay)이 달라져 CYCLE_REPLAN_REQUIRED 로 멈춘다(계획에 없던 이름을 쓰지 않는다).
+  // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
+  // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
+  // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
+  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && e.before?.rewriteReasons?.length === 1 && e.before.rewriteReasons[0] === 'API_OPTIONS' &&
+    e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
+  const optionsAllowed = Math.max(0, OPTIONS_REWRITE_CAP - (plan.entries.length - optionsOnly.length));
+  if (optionsOnly.length > optionsAllowed) {
+    const deferred = new Set(optionsOnly.slice(optionsAllowed).map(e => sourceProductKey(e.after.record)));
+    plan.entries = plan.entries.filter(e => !(optionsOnly.includes(e) && deferred.has(sourceProductKey(e.after.record))));
+    plan.warnings.push(`API_OPTIONS_DEFERRED:${deferred.size}:cap${OPTIONS_REWRITE_CAP}`);
+  }
+  const optionsRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('API_OPTIONS')).length;
+  if (optionsRewrite > 0) plan.warnings.push(`API_OPTIONS_REWRITE:${optionsRewrite}`);
   const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);

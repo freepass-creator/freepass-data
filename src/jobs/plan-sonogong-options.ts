@@ -3,7 +3,7 @@
  * 입력: 배열. 각 항목은 {detail:{options}} · {raw:{detail:{options}}} · {options} 중 하나(source_raw 덤프 또는 엔진 레코드).
  * 출력: 집계만(건수·구분 분포·유상 금액 KNOWN/UNKNOWN·이상 징후). 이름·금액·번호 값은 출력하지 않는다. 상품 문서 쓰기는 이 도구가 하지 않는다. */
 import { readFile } from 'node:fs/promises';
-import { projectSonogongOptions, summarizeOptionProjections } from '../application/sonogong-options.js';
+import { projectSonogongOptions, summarizeOptionProjections } from '../domain/sonogong-options.js';
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {});
