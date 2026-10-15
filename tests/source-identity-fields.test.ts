@@ -320,3 +320,16 @@ describe('Codex #688 두 번째 지적', () => {
     expect(decodeFields(off.fake.docs.get('94아1002').fields).ext_color).toBe('검정');
   });
 });
+
+describe('Codex #685 다섯 번째 지적', () => {
+  it('선정 단계에도 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유를 받지 않아 같은 재쓰기가 반복되지 않는다', async () => {
+    const { commands, fake } = await setup();
+    fake.put('95자1001', legacyDoc(rec('95자1001'), { sub_model: '아반떼 CN7' }));
+    fake.put('95자1002', legacyDoc(rec('95자1002'), { trim_name: '모던' }));
+    await run(commands, [rec('95자1001'), rec('95자1002')]);   // 제원 확인 표식(spec) 한 번은 있을 수 있다
+    const again = await run(commands, [rec('95자1001'), rec('95자1002')]);
+    expect(again.kinds).toEqual([]);                                  // 같은 재쓰기가 반복되지 않는다(상한 슬롯 소모 없음)
+    expect(again.warnings.some(w => w.startsWith('SOURCE_IDENTITY_REWRITE'))).toBe(false);
+    expect(decodeFields(fake.docs.get('95자1001').fields).maker).toBe('');
+  });
+});
