@@ -232,7 +232,14 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
             maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
+          // The operational-refresh apply mode owns supplier status, source facts and existing period rent only (see
+          // reviewed-source-change.ts «limited to known supplier status and existing period rent»). Any other reviewable change
+          // (odometer, deposit, mileage limit) is rejected there and, as the first CHANGE, aborted the whole run with
+          // CANONICAL_COMMAND_REJECTED. Hold that one vehicle at plan time instead; it stays under its own reviewed command.
+          const unsupported = fence ? [...new Set(review.diffs.filter(x => x.classification === 'REVIEWABLE' &&
+            !OPERATIONAL_REFRESH_ALLOWED_REASONS.has(x.reasonCode)).map(x => x.reasonCode))].sort() : [];
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
+          else if (unsupported.length) reasons.push(...unsupported.map(code => `OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:${code}`));
           else {
             entry.action = 'CHANGE';
             entry.change = { ...base, bindingId, expectedBindingRevision: review.bindingRevision,
@@ -354,6 +361,9 @@ export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
 const PER_ENTRY_REJECTION_CODES: ReadonlySet<string> = new Set(
   ['REVIEWED_SOURCE_CHANGE_REJECTED', 'REVIEWED_SOURCE_CHANGE_CONFLICT', 'REVIEWED_SOURCE_CHANGE_BLOCKED',
     'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH']);
+/** Diff reason codes the operational-refresh apply mode accepts (must match assertOperationalRefresh in reviewed-source-change.ts). */
+const OPERATIONAL_REFRESH_ALLOWED_REASONS: ReadonlySet<string> = new Set(
+  ['SOURCE_EXPOSURE_CHANGE', 'SOURCE_ASSET_STATUS_CHANGE', 'SOURCE_VEHICLE_FACTS_CHANGE', 'SOURCE_MONTHLY_RENT_CHANGE']);
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
