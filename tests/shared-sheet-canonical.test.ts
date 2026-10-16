@@ -327,6 +327,7 @@ describe('shared sheet local source to Canonical', () => {
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
       expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
       expect(result.report).toHaveProperty('rejectedByCode');
+      expect(result.report).toHaveProperty('rejectedByReason');
       expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
     } finally { vi.useRealTimers(); }
   });
@@ -876,5 +877,13 @@ describe('commandFailureDetail', () => {
     expect(JSON.stringify(d)).not.toContain('secret-id');
     expect(commandFailureDetail(new Error('something odd 12345'), 'CHANGE').category).toBe('UNCLASSIFIED');
     expect(commandFailureDetail('not an error', 'UNKNOWN')).toMatchObject({ errorClass: 'NonError' });
+  });
+});
+
+describe('reviewedRejectionReason', () => {
+  it('maps only fixed reviewed-command messages; unknown text stays UNLISTED and is never echoed', async () => {
+    const { reviewedRejectionReason } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(reviewedRejectionReason(new Error('Existing rent diverges from the last source observation; preserve human input'))).toBe('EXISTING_RENT_DIVERGES');
+    expect(reviewedRejectionReason(new Error('Candidate not found: secret-id'))).toBe('UNLISTED');
   });
 });

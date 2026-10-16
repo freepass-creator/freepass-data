@@ -336,6 +336,31 @@ const COMMAND_FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/invalid|illegal|malformed|schema|unsupported|must|required/i, 'INVALID_INPUT'],
   [/deadline|timeout|unavailable|econn|network/i, 'TRANSPORT'],
 ];
+/** 검토 명령 거절의 «고정 문구 → 고정 코드». 문구는 reviewed-source-change.ts 의 상수뿐(식별자·값이 섞인 문구는 목록에 없다). */
+const REVIEWED_REJECTION_REASONS: ReadonlyArray<readonly [string, string]> = [
+  ['Operational refresh is limited to', 'OPERATIONAL_UNSUPPORTED_OPERATION'],
+  ['Existing rent diverges', 'EXISTING_RENT_DIVERGES'],
+  ['Existing status is unknown or diverges', 'EXISTING_STATUS_DIVERGES'],
+  ['Source facts contain human divergence', 'SOURCE_FACTS_DIVERGE'],
+  ['Previous candidate does not match', 'PREVIOUS_CANDIDATE_MISMATCH'],
+  ['Operational source evidence is stale', 'OPERATIONAL_EVIDENCE_STALE_OR_INCOMPLETE'],
+  ['Operational refresh lineage does not match', 'OPERATIONAL_LINEAGE_MISMATCH'],
+  ['Known registered supplier status', 'SUPPLIER_STATUS_OR_ASSET_MISSING'],
+  ['Catalog writer ownership changed', 'WRITER_OWNERSHIP_CHANGED'],
+  ['Candidate is not from the accepted current source head', 'CANDIDATE_NOT_CURRENT_HEAD'],
+  ['Candidate source identity does not match', 'BINDING_IDENTITY_MISMATCH'],
+  ['Existing Canonical', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Existing VehicleAsset binding', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Product has a VehicleAsset that is not represented', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Existing economics', 'EXISTING_ECONOMICS_INCONSISTENT'],
+  ['Existing FIXED economics', 'FIXED_ECONOMICS_DIFFER'],
+  ['Changed rent has no identical', 'CHANGED_RENT_NO_ECONOMICS_RULE'],
+  ['Rejected candidate cannot', 'CANDIDATE_REJECTED'],
+];
+export function reviewedRejectionReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  return REVIEWED_REJECTION_REASONS.find(([prefix]) => message.startsWith(prefix))?.[1] ?? 'UNLISTED';
+}
 export function commandFailureDetail(error: unknown, kind: 'CREATE' | 'CHANGE' | 'UNKNOWN') {
   const message = error instanceof Error ? error.message : '';
   const cls = error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? error.name : 'NonError';
@@ -392,7 +417,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
   let commandKind: 'CREATE' | 'CHANGE' | 'UNKNOWN' = 'UNKNOWN';
-  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {};
+  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {}, rejectedByReason: Record<string, number> = {};
   for (const entry of plan.entries) {
     if (entry.action === 'HOLD') { held++; continue; }
     if (entry.action === 'NO_CHANGE') { noChange++; continue; }
@@ -411,6 +436,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       if (typeof code === 'string' && PER_ENTRY_REJECTION_CODES.has(code)) {
         held++; rejected.add(entry.recordId);
         const key = `${commandKind}:${code}`; rejectedByCode[key] = (rejectedByCode[key] ?? 0) + 1;
+        const why = `${code}:${reviewedRejectionReason(error)}`; rejectedByReason[why] = (rejectedByReason[why] ?? 0) + 1;
         continue;
       }
       // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
@@ -466,7 +492,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   }
   return { report: { mode: 'APPLY', status: readbackMismatches ? 'HOLD' : held ? 'PARTIAL_HOLD' : 'APPLIED',
     committed, noChange, held, remaining: 0,
-    ...(Object.keys(rejectedByCode).length ? { rejectedByCode } : {}),
+    ...(Object.keys(rejectedByCode).length ? { rejectedByCode, rejectedByReason } : {}),
     reconciliation: { stage: 'CANONICAL_READBACK', suppliedTerms, storedTerms, heldTerms, readbackMismatches,
       equal: suppliedTerms === storedTerms && readbackMismatches === 0 } } };
 }
