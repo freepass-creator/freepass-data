@@ -123,3 +123,33 @@ describe('이안카 상세·가용 캐시', () => {
     expect(capture.detailCacheOut).toBeUndefined();
   });
 });
+
+describe('캐시 봉투 재검증(관문 Codex P1)', () => {
+  it('캐시 봉투의 차량 ID·번호·가용 사실이 현재 목록과 어긋나면 재사용하지 않고 다시 읽는다', async () => {
+    const w1 = world();
+    const first = await collectIancarOneFullFacts(config, w1.fetcher, undefined, undefined, { detailCache: null });
+    const cache = roundTrip(first.detailCacheOut!);
+    // veh4(순환 밖)의 가용 봉투에 다른 차 ID, veh5 의 상세 번호를 바꿔 넣은 손상 파일
+    (cache.entries.veh4!.availability.data as Record<string, unknown>).vehicle_id = 'other';
+    (cache.entries.veh5!.detail.data as Record<string, unknown>).plate_number = '999가9999';
+    const w2 = world();
+    vi.setSystemTime(new Date('2026-10-01T00:05:00Z'));
+    const second = await collectIancarOneFullFacts(config, w2.fetcher, undefined, undefined, { detailCache: cache });
+    expect(second.readyForRawIngest).toBe(true);
+    expect(w2.calls.detail).toBe(IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle + 2);
+    expect(second.records.filter(r => r.hold)).toHaveLength(0);
+    // 다시 읽은 뒤 캐시는 정상 봉투로 갱신된다
+    expect((second.detailCacheOut!.entries.veh4!.availability.data as { vehicle_id: string }).vehicle_id).toBe('veh4');
+  });
+  it('캐시 상세의 synced_at 이 현재 목록 synced_at 보다 뒤(역행·미래)면 재사용하지 않는다', async () => {
+    const w1 = world();
+    const first = await collectIancarOneFullFacts(config, w1.fetcher, undefined, undefined, { detailCache: null });
+    const cache = roundTrip(first.detailCacheOut!);
+    (cache.entries.veh6!.detail.data as Record<string, unknown>).synced_at = '2026-10-01T00:00:01.000Z';
+    const w2 = world();
+    vi.setSystemTime(new Date('2026-10-01T00:05:00Z'));
+    const second = await collectIancarOneFullFacts(config, w2.fetcher, undefined, undefined, { detailCache: cache });
+    expect(w2.calls.detail).toBe(IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle + 1);
+    expect(second.readyForRawIngest).toBe(true);
+  });
+});

@@ -528,6 +528,18 @@ export function compareIancarOnePhaseOneParity(
 /** Vehicle-scoped GET evidence binds rates even where the provider does not echo ID. */
 /** 한 회차 읽는 동안 상태가 바뀌어 상세·끝 목록과 어긋난 차를 «그 차만 보류»할 수 있는 한도(전체 대수 비율). 넘으면 원천 불안정으로 회차를 실패시킨다. */
 export const IANCAR_ONE_DRIFT_HOLD_RATIO = 0.2;
+/** 캐시 봉투 재사용 조건: 두 봉투가 성공 구조이고 vehicle_id·번호가 이 차와 같고 stale 이 아니며, 가용 3칸이 현재 목록 행과 같고,
+ * 상세 synced_at 이 현재 목록 synced_at 보다 뒤(미래·역행)가 아니다. 하나라도 어긋나면 재사용하지 않는다(다시 읽는다). */
+function cachedEnvelopesMatch(entry: IancarDetailCacheEntry, record: IancarOneListCapture['records'][number], listSyncedAt: string): boolean {
+  for (const envelope of [entry.detail, entry.availability]) {
+    if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data) || envelope.data.vehicle_id !== record.vehicleId
+      || envelope.data.stale !== false || !instant(envelope.data.synced_at) || Date.parse(envelope.data.synced_at) > Date.parse(listSyncedAt)) return false;
+    for (const field of ['inventory_status', 'available', 'available_from'])
+      if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field])) return false;
+  }
+  if (!isObject(entry.detail.data) || (entry.detail.data as JsonObject).plate_number !== record.payload.plate_number) return false;
+  return true;
+}
 export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void,
@@ -575,7 +587,10 @@ export async function collectIancarOneFullFacts(
       continue;
     }
     const rowDigest = cacheOn ? iancarListRowDigest(record.payload) : '';
-    const cached = cacheOn && !rotation.has(record.vehicleId) ? cachedIancarDetailFor(cache, record.vehicleId, rowDigest, observationNow()) : null;
+    // 캐시 적중이어도 봉투의 신원·번호·가용 사실·시각 순서를 «현재 목록»과 다시 대조한다(관문 Codex P1): 어긋나면 캐시를 버리고 전부 다시 읽는다.
+    // 상세 봉투의 15분 창은 다시 적용하지 않는다 — 상세 사실(이름·번호·제원)은 정적이고, 그 시효는 유효 상한(24h)·순환 전수·행 지문으로 묶인다(이 PR 의 목적).
+    const candidate = cacheOn && !rotation.has(record.vehicleId) ? cachedIancarDetailFor(cache, record.vehicleId, rowDigest, observationNow()) : null;
+    const cached = candidate && cachedEnvelopesMatch(candidate, record, capture.syncedAt) ? candidate : null;
     const responses = await Promise.allSettled(cached
       ? [Promise.resolve(cached.detail as Json), Promise.resolve(cached.availability as Json), client.getRates(record.vehicleId)]
       : [client.getVehicle(record.vehicleId), client.getAvailability(record.vehicleId), client.getRates(record.vehicleId)]);
