@@ -1,4 +1,4 @@
-# 이 PC 작업 스케줄러에 «수집 15분 감시» 등록(사용자 로그온 상태, 15분마다). 읽기 전용 감시 스크립트만 실행한다.
+﻿# 이 PC 작업 스케줄러에 «수집 15분 감시» 등록(사용자 로그온 상태, 15분마다). 읽기 전용 감시 스크립트만 실행한다.
 param([string]$Repo = (Split-Path -Parent $PSScriptRoot))
 $node = (Get-Command node).Source
 $script = Join-Path $Repo 'scripts\collection-health-watch.mjs'
