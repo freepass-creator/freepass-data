@@ -35,7 +35,7 @@ const depositOf = (price, p) => digits(price?.[p]?.deposit);
 
 // 항목 정의: kind raw(원문 그대로) | refined(정제값) | number | date. data(f) 는 Data 값, src(c) 는 원본 값.
 const textRaw = (field, srcCol, data) => ({ field, kind: 'raw', src: c => c[srcCol], data });
-const textRefined = (field, srcCol, data) => ({ field, kind: 'refined', src: c => c[srcCol], data });
+const textRefined = (field, srcCol, data, vk = 'contain') => ({ field, kind: 'refined', vk, src: c => c[srcCol], data });
 const num = (field, srcCol, data) => ({ field, kind: 'number', src: c => c[srcCol], data });
 const date = (field, srcCol, data) => ({ field, kind: 'date', src: c => c[srcCol], data });
 const rent = (field, srcCol, period) => ({ field, kind: 'number', src: c => c[srcCol], data: f => rentOf(f.price, period) });
@@ -47,9 +47,9 @@ export const FIELD_MAPS = Object.freeze({
     textRaw('차명 원문(원문.차명)', '트림', f => f['원문']?.['차명']),
     textRaw('옵션 원문(options)', '옵션', f => f.options),
     textRaw('주행거리(mileage)', 'Km', f => f.mileage),
-    textRefined('제조사(maker)', '제조사', f => f.maker),
+    textRefined('제조사(maker)', '제조사', f => f.maker, 'maker'),
     textRefined('차종(model)', '차종분류', f => f.model),
-    textRefined('연료(fuel_type)', '연료', f => f.fuel_type),
+    textRefined('연료(fuel_type)', '연료', f => f.fuel_type, 'fuel'),
     textRefined('외장색(ext_color)', '외장', f => f.ext_color),
     textRefined('내장색(int_color)', '내장', f => f.int_color),
     textRefined('구분(product_type)', '구분', f => f.product_type),
@@ -79,6 +79,17 @@ export const FIELD_MAPS = Object.freeze({
   ] }
 });
 
+
+// 정제 차이는 «검증된 변환»만 인정한다: 제조사 = 같은 제조사의 표기 차이(별칭 묶음), 연료 = 같은 연료군, 그 밖 = 한쪽이 다른 쪽을 포함할 때만.
+const MAKER_GROUPS = [['현대','현대자동차','hyundai'], ['기아','기아자동차','kia'], ['제네시스','genesis'], ['쉐보레','쉐보레(한국gm)','한국gm','chevrolet'],
+  ['르노','르노(삼성)','르노코리아','르노코리아(삼성)','르노삼성','삼성','renault'], ['kgm','kg모빌리티','kg모빌리티(쌍용)','쌍용','ssangyong']];
+const FUEL_GROUPS = [['가솔린','휘발유','gasoline','가솔린터보'], ['디젤','경유','diesel'], ['lpg','lpi','엘피지','lpe'], ['하이브리드','hev','hybrid','가솔린하이브리드','phev'], ['전기','ev','electric','전기차']];
+const groupOf = (groups, v) => { const k = squash(v); return groups.findIndex(g => g.some(x => squash(x) === k || k.includes(squash(x)) && squash(x).length >= 3)); };
+const REFINE_CHECKS = {
+  maker: (a, b) => { const x = groupOf(MAKER_GROUPS, a), y = groupOf(MAKER_GROUPS, b); return x >= 0 && x === y; },
+  fuel: (a, b) => { const x = groupOf(FUEL_GROUPS, a), y = groupOf(FUEL_GROUPS, b); return x >= 0 && x === y; },
+  contain: (a, b) => { const x = squash(a), y = squash(b); return x.length >= 2 && y.length >= 2 && (x.includes(y) || y.includes(x)); }
+};
 function judge(def, srcRaw, dataRaw) {
   if (def.kind === 'number') {
     const s = digits(srcRaw), d = digits(dataRaw);
@@ -91,11 +102,17 @@ function judge(def, srcRaw, dataRaw) {
     return sameDate(a, b) ? 'match' : !b ? 'mismatch' : 'mismatch';
   }
   if (blank(srcRaw)) return blank(dataRaw) ? 'blankBoth' : 'extra';
+  if (def.kind === 'raw') {
+    // 원문 보존 항목: 글자 그대로(앞뒤 공백만 허용)여야 match. 공백·대소문자만 다르면 «형식 차이»(normalized, exactRate 에서 제외), 그 밖은 mismatch.
+    if (String(srcRaw).trim() === String(dataRaw ?? '').trim()) return 'match';
+    return squash(srcRaw) === squash(dataRaw) ? 'normalized' : 'mismatch';
+  }
   if (squash(srcRaw) === squash(dataRaw)) return 'match';
-  if (def.kind === 'refined') return blank(dataRaw) ? 'mismatch' : 'normalized';
+  if (def.kind === 'refined') return !blank(dataRaw) && REFINE_CHECKS[def.vk ?? 'contain'](srcRaw, dataRaw) ? 'normalized' : 'mismatch';
   return 'mismatch';
 }
 
+export const _judgeForTest = (...a) => judge(...a);
 export function compareSupplier({ map, sourceRows, products, samples = 3 }) {
   const srcByPlate = new Map();
   for (const r of sourceRows) {
