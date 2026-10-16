@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
-import { judgeSheetCount, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
+import { judgeSheetCount, parseSheetCountState, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
 import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
@@ -29,6 +29,9 @@ import { captureVehicleMasterSnapshotReadOnly } from '../jobs/data-access-runtim
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { createHash } from 'node:crypto';
+import { readXlsx } from '../adapters/xlsx-reader.js';
+import { convertMaumcarWorkbook, MAUMCAR_SOURCE_ID, type MaumcarConversion } from '../adapters/maumcar-file.js';
 
 /** ERP4 단독 수집 원천(손오공 RP012·오토플러스 RP023)의 관측 전용 플러그인. 엔진은 쓰지 않고, 공급사 문서 전체(source 값과 무관)를 세며
  * 관측 시각은 «지금»이 아니라 노출 문서의 마지막 수정 시각이다 — 수집기가 멈추면 시각이 늙어 신선도 감시가 STALE 로 잡는다
@@ -70,6 +73,23 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<boolean> {
   try { await writeFile(tmp, JSON.stringify(value), { mode: 0o600 }); await rename(tmp, path); return true; }
   catch { await unlink(tmp).catch(() => undefined); return false; }
 }
+/** 마음카(RP034) 파일 원천 플러그인(대표 2026-10-14·커맨드 센터 2026-10-16): 공급사가 보낸 XLSX 를 변환해 엔진 입력으로 넘긴다.
+ * 파일은 «스냅숏»이지 전체 목록의 권위가 아니다 — 파일에 없는 차는 하향하지 않고(부재 판정 보류, 공급사 확인 필요) 보류 건수에 항상 1건을 더해 부재 하향을 막는다.
+ * 같은 파일을 다시 적용해도 내용이 같으면 계획이 비어 쓰기가 없다(해시는 raw.source_file_sha256 로 기록). 번호 중복이 있으면 불완전. */
+export function maumcarFilePlugin(ratio: number, collect: () => Promise<{ conversion: MaumcarConversion; observedAt: string }>) {
+  return sourceCyclePlugin({ sourceId: MAUMCAR_SOURCE_ID, kind: 'FILE', scopes: ['file'], maxDowngradeRatio: ratio }, async () => {
+    const { conversion, observedAt } = await collect();
+    const duplicates = conversion.duplicatePlates.length > 0;
+    const report = conversion.reportOnly;
+    return { observedAt, complete: !duplicates, completedScopes: duplicates ? [] : ['file'], visibilityComplete: true,
+      ...(duplicates ? { incompleteReason: 'DUPLICATE_PLATES' } : {}),
+      notes: [...conversion.notes, `PRE_RELEASE_REPORT_ONLY:${report.preReleaseRows}`, ...report.headerlessSheets.map(s => `HEADERLESS_SHEET_REPORT_ONLY:${s.rows}`)],
+      heldCount: conversion.held.length + 1,
+      heldReasons: [...conversion.held.map(h => `${h.reason}:UPSTREAM_ROW_HOLD`), 'ABSENCE_NOT_AUTHORITATIVE:UPSTREAM_ROW_HOLD'],
+      rows: conversion.records.map(record => ({ scope: 'file', record })) } as CycleCapture;
+  }) as ReturnType<typeof sourceCyclePlugin>;
+}
+
 /** 손오공 공식 API 쓰기 플러그인: API 읽기 결과(번호 키·계약중=선점 표시·요금·사진)를 엔진 레코드로 넘긴다. 읽기가 불완전하면 부재 하향·적용이 막힌다. */
 export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<SonogongApiRead>) {
   return sourceCyclePlugin({ sourceId: 'RP012', kind: 'SONOGONG', scopes: ['api'], maxDowngradeRatio: ratio }, async () => {
@@ -99,10 +119,44 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters) } };
+    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      ...modelTablesFromMasters(masters) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
+}
+/** 입구 매핑이 쓰는 마스터 모델 표(순수): 허용 집합 = 마스터 «정식 모델 이름»만, 별칭은 «정식 이름으로 변환» 표로만(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
+ * 같은 제조사에서 한 별칭(정규화 키: 공백·대소문자 무시)이 서로 다른 정식 모델 둘 이상에 있으면 모호하므로 그 별칭은 제외한다(틀린 모델을 쓰지 않는다, Codex #706). */
+export function modelTablesFromMasters(masters: ReadonlyArray<{ maker: string; model: string; model_aliases: readonly string[] }>):
+  { models: Record<string, readonly string[]>; modelAliases: Record<string, Record<string, string>> } {
+  const key = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const models: Record<string, Set<string>> = {};
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (maker && model) (models[maker] ??= new Set<string>()).add(model);
+  }
+  const canonicalKeys = (maker: string): Set<string> => new Set([...(models[maker] ?? [])].map(key));
+  const candidates: Record<string, Map<string, Map<string, string>>> = {};   // maker → aliasKey → (정식 키 → 정식 이름)
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (!maker || !model) continue;
+    for (const alias of m.model_aliases) {
+      const a = alias.trim();
+      if (!a || key(a) === key(model)) continue;
+      const byAlias = (candidates[maker] ??= new Map<string, Map<string, string>>());
+      const targets = byAlias.get(key(a)) ?? byAlias.set(key(a), new Map<string, string>()).get(key(a))!;
+      targets.set(key(model), model);
+    }
+  }
+  const modelAliases: Record<string, Record<string, string>> = {};
+  for (const [maker, byAlias] of Object.entries(candidates)) {
+    const own = canonicalKeys(maker);
+    for (const [aliasKey, targets] of byAlias) {
+      if (targets.size !== 1 || own.has(aliasKey)) continue;   // 모호(정식 모델 둘 이상) 또는 다른 정식 이름과 같은 키
+      (modelAliases[maker] ??= {})[aliasKey] = [...targets.values()][0]!;
+    }
+  }
+  return { models: Object.fromEntries(Object.entries(models).map(([k, v]) => [k, [...v].sort()])), modelAliases };
 }
 export const sonogongApiEnabled = (env: NodeJS.ProcessEnv): boolean =>
   env.SOURCE_CYCLE_SONOGONG_API === '1' && !!env.SONOGONG_API_KEY?.trim() && !!env.SONOGONG_API_BASE?.trim();
@@ -112,7 +166,13 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
   // 정체성 정제: 기본 켜짐, SOURCE_CYCLE_IDENTITY_REFINE=0 이면 끔. 첫 목록 읽기 때 한 번만 읽고(같은 Promise) 회차 내내 같은 마스터를 쓴다.
-  let identityStatus = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' ? 'DISABLED' : 'NOT_LOADED';
+  // 입구 매핑이 켜진 공급사가 있으면 마스터(제조사 목록)를 읽어야 하므로 REFINE=0 이어도 로드한다(정제 자체는 identityRefine=false 로 끈 채).
+  const sourceIdentitySources = (env.SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  // 정체성 정제 켜기(IDENTITY-SAME-CYCLE-DESIGN 2단계, 기본 꺼짐으로 뒤집음): SOURCE_CYCLE_IDENTITY_SOURCES=공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다.
+  // 목록이 없으면 SOURCE_CYCLE_IDENTITY_REFINE=1 일 때만 전체에 켠다(명시). 그 밖(미설정 포함)은 꺼짐 — 옵션 사고(#674)의 교훈: 무인 쓰기 경로는 기본 꺼짐.
+  const identitySources = (env.SOURCE_CYCLE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' || (identitySources.length === 0 && env.SOURCE_CYCLE_IDENTITY_REFINE !== '1');
+  let identityStatus = refineOff && !sourceIdentitySources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
     : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.status; return r.refiner; });
@@ -120,7 +180,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
-      ...(env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1', identity });
+      ...(env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1' ? [] : ['RP023'])], acceptDrift, writeMonthlyProductType: env.SOURCE_CYCLE_WRITE_MONTHLY_PRODUCT_TYPE === '1',
+      // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
+      writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
+      // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
+      sourceIdentitySources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -153,11 +217,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 기준 수는 오토플러스 시트와 같은 방식(비공개 폴더, 임시 파일 + 이름 바꾸기)으로 공급사마다 따로 둔다. 노출 문서 수는 필요할 때만 센다.
   const sheetCountGuard = async (sourceId: string, capture: CycleCapture): Promise<CycleCapture> => {
     const countFile = join(directory, `sheet-count-${sourceId}.json`);
-    let previous = 0, stateError: string | null = null;
-    try {
-      const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-      if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
-    } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+    let countText: string | null = null, countReadError = false;
+    try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+    const countState = parseSheetCountState(countText, countReadError);
+    const previous = countState.previous, stateError: string | null = countState.stateError;
     const rows = capture.rows.length + capture.heldCount;
     const needExposed = capture.complete && (stateError !== null || previous === 0 || rows < previous * SHEET_SHRINK_RATIO);
     const exposed = needExposed ? (await commands.documents(sourceId)).filter(d => {
@@ -168,7 +231,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     }).length : 0;
     const verdict = judgeSheetCount({ complete: capture.complete, rows, previousCount: previous, exposedUnlockedDocs: exposed, stateError });
     let complete = verdict.complete, reason = verdict.incompleteReason;
-    if (verdict.saveCount !== null) {
+    if (verdict.saveCount !== null && verdict.saveCount > 0) {
       await mkdir(directory, { recursive: true, mode: 0o700 }).catch(() => undefined);
       if (!(await writeJsonAtomic(countFile, { count: verdict.saveCount, at: capture.observedAt })) && complete) { complete = false; reason = 'SHEET_COUNT_STATE_WRITE_FAILED'; }
     }
@@ -225,6 +288,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'IANCAR') {
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
         undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+    } else if (kind === 'MAUMCAR') {
+      // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
+      const file = required('SOURCE_CYCLE_MAUMCAR_FILE');
+      plugins.push(plateUidPlugin(maumcarFilePlugin(ratio, async () => {
+        const bytes = await readFile(file);
+        const observedAt = new Date().toISOString();
+        const fileSha256 = createHash('sha256').update(bytes).digest('hex');
+        return { conversion: convertMaumcarWorkbook(readXlsx(bytes), { observedAt, fileSha256 }), observedAt };
+      })));
     } else if (kind === 'IRON' && env.SOURCE_CYCLE_IRON_HOMEPAGE === '1') {
       // 아이언 홈페이지 상세 기준(대표 2026-10-14): 목록(신차·중고, 더보기) → 상세 전수, 판매완료 라벨은 판매 불가(1차 무조건 편입은 비노출), 번호 키, 사진 갤러리.
       // ERP4 의 RP006 쓰기(approveAll·변동)는 «폐기»가 확정되어야 켠다(이중 쓰기 금지). 읽기 불완전·목록 급감이면 쓰기·부재 하향이 막힌다.
@@ -344,7 +416,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const observedAt = new Date().toISOString();
           const soft = (reason: string): SonogongApiRead => ({ observedAt, complete: false, incompleteReason: reason, tabsRead: [], listed: 0, detailsRead: 0,
             notes: [], records: [], held: [], duplicatePlates: [] });
-          // 부하 방어: 마지막 완전 읽기 후 55분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
+          // 부하 방어: 마지막 완전 읽기 후 45분 안에는 다시 읽지 않는다(손오공 데이터는 1시간 단위 갱신, 상세 최대 600건·간격 1.5초).
           // 간격 기록은 «무인 정시 회차»만 남기고 지킨다: 수동 계획(DRY_RUN) 읽기가 간격을 소비해 같은 시간대 무인 APPLY 를 막지 않게 한다(B3Q 10-14).
           const unattended = env.SOURCE_CYCLE_UNATTENDED === '1';
           if (unattended) try {
@@ -417,6 +489,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
+        { const optCap = Number(env.SOURCE_CYCLE_API_OPTIONS_CAP ?? ''); if (Number.isSafeInteger(optCap) && optCap > 100 && optCap <= 400) apiPlugin.optionsRewriteCap = optCap; }
         plugins.push(apiPlugin);
       } else
       if (kind === 'AUTOPLUS' && env.SOURCE_CYCLE_AUTOPLUS_SHEET === '1') {
@@ -450,16 +523,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             return f.listable === true && !locked;
           }).length;
           const countFile = join(directory, 'autoplus-sheet-count.json');
-          let previous = 0, stateError: string | null = null;
-          try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'SHEET_COUNT_STATE_INVALID';
-          } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'SHEET_COUNT_STATE_INVALID'; }
+          let countText: string | null = null, countReadError = false;
+          try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+          const countState = parseSheetCountState(countText, countReadError);
+          const previous = countState.previous, stateError: string | null = countState.stateError;
           const floor = autoplusSheetRowFloor(exposedDocs, previous);
           let complete = read.complete, reason = read.incompleteReason;
           if (complete && read.rowCount < floor) { complete = false; reason = 'SHEET_SHRUNK'; }
           if (complete && stateError) { complete = false; reason = stateError; }
-          if (complete) {
+          if (complete && read.rowCount > 0) {
             const tmp = `${countFile}.${process.pid}.tmp`;
             try { await writeFile(tmp, JSON.stringify({ count: read.rowCount, at: observedAt }), { mode: 0o600 }); await rename(tmp, countFile); }
             catch { await unlink(tmp).catch(() => undefined); }
@@ -573,7 +645,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       } catch { /* 첫 회차 또는 기록 없음 */ }
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+            // 상류 갱신 감시(독립 판독기): --watch-sync 를 줄 때만(기본 꺼짐). 창(분)은 SOURCE_CYCLE_IANCAR_WATCH_MIN(기본 20, 1~30) — 예: :50 에 시작해 :10 까지.
+            ...(args.includes('--watch-sync') && args.includes('--only-when-synced') && plugin.family === 'IANCAR'
+              ? { syncWatch: { windowMs: Math.min(30, Math.max(1, Number(env.SOURCE_CYCLE_IANCAR_WATCH_MIN ?? '20') || 20)) * 60_000 } } : {}) });
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {

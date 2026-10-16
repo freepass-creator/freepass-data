@@ -6,7 +6,7 @@ import { decodeErp5Value, type Erp5SourceCapture } from './erp5-source-capture.j
 import type { VehicleMasterSnapshot } from './vehicle-identity-inputs.js';
 
 /** build-identity-promotion-plan 입력 모양(application 의 IdentityProduct·IdentityMaster 와 같은 구조 — 어댑터는 application 에 의존하지 않는다, 호환은 시험의 대입이 지킨다). */
-export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean; supplier?: string };
+export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean; supplier?: string; engineTemp?: boolean; makerModelFromSource?: boolean; fuel?: string };
 export type SnapshotMaster = { id: string; maker: string; model: string; sub_model: string; model_aliases: string[]; sub_model_aliases: string[];
   yearFrom: number | null; yearTo: number | null; trims: Array<{ name: string; aliases: string[] }> };
 type Rec = Record<string, unknown>;
@@ -36,7 +36,13 @@ function snapshotProductOf(id: string, f: Rec, includeAll: boolean): SnapshotPro
   return { id, plate4: str(f.car_number).replace(/\D/g, '').slice(-4),
     maker: str(f.maker), model: str(f.model), sub_model: str(f.sub_model), trim_name: str(f.trim_name),
     rawName: str(original.차명) || str(f.car_name), year: yearOf(f), listable: f.listable === true,
-    ...(str(f.provider_company_code) ? { supplier: str(f.provider_company_code) } : {}) };
+    ...(str(f.provider_company_code) ? { supplier: str(f.provider_company_code) } : {}),
+    // 표식만으로는 부족하다(Codex #685 (a)): 현재 maker·model 이 «이 경로가 쓴 값 그대로»(vehicle_maker_model_filled)일 때만 원천이 채운 값으로 본다 —
+    // 사람이 고친 값은 표식이 남아 있어도 그대로 대조에 쓴다(마스터 값으로 덮어쓰는 수정안을 만들지 않는다).
+    ...(f.vehicle_maker_model_source === 'SOURCE_FIELDS' && object(f.vehicle_maker_model_filled)
+      && str(f.vehicle_maker_model_filled.maker) === str(f.maker) && str(f.vehicle_maker_model_filled.model) === str(f.model) ? { makerModelFromSource: true } : {}),
+    ...(str(f.fuel_type) ? { fuel: str(f.fuel_type) } : {}),
+    ...(f.vehicle_review_required === true || f.vehicle_title_source === 'RAW_VEHICLE_TEXT' ? { engineTemp: true } : {}) };
 }
 
 export function identityProductsFromCapture(capture: Erp5SourceCapture, options: { includeAll?: boolean } = {}): SnapshotProduct[] {

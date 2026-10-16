@@ -13,7 +13,7 @@ import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache
 
 export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
-  maxDetails: 600, minPassIntervalMinutes: 55,
+  maxDetails: 600, minPassIntervalMinutes: 45,   // 정시 회차는 읽기 «시작»(회차 앞 단계·상류 갱신 대기 후) 시각이 기준이라 55 분이면 다음 정시에 번갈아 걸렸다(B3Q 10-16): 45 분 = 같은 정시 중복 읽기만 막고 15분 여유를 둔다
 });
 export const SONOGONG_API_TABS = ['rent', 'sub', 'pick'] as const;
 export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
@@ -284,6 +284,9 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const ym = /^(\d{4})-(\d{2})/.exec(String(row.manufactureYearMonth ?? ''));
       const spec: Record<string, string> = {};
       if (typeof row.exteriorColor === 'string' && row.exteriorColor.trim()) spec.ext_color = row.exteriorColor.trim();
+      // 내장색(상세 interiorColor, 없으면 목록): 대표 2026-10-16 화면 대조 «제원 칸이 전부 비어 있다». 문자열이 아니면 칸을 비운다.
+      const interior = typeof detail?.interiorColor === 'string' && detail.interiorColor.trim() ? detail.interiorColor.trim() : typeof row.interiorColor === 'string' ? row.interiorColor.trim() : '';
+      if (interior) spec.int_color = interior;
       // 연료: 공통 허용 목록·별칭(normalize-sonogong 의 표)으로만 바꾼다. 모르면 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
       if (typeof row.fuel === 'string' && row.fuel.trim()) {
         const fuel = fuelName(row.fuel);
@@ -304,7 +307,10 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
         status: row.hasActiveContract ? { raw: '계약중', saleAvailable: true } : { raw: '출고가능', saleAvailable: true },
         terms, observedAt,
         raw: { source: 'sonogong-partner-api', tab, vehicle_id: id, product_type: PRODUCT_TYPE_BY_TAB[tab], list: structuredClone(row), ...(detail ? { detail: structuredClone(detail) } : {}),
-          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}) },
+          prices: structuredClone(prices), images, ...(Object.keys(spec).length ? { spec } : {}),
+          // 원천이 별도 필드로 주는 제조사·모델(brand·model). 짧은 문자열이라 압축 뒤에도 남고, 변경 판정에서는 제외된다(comparableRecord).
+          ...(typeof (detail?.brand ?? row.brand) === 'string' && String(detail?.brand ?? row.brand).trim() ? { source_maker: String(detail?.brand ?? row.brand).trim().slice(0, 60) } : {}),
+          ...(typeof (detail?.model ?? row.model) === 'string' && String(detail?.model ?? row.model).trim() ? { source_model: String(detail?.model ?? row.model).trim().slice(0, 60) } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
       accepted.set(plate, { tab, ym: ymRaw, index: records.length - 1 });
     }

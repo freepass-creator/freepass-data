@@ -11,7 +11,12 @@ export type CycleProduct = {
    * PHOTO_URLS 사진 없는 문서에 원천 API 사진 주소가 있음(손오공).
    * IANCAR_VEHICLE_ID 이안카 노출 문서의 공급사 차량 ID(iancar_one_vehicle_id) 누락.
    * VEHICLE_IDENTITY 엔진 편입 후 정체성 보류(제조사·모델 빈칸·검토 필요) 문서가 이번 회차 차종 마스터로 «하나로» 특정됨(쓰면 보류가 풀려 되풀이되지 않는다). */
-  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY'>;
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY' | 'API_OPTIONS' | 'SOURCE_IDENTITY' | 'SOURCE_SPEC'>;
+  /** 계획이 정한 «이 회차에 입구 매핑(제조사·모델·제원 채움)을 한다»(회차 상한 안, 사유가 있거나 신규 편입인 항목만). 이 표식이 없으면 쓰기가 일어나도 채움은 없다 —
+   * 사유 없는 UPDATE·재노출 등에서 채움이 상한을 우회하지 못하게 하는 «양성» 표식이다(Codex #685 ③). */
+  fillSourceIdentity?: boolean;
+  /** 계획이 정한 «이 회차에 정체성 정제(마스터 이름 채움)를 한다»(기존 문서, 회차 상한 안, VEHICLE_IDENTITY 사유 항목만 — Codex #704 잔여). 이 표식이 없으면 쓰기가 일어나도 기존 문서는 정제하지 않는다(신규 편입은 편입 상한이 따로 건다). */
+  refineIdentity?: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
@@ -27,7 +32,13 @@ export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrol
 /** 엔진 회차 정체성 정제 결과: 차종 마스터 하나로 특정된 이름(세부트림은 하나로 특정될 때만, 아니면 null). */
 export type VehicleIdentityRefinement = { maker: string; model: string; sub_model: string; trim_name: string | null; master_id: string };
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
-export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null };
+export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
+  /** 활성 차종 마스터에 있는 제조사 이름 목록(입구 매핑이 마스터에 없는 원천 표기를 maker 에 넣지 않게 하는 근거). 없으면 입구 매핑은 채우지 않는다. */
+  makers?: readonly string[];
+  /** 제조사별 마스터 «모델 이름 + 별칭» 목록(입구 매핑이 모델을 마스터에 있는 이름일 때만 쓰게 하는 근거, 차종 기준 한 장: 이름은 마스터에 있는 이름만, 괄호·세대·수식어 안 씀). 없으면 입구 매핑은 모델을 쓰지 않는다(fail-closed). */
+  models?: Readonly<Record<string, readonly string[]>>;
+  /** 제조사별 «별칭 → 정식 모델 이름». 원천 표기가 마스터에 등록된 별칭이면 «정식 이름»으로 바꿔 쓴다(별칭 문자열 자체는 쓰지 않는다 — Codex #706). */
+  modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>> };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {
@@ -48,6 +59,8 @@ export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngrade
   maxEnrollPerCycle?: number; minEnrollPerCycle?: number;
   /** 이번 한 회차에 한해 신규 편입 상한을 이 값(≤1000)으로 올린다. 운영 변수 + 회차 후 표식 파일로 자동 원복한다(최초 대량 편입용). */
   enrollCapOnce?: number;
+  /** 옵션 칸 채움(API_OPTIONS 사유 전용) 회차 상한 상향(기본 100, 운영 변수 SOURCE_CYCLE_API_OPTIONS_CAP, 최대 400). 다른 쓰기와 합산 상한은 그대로 적용된다. */
+  optionsRewriteCap?: number;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
   unassignedPlateCount?: number;

@@ -298,6 +298,45 @@
           "minimum": 0,
           "maximum": 200
         },
+        "source_raw_name": {
+          "description": "공급사 원문 차명 표기(선택 필드, 표시용 읽기 전용 파생). 정제 칸이 비어 있고 refine_state 가 PENDING 일 때 «정제 대기»와 함께 쓴다.",
+          "type": ["string", "null"],
+          "maxLength": 140
+        },
+        "refine_state": {
+          "description": "정제 상태(선택 필드): PENDING = 제조사·모델·세부모델 중 빈 칸 또는 엔진 임시 표식.",
+          "enum": ["REFINED", "PENDING"]
+        },
+        "refine_missing": {
+          "description": "비어 있는 정제 칸(선택 필드).",
+          "type": "array",
+          "maxItems": 3,
+          "items": { "enum": ["maker", "model", "sub_model"] }
+        },
+        "option_state": {
+          "description": "옵션 상태(선택 필드, 운영 변수로만 나감). UNKNOWN = 미확인.",
+          "enum": ["PRESENT", "NONE", "UNKNOWN"]
+        },
+        "option_basic": {
+          "description": "기본(무상) 옵션 이름 목록(선택 필드).",
+          "type": "array",
+          "maxItems": 300,
+          "items": { "type": "string", "maxLength": 80 }
+        },
+        "option_paid": {
+          "description": "유상 옵션(선택 필드). amount_krw null = 금액 확인 중. 가격 계산에는 쓰지 않는다.",
+          "type": "array",
+          "maxItems": 300,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "amount_krw"],
+            "properties": {
+              "name": { "type": "string", "maxLength": 80 },
+              "amount_krw": { "type": ["integer", "null"], "minimum": 1 }
+            }
+          }
+        },
         "_policy": { "$ref": "#/$defs/policy" }
       }
     },

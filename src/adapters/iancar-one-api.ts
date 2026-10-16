@@ -70,6 +70,8 @@ export type IancarOneApiConfig = {
   apiKey: string;
   baseUrl?: string | null;
   timeoutMs?: number;
+  /** 일시 오류(502/503/504) 재시도 간격(ms). 기본 [500, 1500]. 상류 갱신 감시 회차는 더 길게 준다(지수 백오프, 각 100~120000ms·최대 5회). */
+  retryDelaysMs?: readonly number[];
 };
 
 export type IancarOneListPage = {
@@ -137,7 +139,10 @@ function normalizedConfig(config: IancarOneApiConfig) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000)
     throw new IancarOneApiError('IANCAR_ONE_API_TIMEOUT_NOT_ALLOWED');
 
-  return { origin: url.origin, apiKey, timeoutMs };
+  const retry = config.retryDelaysMs;
+  if (retry !== undefined && (retry.length > 5 || retry.some(ms => !Number.isSafeInteger(ms) || ms < 100 || ms > 120_000)))
+    throw new IancarOneApiError('IANCAR_ONE_API_RETRY_NOT_ALLOWED');
+  return { origin: url.origin, apiKey, timeoutMs, retryDelaysMs: retry ?? [500, 1500] };
 }
 
 function apiUrl(origin: string, path: string) {
@@ -189,7 +194,7 @@ export function createIancarOneApiClient(
 
   // GET 은 멱등이라 공급사 일시 오류(502/503/504)만 짧게 두 번 더 시도한다. 인증·404·429 는 재시도하지 않는다(신선도 15분 창 안에서만).
   const TRANSIENT_STATUS = new Set([502, 503, 504]);
-  const RETRY_DELAYS_MS = [500, 1500];
+  const RETRY_DELAYS_MS = normalized.retryDelaysMs;
   const requestJson = async (path: string): Promise<Json> => {
     let response: Response | undefined;
     let timeouts = 0;
@@ -517,6 +522,8 @@ export function compareIancarOnePhaseOneParity(
 }
 
 /** Vehicle-scoped GET evidence binds rates even where the provider does not echo ID. */
+/** 한 회차 읽는 동안 상태가 바뀌어 상세·끝 목록과 어긋난 차를 «그 차만 보류»할 수 있는 한도(전체 대수 비율). 넘으면 원천 불안정으로 회차를 실패시킨다. */
+export const IANCAR_ONE_DRIFT_HOLD_RATIO = 0.2;
 export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void
@@ -543,6 +550,7 @@ export async function collectIancarOneFullFacts(
   let next = 0;
   let completed = 0;
   let aborted = false;
+  let driftHolds = 0, sourceDriftHolds = 0;
   const worker = async () => {
   for (;;) {
     if (aborted) return;
@@ -568,6 +576,7 @@ export async function collectIancarOneFullFacts(
       if (result.status !== 'fulfilled') throw new Error('IANCAR_ONE_UNSETTLED_REQUEST');
       return result.value;
     }) as [Json, Json, Json];
+    let availabilityDrift = false, sourceDrift = false;
     for (const envelope of [detail, availability]) {
       if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
         || envelope.data.vehicle_id !== record.vehicleId)
@@ -575,14 +584,18 @@ export async function collectIancarOneFullFacts(
       // A supplier refresh clock can advance while unchanged inventory is being read.
       // Validate freshness and facts separately; clock equality is not fact equality.
       const responseNow = observationNow();
-      if (!instant(envelope.data.synced_at) || envelope.data.stale !== false
+      // 갱신 시각 형식 자체가 깨진 응답은 전송 문제라 회차 전체 실패로 남긴다(봉투 검증).
+      if (!instant(envelope.data.synced_at)) throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+      // 한 차의 상세 시각이 오래됐거나(stale·신선도 창 밖)·미래이거나·목록보다 이전이면 «그 차만» 보류한다(다음 회차에 다시 읽는다) — 한 대 때문에 회차 전체를
+      // 못 쓰던 것(2026-10-16 16:00 회차 이안카 노출 89대 STALE)을 좁힌다. 어긋난 차가 많으면(아래 한도 20%) 원천 불안정으로 예전처럼 회차 전체를 실패시킨다.
+      if (envelope.data.stale !== false
         || responseNow - Date.parse(envelope.data.synced_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
         || Date.parse(envelope.data.synced_at) - responseNow > 60_000
-        || Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at))
-        throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+        || Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at)) { sourceDrift = true; continue; }
       for (const field of ['inventory_status', 'available', 'available_from']) {
-        if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field]))
-          throw new IancarOneApiError('IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT');
+        // 목록을 읽은 뒤 이 차의 가용 상태가 실제로 바뀌면(읽는 데 수 분 걸린다) 상세와 목록이 어긋난다. 한 대의 전이로 회차 전체를 실패시키지 않고
+        // 그 차만 요금 사실 보류(값 계열)로 둔다 — 다음 회차에 일관된 값으로 다시 읽는다. 어긋난 차가 많으면(아래 한도) 원천 불안정으로 회차를 실패시킨다.
+        if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field])) { availabilityDrift = true; break; }
       }
     }
     if (((detail as JsonObject).data as JsonObject).plate_number !== record.payload.plate_number)
@@ -594,6 +607,14 @@ export async function collectIancarOneFullFacts(
       || Date.parse(rates.updated_at) > observationNow() + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
       throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    // 신원·시효·번호·요금 봉투가 모두 정상일 때만 «가용 상태가 읽는 동안 바뀐 차»를 그 차만 보류한다(검증을 건너뛰어 불일치가 보류로 둔갑하지 않게).
+    if (availabilityDrift || sourceDrift) {
+      driftHolds++;
+      if (sourceDrift) sourceDriftHolds++;
+      records[index] = { ...structuredClone(record), hold: { code: sourceDrift ? 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' : 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', identity: false } };
+      onProgress?.(++completed, capture.total);
+      continue;
+    }
     let rateHold: string | null = rates.data.length ? null : 'IANCAR_ONE_RATES_EMPTY';
     const keys = new Set<string>();
     for (const rate of rates.data as JsonObject[]) {
@@ -632,15 +653,32 @@ export async function collectIancarOneFullFacts(
     && result.reason instanceof IancarOneApiError && result.reason.status === 429)
     ?? settled.find(result => result.status === 'rejected');
   if (failed?.status === 'rejected') throw failed.reason;
+  // 목록·상세 시차로 어긋난 차가 한도(전체의 20%)를 넘으면 개별 전이가 아니라 원천 불안정이다: 예전처럼 회차 전체를 실패시킨다.
+  const driftLimit = Math.floor(capture.records.length * IANCAR_ONE_DRIFT_HOLD_RATIO);
+  if (driftHolds > driftLimit) throw new IancarOneApiError(sourceDriftHolds > 0 ? 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' : 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT');
   const ending = await collectIancarOneVehicleList(config, fetcher, new Date(observationNow()).toISOString());
   const issues = [...ending.issues];
   // Photo credentials may be reissued on every GET; do not compare ephemeral URLs.
-  const inventoryFacts = (value: IancarOneListCapture) =>
-    value.records.map(record => [record.vehicleId, record.payload.plate_number,
-      record.payload.inventory_status, record.payload.available, record.payload.available_from])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-  if (digest(inventoryFacts(ending)) !== digest(inventoryFacts(capture)))
-    issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  // 끝 목록 대조는 차마다 한다: 읽는 동안 상태가 바뀐 차(또는 목록에서 사라진 차)만 보류하고, 번호가 바뀐 차·한도 초과는 예전처럼 원천 드리프트다.
+  // 읽는 동안 새로 생긴 차는 이번 회차 대상이 아니므로 무시한다(다음 회차에 읽는다).
+  const endById = new Map(ending.records.map(record => [record.vehicleId, record]));
+  const factsOf = (record: IancarOneListCapture['records'][number]) =>
+    digest([record.payload.inventory_status, record.payload.available, record.payload.available_from]);
+  const startIds = new Set(capture.records.map(record => record.vehicleId));
+  // 시작 목록에 없던 ID 가 끝 목록에 있으면(신규·시작에서 빠졌다 복원) 그 차의 부재 판정이 어긋날 수 있어 예전처럼 원천 드리프트로 둔다.
+  const membershipChanged = ending.records.some(record => !startIds.has(record.vehicleId));
+  let listChanged = 0, plateChanged = false;
+  for (let index = 0; index < capture.records.length; index++) {
+    const before = capture.records[index]!, written = records[index];
+    if (!written) continue;
+    const end = endById.get(before.vehicleId);
+    if (end && end.payload.plate_number !== before.payload.plate_number) { plateChanged = true; continue; }
+    if (end && factsOf(end) === factsOf(before)) continue;
+    // 이미 요금·식별 보류인 차도 변화를 센다(전 차 보류라도 끝 목록 전체 변화가 한도 판정에서 빠지지 않게). 보류 사유는 덮어쓰지 않는다.
+    if (written.hold?.code !== 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT' && written.hold?.code !== 'IANCAR_ONE_DETAIL_SOURCE_DRIFT') listChanged++;   // 상세 어긋남으로 이미 센 차는 두 번 세지 않는다
+    if (!written.hold) records[index] = { ...structuredClone(before), hold: { code: 'IANCAR_ONE_LIST_CHANGED_DURING_READ', identity: false } };
+  }
+  if (membershipChanged || plateChanged || driftHolds + listChanged > driftLimit) issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
   if (Date.parse(capture.syncedAt) > Date.parse(ending.syncedAt))
     issues.push('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
   return { ...capture, records, factScope: 'FULL_FACTS', issues,
@@ -928,10 +966,12 @@ export function summarizeJsonShape(value: Json, maxDepth = 5) {
 
 export function iancarOneApiConfigFromEnv(env = process.env): IancarOneApiConfig {
   const timeout = clean(env.EANCAR_ONE_API_TIMEOUT_MS);
+  const retry = clean(env.EANCAR_ONE_API_RETRY_DELAYS_MS);
   return {
     apiKey: clean(env.EANCAR_ONE_API_KEY),
     baseUrl: clean(env.EANCAR_ONE_API_BASE_URL) || IANCAR_ONE_API_ORIGIN,
-    ...(timeout ? { timeoutMs: Number(timeout) } : {})
+    ...(timeout ? { timeoutMs: Number(timeout) } : {}),
+    ...(retry ? { retryDelaysMs: retry.split(',').map(v => Number(v.trim())) } : {})
   };
 }
 

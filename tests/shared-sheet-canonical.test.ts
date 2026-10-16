@@ -264,8 +264,42 @@ describe('shared sheet local source to Canonical', () => {
       vi.setSystemTime(new Date('2026-10-04T01:15:01.000Z'));
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'HOLD' });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(JSON.stringify(result.report)).toMatch(/REVIEWED_SOURCE_CHANGE_REJECTED/);
       expect(stableDigest(await s.store.listOffers())).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('refreshes status/rent when stored source facts differ only by normalizer ruleVersion, but still holds a real fact change', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const asset = (await s.store.listVehicleAssets())[0]!;
+      const old = structuredClone(asset) as any;
+      old.sourceVehicleFacts.ruleVersion = 'shared-sheet-normalizer/0';
+      for (const [key, fact] of Object.entries(old.sourceVehicleFacts.fields) as [string, any][]) if (key !== 'supplierStatus') fact.ruleVersion = 'shared-sheet-normalizer/0';
+      delete old.sourceVehicleFacts.fields.vehicleIdentitySource;
+      await s.store.seed({ vehicleAssets: [old] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r1 = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r1.report).toMatchObject({ committed: 1, held: 0 });
+    } finally { vi.useRealTimers(); }
+  });
+  it('readback compares an unchanged-rent term with its pre-run economics, not a recompute under a newer fee policy', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = structuredClone((await s.store.listOffers())[0]!) as any;
+      const older = structuredClone(offer.internalEconomicsTerms);
+      for (const t of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee', 'channelPayoutFee']) {
+        if (t[side]?.sourceRefs) t[side].sourceRefs = [...t[side].sourceRefs, 'older-policy-evidence'];
+      }
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect((r.report as any).reconciliation?.readbackMismatches ?? 0).toBe(0);
+      expect(older).toBeDefined();
     } finally { vi.useRealTimers(); }
   });
   it('holds, at plan time, a vehicle whose refresh also changes an odometer, instead of aborting the apply run', async () => {
@@ -291,7 +325,8 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'HOLD', reason: 'CANONICAL_COMMAND_REJECTED' });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(result.report).toHaveProperty('rejectedByCode');
       expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
     } finally { vi.useRealTimers(); }
   });

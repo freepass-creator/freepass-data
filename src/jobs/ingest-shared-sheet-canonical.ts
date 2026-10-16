@@ -357,6 +357,10 @@ export function safeErrorCode(error: unknown): string {
  * 첫 명령 시점에 이미 상한을 넘겼기 때문. 신선도는 적용 직전 라이브 재캡처 대조(assertLiveSharedSheetMatches, 2분)가 보장하므로
  * 이 울타리는 «터무니없이 오래된 계획» 만 막는 2차 안전선으로 두고 적용 단계 소요를 넉넉히 덮는 값으로 둔다. */
 export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
+/** Reviewed-command verdicts that hold one vehicle without stopping the apply run. */
+const PER_ENTRY_REJECTION_CODES: ReadonlySet<string> = new Set(
+  ['REVIEWED_SOURCE_CHANGE_REJECTED', 'REVIEWED_SOURCE_CHANGE_CONFLICT', 'REVIEWED_SOURCE_CHANGE_BLOCKED',
+    'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH']);
 /** Diff reason codes the operational-refresh apply mode accepts (must match assertOperationalRefresh in reviewed-source-change.ts). */
 const OPERATIONAL_REFRESH_ALLOWED_REASONS: ReadonlySet<string> = new Set(
   ['SOURCE_EXPOSURE_CHANGE', 'SOURCE_ASSET_STATUS_CHANGE', 'SOURCE_VEHICLE_FACTS_CHANGE', 'SOURCE_MONTHLY_RENT_CHANGE']);
@@ -388,6 +392,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
   let commandKind: 'CREATE' | 'CHANGE' | 'UNKNOWN' = 'UNKNOWN';
+  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {};
   for (const entry of plan.entries) {
     if (entry.action === 'HOLD') { held++; continue; }
     if (entry.action === 'NO_CHANGE') { noChange++; continue; }
@@ -399,6 +404,15 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       else throw new Error('INVALID_SHARED_SHEET_ACTION');
       if (replay.has(entry.recordId) || businessNoChange) noChange++; else committed++;
     } catch (error) {
+      // A reviewed-command rejection is a per-vehicle verdict made before any write of that command (each command is its own
+      // transaction): hold that vehicle with a fixed code and keep applying the rest. Anything else (transport, storage,
+      // invariant breaches) still stops the whole run.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (typeof code === 'string' && PER_ENTRY_REJECTION_CODES.has(code)) {
+        held++; rejected.add(entry.recordId);
+        const key = `${commandKind}:${code}`; rejectedByCode[key] = (rejectedByCode[key] ?? 0) + 1;
+        continue;
+      }
       // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
       return { report: { mode: 'APPLY', status: 'HOLD', committed, noChange, held,
         remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED',
@@ -408,7 +422,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   let suppliedTerms = 0, storedTerms = 0, heldTerms = 0, readbackMismatches = 0;
   for (const item of p.normalized) {
     const entry = plan.entries.find(x => x.recordId === item.record.sourceRecordId)!;
-    if (entry.action === 'HOLD') { heldTerms += item.suppliedTerms; continue; }
+    if (entry.action === 'HOLD' || rejected.has(entry.recordId)) { heldTerms += item.suppliedTerms; continue; }
     suppliedTerms += item.suppliedTerms;
     const c = item.record.candidate;
     const binding = await store.getSourceBinding(opaque('bind', p.sourceId, c.sourceRecordId));
@@ -426,8 +440,18 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         !auditOfferEconomicsTerms(offer).invalidFacts.length) {
       for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
         const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
-        if (previous?.state === 'UNKNOWN' || previous?.state === 'NOT_APPLICABLE' ||
-            (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE'))
+        // The operational refresh owns status and changed rent only. A term whose rent did not change keeps its stored
+        // economics exactly (a later fee-policy version is applied by the separate economics recompute, not by this run),
+        // so the readback must compare it with the pre-run value, never with a fresh recompute under a newer policy.
+        // The apply step recomputes a dependent fee from the rent of the fee's reference term (referenceRentBasis.termKey),
+        // not from its own term, so «unchanged» must be judged on that same term or a changed reference rent would be mistaken
+        // for an unchanged one (reviewed-source-change.ts basisKey).
+        const basisKey = previous?.referenceRentBasis?.termKey ?? term.termKey;
+        const rentBefore = before.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentNow = c.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentUnchanged = rentBefore !== undefined && rentNow !== undefined && stableDigest(rentBefore) === stableDigest(rentNow);
+        if (previous && (rentUnchanged || previous.state === 'UNKNOWN' || previous.state === 'NOT_APPLICABLE' ||
+            (previous.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')))
           term[side] = structuredClone(previous);
       }
     }
@@ -442,6 +466,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   }
   return { report: { mode: 'APPLY', status: readbackMismatches ? 'HOLD' : held ? 'PARTIAL_HOLD' : 'APPLIED',
     committed, noChange, held, remaining: 0,
+    ...(Object.keys(rejectedByCode).length ? { rejectedByCode } : {}),
     reconciliation: { stage: 'CANONICAL_READBACK', suppliedTerms, storedTerms, heldTerms, readbackMismatches,
       equal: suppliedTerms === storedTerms && readbackMismatches === 0 } } };
 }
