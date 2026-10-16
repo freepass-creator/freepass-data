@@ -15,7 +15,7 @@ const photos = (seed: string) => [
   { photo_id: token(seed + 'a'), url: `/v1/vehicles/V1/photos/${token(seed + 'a')}`, representative: true },
   { photo_id: token(seed + 'b'), url: `/v1/vehicles/V1/photos/${token(seed + 'b')}`, representative: false }];
 const rate = (monthly = 500000) => ({ rental_period: 24, monthly_rate: monthly, deposit: 700000, contracted_mileage: 20000, mileage_period: 'year', currency: 'KRW', vat_included: true });
-type Opts = { monthly?: number; status?: string; complete?: boolean };
+type Opts = { monthly?: number; status?: string; complete?: boolean; mileage?: number };
 /** 회차 읽기 결과: seed 가 다르면 사진 토큰·captured_at 만 다르고 값은 같다. */
 const capture = (at: string, seed: string, o: Opts = {}): IancarOneListCapture => {
   const status = o.status ?? 'AVAILABLE', available = status === 'AVAILABLE', monthly = o.monthly ?? 500000;
@@ -23,7 +23,7 @@ const capture = (at: string, seed: string, o: Opts = {}): IancarOneListCapture =
     issues: o.complete === false ? ['IANCAR_ONE_PAGINATION_TOTAL_MISMATCH'] : [], readyForRawIngest: o.complete !== false, factScope: 'FULL_FACTS',
     records: o.complete === false ? [] : [{ vehicleId: 'V1', fingerprint: 'V1', payload: {
       vehicle_id: 'V1', plate_number: '123가4567', inventory_status: status, available, synced_at: at, stale: false, photos: photos(seed), name: '합성 차종',
-      detail: { success: true, data: { vehicle_id: 'V1', name: '합성 차종', photos: photos(seed + 'd'), synced_at: at } },
+      detail: { success: true, data: { vehicle_id: 'V1', name: '합성 차종', photos: photos(seed + 'd'), synced_at: at, details_updated_at: at, mileage: o.mileage ?? 0 } },
       availability: { success: true, data: { vehicle_id: 'V1', available, synced_at: at } },
       rates: { success: true, data: [rate(monthly)] },
       rateRequestEvidence: { vehicle_id: 'V1', path: '/v1/vehicles/V1/rates', captured_at: at, response_digest: `rates-${monthly}`,
@@ -51,6 +51,7 @@ describe('iancar-stable-facts 정규화', () => {
     expect(s.synced_at).toBe(t0);
     expect((s.detail as { data: Record<string, unknown> }).data.synced_at).toBeUndefined();
     expect((s.availability as { data: Record<string, unknown> }).data.synced_at).toBeUndefined();
+    expect((s.detail as { data: Record<string, unknown> }).data.details_updated_at).toBeUndefined();
     expect(p.photos).toHaveLength(2);   // 원본은 바꾸지 않는다
     expect(stableIancarPhotos('not-a-list')).toBe('not-a-list');
     expect(stableIancarPhotos([{ representative: false }])).toEqual({ count: 1, representative_ordinal: null, credential_urls_omitted: true });
@@ -97,5 +98,14 @@ describe('값 지문 안정화 회차 계획', () => {
     expect((on.raw as { notes?: string[] }).notes).toEqual(['IANCAR_STABLE_FACTS:1']);
     const off = await iancarCyclePlugin(0.9, async () => capture(t0, 's1'), () => t0).read();
     expect((off.raw as { notes?: string[] }).notes).toBeUndefined();
+  });
+});
+
+describe('상세 안 details_updated_at (상류 동기화 시각) — 10-17 운영 실측 보강', () => {
+  it('details_updated_at 만 바뀐 재읽기는 쓰기 0, 상세 주행거리가 바뀌면 UPDATE', async () => {
+    const before = stored((await records(capture(t0, 's1'), true))[0]!);
+    expect(plan([before], await records(capture(t1, 's2'), true), t1).entries).toEqual([]);   // capture 는 details_updated_at=at 이라 회차마다 다르다
+    const moved = plan([before], await records(capture(t1, 's2', { mileage: 12 }), true), t1);
+    expect(moved.entries.map(e => e.kind)).toEqual(['UPDATE']);
   });
 });

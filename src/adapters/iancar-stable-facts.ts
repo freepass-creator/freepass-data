@@ -6,7 +6,9 @@
  * 정규화하고 저장에도 같은 규칙).
  *
  * 규칙(이안카 전용 계약 — 다른 공급사에는 적용하지 않는다):
- *  - detail·availability·rateRequestEvidence 봉투 «안»의 synced_at·captured_at 제거(재읽기 회차의 봉투 시각이 digest 를 흔들지 않게)
+ *  - detail·availability·rateRequestEvidence 봉투 «안»의 synced_at·captured_at·details_updated_at 제거(재읽기 회차의 봉투 시각이 digest 를 흔들지 않게).
+ *    details_updated_at 은 상류가 동기화마다 내용 변화 없이도 갱신하는 시각(10-17 실측: 146호77xx 신차 묶음이 회전 재읽기마다 1~5건 UPDATE)이라
+ *    시각으로 본다 — 실제 변화는 다른 상세 칸(주행·옵션·사진 수·상태)으로 잡힌다. 사진 경로(copy-iancar-photos)는 라이브 상세의 이 값을 읽으므로 영향 없음.
  *  - rateRequestEvidence.captured_at → null (fingerprint 가 이미 같은 방식, response_digest 등 나머지는 보존)
  *  - 목록 행 photos / detail.data.photos → 자격 URL 목록을 빼고 { count, representative_ordinal } 만 남긴다.
  *    사진 교체 감지는 엔진 책임이 아니다(사진 경로 iancar_one_photo_* · copy-iancar-photos 가 라이브 상세로 판정). 같은 개수·같은 대표 위치의
@@ -27,7 +29,7 @@ export function stableIancarPhotos(photos: unknown): unknown {
 
 /** 상세·가용·요금 증거 봉투 안의 관측 시각 키. digest 로 축약되기 전에 빼야 비교(withoutObservationClocks)가 닿지 않는 중첩 시각이 지문을 흔들지 않는다.
  * 상위(payload.synced_at)는 비교 단계가 이미 빼고 읽기 검증이 쓰므로 그대로 둔다. */
-const NESTED_CLOCK_KEYS: ReadonlySet<string> = new Set(['captured_at', 'synced_at', 'observedAt']);
+const NESTED_CLOCK_KEYS: ReadonlySet<string> = new Set(['captured_at', 'synced_at', 'observedAt', 'details_updated_at']);
 const withoutNestedClocks = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutNestedClocks);
   if (!isObject(value)) return value;
