@@ -45,5 +45,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   aicaCaptureCommand(process.argv.slice(2)).then(report => {
     console.log(JSON.stringify(report));
     if (report.issues.length) process.exitCode = 2;
-  }).catch(() => { console.error(JSON.stringify({ issues: ['AICA_CAPTURE_HOLD'] })); process.exitCode = 2; });
+  }).catch((error: unknown) => {
+    // 오류 메시지는 모두 고정 코드(AICA_*·DATA_GOOGLE_AUTH_UNAVAILABLE)라 그대로 남겨 차단 원인을 구분한다. 알 수 없는 오류는 일반 코드로.
+    const code = error instanceof Error && /^[A-Z][A-Z0-9_]{3,63}$/.test(error.message) ? error.message : 'UNEXPECTED';
+    console.error(JSON.stringify({ issues: ['AICA_CAPTURE_HOLD', code] })); process.exitCode = 2;
+  });
 }
