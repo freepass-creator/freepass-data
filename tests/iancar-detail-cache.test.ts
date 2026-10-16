@@ -15,15 +15,17 @@ const rate = { rental_period: 24, monthly_rate: 500000, deposit: 700000, contrac
   vat_included: true, contract_conditions: { version: 'synthetic-v1' } };
 const reserved = { status: 'RESERVED', available: false };
 
-function world(opts: { rateOf?: (i: number) => number; changed?: Set<number>; failAt?: { afterDetails: number; status?: number; identity?: boolean } } = {}) {
+function world(opts: { rateOf?: (i: number) => number; changed?: Set<number>; failAt?: { afterDetails: number; status?: number; identity?: boolean }; endChanged?: Set<number>; endExtra?: boolean } = {}) {
   const calls = { list: 0, detail: 0, availability: 0, rates: 0 };
   const state = (i: number) => (opts.changed?.has(i) ? reserved : undefined);
   const fetcher = (async (input: string | URL | Request) => {
     const path = new URL(String(input)).pathname;
     if (path === '/v1/vehicles') {
       calls.list++;
-      const data = Array.from({ length: N }, (_, i) => row(i, state(i)));
-      return Response.json({ success: true, data, pagination: { page: 1, page_size: 100, total: N }, synced_at: '2026-10-01T00:00:00.000Z', stale: false });
+      const ending = calls.list > 1;
+      const data = Array.from({ length: N }, (_, i) => row(i, ending && opts.endChanged?.has(i) ? reserved : state(i)));
+      if (ending && opts.endExtra) data.push(row(N));
+      return Response.json({ success: true, data, pagination: { page: 1, page_size: 100, total: data.length }, synced_at: '2026-10-01T00:00:00.000Z', stale: false });
     }
     const i = Number(/\/v1\/vehicles\/veh(\d+)/.exec(path)?.[1]);
     if (path.endsWith('/rates')) {
@@ -194,5 +196,25 @@ describe('캐시 적재는 회차 실패와 분리(닭과 달걀 해소)', () =>
     expect(merged.entries.veh1!.rowDigest).toBe('a'.repeat(64));
     expect(merged.entries.veh1!.cachedAt).toBe('2026-10-01T00:30:00.000Z');
     expect(parseIancarDetailCache(JSON.parse(JSON.stringify(merged)))).toEqual(merged);
+  });
+});
+
+describe('끝 목록 대조와 적재(관문 Codex P1)', () => {
+  it('읽는 동안 바뀐 차(LIST_CHANGED_DURING_READ 보류)는 적재에서 빠지고 나머지는 남는다', async () => {
+    const w = world({ endChanged: new Set([7]) });
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    const capture = await collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink });
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.records.find(r => r.vehicleId === 'veh7')!.hold?.code).toBe('IANCAR_ONE_LIST_CHANGED_DURING_READ');
+    expect(sink.veh7).toBeUndefined();
+    expect(Object.keys(sink)).toHaveLength(N - 1);
+  });
+  it('끝 목록에 새 차가 생겨 회차가 불완전(ENRICHMENT_SOURCE_DRIFT)하면 적재 전부를 버린다', async () => {
+    const w = world({ endExtra: true });
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    const capture = await collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink });
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+    expect(Object.keys(sink)).toHaveLength(0);
   });
 });

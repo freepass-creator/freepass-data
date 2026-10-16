@@ -554,11 +554,14 @@ export async function collectIancarOneFullFacts(
     return await collectIancarOneFullFactsInner(config, fetcher, now, onProgress, opts, sink);
   } catch (error) {
     // 일시 실패(502·503·504·429·시간 초과)만 sink 를 남긴다 — 신원·번호·목록 일관성 실패는 그 회차의 적재를 전부 버린다(Codex P1 ①).
-    const transient = error instanceof IancarOneApiError && ((error.status !== undefined && [429, 502, 503, 504].includes(error.status)) || /TIMEOUT/.test(error.code));
-    if (sink && !transient) for (const key of Object.keys(sink)) delete sink[key];
+    if (sink && !isTransientIancarFailure(error)) clearSink(sink);
     throw error;
   }
 }
+/** 일시 실패(이미 검증한 차의 증거를 무효화하지 않는 실패)만 캐시 적재를 남긴다: 429·502·503·504·시간 초과. */
+const isTransientIancarFailure = (error: unknown): boolean => error instanceof IancarOneApiError
+  && ((error.status !== undefined && [429, 502, 503, 504].includes(error.status)) || /TIMEOUT/.test(error.code));
+const clearSink = (sink: Record<string, IancarDetailCacheEntry>) => { for (const key of Object.keys(sink)) delete sink[key]; };
 async function collectIancarOneFullFactsInner(
   config: IancarOneApiConfig, fetcher: Fetcher, now: string, onProgress: ((completed: number, total: number) => void) | undefined,
   opts: { detailCache?: IancarDetailCache | null }, sink: Record<string, IancarDetailCacheEntry> | undefined
@@ -702,6 +705,8 @@ async function collectIancarOneFullFactsInner(
   // Settle outstanding workers before reporting failure: no dangling requests after return.
   const guardedWorker = () => worker().catch(error => { aborted = true; throw error; });
   const settled = await Promise.allSettled([guardedWorker(), guardedWorker()]);
+  // 대표 예외는 429 우선이지만, 어느 워커든 비일시 실패(신원·번호 불일치 등)가 있으면 이번 회차 적재를 전부 버린다(관문 Codex P1).
+  if (sink && settled.some(result => result.status === 'rejected' && !isTransientIancarFailure(result.reason))) clearSink(sink);
   const failed = settled.find(result => result.status === 'rejected'
     && result.reason instanceof IancarOneApiError && result.reason.status === 429)
     ?? settled.find(result => result.status === 'rejected');
@@ -735,6 +740,12 @@ async function collectIancarOneFullFactsInner(
   if (membershipChanged || plateChanged || driftHolds + listChanged > driftLimit) issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
   if (Date.parse(capture.syncedAt) > Date.parse(ending.syncedAt))
     issues.push('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
+  // 끝 목록 대조에서 회차가 불완전(비일시: 번호 변경·목록 붕괴·시계 역행·한도 초과)해지면 적재 전부를 버리고,
+  // 읽는 동안 바뀐 차(LIST_CHANGED_DURING_READ 보류)는 그 차만 적재에서 뺀다(관문 Codex P1).
+  if (sink) {
+    if (issues.length) clearSink(sink);
+    else for (const written of records) if (written?.hold?.code === 'IANCAR_ONE_LIST_CHANGED_DURING_READ') delete sink[written.vehicleId];   // 요금 보류 차는 상세·가용이 검증됐으므로 남긴다
+  }
   return { ...capture, records, factScope: 'FULL_FACTS', issues,
     observationWindow: { startedAt: capture.capturedAt, completedAt: ending.capturedAt,
       startInventorySyncedAt: capture.syncedAt, endInventorySyncedAt: ending.syncedAt,
