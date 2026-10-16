@@ -43,3 +43,13 @@ describe('이안카 파생 spec 은 원문 spec 을 덮지 않는다', () => {
     expect((await recordOf({ first_registration_date: '2024-02-29' })).raw.spec).toEqual({ first_registration_date: '2024-02-29' });
   });
 });
+
+describe('상세·가용 캐시 통계(#724) 요약 표시', () => {
+  it('capture.detailsCached 가 있으면 notes 에 IANCAR_DETAIL_CACHED:n, 없으면(캐시 꺼짐) notes 없음', async () => {
+    const withCache = { ...capture({}), detailsCached: 94 };
+    const on = await iancarCyclePlugin(0.9, async () => withCache, () => time).read();
+    expect((on.raw as { notes?: string[] }).notes).toEqual(['IANCAR_DETAIL_CACHED:94']);
+    const off = await iancarCyclePlugin(0.9, async () => capture({}), () => time).read();
+    expect((off.raw as { notes?: string[] }).notes).toBeUndefined();
+  });
+});
