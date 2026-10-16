@@ -8,15 +8,25 @@ type Obj = Record<string, unknown>;
 const object = (v: unknown): v is Obj => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const secret = /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9]{15,}|github_pat_[A-Za-z0-9_]{15,}|Bearer\s+[A-Za-z0-9_.-]{20,}|AIza[A-Za-z0-9_-]{20,})/;
 
+/** Trusted server-side identity/room mapping read port, never supplied by source JSON.
+ * Implementations must read existing verified capture/directory evidence. Unknown
+ * mappings return null; this feature does not create another identity registry.
+ */
+export type KakaoExtractionContext = {
+  rawRecordId: string; sourceFingerprint: string; supplierCode: string;
+  roomId: string; messageId: string; senderKey: string;
+  roomCode: string; msgNo: string; side: '상대';
+};
+
 /** Existing archived RAW -> paid AI extraction -> existing candidate contract.
  * No ingestion, Drive, Sheet or Canonical writes; no automatic acceptance or retry.
  */
 export async function extractStoredKakaoInformation(input: {
-  runId: string; rawRecordId: string; roomCode: string; msgNo: string;
-  senderVerified: boolean; dataClassification: 'SUPPLIER_NON_SENSITIVE'; requestId: string;
-}, ports: { source: Pick<SourceIngestionStore, 'getRun' | 'listRaw'>; ai: InformationExtractionAiPort }) {
-  if (!input.senderVerified || input.dataClassification !== 'SUPPLIER_NON_SENSITIVE'
-    || !/^K-[A-Za-z0-9]{3,12}$/.test(input.roomCode) || !/^\d{1,6}$/.test(input.msgNo)
+  runId: string; rawRecordId: string;
+  dataClassification: 'SUPPLIER_NON_SENSITIVE'; requestId: string;
+}, ports: { source: Pick<SourceIngestionStore, 'getRun' | 'listRaw'>; ai: InformationExtractionAiPort;
+  context: { getVerifiedMessageContext(rawRecordId: string): Promise<KakaoExtractionContext | null> } }) {
+  if (input.dataClassification !== 'SUPPLIER_NON_SENSITIVE'
     || !/^[A-Za-z0-9_-]{8,128}$/.test(input.requestId)) throw new Error('AI_SOURCE_BINDING_REQUIRED');
   const run = await ports.source.getRun(input.runId);
   if (!run || run.status !== 'COMPLETED') throw new Error('AI_SOURCE_RUN_NOT_COMPLETED');
@@ -32,9 +42,15 @@ export async function extractStoredKakaoInformation(input: {
     || typeof raw.payload.supplierCode !== 'string') throw new Error('AI_RAW_EVIDENCE_INVALID');
   const text = original.text;
   if (hasSensitiveKakaoExcerpt(text) || secret.test(text)) throw new Error('AI_SENSITIVE_SOURCE_REJECTED');
-  // Validate caller-controlled metadata with the existing authority before sending anything.
-  const metadata = { supplierCode: raw.payload.supplierCode, roomCode: input.roomCode,
-    source: { sentAt: new Date(original.sentAt).toISOString(), side: '상대', msgNo: input.msgNo, channel: 'KAKAO_RAW' as const } };
+  const context = await ports.context.getVerifiedMessageContext(raw.rawRecordId);
+  if (!context || context.rawRecordId !== raw.rawRecordId || context.sourceFingerprint !== raw.sourceFingerprint
+    || context.supplierCode !== raw.payload.supplierCode || context.roomId !== raw.payload.roomId
+    || typeof original.messageId !== 'string' || !original.messageId.trim() || context.messageId !== original.messageId
+    || typeof original.senderKey !== 'string' || !original.senderKey.trim() || context.senderKey !== original.senderKey
+    || context.side !== '상대') throw new Error('AI_SOURCE_CONTEXT_UNVERIFIED');
+  // Metadata comes from trusted verified evidence, never caller JSON or the AI.
+  const metadata = { supplierCode: context.supplierCode, roomCode: context.roomCode,
+    source: { sentAt: new Date(original.sentAt).toISOString(), side: context.side, msgNo: context.msgNo, channel: 'KAKAO_RAW' as const } };
   const preflight = createKakaoInfoCandidate({ ...metadata, source: { ...metadata.source, excerpt: '원문 검토' },
     type: '조건', fields: { 항목: '원문', 요약: '원문 검토', 값: '원문 검토' },
     confidence: 0, needsSupplierConfirm: true, aiInvolved: true, status: 'CANDIDATE' });

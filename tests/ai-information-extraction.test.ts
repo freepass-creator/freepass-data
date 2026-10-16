@@ -6,6 +6,7 @@ import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { isKakaoStateAutoPromotable } from '../src/domain/kakao-info-candidate.js';
 import type { InformationAiReply } from '../src/ports/ai-information-extraction.js';
 import type { SourceRun } from '../src/domain/source.js';
+import type { KakaoExtractionContext } from '../src/application/extract-kakao-information.js';
 
 const quote = '99허0000 월대여료65만원, 보증금0원, 36개월.';
 const text = `가상 시험(실제 차량 아님)\n${quote}`;
@@ -13,14 +14,17 @@ const rows = [{ type: '가격', quote, value: '65만원', plate: '99허0000' }];
 const reply = (output: unknown = { candidates: rows }): InformationAiReply => ({ provider: 'openai', model: 'fake-model', responseId: 'fake-response', output, usage: { inputTokens: 1, outputTokens: 1 } });
 function fixture(sourceText = text) {
   const prepared = prepareKakaoBundle({ supplierCode: 'RP001', roomId: 'fake-room', collectorId: 'fake-collector', observedAt: '2026-10-12T01:00:00.000Z',
-    messages: [{ messageId: '100', sentAt: '2026-10-12T00:00:00.000Z', text: sourceText, attachments: [], captureVerified: true, version: 0 }] })[0]!;
+    messages: [{ messageId: '100', senderKey: 'fake-supplier-sender', sentAt: '2026-10-12T00:00:00.000Z', text: sourceText, attachments: [], captureVerified: true, version: 0 }] })[0]!;
   const { rawRecords, runId } = prepareRawSourceBatch(prepared.batch), raw = rawRecords[0]!;
   const run: SourceRun = { runId, sourceId: raw.sourceId, status: 'COMPLETED', startedAt: raw.observedAt, headStatus: 'CURRENT', rawCount: 1, candidateCount: 0, warningCount: 0, coverage: prepared.batch.coverage };
   const source = { getRun: vi.fn(async () => run), listRaw: vi.fn(async () => [raw]) };
   const ai = { extract: vi.fn(async (_input: { text: string; requestId: string }) => reply()) };
-  const input = { runId, rawRecordId: raw.rawRecordId, roomCode: 'K-TESTFAKE', msgNo: '100', senderVerified: true,
+  const verified: KakaoExtractionContext = { rawRecordId: raw.rawRecordId, sourceFingerprint: raw.sourceFingerprint,
+    supplierCode: 'RP001', roomId: 'fake-room', messageId: '100', senderKey: 'fake-supplier-sender', roomCode: 'K-TESTFAKE', msgNo: '100', side: '상대' };
+  const context = { getVerifiedMessageContext: vi.fn(async (): Promise<KakaoExtractionContext | null> => verified) };
+  const input = { runId, rawRecordId: raw.rawRecordId,
     dataClassification: 'SUPPLIER_NON_SENSITIVE' as const, requestId: 'fake-request-001' };
-  return { input, source, ai, raw, run };
+  return { input, source, ai, raw, run, context, verified };
 }
 const wire = (provider: 'openai' | 'claude', output: unknown = { candidates: rows }) => provider === 'openai'
   ? { id: 'resp-fake', model: 'gpt-6.1-sol', status: 'completed', usage: { input_tokens: 1, output_tokens: 2 }, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(output) }] }] }
@@ -30,7 +34,7 @@ describe('direct provider HTTPS in FreePass Data application code', () => {
   it.each(['openai', 'claude'] as const)('calls %s directly once, bounds output and preserves Korean structured evidence', async provider => {
     const fetchImpl = vi.fn(async (_url, _init) => new Response(JSON.stringify(wire(provider)), { headers: { 'Content-Type': 'application/json' } })) as unknown as typeof fetch;
     const ai = createInformationExtractionAi({ provider, apiKey: 'fake-secret-not-real', workspaceId: 'wrkspc_fixture', fetchImpl });
-    const f = fixture(); const result = await extractStoredKakaoInformation(f.input, { source: f.source, ai });
+    const f = fixture(); const result = await extractStoredKakaoInformation(f.input, { source: f.source, context: f.context, ai });
     expect(result.candidates).toHaveLength(1); expect(result.provider).toBe(provider); expect(result.writes).toBe(0);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = vi.mocked(fetchImpl).mock.calls[0]!; const body = JSON.parse(String(init?.body));
@@ -79,8 +83,22 @@ describe('RAW evidence and existing candidate governance', () => {
     if (reason === 'capture') (f.raw.payload.original as Record<string, unknown>).captureVerified = false;
     if (reason === 'fingerprint') f.raw.sourceFingerprint = '0'.repeat(64);
     if (reason === 'run') f.run.status = 'RUNNING';
-    if (reason === 'sender') f.input.senderVerified = false;
+    if (reason === 'sender') f.verified.senderKey = 'different-sender';
     await expect(extractStoredKakaoInformation(f.input, f)).rejects.toThrow(); expect(f.ai.extract).not.toHaveBeenCalled();
+  });
+  it.each(['rawRecordId', 'sourceFingerprint', 'supplierCode', 'roomId', 'messageId', 'senderKey'] as const)('rejects mismatched verified %s before paid extraction', async field => {
+    const f = fixture(); f.verified[field] = 'different';
+    await expect(extractStoredKakaoInformation(f.input, f)).rejects.toThrow('AI_SOURCE_CONTEXT_UNVERIFIED');
+    expect(f.ai.extract).not.toHaveBeenCalled();
+  });
+  it('fails closed without verified context and ignores injected caller room/message metadata', async () => {
+    const f = fixture(); f.context.getVerifiedMessageContext.mockResolvedValueOnce(null);
+    await expect(extractStoredKakaoInformation(f.input, f)).rejects.toThrow('AI_SOURCE_CONTEXT_UNVERIFIED');
+    expect(f.ai.extract).not.toHaveBeenCalled();
+    const injected = { ...f.input, roomCode: 'K-WRONG', msgNo: '999', senderVerified: true };
+    const r = await extractStoredKakaoInformation(injected, f);
+    expect(r.candidates[0]?.candidate.roomCode).toBe('K-TESTFAKE');
+    expect(r.candidates[0]?.candidate.source.msgNo).toBe('100');
   });
   it('drops invented quotes, changed amounts, invalid plates and model metadata injection', async () => {
     const f = fixture(); f.ai.extract.mockResolvedValue(reply({ candidates: [

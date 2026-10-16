@@ -242,15 +242,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
   import { extractStoredKakaoInformation } from './application/kakao-source-intake.js';
   import { informationExtractionAiFromEnv } from './infra/ai-information-extraction.js';
   const result = await extractStoredKakaoInformation({
-    runId, rawRecordId, roomCode, msgNo, senderVerified: true,
+    runId, rawRecordId,
     dataClassification: 'SUPPLIER_NON_SENSITIVE', requestId,
-  }, { source: approvedSourceReader, ai: informationExtractionAiFromEnv('openai') });
+  }, { source: approvedSourceReader, context: verifiedCaptureContextReader,
+    ai: informationExtractionAiFromEnv('openai') });
   // Claude 선택: informationExtractionAiFromEnv('claude')
   ```
 
+- 원문 확인 포트 `context.getVerifiedMessageContext(rawRecordId)`는 기존 신뢰 서버의 촬영·방/메시지·발신자 확인 근거에서 조회한다(새 저장소/등록부를 만들지 않는다). 반환한 RAW ID/fingerprint/공급사/방 ID/메시지 ID/발신자 키를 저장 RAW와 모두 비교한 뒤, 확인된 roomCode/msgNo/상대방 정보만 후보에 붙인다. HTTP/JSON에서 준 roomCode/msgNo/senderVerified는 사용하지 않는다. 확인 포트가 없거나 메시지 ID/발신자 키/매핑이 미확인인 옛 RAW는 호출 전 HOLD. 실제 운영 확인 포트 구현·인가 연결은 아직 미적용이다.
 - 활성화는 서버의 `FREEPASS_DATA_AI_EXTRACTION_ENABLED=1`과 해당 `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` 주입이 필요하다. Claude user key에는 `ANTHROPIC_WORKSPACE_ID`도 주입한다. 키는 소스/브라우저/로그에 넣지 않는다. 모델은 `FREEPASS_AI_OPENAI_MODEL`/`FREEPASS_AI_CLAUDE_MODEL`로 지정하며 기본값은 각각 gpt-6.1-sol/claude-sonnet-5-5. 한 호출은 한 HTTP 요청, timeout 25초, 출력 상한1536 tokens, 자동 재시도/다른 provider 우회 없음. requestId는 상관 식별자이며 공급사 중복방지 약속이 아니다. 호출자에서 중복 업무를 관리하고 UNKNOWN 결과를 무조건 다시 보내지 않는다.
 - 실측: 가상 RAW 문장 `99허0000 월대여료65만원, 보증금0원, 36개월.`로 동일 Data 컴파일 코드를 각 키 보유 PC에서 실행했다. GPT `resp_0bfecdce7d70fd7e016ad2b79efc7c87d0bee84b16c1b10bda`(351/257 tokens), Claude `msg_011Cg6p1yruPKmqGPAi6Q7Nj`(925/758 tokens), 각 후보3/원문 오프셋 대사 PASS/쓰기0. 최초 Claude forced tool 요청은 HTTP400으로 거절됐고 결과를 보존했다. Sonnet5.5 공식 migration 규격대로 auto tool choice로 수정한 별도 v2 요청이 성공했으며, 도구 출력이 없으면 실패로 닫는다. 키 이동·운영 원문 전송 없음.
-- 검증: build 및 관련100시험 PASS, tool choice 수정 뒤 추출15시험 재검증 PASS. 전체 `npm run check`는 4097 PASS/19 SKIP, 4실패+1suite오류: Git Bash jq 미설치(runtime-policy 1/runtime-baseline 2), 병렬 runtime verification timeout1, exposure-apply Vitest 구문 오류1. 해당 파일들은 기준 main과 동일하다. runtime verification 단독 실행은6 PASS/1 SKIP, exposure-apply 자체 node --check PASS; 전체 GREEN으로 표현하지 않는다.
+- 검증: 초기 build 및 관련100시험 PASS, tool choice 수정 뒤 추출15시험 재검증 PASS. 1번 커맨드의 정적 검토에서 원문-방/메시지/발신자 결합 보완 필요를 받아 위의 확인 포트를 추가하고、불일치6항목/미확인/호출자 메타데이터 주입 차단을 포함한 관련107시험/build/arch/data-access-boundary PASS. 두 실제 응답에서 보존한 추출 사실은 최종 확인 포트 경계에서도 각3건/쓰기0으로 오프라인 재검증했다(추가 API호출0, 새 API응답이라고 세지 않음). 전체 `npm run check`는 초기 source에서4097 PASS/19 SKIP, 4실패+1suite오류: Git Bash jq 미설치(runtime-policy 1/runtime-baseline 2), 병렬 runtime verification timeout1, exposure-apply Vitest 구문 오류1. 해당 파일들은 기준 main과 동일하다. runtime verification 단독 실행은6 PASS/1 SKIP, exposure-apply 자체 node --check PASS; 전체 GREEN으로 표현하지 않는다.
 - 남은 HOLD: 운영 서버 secret 주입·실제 수집업무 호출 지점의 인가/비용/중복처리 연결·운영 배포·실제 공급사 원문 검토 및 승인. 읽기 전용 consumer API, 기존 수집 스케줄/작성 주체는 변경하지 않았다. 독립 메인 Claude 코드검토는 기존 채널로 요청했으며 응답 전에는 승인으로 세지 않는다.
 
 ### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
