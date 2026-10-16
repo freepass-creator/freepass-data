@@ -28,14 +28,14 @@ describe('vehicle master reference naming parity', () => {
         { id: 'k3-bd', maker: '기아', model: 'K3', subModel: '올 뉴 K3 BD', generationCode: 'BD', yearStart: '2018', yearEnd: '2021' },
       ],
       productRows: [
-        { id: 'p1', plateNumber: '24저4970', maker: '제네시스', model: 'G80', subModel: 'G80 DH' },
+        { id: 'p1', plateNumber: '11가4970', maker: '제네시스', model: 'G80', subModel: 'G80 DH' },
       ],
     });
     expect(report.status).toBe('FAIL');
     expect(report.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ entityId: 'g80-dh', code: 'GENERATION_CODE_SUFFIX_DRIFT', suggestedSubModel: 'G80' }),
       expect.objectContaining({ entityId: 'k3-bd', code: 'GENERATION_CODE_SUFFIX_DRIFT', suggestedSubModel: '올 뉴 K3' }),
-      expect.objectContaining({ entityId: '24저4970', code: 'PRODUCT_USES_DRIFTED_MASTER_NAME', relatedMasterId: 'g80-dh' }),
+      expect.objectContaining({ entityId: '11가4970', code: 'PRODUCT_USES_DRIFTED_MASTER_NAME', relatedMasterId: 'g80-dh' }),
     ]));
   });
 
@@ -72,11 +72,11 @@ describe('vehicle master reference naming parity', () => {
         { id: 'g80-dh', maker: '제네시스', model: 'G80', subModel: 'G80', generationCode: 'DH', yearStart: '2016', yearEnd: '2020' },
       ],
       productRows: [
-        { id: 'p1', plateNumber: '24저4970', maker: '제네시스', model: 'G80', subModel: 'G80 DH' },
+        { id: 'p1', plateNumber: '11가4970', maker: '제네시스', model: 'G80', subModel: 'G80 DH' },
       ],
     });
     expect(report.issues).toContainEqual(expect.objectContaining({
-      entityId: '24저4970',
+      entityId: '11가4970',
       code: 'PRODUCT_REFERENCE_NAME_MISMATCH',
       severity: 'HOLD',
     }));

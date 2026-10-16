@@ -80,22 +80,29 @@ export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: Shared
   if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
   verifiedMasterRecords(master, now);
 }
-export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
+/**
+ * The sealed master snapshot must be fresh at the entry fence (CLI start). After that fence an apply may legitimately run for
+ * many minutes (preflight, RAW load); judging the sealed snapshot against wall-clock time there turned a good run into
+ * VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE. In-flight checks evaluate it at its own capture time — completeness, immutable
+ * IDs and digest are still verified — while freshness against the live master is the digest comparison with a fresh read.
+ */
+const sealedNow = (master: VehicleMasterSnapshot, inFlight: boolean) => inFlight ? Date.parse(master.readAt) : Date.now();
+export function identityResolver(inputs: VehicleIdentityInputs | undefined, inFlight = false): SharedSheetIdentityResolver | undefined {
   if (!inputs) return undefined;
   assertVehicleIdentityInputs(inputs);
-  const master = indexVehicleMaster(verifiedMasterRecords(inputs.master));
+  const master = indexVehicleMaster(verifiedMasterRecords(inputs.master, sealedNow(inputs.master, inFlight)));
   const data = new Map(inputs.data.map(x => [x.plate, x.identity]));
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear, ...(row.specs ? { specs: row.specs } : {}) });
 }
-function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false) {
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
   const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
-  const master = snapshot ? { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs), master, { includeSupplierColors });
+  const master = snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, { includeSupplierColors });
   const normalize: typeof normalizeBase = raw => {
     const normalized = normalizeBase(raw);
     return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};
@@ -123,8 +130,8 @@ function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogSt
   } });
 }
 export async function planSharedSheetCanonical(store: CatalogStore, capture: SharedSheetCapture, target: string,
-  identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, operationalRefresh = false) {
-  const p = prepared(capture, identityInputs, includeSupplierColors);
+  identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, operationalRefresh = false, inFlight = false) {
+  const p = prepared(capture, identityInputs, includeSupplierColors, inFlight);
   const currentHead = await store.getSourceHead(p.sourceId);
   // A completed source run is immutable. New normalization must use a newly captured run.
   if (includeSupplierColors && currentHead?.runId === p.runId) {
@@ -223,7 +230,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
               x.sourceFingerprint === binding.sourceFingerprint && x.status === 'VALID') : [];
           if (operationalRefresh && previous.length !== 1) throw new Error('OPERATIONAL_PREVIOUS_CANDIDATE_NOT_UNIQUE');
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
-            maxObservationAgeSeconds: 900 } : undefined;
+            maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
           else {
@@ -261,7 +268,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
     planDigest: stableDigest(plan) } };
 }
 
-export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): asserts plan is SharedSheetPlan {
+export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest: string | undefined, target: string, inFlight = false): asserts plan is SharedSheetPlan {
   if (!plan || !digest || plan.schema !== 'shared-sheet-canonical-plan/v1' || plan.target !== target ||
       (plan.includeSupplierColors !== undefined && plan.includeSupplierColors !== true) ||
       (plan.operationalRefresh !== undefined && plan.operationalRefresh !== true) ||
@@ -273,21 +280,21 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
     assertVehicleIdentityInputs(plan.identityInputs);
     if (plan.identityRuleVersion !== VEHICLE_IDENTITY_RULE_VERSION) throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
-  if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
+  if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, inFlight).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
 export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<Set<string>> {
-  assertSharedSheetPlan(plan, digest, target);
+  assertSharedSheetPlan(plan, digest, target, true);
   const ownership = await store.getCatalogWriterOwnership();
   if (!ownership || ownership.mode !== 'EXCLUSIVE' || ownership.primaryWriterId !== actor.id || stableDigest(ownership) !== plan.ownershipDigest)
     throw new Error('SHARED_SHEET_EXCLUSIVE_WRITER_REQUIRED');
-  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, true);
   const head = await store.getSourceHead(p.sourceId);
   if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
   if (head?.runId === p.runId && (head.sourceId !== p.sourceId || head.observedAt !== p.head.observedAt ||
       stableDigest(head.checkpoint) !== stableDigest(p.head.checkpoint) || stableDigest(head.coverage) !== stableDigest(p.head.coverage)))
     throw new Error('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
-  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh);
+  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh, true);
   if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
   const replay = new Set<string>();
   for (let i = 0; i < plan.entries.length; i++) {
@@ -299,6 +306,54 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
   }
   return replay;
 }
+/** Public-log-safe failure label: a fixed UPPER_SNAKE code thrown by our own code, else the error class name. Never free text. */
+/** 마스터 스냅샷 검사(scripts/supplier-input-sheet.mjs vehicleMasterSnapshotRows)가 `HOLD: <고정 문구>` 로 던지는 것들 — 고정 코드로 옮긴다.
+ * 문구는 우리 코드의 고정 문자열뿐이라 식별자·값이 섞이지 않는다. 목록에 없는 HOLD 는 아래에서 UNCODED_Error 로 남는다. */
+const MASTER_HOLD_CODES: ReadonlyArray<readonly [string, string]> = [
+  ['HOLD: Active Data vehicle master snapshot required', 'VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE'],
+  ['HOLD: Complete master and trim documents required', 'VEHICLE_MASTER_DOCUMENTS_INCOMPLETE'],
+  ['HOLD: Vehicle master snapshot digest mismatch', 'VEHICLE_MASTER_SNAPSHOT_DIGEST_MISMATCH'],
+  ['HOLD: Unique immutable master IDs required', 'VEHICLE_MASTER_IDS_NOT_UNIQUE'],
+  ['HOLD: Unique immutable trim IDs required', 'VEHICLE_TRIM_IDS_NOT_UNIQUE']];
+/**
+ * 명령 거절의 «종류»만 닫힌 어휘로 노출한다 — 메시지 본문·식별자·값은 절대 싣지 않는다.
+ * 우리 코드의 UPPER_SNAKE 코드가 아닌 일반 Error(저장소·트랜잭션 계층)가 던져질 때 원인 범주를 판정하기 위한 것.
+ */
+const COMMAND_FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/already exists|already_exists|duplicate/i, 'ALREADY_EXISTS'],
+  [/not found|not_found|missing|does not exist/i, 'NOT_FOUND'],
+  [/revision|version|stale|changed|conflict|precondition|expected/i, 'REVISION_OR_PRECONDITION'],
+  [/abort|contention|transaction|too much|retry/i, 'TRANSACTION_ABORTED'],
+  [/lock|ownership|writer|exclusive|permission|denied|unauthenticated/i, 'OWNERSHIP_OR_PERMISSION'],
+  [/size|limit|exceed|too large|bytes/i, 'SIZE_OR_LIMIT'],
+  [/invalid|illegal|malformed|schema|unsupported|must|required/i, 'INVALID_INPUT'],
+  [/deadline|timeout|unavailable|econn|network/i, 'TRANSPORT'],
+];
+export function commandFailureDetail(error: unknown, kind: 'CREATE' | 'CHANGE' | 'UNKNOWN') {
+  const message = error instanceof Error ? error.message : '';
+  const cls = error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? error.name : 'NonError';
+  const rawCode = (error as { code?: unknown } | null)?.code;
+  const code = typeof rawCode === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(rawCode) ? rawCode
+    : typeof rawCode === 'number' && Number.isInteger(rawCode) ? String(rawCode) : null;
+  const category = COMMAND_FAILURE_PATTERNS.find(([rx]) => rx.test(message))?.[1] ?? 'UNCLASSIFIED';
+  return { commandKind: kind, errorClass: cls, errorCode: code, category };
+}
+export function safeErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
+  const known = MASTER_HOLD_CODES.find(([text]) => message === text);
+  if (known) return known[1];
+  return error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? `UNCODED_${error.name}` : 'UNCODED';
+}
+/** 예약 적용 울타리: 명령 시각 − 원천 관측 시각(계획 캡처 readTime)의 상한.
+ * 900초였을 때 예약 적용이 10-11 22:15Z 부터 전부 거절됐다 — 적용 단계 자체(사전 재계획·RAW 적재·listOffers)가 15~20분 걸려
+ * 첫 명령 시점에 이미 상한을 넘겼기 때문. 신선도는 적용 직전 라이브 재캡처 대조(assertLiveSharedSheetMatches, 2분)가 보장하므로
+ * 이 울타리는 «터무니없이 오래된 계획» 만 막는 2차 안전선으로 두고 적용 단계 소요를 넉넉히 덮는 값으로 둔다. */
+export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
+/** Reviewed-command verdicts that hold one vehicle without stopping the apply run. */
+const PER_ENTRY_REJECTION_CODES: ReadonlySet<string> = new Set(
+  ['REVIEWED_SOURCE_CHANGE_REJECTED', 'REVIEWED_SOURCE_CHANGE_CONFLICT', 'REVIEWED_SOURCE_CHANGE_BLOCKED',
+    'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH']);
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
@@ -309,7 +364,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     return planSharedSheetCanonical(store, options.capture, options.target, options.identityInputs, options.includeSupplierColors, options.operationalRefresh);
   }
   const plan = options.plan;
-  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
+  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target, true);
   if (options.target === 'freepasserp5') {
     const current = options.currentVehicleMasterSnapshot;
     if (!current) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
@@ -319,32 +374,45 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
   }
   const replay = await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
-  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors, true);
   // Immutable pre-write economics oracle for confirmed vehicle-price fees. A rent capture
   // is not a vehicle-price fact and must not recalculate or invent that basis.
   const beforeOffers = plan.operationalRefresh ? new Map((await store.listOffers()).map(x => [x.id, structuredClone(x)])) : null;
   const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize);
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
+  let commandKind: 'CREATE' | 'CHANGE' | 'UNKNOWN' = 'UNKNOWN';
+  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {};
   for (const entry of plan.entries) {
     if (entry.action === 'HOLD') { held++; continue; }
     if (entry.action === 'NO_CHANGE') { noChange++; continue; }
     try {
       let businessNoChange = false;
+      commandKind = entry.create ? 'CREATE' : entry.change ? 'CHANGE' : 'UNKNOWN';
       if (entry.create) await canonicalizeCatalogCandidate(store, entry.create);
       else if (entry.change) businessNoChange = (await applyReviewedSourceChange(store, entry.change)).status === 'NO_CHANGE';
       else throw new Error('INVALID_SHARED_SHEET_ACTION');
       if (replay.has(entry.recordId) || businessNoChange) noChange++; else committed++;
-    } catch {
-      // No thrown provider text or raw identifiers in stdout/public CI.
+    } catch (error) {
+      // A reviewed-command rejection is a per-vehicle verdict made before any write of that command (each command is its own
+      // transaction): hold that vehicle with a fixed code and keep applying the rest. Anything else (transport, storage,
+      // invariant breaches) still stops the whole run.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (typeof code === 'string' && PER_ENTRY_REJECTION_CODES.has(code)) {
+        held++; rejected.add(entry.recordId);
+        const key = `${commandKind}:${code}`; rejectedByCode[key] = (rejectedByCode[key] ?? 0) + 1;
+        continue;
+      }
+      // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
       return { report: { mode: 'APPLY', status: 'HOLD', committed, noChange, held,
-        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED' } };
+        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED',
+        reasonCode: safeErrorCode(error), failure: commandFailureDetail(error, commandKind) } };
     }
   }
   let suppliedTerms = 0, storedTerms = 0, heldTerms = 0, readbackMismatches = 0;
   for (const item of p.normalized) {
     const entry = plan.entries.find(x => x.recordId === item.record.sourceRecordId)!;
-    if (entry.action === 'HOLD') { heldTerms += item.suppliedTerms; continue; }
+    if (entry.action === 'HOLD' || rejected.has(entry.recordId)) { heldTerms += item.suppliedTerms; continue; }
     suppliedTerms += item.suppliedTerms;
     const c = item.record.candidate;
     const binding = await store.getSourceBinding(opaque('bind', p.sourceId, c.sourceRecordId));
@@ -378,6 +446,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   }
   return { report: { mode: 'APPLY', status: readbackMismatches ? 'HOLD' : held ? 'PARTIAL_HOLD' : 'APPLIED',
     committed, noChange, held, remaining: 0,
+    ...(Object.keys(rejectedByCode).length ? { rejectedByCode } : {}),
     reconciliation: { stage: 'CANONICAL_READBACK', suppliedTerms, storedTerms, heldTerms, readbackMismatches,
       equal: suppliedTerms === storedTerms && readbackMismatches === 0 } } };
 }
@@ -455,6 +524,16 @@ export async function main(args = process.argv.slice(2)) {
   console.log(JSON.stringify(result.report, null, 2));
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
+export async function runSharedSheetCli(args = process.argv.slice(2)) {
+  await main(args).catch(error => {
+    // CI redirects stdout to apply.json and reads it even after a nonzero exit.
+    // A business/system HOLD must never produce an empty JSON artifact.
+    console.log(JSON.stringify({ mode: args.includes('--apply') ? 'APPLY' : 'DRY_RUN',
+      status: 'HOLD', reason: 'SHARED_SHEET_JOB_HOLD' }));
+    // main 의 안전 오류 코드(safeErrorCode)를 그대로 남긴다 — 원문 메시지·비밀은 싣지 않는다.
+    console.error(`SHARED_SHEET_JOB_HOLD ${safeErrorCode(error)}`); process.exitCode = 1;
+  });
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1; });
+  void runSharedSheetCli();
 }

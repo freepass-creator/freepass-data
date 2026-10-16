@@ -8,7 +8,7 @@ import { Timestamp, type Firestore } from 'firebase-admin/firestore';
 
 const token = 'test-single-product-token-0123456789abcdef';
 const headers = { authorization: `Bearer ${token}` };
-const id = '10하8099';
+const id = '11가8099';
 const url = (consumer = 'erp-com') => `/v1/consumers/${consumer}/catalog-compat/products/${encodeURIComponent(id)}`;
 function snapshot(consumerId = 'erp-com'): CatalogCompatibilityProductSnapshot {
   return { schema: 'freepass-data.catalog-compat/v1',

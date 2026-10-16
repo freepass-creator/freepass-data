@@ -13,12 +13,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const now = new Date('2026-10-12T05:00:00.000Z');
-const item = { plate: '00가0001', supplierCode: 'RP001', sheetRow: 10, expectedLockAt: 1790000000000 };
+const item = { plate: '11가0001', supplierCode: 'RP001', sheetRow: 10, expectedLockAt: 1790000000000 };
 const product = { provider_company_code: 'RP001', locked_by_contract: 'LEDGER', _ledger_lock_at: 1790000000000, status: '계약중' };
 const evidence = (patch: Record<string, unknown> = {}, top: Record<string, unknown> = {}) => ({
   readAt: '2026-10-12T04:55:00.000Z',
   otherTabsRead: ['분납실적', '완납실적'],
-  items: [{ plate: '00가0001', intakeRows: [{ row: 10, cancel: true }], otherTabHits: 0, ...patch }],
+  items: [{ plate: '11가0001', intakeRows: [{ row: 10, cancel: true }], otherTabHits: 0, ...patch }],
   ...top,
 });
 const parsed = (value: unknown) => parseContractLockSheetEvidence(value);
@@ -62,7 +62,7 @@ describe('contract lock release decision', () => {
   });
 
   it('digest is order independent and summary counts reasons', () => {
-    const other = { ...item, plate: '00나0002' };
+    const other = { ...item, plate: '11가0002' };
     expect(contractLockPlanDigest({ planId: 'p', items: [item, other] })).toBe(contractLockPlanDigest({ planId: 'p', items: [other, item] }));
     const summary = summarizeContractLockDecisions([
       decideContractLockRelease(item, product, parsed(evidence()), now),
@@ -73,7 +73,7 @@ describe('contract lock release decision', () => {
 });
 
 describe('release-contract-locks job', () => {
-  const second = { ...item, plate: '00나0002', sheetRow: 11 };
+  const second = { ...item, plate: '11가0002', sheetRow: 11 };
   const plan = { planId: 'p', items: [item, second] };
   const ev = {
     readAt: '2026-10-12T04:58:00.000Z',

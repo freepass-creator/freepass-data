@@ -170,7 +170,7 @@ describe('trusted bounded single-product runtime readback', () => {
     const input = options(full); const onDiagnostic = vi.fn();
     await expect(helper.verifyReadback({ ...input, onDiagnostic })).rejects.toMatchObject({ diagnostic: { phase: 'SELECT_PRODUCT', requestCount: 0, lastStatus: 0, reason: reasons[kind] } });
     expect(onDiagnostic).toHaveBeenCalledTimes(1); expect(input.fetchImpl).not.toHaveBeenCalled();
-    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/private-|10하8099/);
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/private-|11가8099/);
   });
   it.each(['VALIDATE_HEADERS', 'VALIDATE_SCHEMA', 'VALIDATE_META', 'VALIDATE_PRODUCT', 'VALIDATE_PRICE', 'VALIDATE_LINKED'])('reports %s after one 200 and starts no further GET', async phase => {
     const value = snapshot() as any; const h = new Headers(headers);
@@ -216,7 +216,7 @@ describe('trusted bounded single-product runtime readback', () => {
       expect(result.stdout).toContain('SINGLE_PRODUCT_READBACK_REASON=PRODUCT_NOT_OBSERVED');
       expect(result.stdout).toContain('SINGLE_PRODUCT_READBACK_REQUEST_COUNT=0');
       expect(result.stderr).toBe('SINGLE_PRODUCT_READBACK_OK=false\n');
-      expect(result.stdout + result.stderr).not.toMatch(/private-|10하8099|https:|Error|\.json|\.mjs/);
+      expect(result.stdout + result.stderr).not.toMatch(/private-|11가8099|https:|Error|\.json|\.mjs/);
     } finally { unlinkSync(file); rmdirSync(folder); }
   });
   it('verify-only restores the trusted helper and reuses one existing secret read without deployment', () => {

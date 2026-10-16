@@ -1,4 +1,4 @@
-import { sharedSheetChannels, sharedSheetUnavailableChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
+import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetUnavailableChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
   type SupplierEnteredRecord, type SheetCorrection } from './shared-sheet-source.js';
 import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
@@ -210,7 +210,7 @@ export function supplierEnteredFromErp5(capture: Erp5SourceCapture): SupplierEnt
 /** Merge supplements into a capture and re-seal its digest. Only supplements whose «공급사 코드 + 차량번호» is a sheet row are kept. */
 export function withSupplements(capture: SharedSheetCapture, supplierEntered: SupplierEnteredRecord[], corrections: SheetCorrection[]): SharedSheetCapture {
   const rowKeys = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => {
-    const code = sharedSheetChannels.find(x => x.tab === t.title && x.companyName === String(r[0] ?? '').trim())?.code;
+    const code = sharedSheetChannelOf(t.title, r[0])?.code;
     return code && isAssignedPlate(r[4]) ? `${code}|${plateIdentityKey(r[4])}` : '';
   })).filter(Boolean));
   // Validate before matching: a supplement without supplier code/plate is an error, not something to drop silently.
