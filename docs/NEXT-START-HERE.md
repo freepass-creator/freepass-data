@@ -299,6 +299,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 상세 표: [FEE-UNCONFIRMED-TRIAGE-20261012.md](FEE-UNCONFIRMED-TRIAGE-20261012.md). 계획 재실행(쓰기 0) 확정 4,880→4,976, 미확정 8,942→8,846.
 - 코드: ① 원문 「구분」 «신차(선출고|견적출고)» 명시분 읽기 ② 아이언(RP006)·우리캐피탈(RP020) 신차렌트는 선출고 규칙(F04 139·50행)으로, 차량가액은 원문 전체.차량가격(신차렌트만). 손오공 차량가액 판정은 변경 없음.
 - 남은 HOLD: 이안카·아이카 «대표 협의/확인 대기»(자동 질문 금지), 아이언·우리캐피탈 차량가격 없는 상품 76행, 아이언 중고렌트 비표준 기간 13행. apply 는 하지 않았다.
+### 2026-10-12 수집 15분·이안카·손오공 (collection-health-pipeline)
+- 감시 스크립트 `scripts/collection-health-watch.mjs`(gh 읽기만)+작업 스케줄러 등록 스크립트 추가, 첫 실측 7일 준수율 4.0%. 마지막 예약 실패 원인은 관문이 아니라 적용 HOLD(CANONICAL_COMMAND_REJECTED, 18대) — #490 의 가드 종속 서술 정정. 가드 완화는 하지 않음. 이안카는 코드 문제가 아니라 스케줄러 PAUSED/pending 운영 항목, 손오공은 RAW→후보 정규화 미연결. 상세 [COLLECTION-HEALTH-OPS](COLLECTION-HEALTH-OPS.md). next_start_here: 지휘통제실 승인(보조 트리거·이안카 대사·손오공 읽기 시험) 뒤 진행.
 
 <a id="limited-open-readiness-20261012"></a>
 
