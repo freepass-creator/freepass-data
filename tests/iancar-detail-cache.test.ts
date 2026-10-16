@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectIancarOneFullFacts, IANCAR_ONE_API_ORIGIN } from '../src/adapters/iancar-one-api.js';
 import { cachedIancarDetailFor, IANCAR_DETAIL_CACHE_POLICY, IANCAR_DETAIL_CACHE_VERSION, iancarListRowDigest, iancarRotationIds,
-  parseIancarDetailCache, type IancarDetailCache } from '../src/adapters/iancar-detail-cache.js';
+  parseIancarDetailCache, mergeIancarDetailCache, type IancarDetailCache, type IancarDetailCacheEntry } from '../src/adapters/iancar-detail-cache.js';
 
 // 값은 전부 가짜. 이안카 상세·가용 캐시: 목록 행 지문이 같은 차는 상세·가용을 재사용하고 요금만 다시 읽는다. 요금은 캐시하지 않는다.
 const config = { apiKey: 'SYNTHETIC_KEY', origin: IANCAR_ONE_API_ORIGIN, timeoutMs: 5000, retryDelaysMs: [] as number[] };
@@ -15,15 +15,17 @@ const rate = { rental_period: 24, monthly_rate: 500000, deposit: 700000, contrac
   vat_included: true, contract_conditions: { version: 'synthetic-v1' } };
 const reserved = { status: 'RESERVED', available: false };
 
-function world(opts: { rateOf?: (i: number) => number; changed?: Set<number> } = {}) {
+function world(opts: { rateOf?: (i: number) => number; changed?: Set<number>; failAt?: { afterDetails: number; status?: number; identity?: boolean }; endChanged?: Set<number>; endExtra?: boolean } = {}) {
   const calls = { list: 0, detail: 0, availability: 0, rates: 0 };
   const state = (i: number) => (opts.changed?.has(i) ? reserved : undefined);
   const fetcher = (async (input: string | URL | Request) => {
     const path = new URL(String(input)).pathname;
     if (path === '/v1/vehicles') {
       calls.list++;
-      const data = Array.from({ length: N }, (_, i) => row(i, state(i)));
-      return Response.json({ success: true, data, pagination: { page: 1, page_size: 100, total: N }, synced_at: '2026-10-01T00:00:00.000Z', stale: false });
+      const ending = calls.list > 1;
+      const data = Array.from({ length: N }, (_, i) => row(i, ending && opts.endChanged?.has(i) ? reserved : state(i)));
+      if (ending && opts.endExtra) data.push(row(N));
+      return Response.json({ success: true, data, pagination: { page: 1, page_size: 100, total: data.length }, synced_at: '2026-10-01T00:00:00.000Z', stale: false });
     }
     const i = Number(/\/v1\/vehicles\/veh(\d+)/.exec(path)?.[1]);
     if (path.endsWith('/rates')) {
@@ -32,6 +34,10 @@ function world(opts: { rateOf?: (i: number) => number; changed?: Set<number> } =
     }
     if (path.endsWith('/availability')) { calls.availability++; return Response.json({ success: true, data: row(i, state(i)) }); }
     calls.detail++;
+    if (opts.failAt && calls.detail > opts.failAt.afterDetails) {
+      if (opts.failAt.identity) return Response.json({ success: true, data: { ...row(i, state(i)), vehicle_id: 'other' } });
+      return new Response('upstream', { status: opts.failAt.status ?? 503 });
+    }
     return Response.json({ success: true, data: row(i, state(i)) });
   }) as typeof fetch;
   return { fetcher, calls };
@@ -151,5 +157,64 @@ describe('캐시 봉투 재검증(관문 Codex P1)', () => {
     const second = await collectIancarOneFullFacts(config, w2.fetcher, undefined, undefined, { detailCache: cache });
     expect(w2.calls.detail).toBe(IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle + 1);
     expect(second.readyForRawIngest).toBe(true);
+  });
+});
+
+describe('캐시 적재는 회차 실패와 분리(닭과 달걀 해소)', () => {
+  it('N대 검증 뒤 503 으로 회차가 실패해도 sink 에는 검증 통과 차만 남고, 회차는 종전처럼 실패한다', async () => {
+    const w = world({ failAt: { afterDetails: 26, status: 503 } });   // 순환 몫(20)보다 많이 쌓여야 적중이 보인다
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    await expect(collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink })).rejects.toThrow();
+    const ids = Object.keys(sink);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.length).toBeLessThanOrEqual(27); expect(ids.length).toBeGreaterThan(IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle);
+    for (const id of ids) expect((sink[id]!.detail.data as { vehicle_id: string }).vehicle_id).toBe(id);
+    // 다음 회차: 병합된 파일로 sink 차는 상세·가용을 건너뛴다(요금만)
+    const merged = mergeIancarDetailCache(null, sink, Date.parse('2026-10-01T00:01:00Z'));
+    const w2 = world();
+    vi.setSystemTime(new Date('2026-10-01T00:05:00Z'));
+    const second = await collectIancarOneFullFacts(config, w2.fetcher, undefined, undefined, { detailCache: merged });
+    expect(second.readyForRawIngest).toBe(true);
+    expect(second.detailsCached).toBe(ids.length - IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle);
+    expect(w2.calls.detail).toBe(N - ids.length + IANCAR_DETAIL_CACHE_POLICY.rotationPerCycle);
+  });
+  it('신원 불일치(비일시 실패)로 끝나면 sink 를 비운다', async () => {
+    const w = world({ failAt: { afterDetails: 6, identity: true } });
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    await expect(collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink })).rejects.toThrow('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
+    expect(Object.keys(sink)).toHaveLength(0);
+  });
+  it('병합은 차량별 통째 덮어쓰기, 유효 상한 지난 항목은 버림, cachedAt 은 보존', () => {
+    const base = row(1);
+    const old: IancarDetailCacheEntry = { rowDigest: iancarListRowDigest(base), detail: { success: true, data: base }, availability: { success: true, data: base },
+      cachedAt: '2026-10-01T00:00:00.000Z', detailSyncedAt: null };
+    const stale: IancarDetailCacheEntry = { ...old, cachedAt: '2026-09-29T00:00:00.000Z' };
+    const existing: IancarDetailCache = { version: IANCAR_DETAIL_CACHE_VERSION, writtenAt: '2026-10-01T00:00:00.000Z', entries: { veh1: old, veh2: stale } };
+    const fresh: IancarDetailCacheEntry = { ...old, rowDigest: 'a'.repeat(64), cachedAt: '2026-10-01T00:30:00.000Z' };
+    const merged = mergeIancarDetailCache(existing, { veh1: fresh }, Date.parse('2026-10-01T01:00:00Z'));
+    expect(Object.keys(merged.entries)).toEqual(['veh1']);
+    expect(merged.entries.veh1!.rowDigest).toBe('a'.repeat(64));
+    expect(merged.entries.veh1!.cachedAt).toBe('2026-10-01T00:30:00.000Z');
+    expect(parseIancarDetailCache(JSON.parse(JSON.stringify(merged)))).toEqual(merged);
+  });
+});
+
+describe('끝 목록 대조와 적재(관문 Codex P1)', () => {
+  it('읽는 동안 바뀐 차(LIST_CHANGED_DURING_READ 보류)는 적재에서 빠지고 나머지는 남는다', async () => {
+    const w = world({ endChanged: new Set([7]) });
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    const capture = await collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink });
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.records.find(r => r.vehicleId === 'veh7')!.hold?.code).toBe('IANCAR_ONE_LIST_CHANGED_DURING_READ');
+    expect(sink.veh7).toBeUndefined();
+    expect(Object.keys(sink)).toHaveLength(N - 1);
+  });
+  it('끝 목록에 새 차가 생겨 회차가 불완전(ENRICHMENT_SOURCE_DRIFT)하면 적재 전부를 버린다', async () => {
+    const w = world({ endExtra: true });
+    const sink: Record<string, IancarDetailCacheEntry> = {};
+    const capture = await collectIancarOneFullFacts(config, w.fetcher, undefined, undefined, { detailCache: null, cacheSink: sink });
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+    expect(Object.keys(sink)).toHaveLength(0);
   });
 });

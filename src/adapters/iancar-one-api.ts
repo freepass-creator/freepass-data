@@ -543,7 +543,28 @@ function cachedEnvelopesMatch(entry: IancarDetailCacheEntry, record: IancarOneLi
 export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void,
-  opts: { detailCache?: IancarDetailCache | null } = {}
+  opts: { detailCache?: IancarDetailCache | null;
+    /** 캐시 «적재» 전용(1번 커맨드 2026-10-16 닭과 달걀 해소): 차량별 검증을 모두 통과한 상세·가용 봉투를 읽는 즉시 여기에 쌓는다.
+     *  회차가 503 등 «이미 검증한 차의 증거를 무효화하지 않는» 일시 실패로 끝나도 남아 다음 회차에 재사용된다(호출자가 파일에 병합).
+     *  신원 불일치·목록 붕괴 같은 비일시 실패면 비운다. 발행·Firestore 쓰기와 무관(캐시 적재 경로만). */
+    cacheSink?: Record<string, IancarDetailCacheEntry> } = {}
+): Promise<IancarOneListCapture> {
+  const sink = opts.cacheSink;
+  try {
+    return await collectIancarOneFullFactsInner(config, fetcher, now, onProgress, opts, sink);
+  } catch (error) {
+    // 일시 실패(502·503·504·429·시간 초과)만 sink 를 남긴다 — 신원·번호·목록 일관성 실패는 그 회차의 적재를 전부 버린다(Codex P1 ①).
+    if (sink && !isTransientIancarFailure(error)) clearSink(sink);
+    throw error;
+  }
+}
+/** 일시 실패(이미 검증한 차의 증거를 무효화하지 않는 실패)만 캐시 적재를 남긴다: 429·502·503·504·시간 초과. */
+const isTransientIancarFailure = (error: unknown): boolean => error instanceof IancarOneApiError
+  && ((error.status !== undefined && [429, 502, 503, 504].includes(error.status)) || /TIMEOUT/.test(error.code));
+const clearSink = (sink: Record<string, IancarDetailCacheEntry>) => { for (const key of Object.keys(sink)) delete sink[key]; };
+async function collectIancarOneFullFactsInner(
+  config: IancarOneApiConfig, fetcher: Fetcher, now: string, onProgress: ((completed: number, total: number) => void) | undefined,
+  opts: { detailCache?: IancarDetailCache | null }, sink: Record<string, IancarDetailCacheEntry> | undefined
 ): Promise<IancarOneListCapture> {
   // 상세·가용 캐시(기본 없음): opts.detailCache 가 주어진 회차만 재사용·갱신한다. 요금(rates)은 항상 다시 읽는다(Codex P1: 가격은 캐시 금지).
   const cacheOn = opts.detailCache !== undefined;
@@ -660,8 +681,11 @@ export async function collectIancarOneFullFacts(
       if (keys.has(key)) { rateHold = 'IANCAR_ONE_DUPLICATE_RATE'; break; }
       keys.add(key);
     }
-    if (cacheOn) cacheNext[record.vehicleId] = cached ? cached : { rowDigest, detail: structuredClone(detail) as Record<string, unknown>,
-      availability: structuredClone(availability) as Record<string, unknown>, cachedAt: new Date(observationNow()).toISOString(), detailSyncedAt };
+    if (cacheOn) {
+      cacheNext[record.vehicleId] = cached ? cached : { rowDigest, detail: structuredClone(detail) as Record<string, unknown>,
+        availability: structuredClone(availability) as Record<string, unknown>, cachedAt: new Date(observationNow()).toISOString(), detailSyncedAt };
+      if (sink && !cached) sink[record.vehicleId] = structuredClone(cacheNext[record.vehicleId]!);   // 새로 읽어 검증을 통과한 차만 적재(재사용 차는 파일에 이미 있음)
+    }
     const payload: JsonObject = { ...structuredClone(record.payload),
       detail: structuredClone(detail), availability: structuredClone(availability),
       rates: structuredClone(rates), rateRequestEvidence: {
@@ -681,6 +705,8 @@ export async function collectIancarOneFullFacts(
   // Settle outstanding workers before reporting failure: no dangling requests after return.
   const guardedWorker = () => worker().catch(error => { aborted = true; throw error; });
   const settled = await Promise.allSettled([guardedWorker(), guardedWorker()]);
+  // 대표 예외는 429 우선이지만, 어느 워커든 비일시 실패(신원·번호 불일치 등)가 있으면 이번 회차 적재를 전부 버린다(관문 Codex P1).
+  if (sink && settled.some(result => result.status === 'rejected' && !isTransientIancarFailure(result.reason))) clearSink(sink);
   const failed = settled.find(result => result.status === 'rejected'
     && result.reason instanceof IancarOneApiError && result.reason.status === 429)
     ?? settled.find(result => result.status === 'rejected');
@@ -714,6 +740,12 @@ export async function collectIancarOneFullFacts(
   if (membershipChanged || plateChanged || driftHolds + listChanged > driftLimit) issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
   if (Date.parse(capture.syncedAt) > Date.parse(ending.syncedAt))
     issues.push('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
+  // 끝 목록 대조에서 회차가 불완전(비일시: 번호 변경·목록 붕괴·시계 역행·한도 초과)해지면 적재 전부를 버리고,
+  // 읽는 동안 바뀐 차(LIST_CHANGED_DURING_READ 보류)는 그 차만 적재에서 뺀다(관문 Codex P1).
+  if (sink) {
+    if (issues.length) clearSink(sink);
+    else for (const written of records) if (written?.hold?.code === 'IANCAR_ONE_LIST_CHANGED_DURING_READ') delete sink[written.vehicleId];   // 요금 보류 차는 상세·가용이 검증됐으므로 남긴다
+  }
   return { ...capture, records, factScope: 'FULL_FACTS', issues,
     observationWindow: { startedAt: capture.capturedAt, completedAt: ending.capturedAt,
       startInventorySyncedAt: capture.syncedAt, endInventorySyncedAt: ending.syncedAt,
