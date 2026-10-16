@@ -7,8 +7,7 @@ export async function captureVehicleMasterSnapshotReadOnly() {
   }, readVehicleMasterSnapshot);
 }
 import { DataAccessGateway } from '../application/data-access-gateway.js';
-import { withdrawIancarPublication, publishIancarPhaseOne, publishIancarPhotoReferences, restoreIancarPhaseOne } from '../infra/iancar-publication-withdrawal-firestore.js';
-import { buildIancarOnePublicationProducts, type IancarOneListCapture } from '../adapters/iancar-one-api.js';
+import { publishIancarPhotoReferences, restoreIancarPhotoReferences } from '../infra/iancar-photo-firestore.js';
 import { iancarErpReadTransport, buildIancarErpRawIntakeBatch } from '../adapters/iancar-source-capture.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
@@ -24,6 +23,8 @@ import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
 import { ingestRawSourceBatch } from '../application/ingest-raw-source.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import {
   assessLatestSheetConsumerCutover,
@@ -228,44 +229,6 @@ export function createPeriodFeeLedgerApplyRuntime() {
   };
 }
 
-export async function runIancarPublicationWithdrawal(input: {
-  apply: boolean; expectedCount: number; expectedOpen: number;
-}) {
-  const runtime = createJobDataAccessRuntime();
-  const context = { actor: { id: 'service:freepass-data-iancar-withdrawal', kind: 'SERVICE' as const },
-    clientId: 'job:withdraw-iancar-publication', purpose: 'user-directed temporary RP031 publication withdrawal' };
-  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
-  const summarize = (value: Awaited<ReturnType<typeof withdrawIancarPublication>>) =>
-    ({ count: value.changedCount, digest: stableDigest(value) });
-  if (!input.apply) return runtime.access.read({ context, resource,
-    operation: 'READ_IANCAR_PUBLICATION_WITHDRAWAL_PLAN', summarize }, () => withdrawIancarPublication(input));
-  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PUBLICATION_WITHDRAWAL',
-    requestDigest: stableDigest(input), summarize }, () => withdrawIancarPublication(input));
-}
-
-export async function runIancarPhaseOnePublication(input: {
-  capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
-  photoPending?: boolean; keepWithdrawn?: boolean; refreshFacts?: boolean;
-}) {
-  const prepared = { products: buildIancarOnePublicationProducts(input.capture),
-    sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
-    apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
-    ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
-    ...(input.photoPending ? { photoPending: true } : {}), ...(input.keepWithdrawn ? { keepWithdrawn: true } : {}), ...(input.refreshFacts ? { refreshFacts: true } : {}),
-    ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
-    ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
-  const runtime = createJobDataAccessRuntime();
-  const context = { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const },
-    clientId: 'job:publish-iancar-phase-one', purpose: 'user-directed RP031 API vehicle/rental publication; policy deferred' };
-  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
-  const summarize = (value: Awaited<ReturnType<typeof publishIancarPhaseOne>>) =>
-    ({ count: value.sourceCount, digest: stableDigest(value) });
-  if (!input.apply) return runtime.access.read({ context, resource,
-    operation: 'READ_IANCAR_PHASE_ONE_PLAN', summarize }, () => publishIancarPhaseOne(prepared));
-  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PHASE_ONE_PUBLICATION',
-    requestDigest: stableDigest(input), summarize }, () => publishIancarPhaseOne(prepared));
-}
-
 export async function runIancarPhotoPublication(input: Parameters<typeof publishIancarPhotoReferences>[0]) {
   const runtime = createJobDataAccessRuntime();
   const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const },
@@ -280,22 +243,12 @@ export async function runIancarPhotoPublication(input: Parameters<typeof publish
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
 }
 
-export async function runIancarPhaseOneRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
-  const prepared = { ...input, expectedSchema: 'iancar-phase-one-typed-backup/1' };
-  const runtime = createJobDataAccessRuntime();
-  const spec = { context: { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-phase-one', purpose: 'restore verified RP031 phase-one publication backup' },
-    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' }, operation: input.apply ? 'RESTORE_IANCAR_PHASE_ONE' : 'READ_IANCAR_PHASE_ONE_RESTORE_PLAN',
-    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
-  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
-}
-
-export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
-  const prepared = { ...input, expectedSchema: 'iancar-photo-typed-backup/1' };
+export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhotoReferences>[0]) {
   const runtime = createJobDataAccessRuntime();
   const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-photos', purpose: 'restore verified RP031 photo-only backup' },
     resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031/photos' }, operation: input.apply ? 'RESTORE_IANCAR_PHOTOS' : 'READ_IANCAR_PHOTO_RESTORE_PLAN',
-    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
-  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
+    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhotoReferences>>) => ({ count: value.count }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhotoReferences(input)) : runtime.access.read(spec, () => restoreIancarPhotoReferences(input));
 }
 
 export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
@@ -662,7 +615,7 @@ export async function createSourceIngestDataAccessRuntime() {
       }, () => ingestLegacyProductSnapshot(sourceStore, snapshot))
 ,
 
-    ingestRawBatch: (batch: SourceIntakeBatch) =>
+    ingestRawBatch: (batch: SourceIntakeBatch, normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] } | null) =>
       access.write({
         context: {
           actor: { id: 'service:freepass-data-source-intake', kind: 'SERVICE' },
@@ -697,7 +650,7 @@ export async function createSourceIngestDataAccessRuntime() {
             checkpoint: value.checkpoint
           })
         })
-      }, () => ingestRawSourceBatch(sourceStore, batch))
+      }, () => ingestRawSourceBatch(sourceStore, batch, new Date().toISOString(), normalize))
   };
 }
 

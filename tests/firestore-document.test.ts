@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentSnapshot } from 'firebase-admin/firestore';
 import { GeoPoint, Timestamp } from 'firebase-admin/firestore';
-import { encodeIancarBackupValue, decodeIancarBackupValue, iancarAbsencePatch, iancarPhotoPatch, iancarPhotoPendingPatch, iancarFactsRefreshPatch } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { encodeIancarBackupValue, decodeIancarBackupValue } from '../src/infra/iancar-backup-value.js';
+import { iancarPhotoPatch, iancarPhotoPendingPatch } from '../src/infra/iancar-photo-firestore.js';
 import {
   decodeFirestoreDocument,
   decodeFirestoreIdentityDocument
@@ -17,15 +18,6 @@ function snapshot(id: string, value: Record<string, unknown> | null) {
 }
 
 describe('Firestore document decoding', () => {
-  it('absent source inventory is withdrawn once, never deleted or repeated over locks/history', () => {
-    const old = { provider_company_code: 'RP031', listable: true, iancar_one_vehicle_id: 'V1', iancar_phase_one: { sourceDigest: 'old' } };
-    const patch = iancarAbsencePatch(old, new Set(), 'new', 'now')!;
-    expect(patch).toMatchObject({ listable: false, iancar_phase_one: null, publication_withdrawal: { deleteAuthorized: false } });
-    expect(iancarAbsencePatch({ ...old, ...patch }, new Set(), 'next', 'later')).toBeNull();
-    for (const extra of [{ locked_by_contract: true }, { _deleted: true }, { deletedAt: 'date' }, { provider_company_code: 'RP999' }])
-      expect(iancarAbsencePatch({ ...old, ...extra }, new Set(), 'new', 'now')).toBeNull();
-    expect(iancarAbsencePatch(old, new Set(['V1']), 'new', 'now')).toBeNull();
-  });
   it('shared photo mapping preserves originals and restores only unbacked own proxy slots', () => {
     const row = { productId: 'P', vehicleId: 'V', plate: '123가4567', count: 2, observedAt: 'now' };
     const original = { image_urls: ['https://original.example/photo.jpg'], image_url: 'https://original.example/photo.jpg' };
@@ -98,21 +90,5 @@ describe('iancarPhotoPendingPatch — 죽은 ERP4 별칭만 «사진 확인 중�
   });
   it('사진이 전혀 없는 새 문서는 «사진 확인 중»', () => {
     expect(iancarPhotoPendingPatch({})).toMatchObject({ image_kind: 'PHOTO_PENDING', image_urls: [] });
-  });
-});
-
-describe('iancarFactsRefreshPatch — 주행거리는 ONE 값, 연식은 모델연식 출처로 따로', () => {
-  it('문자열 주행거리 형식을 유지하고 옛 값을 보존한다', () => {
-    const patch = iancarFactsRefreshPatch({ mileage: '10', year: '2026' }, { mileage: 1380, year: '2027' }, 'T') as any;
-    expect(patch).toMatchObject({ mileage: '1,380', mileage_source_original: '10', model_year_source: '2027', iancar_mileage_observed_at: 'T' });
-    expect('year' in patch).toBe(false);
-  });
-  it('숫자 형식·같은 값·옛 보존 칸은 건드리지 않는다', () => {
-    expect((iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toMatchObject({ mileage: 7 });
-    expect('mileage_source_original' in (iancarFactsRefreshPatch({ mileage: 5, mileage_source_original: 1 }, { mileage: 7 }, 'T') as any)).toBe(false);
-    expect('mileage' in (iancarFactsRefreshPatch({ mileage: '1,380' }, { mileage: 1380 }, 'T') as any)).toBe(false);
-  });
-  it('ONE 값이 없으면 주행거리를 지우지 않는다', () => {
-    expect(iancarFactsRefreshPatch({ mileage: '10' }, { mileage: null, year: null }, 'T')).toEqual({});
   });
 });

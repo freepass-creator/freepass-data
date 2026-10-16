@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
 import { selectErp5Policy } from '../adapters/erp5-product-mapping.js';
-import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarEngineDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 import sheetSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
@@ -570,6 +570,7 @@ export function resolveReferenceDeposit(input: {
   depositFree?: unknown;
   depositFreeConfirmation?: unknown;
   depositSourceWaiverBasis?: unknown;
+  calculatedDepositRule?: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
   const resolved = resolveDepositWithRuleNote(input);
@@ -1021,6 +1022,27 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
+/**
+ * 공급사 원문 「구분」 칸이 «신차(선출고)» 처럼 출고 방식을 괄호로 직접 적은 경우만 신차 세부조건으로 읽는다(예: 이안카 시트).
+ * 「신차」「즉시출고」 같은 말은 선출고/견적출고를 가리지 못하므로 읽지 않는다 — 추정 금지, 없으면 NEW_PRODUCT_SUBTYPE_REQUIRED 유지.
+ */
+export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
+  if (text(source.product_type) !== '신차렌트') return undefined;
+  const stated = statedNewProductSubtype(source);
+  // 대표 2026-10-12: 아이언(RP006)·우리캐피탈렌더카(RP020)는 시트의 신차렌트를 차량가액 기준 선출고 규칙(F04 139·50행)으로 읽는다.
+  // 원문에 견적출고가 명시되면 그것이 우선(위 stated).
+  return stated ?? (['RP006', 'RP020'].includes(text(source.provider_company_code)) ? 'NEW_PREDELIVERY' : undefined);
+}
+
+export function statedNewProductSubtype(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
+  const raw = source['원문'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const all = (raw as Rec)['전체'];
+  const holder = all && typeof all === 'object' && !Array.isArray(all) ? all as Rec : raw as Rec;
+  const m = /^신차\s*\(\s*(선출고|견적출고)\s*\)$/.exec(text(holder['구분']));
+  return m ? (m[1] === '선출고' ? 'NEW_PREDELIVERY' : 'NEW_MATCHING') : undefined;
+}
+
 export type ReferenceSourceScope = 'LISTABLE' | 'COLLECTED';
 export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string, sourceScope: ReferenceSourceScope = 'LISTABLE', rawVehicleValueEvidence: VehicleValueEvidence | null = null) {
   const collected = sourceScope === 'COLLECTED';
@@ -1099,27 +1121,22 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
-    const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
-      ? readIancarPublishedDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
+    // 이안카(RP031)는 원천 엔진 근거만 쓴다(옛 1차 발행 칸 iancar_phase_one 은 근거가 아님). 엔진 근거가 없으면 미확인.
+    const publishedDeposit = supplierId === 'RP031' ? readIancarEngineDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
     const deposit = publishedDeposit ? {
       depositAmount: publishedDeposit.amount,
       depositState: publishedDeposit.state,
       depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
         code: publishedDeposit.reason, multiplier: null,
-        label: publishedDeposit.reason === 'SOURCE_AMOUNT' ? '공급사 입력 금액' : '공급사 기간·주행거리 조건',
+        label: '공급사 기간·주행거리 조건',
+        ...('depositEvidenceBasis' in publishedDeposit ? { depositEvidenceBasis: publishedDeposit.depositEvidenceBasis } : {}),
       },
-      ...('depositRuleDifference' in publishedDeposit && publishedDeposit.depositRuleDifference
-        ? { depositRuleDifference: publishedDeposit.depositRuleDifference } : {}),
     } : resolveReferenceDeposit(depositInput);
     const depositEvidence = {
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
       sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
       sourceNote: text(source.deposit_note) || null,
       reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
-      ...(publishedDeposit && 'publicationEvidenceReason' in publishedDeposit ? {
-        publicationEvidenceReason: publishedDeposit.publicationEvidenceReason,
-        publicationDecision: publishedDeposit.publicationDecision,
-      } : {}),
     };
     const vehicleValueEvidence = publicVehicleValueEvidence(evidenceByTerm[sourceKey]?.vehicleValue ? rawVehicleValueEvidence : null);
     const withVehicleValueEvidence = (fee: CommissionResolution) => {
@@ -1131,7 +1148,14 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
         ...(fee.state === 'CALCULATED' && vehicleValueEvidence ? { vehicleValueEvidence } : {}),
       };
     };
-    const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
+    const explicitSubtype = explicitNewProductSubtypeFromSource(source);
+    // 원문이 직접 적은 출고 방식(예: 견적출고)과 증거 입력의 subtype 이 다르면 어느 쪽도 믿지 않고 멈춘다.
+    const statedSubtype = statedNewProductSubtype(source);
+    const evidenceSubtype = (automaticCommissionEvidence as Rec).newProductSubtype ?? (effectiveEvidence as Rec | undefined)?.newProductSubtype;
+    const subtypeConflict = !!statedSubtype && !!evidenceSubtype && statedSubtype !== evidenceSubtype;
+    const guardSubtype = (fee: CommissionResolution): CommissionResolution => subtypeConflict ? unknownCommission('CONFLICTING_NEW_PRODUCT_SUBTYPE') : fee;
+    const channelPayoutFee = withVehicleValueEvidence(guardSubtype(resolveSalesCommission({
+      ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...effectiveEvidence,
       ...automaticCommissionEvidence,
       supplierId,
@@ -1140,8 +1164,9 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    }));
-    const supplierBillingFee = withVehicleValueEvidence(resolveSupplierBillingFee({
+    })));
+    const supplierBillingFee = withVehicleValueEvidence(guardSubtype(resolveSupplierBillingFee({
+      ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...effectiveEvidence,
       ...automaticCommissionEvidence,
       supplierId,
@@ -1150,7 +1175,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    }));
+    })));
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{
       termKey: `source:${sourceKey}`,

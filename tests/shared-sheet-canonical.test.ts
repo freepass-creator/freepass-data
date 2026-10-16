@@ -246,7 +246,7 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       expect(p.plan.operationalRefresh).toBe(true);
       expect(p.plan.entries[0]!.action).toBe('CHANGE');
-      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 900 });
+      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 3600 });
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
       expect(result.report).toMatchObject({ status: 'APPLIED' });
@@ -255,16 +255,62 @@ describe('shared sheet local source to Canonical', () => {
       expect((await s.store.listOffers())[0]!.internalEconomicsTerms!.find(x => x.termMonths === 1)!.supplierBillingFee.amount!.amount).toBe(39);
     } finally { vi.useRealTimers(); }
   });
-  it('rejects an operational observation older than fifteen minutes without changing Canonical', async () => {
+  it('rejects an operational observation older than the operational observation limit (3600 s; the sealed master no longer expires in flight) without changing Canonical', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
       const s = await stores(); await apply(s);
       const before = stableDigest(await s.store.listOffers());
       const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
-      vi.setSystemTime(new Date('2026-10-04T00:30:01.000Z'));
-      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
-        plan: p.plan, expectedPlanDigest: p.report.planDigest })).rejects.toThrow('HOLD');
+      vi.setSystemTime(new Date('2026-10-04T01:15:01.000Z'));
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(JSON.stringify(result.report)).toMatch(/REVIEWED_SOURCE_CHANGE_REJECTED/);
       expect(stableDigest(await s.store.listOffers())).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('refreshes status/rent when stored source facts differ only by normalizer ruleVersion, but still holds a real fact change', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const asset = (await s.store.listVehicleAssets())[0]!;
+      const old = structuredClone(asset) as any;
+      old.sourceVehicleFacts.ruleVersion = 'shared-sheet-normalizer/0';
+      for (const [key, fact] of Object.entries(old.sourceVehicleFacts.fields) as [string, any][]) if (key !== 'supplierStatus') fact.ruleVersion = 'shared-sheet-normalizer/0';
+      delete old.sourceVehicleFacts.fields.vehicleIdentitySource;
+      await s.store.seed({ vehicleAssets: [old] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r1 = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r1.report).toMatchObject({ committed: 1, held: 0 });
+    } finally { vi.useRealTimers(); }
+  });
+  it('readback compares an unchanged-rent term with its pre-run economics, not a recompute under a newer fee policy', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = structuredClone((await s.store.listOffers())[0]!) as any;
+      const older = structuredClone(offer.internalEconomicsTerms);
+      for (const t of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee', 'channelPayoutFee']) {
+        if (t[side]?.sourceRefs) t[side].sourceRefs = [...t[side].sourceRefs, 'older-policy-evidence'];
+      }
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect((r.report as any).reconciliation?.readbackMismatches ?? 0).toBe(0);
+      expect(older).toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it('holds, at plan time, a vehicle whose refresh also changes an odometer, instead of aborting the apply run', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '99,999km' })), 'synthetic-target', undefined, false, true);
+      const entry = p.plan.entries[0]!;
+      expect(entry.action).toBe('HOLD');
+      expect(entry.reasons).toContain('OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:SOURCE_ODOMETER_CHANGE');
+      expect(entry.change).toBeUndefined();
     } finally { vi.useRealTimers(); }
   });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
@@ -279,7 +325,9 @@ describe('shared sheet local source to Canonical', () => {
       const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'HOLD', reason: 'CANONICAL_COMMAND_REJECTED' });
+      expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
+      expect(result.report).toHaveProperty('rejectedByCode');
+      expect(result.report).toHaveProperty('rejectedByReason');
       expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
     } finally { vi.useRealTimers(); }
   });
@@ -771,6 +819,20 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
       expect(master.readAt).toBe(oldTime); expect(stableDigest(plan)).toBe(digest);
     } finally { vi.useRealTimers(); }
   });
+  it('keeps a sealed master usable in flight after the entry fence (long apply), but never when incomplete or digest-changed', async () => {
+    const s = await stores(), c = capture(), { plan, report } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const master = plan.capture.vehicleMasterSnapshot as VehicleMasterSnapshot;
+    const digest = stableDigest(plan);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(master.readAt) + 20 * 60_000);
+      expect(() => assertSharedSheetPlan(plan, digest, plan.target)).toThrow('Active Data vehicle master snapshot required');
+      expect(() => assertSharedSheetPlan(plan, digest, plan.target, true)).not.toThrow();
+      await expect(preflightSharedSheetApply(s.store, plan, report.planDigest, 'synthetic-target')).resolves.toBeInstanceOf(Set);
+    } finally { vi.useRealTimers(); }
+    const broken = structuredClone(plan); (broken.capture.vehicleMasterSnapshot as VehicleMasterSnapshot).complete = false as never;
+    expect(() => assertSharedSheetPlan(broken, stableDigest(broken), broken.target, true)).toThrow();
+  });
   it('rechecks stored head and all revisions in the read-only preflight before opening audited writes', async () => {
     const s = await stores(); await apply(s);
     const c = later(capture({ '1개월': 777 })), p = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
@@ -792,5 +854,36 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
     await expect(preflightSharedSheetApply(s.store, p.plan, p.report.planDigest, 'synthetic-target'))
       .rejects.toThrow('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('safeErrorCode', () => {
+  it('공개 로그에는 고정 대문자 코드나 오류 클래스 이름만 낸다', async () => {
+    const { safeErrorCode } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(safeErrorCode(new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED'))).toBe('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+    expect(safeErrorCode(new Error('provider said 12가3456 failed'))).toBe('UNCODED_Error');
+    expect(safeErrorCode(new TypeError('x'))).toBe('UNCODED_TypeError');
+    expect(safeErrorCode(new Error('HOLD: Active Data vehicle master snapshot required'))).toBe('VEHICLE_MASTER_SNAPSHOT_STALE_OR_INCOMPLETE');
+    expect(safeErrorCode(new Error('HOLD: some other free text 12가3456'))).toBe('UNCODED_Error');
+    expect(safeErrorCode('boom')).toBe('UNCODED');
+  });
+});
+
+describe('commandFailureDetail', () => {
+  it('exposes only a closed vocabulary, never message text or identifiers', async () => {
+    const { commandFailureDetail } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    const d = commandFailureDetail(Object.assign(new Error('Document projects/x/documents/offers/secret-id already exists'), { code: 6 }), 'CREATE');
+    expect(d).toEqual({ commandKind: 'CREATE', errorClass: 'Error', errorCode: '6', category: 'ALREADY_EXISTS' });
+    expect(JSON.stringify(d)).not.toContain('secret-id');
+    expect(commandFailureDetail(new Error('something odd 12345'), 'CHANGE').category).toBe('UNCLASSIFIED');
+    expect(commandFailureDetail('not an error', 'UNKNOWN')).toMatchObject({ errorClass: 'NonError' });
+  });
+});
+
+describe('reviewedRejectionReason', () => {
+  it('maps only fixed reviewed-command messages; unknown text stays UNLISTED and is never echoed', async () => {
+    const { reviewedRejectionReason } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(reviewedRejectionReason(new Error('Existing rent diverges from the last source observation; preserve human input'))).toBe('EXISTING_RENT_DIVERGES');
+    expect(reviewedRejectionReason(new Error('Candidate not found: secret-id'))).toBe('UNLISTED');
   });
 });

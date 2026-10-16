@@ -10,7 +10,10 @@ const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${i
 // Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
 const sortKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])])) : v;
 // A snapshot is fixed at read time, like Firestore's DocumentSnapshot (later writes do not show through it).
-const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { ref: r, exists: at !== undefined, data: () => (at === undefined ? undefined : structuredClone(at)) }; };
+const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { ref: r, exists: at !== undefined, updateTime: updateTimes.get(r.path), data: () => (at === undefined ? undefined : structuredClone(at)) }; };
+// 문서별 updateTime(백업 시점 고정 검증용)과 쓰기 때 걸린 precondition 기록.
+const updateTimes = new Map<string, unknown>();
+const preconditions: Array<[string, unknown]> = [];
 const applyUpdate = (path: string, update: Record<string, unknown>) => {
   const doc = { ...store.get(path)! };
   for (const [k, v] of Object.entries(update)) {
@@ -44,7 +47,7 @@ const db = {
     const t = {
       getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
-      update: (r: Ref, u: Record<string, unknown>) => writes.push(() => applyUpdate(r.path, u)),
+      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => applyUpdate(r.path, u)); },
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
         store.set(r.path, structuredClone(d));
@@ -62,6 +65,9 @@ vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => 
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
 const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+
+// 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
+const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
 
 beforeEach(() => {
   store.clear();
@@ -510,7 +516,7 @@ describe('product identity repair apply path', () => {
   it('repairs product maker/model/sub_model together when the target active master exists', async () => {
     store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
     store.set('products/p-identity', { maker: '', model: 'Model A', sub_model: '' });
-    const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+    const result = await applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productIdentityRepairs: [{ id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' }] });
     expect(store.get('products/p-identity')).toMatchObject({
       maker: 'Maker',
@@ -529,12 +535,12 @@ describe('product identity repair apply path', () => {
     store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
     store.set('products/p-identity', { maker: 'Other', model: 'Model A', sub_model: '' });
     const repair = { id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/precondition/);
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/precondition/);
     store.set('products/p-identity', { maker: '', model: 'Model A', sub_model: '' });
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productIdentityRepairs: [{ ...repair, to: { maker: 'Maker', model: 'Missing', sub_model: 'Missing New' } }] })).rejects.toThrow(/exactly one active vehicle_master/);
     store.set('vehicle_master/m-old-identity', { id: 'm-old-identity', maker: 'Maker', model: 'Old', sub_model: 'Old New', retired: true });
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productIdentityRepairs: [{ ...repair, to: { maker: 'Maker', model: 'Old', sub_model: 'Old New' } }] })).rejects.toThrow(/retired master/);
   });
 
@@ -542,17 +548,17 @@ describe('product identity repair apply path', () => {
     store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
     const repair = { id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
     store.set('products/p-identity', { maker: '', model: ' Model A ', sub_model: '' });
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
     store.set('products/p-identity', { maker: ' ', model: 'Model A', sub_model: '' });
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
     store.set('products/p-identity', { model: 'Model A' });
-    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).resolves.toMatchObject({ productIdentityCount: 1 });
+    await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).resolves.toMatchObject({ productIdentityCount: 1 });
   });
 
   it('matches product identity repairs against masters created in the same plan and catches readback drift', async () => {
     const created = { id: 'm-created-identity', evidence: 'source text', data: { id: 'm-created-identity', maker: 'Maker', model: 'Created', sub_model: 'Created New', origin: 'local' } };
     store.set('products/p-identity', { maker: '', model: '', sub_model: '' });
-    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [created],
+    await applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [created],
       productIdentityRepairs: [{ id: 'p-identity', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Created', sub_model: 'Created New' }, evidence: 'source text' }] });
     expect(store.get('products/p-identity')).toMatchObject({ maker: 'Maker', model: 'Created', sub_model: 'Created New' });
     const original = db.runTransaction;
@@ -560,7 +566,7 @@ describe('product identity repair apply path', () => {
     store.set('products/p-readback', { maker: '', model: '', sub_model: '' });
     db.runTransaction = async (fn) => { await original(fn); store.set('products/p-readback', { ...store.get('products/p-readback')!, model: 'tampered' }); };
     try {
-      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
         productIdentityRepairs: [{ id: 'p-readback', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Readback', sub_model: 'Readback New' }, evidence: 'source text' }] })).rejects.toThrow(/readback productIdentity mismatch/);
     } finally { db.runTransaction = original; }
   });
@@ -574,10 +580,120 @@ describe('product identity repair apply path', () => {
       return original(fn);
     };
     try {
-      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      await expect(applyApproved({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
         productIdentityRepairs: [{ id: 'p-spelling', from: { maker: '', model: 'Spelling', sub_model: '' }, to: { maker: 'Maker', model: 'Spelling', sub_model: 'Spelling New' }, evidence: 'source text' }] }))
         .rejects.toThrow(/stored spelling changed since backup/);
     } finally { db.runTransaction = original; }
+  });
+});
+
+describe('product identity applier guards (Codex 적용기 검토 5건)', () => {
+  const master = { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' };
+  const repair = { id: 'p-guard', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
+  const plan = (over: Record<string, unknown> = {}) => ({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair], ...over });
+  beforeEach(() => { store.set('vehicle_master/m-alpha', master); updateTimes.clear(); preconditions.length = 0; });
+
+  it('(a) refuses a settlement-locked product, including string lock values', async () => {
+    for (const lock of ['LEDGER', true, 'anything']) {
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: lock });
+      await expect(applyApproved(plan())).rejects.toThrow(/product write refused LOCKED_BY_CONTRACT/);
+    }
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: null });
+    await expect(applyApproved(plan())).resolves.toMatchObject({ productIdentityCount: 1 });
+  });
+
+  it('(b) refuses a product that carries a publication_withdrawal marker', async () => {
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', publication_withdrawal: { reason: 'REPLACED_BY_API', at: 'x' } });
+    await expect(applyApproved(plan())).rejects.toThrow(/product write refused PUBLICATION_WITHDRAWN/);
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', publication_withdrawal: null });
+    await expect(applyApproved(plan())).resolves.toMatchObject({ productIdentityCount: 1 });
+  });
+
+  it('(c) overwrites only engine-temporary or blank/raw-chunk values, never a manual/confirmed sub_model', async () => {
+    const confirmed = { ...repair, from: { maker: 'Human', model: 'Typed', sub_model: 'Typed Sub' } };
+    store.set('products/p-guard', { maker: 'Human', model: 'Typed', sub_model: 'Typed Sub' });
+    await expect(applyApproved(plan({ productIdentityRepairs: [confirmed] }))).rejects.toThrow(/manual or confirmed value/);
+    // 엔진 임시 표식이 있으면 허용
+    store.set('products/p-guard', { maker: 'Human', model: 'Typed', sub_model: 'Typed Sub', vehicle_review_required: true });
+    await expect(applyApproved(plan({ productIdentityRepairs: [confirmed] }))).resolves.toMatchObject({ productIdentityCount: 1 });
+    // 원문 덩어리 그대로(제조사·모델 빈칸)이면 허용
+    store.set('products/p-guard', { maker: '', model: '', sub_model: 'RAW CHUNK', 원문: { 차명: 'RAW CHUNK' } });
+    const rawRepair = { ...repair, from: { maker: '', model: '', sub_model: 'RAW CHUNK' } };
+    await expect(applyApproved(plan({ productIdentityRepairs: [rawRepair] }))).resolves.toMatchObject({ productIdentityCount: 1 });
+    // 원문과 다른 세부모델 값은 «원문 덩어리»가 아니다
+    store.set('products/p-guard', { maker: '', model: '', sub_model: 'Typed Sub', 원문: { 차명: 'RAW CHUNK' } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...repair, from: { maker: '', model: '', sub_model: 'Typed Sub' } }] }))).rejects.toThrow(/manual or confirmed value/);
+  });
+
+  it('(d) pins the write to the backed-up updateTime and refuses when other fields changed since backup', async () => {
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'before' });
+    updateTimes.set('products/p-guard', 'T1');
+    await applyApproved(plan());
+    expect(preconditions).toEqual([['products/p-guard', { lastUpdateTime: 'T1' }]]);
+    // 세 칸이 같아도 다른 칸이 백업 뒤 바뀌었으면 거절(전체 digest)
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'before' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => { store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'changed by engine' }); return original(fn); };
+    try { await expect(applyApproved(plan())).rejects.toThrow(/product changed since backup/); } finally { db.runTransaction = original; }
+  });
+
+  it('(e) the applier itself compares the approved plan digest', async () => {
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair(plan(), { approvedPlanDigest: 'wrong' })).rejects.toThrow(/approved plan digest mismatch/);
+    await expect(applyVehicleNameReferenceRepair(plan())).rejects.toThrow(/approved plan digest required/);
+    await expect(applyVehicleNameReferenceRepair(plan(), { approvedPlanDigest: stableDigest(plan()) })).resolves.toMatchObject({ productIdentityCount: 1 });
+    // 승인 digest 가 없어도 상품 정체성 정정이 없는 옛 계획은 그대로 적용된다(호환)
+    expect(store.get('products/p-guard')).toMatchObject({ sub_model: 'Model A New' });
+  });
+
+  it('모델 수준(level MODEL): 제조사·모델만 쓰고 세부모델은 저장된 글자 그대로 유지, 백업·되읽기·사람 입력 거절은 그대로', async () => {
+    const raw = '현대  더 뉴 싼타페 HEV 1.6 2WD';   // 공백이 정규화되지 않은 원문형 값(그대로 유지되어야 한다)
+    const model = { id: 'p-model', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: raw }, to: { maker: 'Maker', model: 'Model A', sub_model: raw }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, vehicle_review_required: true, 원문: { 차명: raw } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).resolves.toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+    expect(store.get('products/p-model')).toMatchObject({ maker: 'Maker', model: 'Model A', sub_model: raw, vehicle_review_required: true });
+    // 마스터에 없는 제조사·모델은 거절
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, vehicle_review_required: true, 원문: { 차명: raw } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...model, to: { maker: 'Maker', model: 'Nope', sub_model: raw } }] }))).rejects.toThrow(/exactly one active vehicle_master/);
+    // 사람 입력(검토 완료·원문과 다른 세부모델)은 거절
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, 원문: { 차명: 'something else' } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).rejects.toThrow(/manual or confirmed value/);
+  });
+
+  it('모델 수준 + 저장 세부모델 빈칸: 제조사·모델만 채우고 세부모델 칸은 쓰지 않는다(없던 칸이 생기지 않음), 값이 있으면 종전 규칙', async () => {
+    const blank = { id: 'p-nosub', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: '' }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-nosub', { maker: '', model: '' });   // sub_model 칸 자체가 없음
+    await expect(applyApproved(plan({ productIdentityRepairs: [blank] }))).resolves.toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+    expect(store.get('products/p-nosub')).toMatchObject({ maker: 'Maker', model: 'Model A' });
+    expect(store.get('products/p-nosub')).not.toHaveProperty('sub_model');
+    // 마스터에 없는 모델은 여전히 거절
+    store.set('products/p-nosub', { maker: '', model: '' });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, to: { maker: 'Maker', model: 'Nope', sub_model: '' } }] }))).rejects.toThrow(/exactly one active vehicle_master/);
+    // 전체 정정(level 없음)은 여전히 to.sub_model 필수
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, level: undefined }] }))).rejects.toThrow(/requires a non-empty value/);
+  });
+
+  it('Codex #664 확인: false·빈 문자열·null·undefined 는 «잠금/철회 아님»이고, 빈 객체·문자열·true 는 표식 있음(보수)', async () => {
+    for (const value of [null, undefined, false, '']) {
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: value, publication_withdrawal: value });
+      await expect(applyApproved(plan())).resolves.toMatchObject({ productIdentityCount: 1 });
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '' });
+    }
+    for (const marker of [{}, 'x', true, 0]) {
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', publication_withdrawal: marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/PUBLICATION_WITHDRAWN/);
+      store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+    }
+  });
+
+  it('(a)(b) also protect productTrim name repairs', async () => {
+    store.set('products/p-trim', { trim_name: 'Old', locked_by_contract: 'LEDGER' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productTrimRepairs: [{ id: 'p-trim', from: 'Old', to: 'New' }] })).rejects.toThrow(/product write refused LOCKED_BY_CONTRACT/);
+    store.set('products/p-trim', { trim_name: 'Old', publication_withdrawal: { at: 'x' } });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productTrimRepairs: [{ id: 'p-trim', from: 'Old', to: 'New' }] })).rejects.toThrow(/product write refused PUBLICATION_WITHDRAWN/);
   });
 });
 
@@ -732,5 +848,156 @@ describe('audit readback', () => {
   it('checks each audit reason', async () => {
     await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [0], [{ reason: 'a' }], 'm')).resolves.toHaveLength(1);
     await expect(readbackAuditEvents(fakeDb([{ reason: 'x' }]), [0], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/readback audit mismatch/);
+  });
+});
+
+// 제조사명 정정(기준 한 장 규칙 7 «짧게»: 르노코리아→르노, KG모빌리티→KGM): 마스터·세부트림 행·표시명·상품이 같은 제조사명으로 함께 옮겨 간다. 옛 이름은 별칭으로 남는다.
+describe('maker rename repair (masterMaker / trimMaker / productMaker)', () => {
+  beforeEach(() => {
+    store.clear();
+    store.set('vehicle_master/m-arkana', { id: 'm-arkana', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', title: '르노코리아 아르카나 LJL' });
+    store.set('vehicle_trim_master/t-a1', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', master_id: 'm-arkana', trim: '이스타일' });
+    store.set('vehicle_trim_master/t-a2', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', master_id: 'm-arkana', trim: '아이코닉' });
+    store.set('products/p-arkana', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', car_number: '12가1234' });
+  });
+  const masterPlan = {
+    sourceDigest: 'maker-v1', masterRepairs: [], productRepairs: [],
+    masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: '르노' }],
+    trimMakerRepairs: [{ id: 't-a1', from: '르노코리아', to: '르노' }, { id: 't-a2', from: '르노코리아', to: '르노' }],
+    masterTitleRepairs: [{ id: 'm-arkana', from: '르노코리아 아르카나 LJL', to: '르노 아르카나 LJL' }],
+  };
+  it('renames the master, its trim rows and its title together and keeps the old name as maker_aliases', async () => {
+    const result = await applyApproved(masterPlan);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노', title: '르노 아르카나 LJL', maker_aliases: ['르노코리아'] });
+    expect(store.get('vehicle_trim_master/t-a1')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+    expect(store.get('vehicle_trim_master/t-a2')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+    expect(result).toMatchObject({ masterMakerCount: 1, trimMakerCount: 2, masterTitleCount: 1 });
+  });
+  it('refuses a master maker rename that leaves a linked trim row on the old maker', async () => {
+    await expect(applyApproved({ ...masterPlan, trimMakerRepairs: [{ id: 't-a1', from: '르노코리아', to: '르노' }] }))
+      .rejects.toThrow(/maker would differ between vehicle_master\/m-arkana/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+  });
+  it('refuses a rename onto an existing identical master identity (값 하나)', async () => {
+    store.set('vehicle_master/m-dup', { id: 'm-dup', maker: '르노', model: '아르카나', sub_model: '아르카나 LJL' });
+    await expect(applyApproved(masterPlan)).rejects.toThrow(/master sub-model would be stored twice/);
+  });
+  it('refuses a stale from (precondition) and a retired master', async () => {
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: 'KG모빌리티', to: '르노' }] })).rejects.toThrow(/precondition changed/);
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, retired: true });
+    await expect(applyApproved(masterPlan)).rejects.toThrow(/retired master/);
+  });
+  it('renames a product maker only when it lands on exactly one active master and the product is not locked', async () => {
+    await applyApproved(masterPlan);
+    const productPlan = { sourceDigest: 'maker-v1-products', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] };
+    await applyApproved(productPlan);
+    expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', model: '아르카나', sub_model: '아르카나 LJL' });
+    store.set('products/p-locked', { maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL', locked_by_contract: true });
+    await expect(applyApproved({ ...productPlan, productMakerRepairs: [{ id: 'p-locked', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+  });
+  it('refuses a product maker repair when no active master carries the target identity', async () => {
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/does not match exactly one active vehicle_master/);
+  });
+  it('validates: product maker repairs must not overlap other product repairs; no-op and non-normalized names refused', async () => {
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [{ id: 'p-arkana', from: 'a', to: 'b' }],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/one product per plan/);
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: '르노코리아' }] })).rejects.toThrow(/no-op/);
+    await expect(applyApproved({ ...masterPlan, masterMakerRepairs: [{ id: 'm-arkana', from: '르노코리아', to: ' 르노' }] })).rejects.toThrow(/normalized/);
+  });
+  it('(c) approved plan digest is mandatory for maker repairs, and must match', async () => {
+    await expect(applyVehicleNameReferenceRepair(masterPlan)).rejects.toThrow(/approved plan digest required for maker repairs/);
+    await expect(applyVehicleNameReferenceRepair(masterPlan, { approvedPlanDigest: 'wrong' })).rejects.toThrow(/approved plan digest mismatch/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'p', masterRepairs: [], productRepairs: [],
+      productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] })).rejects.toThrow(/approved plan digest required for maker repairs/);
+  });
+  it('(a) a non-standard master title aborts the whole plan; a standard one must be repaired together; a blank one is left as is', async () => {
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, title: '르노 아르카나(구형 표기)' });
+    await expect(applyApproved({ ...masterPlan, masterTitleRepairs: [] })).rejects.toThrow(/not the standard maker \+ sub_model form/);
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노코리아' });
+    store.set('vehicle_master/m-arkana', { ...store.get('vehicle_master/m-arkana')!, title: '르노코리아 아르카나 LJL' });
+    await expect(applyApproved({ ...masterPlan, masterTitleRepairs: [] })).rejects.toThrow(/requires a masterTitle repair in the same plan/);
+    store.set('vehicle_master/m-arkana', { id: 'm-arkana', maker: '르노코리아', model: '아르카나', sub_model: '아르카나 LJL' });   // 표시명 없음
+    { const { masterTitleRepairs: _omit, ...noTitle } = masterPlan; await applyApproved(noTitle); }
+    expect(store.get('vehicle_master/m-arkana')).toMatchObject({ maker: '르노' });
+    expect(store.get('vehicle_master/m-arkana')!.title).toBeUndefined();
+  });
+  it('(b) a product maker rename keeps the old name in maker_aliases and checks it on readback', async () => {
+    await applyApproved(masterPlan);
+    await applyApproved({ sourceDigest: 'p', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p-arkana', from: '르노코리아', to: '르노' }] });
+    expect(store.get('products/p-arkana')).toMatchObject({ maker: '르노', maker_aliases: ['르노코리아'] });
+  });
+});
+
+// 별칭 정규화(사람 입력 보존 안전선의 유일한 예외): 확정·사람 입력 세부모델이 대상 마스터의 «등록 별칭» 일 때만 마스터 이름으로 바꾼다. 트림·제조사·모델은 그대로.
+describe('alias canonicalization of a confirmed product identity', () => {
+  beforeEach(() => {
+    store.clear();
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+  });
+  const plan = (over: Record<string, unknown> = {}) => ({ sourceDigest: 'alias-v1', masterRepairs: [], productRepairs: [],
+    productIdentityRepairs: [{ id: 'p1', from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1' },
+      evidence: '원문 차명: 현대_캐스퍼_가솔린 1.0 밴_스마트', ...over }] });
+  it('renames the confirmed sub-model to the master name when from is the target master\'s unique registered alias; trim and maker/model untouched', async () => {
+    const result = await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', trim_name: '스마트' });
+    expect(result).toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+  });
+  it('refuses when from is not a registered alias of the target master', async () => {
+    store.set('vehicle_master/m-ax1', { id: 'm-ax1', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼 AX1', sub_model_aliases: [] });
+    await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+  it('refuses when two active masters of the same family register the same alias (not unconditional)', async () => {
+    store.set('vehicle_master/m-new', { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '더 뉴 캐스퍼 AX1', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan())).rejects.toThrow(/not a unique registered alias/);
+  });
+  it('refuses a change of maker or model, and a locked or withdrawn product', async () => {
+    store.set('vehicle_master/m-other', { id: 'm-other', maker: '기아', model: '레이', sub_model: '레이 TAM', sub_model_aliases: ['캐스퍼'] });
+    await expect(applyApproved(plan({ to: { maker: '기아', model: '레이', sub_model: '레이 TAM' } }))).rejects.toThrow(/manual or confirmed value/);
+    store.set('products/p1', { ...store.get('products/p1')!, locked_by_contract: true });
+    await expect(applyApproved(plan())).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+  });
+  it('Codex #683 (a): a human-chosen or confirmed identity is never canonicalized, even when it equals the unique alias', async () => {
+    for (const marker of [{ vehicle_title_source: 'MANUAL' }, { confirmed_by: 'someone' }, { identity_manual_override: true }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+    // 기계 출처(MASTER_MATCH)·표식 없음은 허용
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_title_source: 'MASTER_MATCH' });
+    await applyApproved(plan());
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼 AX1' });
+  });
+  it('Codex #683 (b): maker/model must match the raw stored strings exactly (no normalization-only equality); the write never changes them', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved(plan({ from: { maker: '현대 ', model: '캐스퍼', sub_model: '캐스퍼' } }))).rejects.toThrow();
+    await expect(applyApproved(plan({ from: { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' }, to: { maker: '현대', model: '캐스퍼 ', sub_model: '캐스퍼 AX1' } }))).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', model: '캐스퍼', sub_model: '캐스퍼' });
+  });
+  it('Codex #683 ①: a confirmed / human-source marker blocks even an engine-temporary (vehicle_review_required) product', async () => {
+    for (const marker of [{ confirmed: true }, { vehicle_title_source: 'HUMAN_ENTRY' }]) {
+      store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', vehicle_review_required: true, ...marker });
+      await expect(applyApproved(plan())).rejects.toThrow(/manual or confirmed value/);
+      expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+    }
+  });
+  it('Codex #683 ②: a from that is another active master canonical name is never moved by alias canonicalization', async () => {
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', sub_model_aliases: [] });   // 다른 활성 마스터의 정식 이름 «캐스퍼»
+    await expect(applyApproved(plan())).rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+  it('Codex #683: productRepairs / productMakerRepairs refuse human-source or confirmed products; masterCreates canonical names also block', async () => {
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234', confirmed: true });
+    await expect(applyApproved({ sourceDigest: 'x', masterRepairs: [], productRepairs: [{ id: 'p1', from: '캐스퍼', to: '캐스퍼 AX1' }] })).rejects.toThrow(/HUMAN_OR_CONFIRMED/);
+    await expect(applyApproved({ sourceDigest: 'y', masterRepairs: [], productRepairs: [], productMakerRepairs: [{ id: 'p1', from: '현대', to: '현대자동차' }] })).rejects.toThrow();
+    expect(store.get('products/p1')).toMatchObject({ maker: '현대', sub_model: '캐스퍼' });
+    // 같은 계획이 만드는 마스터의 정식 이름과 from 이 같으면 별칭 정규화 금지
+    store.set('products/p1', { maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', trim_name: '스마트', car_number: '12가1234' });
+    await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
+      .rejects.toThrow(/canonical name|manual or confirmed value/);
+    expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
   });
 });

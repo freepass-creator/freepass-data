@@ -1,0 +1,75 @@
+name: Source cycle online DRY_RUN (read-only)
+
+# 원천 엔진을 운영 PC(B3Q 작업 스케줄러) 밖, 온라인에서 «계획만» 세우는 회차(2026-10-14, 설계: docs/SOURCE-CYCLE-ONLINE-MIGRATION-DESIGN-20261014.md §5).
+# - 쓰기 0: --apply·--unattended 를 절대 넘기지 않는다(엔진 applySourceCycle 은 apply 없으면 DRY_RUN, writes 0).
+# - 읽기 신원·원천별 비밀은 저장소 변수/비밀로만. 없으면 그 원천은 건너뛰고(SKIPPED) 실패로 숨기지 않는다.
+# - 정기 실행 스위치(vars.FREEPASS_SOURCE_CYCLE_DRY_RUN_SCHEDULE == 'on')는 커맨드 센터가 켠다. 기본 꺼짐.
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: '계획만 세울 원천 종류(쉼표). 시트 원천(F05·AICA)은 gws 의존이라 아직 불가'
+        type: string
+        default: 'IANCAR,IRON,AUTOPLUS'
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: source-cycle-dry-run
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+    steps:
+      - name: Schedule switch (off by default)
+        id: gate
+        shell: bash
+        env:
+          SWITCH: ${{ vars.FREEPASS_SOURCE_CYCLE_DRY_RUN_SCHEDULE }}
+        run: |
+          if [ "${{ github.event_name }}" = 'schedule' ] && [ "$SWITCH" != 'on' ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo 'schedule switch is off — skipped'; exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        name: Fail closed until the read-only identity is configured
+        shell: bash
+        run: |
+          test -n '${{ vars.SOURCE_CYCLE_WIF_PROVIDER }}' || { echo 'SOURCE_CYCLE_WIF_PROVIDER unset'; exit 1; }
+          test -n '${{ vars.SOURCE_CYCLE_READ_SERVICE_ACCOUNT }}' || { echo 'SOURCE_CYCLE_READ_SERVICE_ACCOUNT unset'; exit 1; }
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.gate.outputs.run == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.SOURCE_CYCLE_WIF_PROVIDER }}
+          service_account: ${{ vars.SOURCE_CYCLE_READ_SERVICE_ACCOUNT }}
+      - if: steps.gate.outputs.run == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci && npm run build
+      - if: steps.gate.outputs.run == 'true'
+        name: Plan each source (writes 0)
+        shell: bash
+        env:
+          SOURCES: ${{ github.event_name == 'schedule' && 'IANCAR,IRON,AUTOPLUS' || inputs.sources }}
+          EANCAR_ONE_API_BASE_URL: ${{ vars.EANCAR_ONE_API_BASE_URL }}
+          EANCAR_ONE_API_KEY: ${{ secrets.EANCAR_ONE_API_KEY }}
+          SOURCE_CYCLE_IRON_LIST_URL: ${{ vars.SOURCE_CYCLE_IRON_LIST_URL }}
+          # 아이언은 운영과 같은 홈페이지 상세 경로로 계획한다(읽기 모드 선택, 쓰기 스위치 아님). 옛 목록 경로는 변수를 '0' 으로.
+          SOURCE_CYCLE_IRON_HOMEPAGE: ${{ vars.SOURCE_CYCLE_IRON_HOMEPAGE || '1' }}
+        run: node scripts/ci/source-cycle-dry-run.mjs

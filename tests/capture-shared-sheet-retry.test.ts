@@ -36,6 +36,18 @@ describe('capture-shared-sheet: transient sheet read errors are retried before a
     expect(existsSync(out)).toBe(true);
     log.mockRestore();
   });
+  it('a gws timeout or non-zero exit is a transient read error and is read again', async () => {
+    vi.useFakeTimers();
+    dir = await mkdtemp(join(tmpdir(), 'capture-retry-'));
+    const out = join(dir, 'capture.json');
+    reads.push(new Error('SHARED_SHEET_GWS_TIMEOUT'), new Error('SHARED_SHEET_GWS_EXIT_1'), batch(46246), batch('08-12'), batch(46246));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const run = main(['--spreadsheet', ID, '--out', out]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await run;
+    expect(existsSync(out)).toBe(true);
+    log.mockRestore();
+  });
   it('a non-transient error (403) stops at once and writes nothing', async () => {
     dir = await mkdtemp(join(tmpdir(), 'capture-retry-'));
     const out = join(dir, 'capture.json');

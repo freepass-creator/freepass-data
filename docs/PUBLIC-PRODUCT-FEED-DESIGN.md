@@ -109,7 +109,7 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 | source deposit 0 + 규칙/근거 없음 | 0처럼 보일 수 있음 | `deposit:null`, `depositState:"UNKNOWN"` |
 | 양수와 규칙 note 충돌 | 양수 또는 규칙값으로 보일 위험 | `deposit:null`, `depositState:"UNKNOWN"` |
 | 해당 상품/기간에 보증금 개념이 없음 | 빈 값 또는 0처럼 보일 수 있음 | `deposit:null`, `depositState:"NOT_APPLICABLE"` |
-| RP031 Iancar | ERP4 로컬 helper 범위 밖 | `readIancarPublishedDeposit` 검증 통과 시 `AMOUNT` 또는 `VERIFIED_NO_DEPOSIT`, 아니면 `UNKNOWN` |
+| RP031 Iancar | ERP4 로컬 helper 범위 밖 | 원천 엔진 근거 `readIancarEngineDeposit` 통과 시 `AMOUNT` 또는 `VERIFIED_NO_DEPOSIT`, 아니면 `UNKNOWN` (2026-10-14, 옛 `readIancarPublishedDeposit` 삭제) |
 
 공개 v1의 `price.*.deposit`은 `number|null`이다. `depositState`는 항상 함께 싣고 값은 `AMOUNT`, `VERIFIED_NO_DEPOSIT`, `UNKNOWN`, `NOT_APPLICABLE` 네 가지뿐이다. 이 값은 운영 중인 ERP4 #562 형식과 맞춘다. 미확인을 0으로 내보내면 안 된다.
 

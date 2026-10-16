@@ -5,10 +5,14 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const src = path.join(root, 'src');
 const allowedRawInfraConsumers = new Set([
+  // SPEC3 explicitly authorizes this legacy-products REST composition. It uses the
+  // central target resolver, immutable private backups, updateTime CAS and readback.
+  'src/runtime/source-cycle-runtime.ts',
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',
   'src/jobs/apply-iancar-policy-sync.ts',
+  'src/jobs/iancar-policy-link.ts',
   'src/jobs/apply-billincar-policy-repair.ts',
   'src/jobs/apply-vehicle-name-reference-repair.ts'
 ]);
@@ -128,6 +132,7 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/check-consumer-readiness.ts', ['runtime.readiness(']],
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']],
   ['src/jobs/apply-iancar-policy-sync.ts', ['runtime.access.write(']],
+  ['src/jobs/iancar-policy-link.ts', ['runtime.access.write(', 'runtime.access.read(']],
   ['src/jobs/apply-billincar-policy-repair.ts', ['runtime.access.write(']],
   ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
 ]);
@@ -150,9 +155,9 @@ for (const [relativeFile, required] of requiredGatewayUsage) {
 // whole-document replacement must match a reviewed call signature below (receiver and
 // target document for set()); a new call, a changed target, or a stale entry fails. Comments and string contents are ignored.
 const preservationAllowlist = [
-  { kind: 'fieldDelete', file: 'src/infra/iancar-publication-withdrawal-firestore.ts',
-    call: 'const patch = row.exists ? Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()]))',
-    reason: 'restore from typed backup; PR1c narrows this' },
+  { kind: 'fieldDelete', file: 'src/infra/iancar-photo-firestore.ts',
+    call: 'tx.update(refs[i]!, Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()])));',
+    reason: 'photo-only restore from typed backup; only photo keys added by the photo writer, never price/inventory' },
   { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
     call: 'return externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds };',
     reason: 'vehicle UID rollback restores typed pre-apply backup; normal apply is add-only' },

@@ -13,20 +13,23 @@ sharp.cache(false);
 export async function renderVehiclePhotoRendition(
   input: { bytes: Buffer; contentType: string },
   size: VehiclePhotoRenditionSize,
-  { signal }: { signal?: AbortSignal } = {},
+  { signal, maxEdge, quality }: { signal?: AbortSignal; maxEdge?: number; quality?: number } = {},
 ): Promise<{ bytes: Buffer; contentType: 'image/jpeg' }> {
   if (!input || !Buffer.isBuffer(input.bytes) || !input.bytes.length
     || validateVehiclePhotoMedia(input.contentType, input.bytes.length, input.bytes)
     || (size !== 'list' && size !== 'detail') || signal?.aborted)
     throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+  // 보관용 사본(드라이브 복사)은 호출자가 긴 변·품질을 더 줄일 수 있다(대표 2026-10-14 «사진 더 줄여서»). 범위 밖 값은 거부.
+  if ((maxEdge !== undefined && (!Number.isInteger(maxEdge) || maxEdge < 480 || maxEdge > 1600))
+    || (quality !== undefined && (!Number.isInteger(quality) || quality < 50 || quality > 90))) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
   if (active) throw new Error('VEHICLE_PHOTO_BUSY');
   active = true;
-  const bound = size === 'list' ? 480 : 960;
+  const bound = maxEdge ?? (size === 'list' ? 480 : 960);
   let pipeline: sharp.Sharp;
   try {
     pipeline = sharp(input.bytes, { limitInputPixels: MAX_PIXELS, animated: false })
       .rotate().resize({ width: bound, height: bound, fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: { r: 255, g: 255, b: 255 } }).jpeg({ quality: size === 'list' ? 75 : 80 })
+      .flatten({ background: { r: 255, g: 255, b: 255 } }).jpeg({ quality: quality ?? (size === 'list' ? 75 : 80), mozjpeg: maxEdge !== undefined || quality !== undefined })
       .timeout({ seconds: 3 });
   } catch { active = false; throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
   let timer: ReturnType<typeof setTimeout> | undefined;

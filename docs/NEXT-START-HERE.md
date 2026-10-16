@@ -231,6 +231,74 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
+
+- 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.
+- 변경: 새 판정 `readIancarEngineDeposit`(엔진 표식 + `source_cycle_record.terms` 항과 price 금액 대사, 짧은 신선도 창 없음, ONE 0원=ZERO) 로 호환 응답·0원 감사·카톡 참고 3곳 전환, `readIancarPublishedDeposit` 삭제. 옛 writer(`publishIancarPhaseOne`·`restoreIancarPhaseOne`·`withdrawIancarPublication`·`iancarAbsencePatch`·`iancarFactsRefreshPatch`), runtime 래퍼, CLI `--sync` 계열, 감시 실행기, 직접 ERP 수집 삭제. 사진 경로는 `src/infra/iancar-photo-firestore.ts`(사진 전용 복원 포함), 백업 인코딩은 `src/infra/iancar-backup-value.ts`. 엔진 문서의 개월 별칭 키는 엔진 대표 항 기준으로 조건 목록에서 뺀다. 카톡 참고 스키마: depositRule.code `IANCAR_ENGINE_SOURCE_EVIDENCE`, 무보증 근거 field `source_cycle_record.terms` 추가, 옛 `publicationEvidenceReason`/`publicationDecision`(STALE HOLD) 삭제. Firestore 데이터 삭제 없음(코드만).
+- 남음/next_start_here: ERP4 이안카 단계(옛 pin)를 ERP4 쪽에서 먼저 끈다. 엔진 미작성 옛 이안카 문서는 보증금이 UNKNOWN 으로 보인다(엔진 회차가 덮어쓰면 해소). 사진은 `--photos` 경로로만.
+
+### 2026-10-13 원천 엔진 무인 회차 — ERP5 1시간 간격 자동 반영 (PLN)
+
+- 목적/정본: 대표 10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔 해」(ai-ops 결정 장부 10-13 «원천 엔진 실행 기반»). 가지 `work/freepass-data/plate-mask-20261013`(PR #567 head `9ca4308` 기반), 설계·절차 [SOURCE-ENGINE-UNATTENDED-20261013](SOURCE-ENGINE-UNATTENDED-20261013.md).
+- 변경: `runUnattendedSourceCycle`(계획→변경 있으면 같은 회차에 기존 승인 경로로 적용, 변경 0 이면 생략), runtime CLI `--unattended`(env `SOURCE_CYCLE_UNATTENDED=1` 옵트인 필수, `--apply`/`--plan` 혼용 거부), `scripts/run-source-cycle.ps1` 실행기(비공개 EnvFile·결과 jsonl), `register-source-cycle.ps1 -Unattended -IntervalMinutes 60`. 기존 blockers·백업·CAS·되읽기·3회 정지·수동 승인 경로 유지.
+- 검증: 관련 3파일 137 PASS(신규 4건 포함), build/arch/boundary PASS, ps1 5.1 구문 0오류·등록 DRY_RUN 확인. 운영 등록·실제 적용은 미실행.
+- 남음/next_start_here: B3Q(DEV)가 문서 절차대로 env 파일 준비 → 1회 수동 실행 → 60분 등록 → 두 회차 jsonl·ERP5 되읽기 보고. PR 은 gh 연결 PC 에서 생성.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3D + 3E 오프라인 구현
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3D-20261012.md`; 시작 revision `a044f43f60bc9172ef343154ab9fc93f2324d955`, 기존 WIP 보정 보존. SPEC 영수증으로 사전점검 갈음, 외부 도구 미사용.
+- 변경: 아이카 MONTHLY_RENT 1개월 상품·차종 기반 UID·중복 보류 표시·장기/월렌트 별도 요약. 신규 편입 provider_name/policy_code 최빈값 및 기존 이름 설정 fallback, 이름 없으면 SUPPLIER_NAME_REQUIRED. UPDATE 두 필드 보존.
+- 검증: 관련 5파일 260 PASS, build/architecture/data-access/diff-check PASS. 코드·시험·문서만 변경, 미커밋, 운영 쓰기0. 전체 시험/라이브/외부 독립 검토 미실행.
+- 남음/next_start_here: [RESULT3D](SOURCE-ENGINE-RESULT3D-20261012.md) → SPEC3D → diff. 새 digest 계획 필요. 라이브 담당이 실제 월렌트 수·공급사 메타데이터·ERP5 출력을 확인한다. 정책코드 근거 없으면 null이며 운영 완료로 세지 않는다.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3C 빈 기간·번호미배정 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3C-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`. SPEC 사전점검 영수증 사용, 기존 미커밋 변경 보존, 커밋 없음.
+- 변경: 빈 기간 제외 회귀 고정. 아이카/F05 공통 계획에 번호미배정 수와 비차단 `ABSENCE_DOWNGRADE_SKIPPED`; 정상 UID 동작 유지·SOURCE_ABSENT만 생략. 실제 읽기 불완전은 적용 전 차단.
+- 검증: 관련 254 PASS, build/architecture/data boundary PASS. 전체 3276 PASS/18 FAIL/18 SKIP; CLI 권한·홈 경로·로컬 서버 실행 실패로 전체 통과 HOLD. 네트워크·운영 쓰기 없음.
+- 남음/next_start_here: `SOURCE-ENGINE-RESULT3C-20261012.md` → 관련 cycle 시험. 허용 환경에서 전체 잔여 시험과 새 라이브 읽기 계획 확인. 과거 계획/digest 재사용 금지.
+
+### 2026-10-13 SOURCE-ENGINE SPEC3B 아이카 실제 형식 보정
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3B-20261012.md`, 시작 HEAD `679c779d18f601c8e2124d71ff7f8999194da3bd`, 미커밋 작업 트리. 사용자 규칙대로 SPEC 사전점검 영수증 사용, 네트워크/외부 도구 생략.
+- 변경: 장기보증 공통값, 36/48/60개월 값 있는 기간, E+F 차명/원문 보존, 출고불가만 판매 불가, 숨김 제외, 월렌트 관측 전용 및 기존 월렌트 문서 하향 제외. 기존 runtime gws/Firestore 백틱 미커밋 수정 보존.
+- 검증: 관련 9파일 281 PASS, build/architecture/data-access/diff-check PASS. 라이브 읽기·운영 쓰기·커밋 0.
+- 남음/next_start_here: [RESULT3B](SOURCE-ENGINE-RESULT3B-20261012.md)에서 파일·시험·HOLD 확인 후 연결 담당이 새 라이브 읽기 계획으로 기존 UID 대조. 아이언 실 envelope 적합성 HOLD, 운영 적용 미실행.
+
+### 2026-10-13 원천 엔진 3단계 — REST runtime 코드·시험 / 라이브 적합성 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC3-20261012.md`; 시작 HEAD `3ac8cb283209eb9ae8c12bb55c49956b8359e9ee`, `work/freepass-data/source-engine-core-20261012`. SPEC 영수증으로 사전점검 대체, 커밋 없음.
+- 변경: 기존 2단계 계획/제어를 재사용한 REST commands·전체 원본 백업/CAS/깊은 되읽기·receipt/복구, 차량번호 UID 및 미배정 HOLD, 여섯 원천 runtime 조합과 관측 전용 무쓰기. [결과·실행 한 장](SOURCE-ENGINE-RESULT3-20261012.md).
+- 검증: 신규37/37, 관련265/265 PASS. 확장 ONE97/99: 기존 tsx `uv_os_get_passwd ENOMEM` CLI 실패2 재현. build/architecture/data-access PASS. Claude UNAVAILABLE. 라이브/운영 쓰기·외부 스크립트 실행·예약 등록·push0.
+- 남음: 아이카 금액 헤더/아이언 listing 형식의 실제 적합성, F05/ONE private capture, 기존 UID 이행 및 전체 소비처 대조 미검증. 코드 시험을 운영 완료로 확대하지 않는다.
+- next_start_here: RESULT3 → runtime 합성 시험 → 연결 담당의 비공개 live dry-run. 승인 digest는 외부 입력이며 예약 자동 적용은 아직 연결하지 않았다.
+
+### 2026-10-13 원천 엔진 2단계 — 반복 사이클 코드·시험 / 운영 연결 HOLD
+
+- 목적/정본: `SOURCE-ENGINE-SPEC2-20261012.md`. 대상 HEAD `91eff5ee57799e6d88d0638245bd00d5c259884d`, `work/freepass-data/source-engine-core-20261012`; 이번 커밋 없음. SPEC 영수증으로 오프라인 사전점검 대체.
+- 변경: UID 기반 하향/편입/재노출/조건갱신 계획, digest 승인·전체 백업/CAS·키순서 무관 되읽기, 계약잠금/불완전 누락 방어/하향 비율 상한, 파일 잠금·3회 실패 정지·heartbeat, 설정형 원천 플러그인·F05/ONE 변환 연결, 15분 Windows 등록/제거 스크립트(실행 안 함).
+- 검증: 신규41/41 및 관련7파일211/211 PASS, build/architecture/data-access/PowerShell 구문 PASS. 확장 ONE97/99: tsx 초기화 `uv_os_get_passwd ENOMEM` CLI 실패2. 전체 PASS 아님. Claude UNAVAILABLE.
+- 남음: 실제 source mapping·UID live binding·CatalogStore command runtime·소비처 되읽기 미연결/미검증. 운영 쓰기·네트워크·배포·push·예약 등록0. [결과·실행 경로·정확한 HOLD](SOURCE-ENGINE-RESULT2-20261012.md).
+- next_start_here: 결과 문서와 `tests/source-cycle.test.ts` → native 캡처 mapping/CatalogStore adapter → private dry-run UID 집합·digest 검증. 지휘통제실이 코드 검토/커밋하며 운영 연결은 별도다.
+
+### 2026-10-12 원천 엔진 골격 — 오프라인 작업
+
+- 정본/목적: `SOURCE-ENGINE-SPEC-20261012.md` 및 설계 사본, source-engine-core 작업선. 시작 revision `62906b2f2cc997aaba7dde2f1c6cdce2d08b1d93`.
+- 변경: UID 기반 공통 계약·원천별 만료·source_runs heartbeat 투영·F05 기존 수집/정제 adapter·행별 반영 계획/백업/CAS/되읽기 골격·CLI HOLD JSON. [결과와 정확한 적용 경계](SOURCE-ENGINE-RESULT-20261012.md).
+- 검증: 최종 관련 170/170 PASS, build/architecture/data-access/diff PASS. 전체는 3171 PASS/20 FAIL/18 SKIP(후속 시험1개 추가 전). 환경 제약 실패를 PASS로 세지 않음.
+- 남음: BLOCKED_NETWORK — 실제 F05/Firestore 103건 대조; UID live 열·binding 이행·실제 CatalogStore command adapter 및 소비처 연결 미완료. Claude UNAVAILABLE. 운영 쓰기/push0.
+- 커밋 BLOCKED_FILESYSTEM: Git metadata가 허용 범위 밖 `C:/dev/freepass-data/.git/worktrees/fd-engine`이라 index.lock 권한 거부. 새 커밋 없음, 작업 트리 보존. next_start_here: 결과 문서의 9파일 diff를 검토하고 Git metadata 쓰기가 허용된 환경에서 커밋 후 명시된 연결·실측 순서로 진행.
+
+### 2026-10-13 공통 시트 15분 예약 적용 연속 실패 원인·완화 (shared-sheet-refresh-fence)
+- 원인(비공개 증거 apply.json 으로 확정): 10-11 22:03Z `ec840d36` 가 넣은 operationalRefresh 울타리 `maxObservationAgeSeconds=900` 을 적용 단계 자체 소요(사전 재계획+RAW 적재+listOffers, 실측 17분)가 넘겨 첫 CHANGE 명령부터 `CANONICAL_COMMAND_REJECTED`(held 1·remaining 174). 10-11 22:15Z 이후 예약 적용 전부 실패, 마지막 성공은 10-11 16:42Z 수동.
+- 완화: 울타리 상수 `OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS=3600`. Codex(gpt-6-astra) 검토: 원인 동의, 단 «임시 완화» — 라이브 재캡처 대조가 긴 전처리 «전»이라 첫 명령 시점 신선도 보장이 아님. 정식 해결 = 전처리 후 재캡처·검증시각 결합 또는 적용 단계 지연 축소(중복 preflight·반복 listOffers·직렬 저장 계측). 01:32Z~23:47Z 회차의 출력 없는 `SHARED_SHEET_JOB_HOLD` 는 별도 예외(원인 미확정) — PR #571 의 사유 코드 노출로 확정.
+- next_start_here: 반영 후 다음 예약 회차 apply.json 이 APPLIED/PARTIAL_HOLD 인지 확인 → 적용 단계 구간별 계측 → 정식 해결 설계.
+
+### 2026-10-12 수수료 미확정 분류·아이언/우리캐피탈 신차 선출고 기준
+
+- 상세 표: [FEE-UNCONFIRMED-TRIAGE-20261012.md](FEE-UNCONFIRMED-TRIAGE-20261012.md). 계획 재실행(쓰기 0) 확정 4,880→4,976, 미확정 8,942→8,846.
+- 코드: ① 원문 「구분」 «신차(선출고|견적출고)» 명시분 읽기 ② 아이언(RP006)·우리캐피탈(RP020) 신차렌트는 선출고 규칙(F04 139·50행)으로, 차량가액은 원문 전체.차량가격(신차렌트만). 손오공 차량가액 판정은 변경 없음.
+- 남은 HOLD: 이안카·아이카 «대표 협의/확인 대기»(자동 질문 금지), 아이언·우리캐피탈 차량가격 없는 상품 76행, 아이언 중고렌트 비표준 기간 13행. apply 는 하지 않았다.
 ### 2026-10-12 수집 15분·이안카·손오공 (collection-health-pipeline)
 - 감시 스크립트 `scripts/collection-health-watch.mjs`(gh 읽기만)+작업 스케줄러 등록 스크립트 추가, 첫 실측 7일 준수율 4.0%. 마지막 예약 실패 원인은 관문이 아니라 적용 HOLD(CANONICAL_COMMAND_REJECTED, 18대) — #490 의 가드 종속 서술 정정. 가드 완화는 하지 않음. 이안카는 코드 문제가 아니라 스케줄러 PAUSED/pending 운영 항목, 손오공은 RAW→후보 정규화 미연결. 상세 [COLLECTION-HEALTH-OPS](COLLECTION-HEALTH-OPS.md). next_start_here: 지휘통제실 승인(보조 트리거·이안카 대사·손오공 읽기 시험) 뒤 진행.
 
@@ -286,6 +354,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 진단 source 승인 단1배포(20 제공,01 GitHub run/job 대조): [run38180808448](https://github.com/freepass-creator/freepass-data/actions/runs/38180808448), deployjob114592769799 SUCCESS, 완료07:34:00 KST. trustedworkflow `d6696a2df0d0f7a23be1f148d914abbf764fe927`, 선택runtime `2ebdb18822416847b2019f6506b7b0d65daf0ee2`, 현재 revision `freepass-data-read-00034-6r7`, image `sha256:6becfc2456536d17f5b44c236e5e5d37b8dae1873e9fc120825649bbe18b7d62`. source/ancestor/selectedcheckout/build OCI/private deploy/baseline33·7a·b46/resourceguard/readiness와 BASELINE_VERIFIED=true/ENV_PRESERVED=true/READY=True는 실제PASS이다. post 기존SA·URI/privateIAM/traffic100/pins5+ONE1/timeout300/concurrency8 assertion PASS;max10/512Mi/8080/emptyvolumes·mount/F04/비관리env는baseline+deploy보존assertion으로구분하고새post실측으로확대하지않는다. verifyjob114592770601 SKIP/steps0/publicinvoker·publicsmoke SKIP이다.
 - revision34 실검증과 한계(20 안전 영수증): IAM무인증403/fullcompat200/schema/migrationheaders PASS. 같은IDtoken·consumerJSON1회·고정상품1의 fact200→소비자무인증401→photos-only403 총3GET을검사해helper OK=true/PHASE=SUCCESS/REQUEST_COUNT=3/LAST_STATUS=403/REASON=NONE이다. products1/SINGLE_PRODUCT/exactID/nano시각·versions/order/linkedFacts/count/shape/deposit state/1MiB/private-no-store/nosniff/directmigration 실검증 PASS. [활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6114645755),07:33:56 KST. 이 fact검증은새사진실패event/stage/reason의실관측을증명하지않으며 manifest503원인/적용timeout/사진복구/전체cutover·성능은HOLD이다. 승인dispatch외재dispatch/retry/rollback/사진bytesGET/새원천metadata probe/워밍/newauth·IAM·secret/사업DB쓰기0,민감원문출력0이다.
 - next_start_here: 현재34/source2eb/image6bec를고정하고ERP5root가별도후속GO로유한재진입·안전진단읽기를관리한다. 원래요청binding과실upstream사유는실관측근거전UNKNOWN이며관측enum을확정원인으로확대하지않는다. ERP5/각소비처owner는기존cataloggate·조건·공급사·정책판정을보존하고실UI/서버readback을결속하며 fact를사진binary의필수의존으로추가하지않는다. 견적HOLD·preview한도FAIL·사진503원인UNKNOWN 및전체cutover/모든상품동등성/성능/전체Data완료HOLD와이전32두FAIL/33성공이력을보존한다. 01은이번문서결속에서운영조회·사진GET·원천probe·워밍·DB·권한·배포0,QA pin해제는새배포승인이아니며원본checkout dirty185줄은계속보존한다.
+
+### 2026-10-12 손오공 RAW→후보 정규화 1차 연결
+
+- 목적/대상: RP012 손오공 원본 API RAW를 기존 SourceIngestionStore 후보 단계에 연결한다. 변경은 `normalize-sonogong` 신규 adapter, `ingestRawSourceBatch`의 normalize-null skip, `collect-sonogong --apply-raw` normalizer 주입과 문서/가짜 payload 테스트에 한정한다. 공급사 원문·RTDB·운영 배포·commit/push 없음. next_start_here: 실제 계정/실호출/15분 예약/수수료 기준은 HOLD로 남기고, 운영 적용 전 Vehicle Master snapshot과 RAW readback을 다시 고정한다.
 
 ### 2026-10-12 수집 마스터 충돌 보강 — 배기량 명목값·연식±1 (보류 153→101행, 식별 보류 144→75행)
 
@@ -358,7 +430,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-11 승인 사진 51장 등록 / ERP5 최종 전환 인계
 
-- 목적/범위: RP031의 승인 상품 1건(10하8099), 실제 검토본 사진 51장만 등록한다. 코드 통합은01, 실행 승인과 단일 writer 지정은00, 기존 B3Q ce96는 source/등록, ERP5 실제 화면·main alias 전환은root가 소유한다. 원본 shared checkout의 역할 지도185줄 dirty는 보존한다.
+- 목적/범위: RP031의 승인 상품 1건(***8099), 실제 검토본 사진 51장만 등록한다. 코드 통합은01, 실행 승인과 단일 writer 지정은00, 기존 B3Q ce96는 source/등록, ERP5 실제 화면·main alias 전환은root가 소유한다. 원본 shared checkout의 역할 지도185줄 dirty는 보존한다.
 - 사람 승인: ERP5 root가 실제 검토 화면을 제시한 뒤 사용자 메시지 `01a12b11-19ac...`(2026-10-11T13:05:15.253Z)의 사진 확인과 `01a12b15-3f02...`의 “51장 모두 확인했어. 이 검토본으로 등록해.”를00이 직접 확인했다. 실제 사용자 승인 메시지·관측 시각으로 검수 필드를 전사했으며 추가 사람 확인이나 시각을 추정/조작하지 않았다.
 - 코드/검증: [PR473](https://github.com/freepass-creator/freepass-data/pull/473), reviewed head `3931663b59c877ec73113eb9df97e65a0d13c422`, merge base `9aa9d8669214ab9cbc90a533260025226f618bef`, merge/writer pin `1a32a313341fd0695cb05b0fd88c164c060741bd`. 12/21 exact-head 독립 blocker0, Core38143729315/job114482653039 및 Canon38143729260/job114482653798 SUCCESS. 등록83+CLI23=106 PASS, gateway110 PASS, build/architecture/access PASS. 이 writer 보완은 runtime reader 재배포를 요구하지 않으며 Data 서비스는 아래 source551581/revision00028과 구분한다.
 - 입력 결속: 당시 capture ID 배열 미보존은 CAPTURED_ID_ARRAY_NOT_RETAINED로 유지한다. 현재 ID를 과거 ID로 재구성하지 않았다. 원본 검토본/승인 영수증을 보존하고 SHA→photoSha256 명칭 매핑 및 동일 ordinal/대표/MIME/binding/당시 sourcePhotoIdDigest로 별도 typed plan을 만든다. 계약 photoSetDigest는 공식 iancarReviewedContentSetDigest로 유도하며 기존 preview.contentDigest와 다르다. preview helper의 원래 계산식은 별도 evidence의 정의 미확인 제약으로 남긴다. 이를 계약 digest와 같다고 주장하지 않으며, 공식 writer 함수·동일 승인 tuple·당시 capture digest 보존과 실제51장 raw/DB 되읽기로 확인한 PERSISTENCE VERIFIED를 등록 HOLD로 되돌리지 않는다.
@@ -845,7 +917,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 목적/결정: 사용자 최신 지시는 질문을 반복하지 말고 ONE 전체 재고·상태·대여료·사진을15분마다 계속 맞추는 것이다. 최소 권한 범위 설명 뒤 작업 진행 직접 지시를 받아 기존 계정에만 적용했다. 정책2차/RTDB/새 writer/수동 입력 시트는 제외한다.
 - 정본/revision: Data 실행기는 main `4917f2a79c0ab41d83dee745c8645bf810934f98` 고정, ERP workflow와 지도는 main `6a72da4c`까지 반영. 본 인계는 audit-only main `ee08bb35ac00a61ebf5a8b4edb393e5f146d3a72` 위 문서 확장이다. 기존 dirty 작업선은 보존했다.
 - 변경: 기존 github-inventory-writer에 단일 supplier SecretAccessor 및 private audit bucket `iancar-one/` prefix 조건부 objectCreator/objectViewer를 적용·재조회했다. 삭제/덮어쓰기/공개 공유 권한 없음. `IANCAR_ONE_15M_ENABLED=true` 설정·재조회로 기존02/17/32/47분 수집이 활성이다. 백업은 ifGenerationMatch=0, byte readback 후 atomic apply다.
-- 실제 검증: 운영 계정 DRY_RUN `37098391402` SUCCESS. 두 적용 시도는 공급사 stale=true에서 writes0/HOLD로 차단됐다. 새 source `2026-10-03T05:13:44.411Z`의112대/공개105/사진59대2681장에 ALL apply `37099324378` SUCCESS. 신규5/미관측13 비공개 보류/삭제0. Data run `a54b1f94-f461-469e-8f52-05b4b5813267`, sourceDigest `880a8181c80e2a97c738b957a6b8a0fff6bbc5676cc30d87800e6e9a2ca3fa2a`; private backup `iancar-one/a54b1f94-f461-469e-8f52-05b4b5813267/backup.json`(fixed private evidence bucket). PHASE_ONE_ATOM_READBACK_VERIFIED.
+- 실제 검증: 운영 계정 DRY_RUN `37098391402` SUCCESS. 두 적용 시도는 공급사 stale=true에서 writes0/HOLD로 차단됐다. 새 source `2026-10-03T05:13:44.411Z`의112대/공개105/사진***2681장에 ALL apply `37099324378` SUCCESS. 신규5/미관측13 비공개 보류/삭제0. Data run `a54b1f94-f461-469e-8f52-05b4b5813267`, sourceDigest `880a8181c80e2a97c738b957a6b8a0fff6bbc5676cc30d87800e6e9a2ca3fa2a`; private backup `iancar-one/a54b1f94-f461-469e-8f52-05b4b5813267/backup.json`(fixed private evidence bucket). PHASE_ONE_ATOM_READBACK_VERIFIED.
 - 소비처: 동일회차 F01/F86 발행, RP031 상태/요금 검증, 공개catalog mismatch0, F86 freshness, Atom↔F01↔F86 칸 및 전체 사진 링크 감사 SUCCESS. live eancar feed105/실사진53/연출50 직접 확인, 실사진3건 HTTP200 JPEG. source 전체 사진59대와 공개사진53대는 같은 모수가 아니다. generic raw terms coverage UNKNOWN은 여전히 HOLD이며 phase-one observed facts 적용을 Catalog ACTIVE 전체전환으로 확대하지 않는다.
 - 독립 검토: 기존 코드/collector/workflow ANSWERED에 추가 IAM read-only ANSWERED/exit0. 첫 objectCreator overwrite 반례는 Google 공식 역할 정의와 ifGenerationMatch=0로 반박하고 검토자가 후속 ANSWERED에서 철회했다. 412를 무조건 성공 처리하라는 제안은 미채택(기존 원문 대조 필요).
 - 남음/next_start_here: ERP `docs/예약작업-지도.md`와 활성 native 회차에서 다음 source 전진·실제 실행 지연/같은 발행본 대사를 확인한다. 첫 성공은 workflow_dispatch이며 native 자동회차 성공으로 세지 않는다. 긴 기존 writer 실행 시 추가 회차는 양보하므로 정확히15분 벽시계 SLA는 보장하지 않는다. supplier stale는 last-known-good 보존과 실패 receipt로 처리한다. Admin 개별UI/정책2차/전체 Catalog cutover는 별도다.
@@ -892,9 +964,9 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 실제 사진 발행: run `3a40956e-d168-41f8-b6b8-6dfbd068657d`, 공개109대 중50대/2,249장. 상세52대는 빈 사진 배열,7대는HTTP404였으며 404를 사진0장이나 재고 삭제로 처리하지 않았다. 해당 원본을 보존했다.
 - 연출 이미지 source/write: fresh FULL+COMPLETE116대 capture `3b0db7ad-402c-4276-b168-c5f1267cd750`, sourceDigest `9fd4a59b7c98d4f6a56abff2817d732c6fa1f58e4b7d78d0268d8c607fafdb70`, syncedAt `2026-10-02T03:36:26.801Z`. 기존 빈 API사진52대에 exact vehicle ID/plate/full supplier model-name와 빈 배열을 재검증했다.51대는 MODEL_ILLUSTRATION,1대는 기존Drive folder 연결을 보존했다. 실제50대는 이번 write에서 손대지 않았다. run `dc456e14-3c5c-4292-ac04-fd677bbbf60b`, planDigest `c3bea2bd93bb3602709020784cac05a0d48abd380977684eac1a15988b628a49`, `PHOTO_ATOM_READBACK_VERIFIED`, typed private backup `photos-dc456e14-3c5c-4292-ac04-fd677bbbf60b.json`. 이 photo-only write의 재고/가격/삭제 변경0.
 - 원본 보존: supplier neutral WEBP7개를 HTTP200/실제WEBP1536×1024로 확인하고 관측SHA256 checkpoint를 기록했다. URL/색상/이미지를 재생성·변환·재호스팅하지 않는다. 현재51대에는6개 asset이 쓰이고 MINI는 기존Drive 연결이 우선한다. SHA checkpoint는 관측 증거이지 매 렌더의 무결성 강제 검증이 아니다.
-- 검증/운영 화면: Data 전체 check exit0(1,147 PASS/14 SKIP, architecture/access/sheets25/build/smoke/shadow), ERP typecheck/catalog102+illustration contract/fonts/build PASS. Claude scoped Data session22458와 ERP session23400은 본문/exit0/ANSWERED/GO이며 no-overwrite·exact identity·rerun·thumbnail/mobile 구분 반례를 반영했다. timeout/command-length 실패는 PASS로 세지 않는다. ERP CI36961373357 SUCCESS, Vercel production 배포 및 `/api/version` sha `f24ab81` 확인. 공개 feed109대에서 supplier illustration51/actual-photo proxy50 확인. 실제 `10하8263` 상세/확대/375px 모바일에 원본 WEBP와 연출 안내문 표시, `10하8128` 실제50장 갤러리/대표사진1920px 및 연출표시0 확인.
+- 검증/운영 화면: Data 전체 check exit0(1,147 PASS/14 SKIP, architecture/access/sheets25/build/smoke/shadow), ERP typecheck/catalog102+illustration contract/fonts/build PASS. Claude scoped Data session22458와 ERP session23400은 본문/exit0/ANSWERED/GO이며 no-overwrite·exact identity·rerun·thumbnail/mobile 구분 반례를 반영했다. timeout/command-length 실패는 PASS로 세지 않는다. ERP CI36961373357 SUCCESS, Vercel production 배포 및 `/api/version` sha `f24ab81` 확인. 공개 feed109대에서 supplier illustration51/actual-photo proxy50 확인. 실제 `***8263` 상세/확대/375px 모바일에 원본 WEBP와 연출 안내문 표시, `***8128` 실제50장 갤러리/대표사진1920px 및 연출표시0 확인.
 - 시트 실행: PREPARE `36961710523` SUCCESS, snapshot `20261002040132994-477dd48d50b8`의 illustration51대/actual-photo50대·2,249장 보존 확인. 같은 ready_run_id를 지정한 ALL apply `36962834677` SUCCESS. F01/F86 발행, RP031 evidence, 공개catalog, F86↔atom 신선도, 전체 칸 및 전체 탭 사진 링크 감사 모두 SUCCESS. 별도writer/수동append 없음.
-- 새 native readback: F01 `F01 시트(ID는 비공개 ai-ops 문서)`/668539469와 F86 `F86 시트(ID는 비공개 ai-ops 문서)`/2029374993의 `10.02 13:01 상품리스트 315대` C2:C316, F86/1942643715 `이안카 109대` D2:D110을 실제 연결로 재조회. 각 뷰의 exact plate/expected canonical photo URL 대사109/109, illustration51/51, actual50/50, preserved8/8, mismatch0(전체327개 차량 식별·링크 상태 일치). 기존 보존8대 중2대에는 기존Drive link가 있고6대는 사진 연결이 없다. 이 기존 상태를 공급사 사진없음으로 확정하지 않는다. API 빈사진52대 중의Drive1대와 전체 보존8대 중Drive2대를 혼동하지 않는다. 실제 F01 C70/F86 이안카D44에 `10하8263` 파란 링크 확인, 게시된 `/q/abkpegyd3a` 도착 화면의 원본 illustration와 안내문 확인. 기존 tabs/원천 숨김 사진/T카 링크 보존.
+- 새 native readback: F01 `F01 시트(ID는 비공개 ai-ops 문서)`/668539469와 F86 `F86 시트(ID는 비공개 ai-ops 문서)`/2029374993의 `10.02 13:01 상품리스트 315대` C2:C316, F86/1942643715 `이안카 109대` D2:D110을 실제 연결로 재조회. 각 뷰의 exact plate/expected canonical photo URL 대사109/109, illustration51/51, actual50/50, preserved8/8, mismatch0(전체327개 차량 식별·링크 상태 일치). 기존 보존8대 중2대에는 기존Drive link가 있고6대는 사진 연결이 없다. 이 기존 상태를 공급사 사진없음으로 확정하지 않는다. API 빈사진52대 중의Drive1대와 전체 보존8대 중Drive2대를 혼동하지 않는다. 실제 F01 C70/F86 이안카D44에 `***8263` 파란 링크 확인, 게시된 `/q/abkpegyd3a` 도착 화면의 원본 illustration와 안내문 확인. 기존 tabs/원천 숨김 사진/T카 링크 보존.
 - 남음/next_start_here: 이번 실사진·연출 이미지의 Data→ERP 기본/이안카 white-label→F01/F86 연결은 위 시점에서 검증됐다. 다음 갱신은 기존 collector의 fresh `--photos`→dry-run/CAS/private backup→동일plan apply→기존 publisher exact READY→새 readback을 따른다. 정책2차와15분 공식 API writer/schedule은 별도다. 공개109대가 최신 source116대와 같다는 뜻이 아니며 재고 최신화는 이번 photo-only 범위 밖이다.7개 이전404는 재확인 전까지 미확인으로 보존한다. 기존Drive 실제 폴더 내용, Admin 및 모든 화이트라벨 개별 UI, Catalog V1 전체 cutover는 미검증이다. 실제사진 후속 수집 시 image_kind는 VEHICLE_PHOTO로 바뀌지만 과거 illustration metadata가 남을 수 있으며 공개 UI는 현재 image URL로 분류한다.
 
 ## 2026-10-02 이안카 사진 운영 배포 준비 — 아래 로컬 기록을 대체
@@ -902,7 +974,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 사용자 직접 지시: 사진을 전량 연결하고 배포한다. Data/ERP/기존 F01·F86 publisher 순으로 진행한다. IAM 변경은 기존 runtime SA가 기존 이안카 단일 Secret을 읽는 범위로 한정한다. RTDB는 사용하지 않는다.
 - 코드: Data 인증 transport + ERP 공개 상품/채널 gate + raster decode/EXIF·GPS 제거. Data의 private byte cache는 exact vehicle/photo ID, 30초·32MiB·최대8 fetch이며 Cloud Run concurrency8과 일치한다. Secret name/version을 GitHub vars로 pin하고 readiness에서 재검증한다. 사진만 수정하는 publication은15분 capture/CAS/private typed backup/재조회/감사 gateway를 사용한다. 절대 ERP proxy URL을 발행해 다른 origin의 Admin/AI도 참조할 수 있다.
 - 검증: Data build/architecture/access PASS, 전체1143 PASS/14 SKIP, Sheets25 PASS; photo rollback을 mocked 원본·계약 보존/추가필드 삭제로 연습했다. ERP typecheck/공개catalog102+회귀/data authority PASS, CI 방식 public Firebase placeholder production build PASS. 실제 production 환경/화면 확인 전에는 배포 완료가 아니다.
-- 원천 read-only 관측: 공개109 중104 응답,52대2348장,5개ID404. 404는0장이나 삭제가 아니며 해당 원본을 그대로 보존한다. 최신 full API list116대/coverage issues0에서 기존404 차번3개는 미관측; 차량ID를 추정 재매핑하지 않는다. 운영 재고/가격 변경은0이다.
+- 원천 read-only 관측: 공개109 중104 응답,***2348장,5개ID404. 404는0장이나 삭제가 아니며 해당 원본을 그대로 보존한다. 최신 full API list116대/coverage issues0에서 기존404 차번3개는 미관측; 차량ID를 추정 재매핑하지 않는다. 운영 재고/가격 변경은0이다.
 - 독립 검토: 이전 전체 검토의 secret pin/concurrency/cache/rollback 지적을 반영했다. 정확한 gate 호출 첫 검토는 REVIEW_TIMEOUT이며 PASS가 아니다. 좁힌 검토 진행 중. 배포/IAM/원자 사진 write/시트 write는 아직 미실행.
 - rollback: Cloud Run 이전 ready revision `freepass-data-read-00014-8db`; ERP 이전 main `a00547ce4c794343f5520b03f48df00cac2a4a2d`; publisher 이전 pin `ce811592daef6c0283c3637ec94f1b7cf09a3838`. 사진 원자 backup은 `iancar-photo-typed-backup/1`. 복구는 `source:iancar:one -- --restore-photos=<private-backup> --expected-digest=<sourceDigest>` dry-run 후 승인 시 `IANCAR_PHOTO_RESTORE_APPROVED=true`와 `--apply`; 원본 이외 변경이 있으면 HOLD한다.
 - next_start_here: 독립 검토 blocker 해소 → Data main 통합/private runtime 배포 exact revision → ERP main 통합/production SHA와 실제 사진 확인 → fresh capture/동일plan photo-only write → 새 publisher pin·검증 snapshot으로 F01/F86 canonical workflow apply → 두 시트/모든 대상 소비처 새 readback. 해당 증거 전에는 전체 완료/15분 자동화 완료로 보고하지 않는다.
@@ -912,7 +984,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 목적/결정: 사용자가 API 사진을 우리 서버에서 인증해 제공하는 방식을 승인했다. 새 사진 저장소/Drive 재호스팅/공개 API키는 사용하지 않는다. 기존 상품·사진·계약·가격은 변경하지 않는다.
 - 대상: Data `5318ccfadc655a28a708fd645976057fb030941e` 기반 detached worktree `C:\Users\admin\.codex\worktrees\iancar-photo-proxy\freepass-data`; ERP `a00547ce4c794343f5520b03f48df00cac2a4a2d` 기반 detached worktree `C:\dev\worktrees\freepasserp4-iancar-photo-proxy-20261002`. 이전15분 초안/다른 dirty checkout은 보존했다. 두 대상 Academy READY, 기존 ONE client/compatibility reader/consumer gateway 및 ERP api/img COMPOSE_OR_EXTEND.
 - 변경: 기존 Data adapter에 exact vehicle ID+plate/photo path 귀속, 대표사진 우선, raster MIME+magic/8MiB 스트림 제한 추가. Infra는 상품ID를 중앙 target에서 조회하고 공개 RP031만 허용하며 provider 호출은 composition root에 주입한다. 기존 소비처 token/capability/audit 후 `/v1/consumers/{consumerId}/catalog-compat/products/{productId}/photos`(count-only) 및 `/photos/{index}`(image bytes)를 제공한다. 상세 참조30초/128건 bounded coalescing, 이미지 바이트는 저장/캐시하지 않는다. provider 키·만료 URL·photo_id·원문 오류는 공개하지 않는다. ERP 기존 `/api/img?product={docId}&photo={index|manifest}&wl=eancar`는 기존 공개 목록/채널 fence와 consumer token/WIF를 사용하고 Data 사진만 전달한다.
-- 검증: Data 전체 check PASS(1138 PASS/14 SKIP/build/architecture/access/sheets 등), 마지막 coalescing 변경 후 build+targeted76 PASS. Infra→adapter 직접 의존은 첫 architecture 검사에서 실패하여 runtime composition 주입으로 수정했다. ERP TypeScript 및 check-freepass-data-consumer PASS, diff whitespace 오류0. 실제 read-only RP031 상품 `10하8128`로 새 reader에서 사진50장 목록 및 대표 JPEG562156bytes/magic 검증 성공, business writes0. 이것은 로컬 reader 실호출이며 운영 HTTP/UI 표시나 전 차량 반영 완료가 아니다.
+- 검증: Data 전체 check PASS(1138 PASS/14 SKIP/build/architecture/access/sheets 등), 마지막 coalescing 변경 후 build+targeted76 PASS. Infra→adapter 직접 의존은 첫 architecture 검사에서 실패하여 runtime composition 주입으로 수정했다. ERP TypeScript 및 check-freepass-data-consumer PASS, diff whitespace 오류0. 실제 read-only RP031 상품 `***8128`로 새 reader에서 사진50장 목록 및 대표 JPEG562156bytes/magic 검증 성공, business writes0. 이것은 로컬 reader 실호출이며 운영 HTTP/UI 표시나 전 차량 반영 완료가 아니다.
 - Claude: 이전 방식 검토는 ANSWERED이며 stable vehicle ID/재배포 범위/소비처 Sheet 쓰기 금지 지적을 반영했다. 이안카 사진 제공 코드를 검토하는 별도 scoped read-only review는 아직 진행 중(session71308), PASS로 세지 않는다. 기존 Drive 폴더 존재는 우리 연결의 exact-ID metadata에서 확인했으나 reviewer의 다른 Drive 연결 검색0과 섞지 않았다.
 - 운영 HOLD: 현재 private Cloud Run `freepass-data-read`에는 소비처 Secret만 바인딩되고 이안카 Secret은 미바인딩이다. 기존 runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`에 기존 `freepass-data-iancar-one-api` 단일 Secret read 권한 및 Data/ERP 사진 연결 배포 범위를 사용자에게 질문했으며 아직 답을 받지 못했다. IAM mutation/배포/feature 활성화/DB·Sheet 쓰기/commit·push는 미실행. 검사 대상은 미커밋 로컬 초안이다.
 - next_start_here: scoped review 반례 해소 및 ERP photo transport 행동 테스트/빌드 → 중앙 photo manifest/index를 공개 상품에 붙이는 소비처 연결(현재 공개 feed/상세에 proxy URL을 자동으로 붙이는 코드는 아직 없음; 주소만 만든 상태를 반영 완료로 말하지 않음) → 확인된 범위 사용자 승인 후 Secret read/binding 및 기존 deploy workflow에 영속 설정(현재 deploy의 --set-secrets는 기존 consumer Secret만 지정하므로 수동 binding만 하면 다음 배포에서 사라짐) → main 통합/배포 정확한 SHA → 인증 없는 ERP image request의 JPEG와 실제 목록/상세 갤러리 확인 → F01/F86 기존 photo_link/gallery 소비 경로에 Data 사실로 전달하고 새 readback. 무키 provider 사진401/키 인증200은 이전 및 이번 실측으로 확인했다. source photo_id는 영구키라고 가정하지 말고 신선한 상세에서 재조회한다.
@@ -1018,10 +1090,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - Data01 실행: 직전 remote main `b5d738c`/동시 deploy없음/기존 repo pin3·Iancar1·서비스/SA 재확인 후 repository VARIABLE `FREEPASS_DATA_CONSUMERS_SECRET_VERSION`을4로 저장·get4 확인. main 정상 [deploy run38127687816](https://github.com/freepass-creator/freepass-data/actions/runs/38127687816), job114435382175, workflow_dispatch 18:14:58 KST, SUCCESS. [Issue209 비밀 없는 활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6107499101) 18:16:35 KST.
 - 실제 배포 검증: image `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:b5d738c12f5d0d4da302c5a3a8d425ea4f1ba7d1@sha256:0fb92cee22bf8aa5c8e793cdffc8f58ba3fccf1ceb022db18b33539e64215494`, 당시 serving revision `freepass-data-read-00025-6lx`, Ready True, canonical URL `https://freepass-data-read-njl7veujva-du.a.run.app`. 정상 workflow readiness 단계가 새 revision100% traffic과 service template의 image·runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`·consumer secret version4·Iancar `freepass-data-iancar-one-api`1·concurrency8·비공개 IAM을 되읽어 assert PASS. consumer resource NAME은 해당 readiness가 assert하지 않으며 serving revision 자체 describe도 수행하지 않았다. 이 두 항목은 당시 독립 확인 HOLD이며 template 검증과 구분한다. 인증 없는 요청403, 기존 erp-com 인증 compatibility200 및 schema 검증 PASS. 증거는 GitHub Actions 실제 metadata 조회/assert와 활성화 영수증이며 Data01 직접 Chrome Run 재조회가 아니다.
 - 후속 운영 상태: [run38127904472](https://github.com/freepass-creator/freepass-data/actions/runs/38127904472)는 source `1067fae21fa19d8e3f284884e182a20445bc894e`, workflow_dispatch 18:18:32 KST, actor/triggering_actor `freepass-creator`, 18:20:17 KST SUCCESS. Data01 실행이 아니다. 00 후속 확인 영수증에 따라 B3Q Data 지휘 채팅 `01a0e3f6...`가 해당 방의 사용자 “적용해” 지시로 실행한 것으로 확인됐다. GitHub 계정명만으로 실행 채팅을 식별한 것이 아니다. root의 18:20 KST 실제 Run 화면 영수증은 `freepass-data-read-00026-h5s` latest traffic100%, 이전00025 traffic0%, digest `sha256:1792d175e7b6fbad785f91ca6a2c69c4d6a45810eab7e34b02f742f318a0dc88`, 실제 revision consumer `freepass-data-consumers:4`/Iancar1/runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`/concurrency8/8080/entrypoint/volumes0/CloudSQL0 확인이다. 이전 NAME·revision 자체 refs 확인의 빈틈은 이 후속 root 관측으로 해소됐으며 과거00025의 검증 범위를 소급 확대하지 않는다. 이 실제 관측은 root 출처이며 Data01 직접 화면 확인이 아니다. 00025 성공을 현재 serving 상태로 표현하지 않는다. 배포 workflow의 push 조건은 main의 `.github/read-runtime-deploy.trigger` 변경뿐이며 NEXT 단독 변경은 자동 배포 조건에 해당하지 않는다.
-- 복구 기준/남은 HOLD: root의 등록 직전 fresh receipt `00024-w6g`/traffic100/consumer3·Iancar1/image `sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`는 직전 복구 기준이다. rollback 실행0, 기존secret·SA·IAM삭제0. Data 비공개 읽기 서비스 배포 검증은 완료했지만 새 소비자 실제 STS/manifest/사진index0..23/MIME·bytes·전체앨범/ERP5 생산 후보·cutover는 root의 별도 후속이며 검증 완료 전 HOLD. 롯데 표본 183어2364의24장은 이안카 사진 전용 소비자 성공 증거가 아니며 `/eancar/api/vehicles/183어2364` 404는 공급사 경계 차단으로 구분한다. 현재 ERP5 이미지 URL의 ERP4 의존 해소를 이 배포로 선언하지 않는다. 20의 독립 검토는 이 영수증 정합성 검토이지 자체 live 재관측이 아니다.
-- 실제 사진 요청 HOLD: root의 고정 Cloud Run 로그 09:19:20–09:22:00Z 관측에서 신규 소비자의 10하8099/10하8161 manifest GET은 각각09:19:36.192Z/09:21:35.082Z HTTP404였다. manifest 성공0이며 롯데/Drive fallback 사진 수는 성공 증거가 아니다. 정적 코드상 photos route와 consumer-server 연결은 존재하고 products.doc(productId)를 exact 문서ID로 읽는다. 차량번호와 문서ID 일치, 안전 응답 code, 공개 RP031/사진 검증 조건 중 실제 실패 원인은 미확정이며 원천 재조회 없이 기존 증거로 구분한다.
+- 복구 기준/남은 HOLD: root의 등록 직전 fresh receipt `00024-w6g`/traffic100/consumer3·Iancar1/image `sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`는 직전 복구 기준이다. rollback 실행0, 기존secret·SA·IAM삭제0. Data 비공개 읽기 서비스 배포 검증은 완료했지만 새 소비자 실제 STS/manifest/사진index0..23/MIME·bytes·전체앨범/ERP5 생산 후보·cutover는 root의 별도 후속이며 검증 완료 전 HOLD. 롯데 표본 ***2364의24장은 이안카 사진 전용 소비자 성공 증거가 아니며 `/eancar/api/vehicles/***2364` 404는 공급사 경계 차단으로 구분한다. 현재 ERP5 이미지 URL의 ERP4 의존 해소를 이 배포로 선언하지 않는다. 20의 독립 검토는 이 영수증 정합성 검토이지 자체 live 재관측이 아니다.
+- 실제 사진 요청 HOLD: root의 고정 Cloud Run 로그 09:19:20–09:22:00Z 관측에서 신규 소비자의 ***8099/***8161 manifest GET은 각각09:19:36.192Z/09:21:35.082Z HTTP404였다. manifest 성공0이며 롯데/Drive fallback 사진 수는 성공 증거가 아니다. 정적 코드상 photos route와 consumer-server 연결은 존재하고 products.doc(productId)를 exact 문서ID로 읽는다. 차량번호와 문서ID 일치, 안전 응답 code, 공개 RP031/사진 검증 조건 중 실제 실패 원인은 미확정이며 원천 재조회 없이 기존 증거로 구분한다.
 - 병렬 후속 검토 통합(10 미디어·12 API·20 런타임·21 독립 권위): 네 지정 비공개 작업 artifact의 JSON 형식 확인 및 기존 코드·문서 검토를 취합했다. 통합 기준 main `9383bfb59169dc4d1cc36a2dd61f474b407d1d71`, 기존 문서 merge `b7e519bcfd6561df2216b8ae307a98c02139a569`, 실제 운영 source `1067fae21fa19d8e3f284884e182a20445bc894e`를 분리한다. [기존 사진 확인 규칙](NATIVE-SOURCE-COLLECTOR.md)은 b7에서도 존재하며 해당 문서 최신 변경은 `67a372e2bfe2f81f63e962753918697de9891703`; ONE 차량 ID·번호 검증과 사람의 사진 내용 확인은 독립이다. reader가 확인자·방법 문자열 및 UTC 시각을 검사한다는 사실은 확인자 자격·비공개 근거 실재를 입증하지 않는다. 새 테스트·live GET·사진 열람·등록·원천 쓰기·배포0인 정적 검토이며 persistence/사진 cutover 증거가 아니다.
-- 진단 정정/범위: root의 기존 exact doc `10하8099` 단건 관측에서 존재/RP031/listable/가용·선점/ONE ID·번호 존재/withdrawal absence가 확인됐으므로 초기 공개 조건 누락 가설은 철회한다. `10하8161`은 기존 관측의 문서 존재 외 조건 미확정이다. `photo_original_refs`의 제한된 화면 미표시는 UNKNOWN이며 ABSENT나 verification 실패 확정이 아니다. 두404의 안전 응답 code 미확보로 route/domain/ONE 응답/철회 재검사 중 실제 실패 단계는 미확정이다. manifest 성공0건을 사진0장으로 바꾸지 않는다. 현재 code fix 필요 미확정; 기존 승인 근거의 공식 shape와 mapper 불일치가 입증된 경우에만 00가 최소 hunk owner를 지정한다.
+- 진단 정정/범위: root의 기존 exact doc `***8099` 단건 관측에서 존재/RP031/listable/가용·선점/ONE ID·번호 존재/withdrawal absence가 확인됐으므로 초기 공개 조건 누락 가설은 철회한다. `***8161`은 기존 관측의 문서 존재 외 조건 미확정이다. `photo_original_refs`의 제한된 화면 미표시는 UNKNOWN이며 ABSENT나 verification 실패 확정이 아니다. 두404의 안전 응답 code 미확보로 route/domain/ONE 응답/철회 재검사 중 실제 실패 단계는 미확정이다. manifest 성공0건을 사진0장으로 바꾸지 않는다. 현재 code fix 필요 미확정; 기존 승인 근거의 공식 shape와 mapper 불일치가 입증된 경우에만 00가 최소 hunk owner를 지정한다.
 - 실행 가능한 최소 후속/HOLD: 00가 기존 비공개 사람 사진 확인 근거 보유자와 실제 확인자를 연결하고 적용 ONE API·정확 사진집합/버전·실제 검수 방법·근거 위치/버전·확인자·UTC 시각을 확인한다 → 10 미디어와 21 권위 검토가 근거/차량 연결 범위를 확인한다 → 기존 정식 writer의 exact revision·지원 schema/대상 필드·동시변경 guard·typed 백업·복구 계획을 확인한다 → 필요한 데이터 변경에 대한 별도 승인 후 지정 단일 writer만 적용·새 되읽기를 남긴다 → root 단독으로 신규 manifest와 전체 승인 범위 index/MIME/bytes/반대 권한/변경·철회 동작을 검증한다. 검색한 src/scripts/contracts/.github에는 확인 기록 등록 writer를 찾지 못했고 외부 절차 존재는 미확정이다. 일반 가격 정정기·범용 Firestore 쓰기·과거 photo publisher를 현행 등록 경로로 추정하지 않는다. 근거 또는 writer 미확정이면 해당 단계 HOLD; marker·가짜 Drive ref/hash 발명·게이트 완화·Drive fallback·새 source GET0. runtime rollback 후보00024/consumer3는 현재 ERP5 새token과 후속 변경 영향 검토 및 별도 승인이 필요하며 실행0이다.
 - next_start_here: root가 정상 server 인증 경로에서 신규 소비자 manifest·bytes 및 권한 반례를 확인하고 ERP5 실제 소비 검증을 이어간다. 새source 조회·범위 확대·누락값 추정·추가등록 없이 source SHA→run→digest→revision/pin→개별 소비처 readback을 결속한다. 공유 checkout NEXT 역할지도 dirty와 다른 PR 원본은 계속 보존한다.
 
@@ -1259,7 +1331,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 대상 revision: main `d91124304bd082d0654e0d3bd3f743864d84f6ee` 및 기존 PR395. 원래 checkout 문서2개, fd-guard 미커밋 수정, 옛 data-first dirty5개는 보존했다. 재사용 작업공간 fd-356에서 academy READY 후 수행.
 - 변경: F03/v1 identity 입력과 기본형/생산기간 허용 추정 폐기. master/trim read-only transaction 동일 readTime 캡처 → RAW capture digest → 기존 identity/normalizer → cascade 동일 snapshot. 별칭은 검색만, 출력은 현재 master 이름/불변 ID. 모호/불일치/마스터 없음은 null·REVIEW_REQUIRED이며 원문은 보존한다. APPLY 직전 fresh master가 계획 내용과 다르면 재계획한다. source 최신 주소/12개 실제 탭·UNKNOWN 보증금·F01 단독/F86 중단·정산 사람 입력·기간정책 확장을 최신 main 그대로 유지했다.
 - 검증: 최신 main d911243 합친 전체 npm run check PASS(Vitest1701 PASS/14SKIP), sheet105 PASS/build/dist smoke8 PASS/architecture/data-access/diff check PASS. 원격 exact-head CI를 확인한다. Claude 조직 구독 비활성 FAILED(exit1), 독립 검토 PASS로 세지 않는다.
-- 직접 운영 조회(14:31 KST): 기존 Firebase target/read-only transaction으로 master1871/trim2097 동일 readTime 캡처와 validator eligible1825를 확인했다. digest `f8ab2c0b1266d77c5fd5da96766a044827eb805a08c5ba8310d4ceb9ffd5ce2d`; 사업 데이터 쓰기0. REST 보조 대조 products1776중1673일치/103미일치, catalog160중4미일치, trim부모이름불일치272. 실제 자료를 읽은 것이며 운영 소비처 적용 완료는 아니다.
+- 직접 운영 조회(14:31 KST): 기존 Firebase target/read-only transaction으로 master1871/trim2097 동일 readTime 캡처와 validator eligible1825를 확인했다. digest `f8ab2c0b1266d77c5fd5da96766a044827eb805a08c5ba8310d4ceb9ffd5ce2d`; 사업 데이터 쓰기0. REST 보조 대조 products1***1673일치/103미일치, catalog160중4미일치, trim부모이름불일치272. 실제 자료를 읽은 것이며 운영 소비처 적용 완료는 아니다.
 - 남음: 운영 master/product 일괄 정정·시트 쓰기·배포·소비처 cutover는 별도이며 실행하지 않는다. 103/272/4와 제조사 표기 drift96은 근거 없이 보정하지 않는다. dropdown disabled 사용자 결정 유지. Docker daemon/실제 Sheets 왕복·Admin/화이트라벨/Sales 전 소비처 배포 readback 미검증.
 - next_start_here: PR395 exact-head CI/최종 diff → 기존 main 통합 경로 → 실제 소비처 배포 revision과 master snapshot digest 재조회. 규칙은 ai-ops 기준 한 장 하나이며 수집/금액 담당의 최신 main을 되돌리지 않는다.
 
@@ -2381,7 +2453,7 @@ Date: 2026-09-28
 - readback: `FP-RP021-RENT`는 연 20,000km, 1만km당 10만원, 만 26세 이상,
   만 21세까지 하향·하향료 10만원, 보험료 포함이다. S01/S02는 각각 15/20만원과 5/10만원을
   그대로 보존했고, `POL-0040`만 `POL-0035`의 미사용 중복으로 퇴역했다.
-- ERP.com: 기존 미연결 `08주6722` (`/q/6e3ur7v9fg`)에서 요금 기준,
+- ERP.com: 기존 미연결 `***6722` (`/q/6e3ur7v9fg`)에서 요금 기준,
   보험 보상한도·면책금, 이용조건이 모두 원본과 같게 노출되는 것을 확인했다.
 - Claude 읽기 전용 독립 검토는 status available 후 호출했으나 응답 본문 없이 멈춰 `UNAVAILABLE`이며 PASS로 세지 않았다.
 
@@ -2402,7 +2474,7 @@ next_start_here: 빌린카 원본에서 새 상품이 입력될 때 `정책UID`�
 - 운영 보정: exact main revision에서 run
   `2026-09-29T08-32-37-965Z-a763a548-6b7a-4140-9ce5-046a63ea3fae` 실행. 사전 155건을 전수 검사하고
   기존 `POL-0047`이 아닌 89건을 연결했으며, 적용 후 155건 모두 `POL-0047`임을 새 조회로 확인했다.
-- 상세 화면 readback: 기존 미연결이었던 출고가능 `07어4389` (`/q/jems2ua8au`)에서
+- 상세 화면 readback: 기존 미연결이었던 출고가능 `***4389` (`/q/jems2ua8au`)에서
   `기준 연령 만 26세 이상`, `기준 주행거리 연 30,000km`, `보험료 포함`, `연령 낮추기 불가`와
   보험 보상한도·면책금이 노출되는 것을 운영 ERP.com에서 확인했다.
 
@@ -2419,7 +2491,7 @@ next_start_here: RP023 활성 상품이 155건에서 변경되거나 오플구�
   `2026-09-29T04-44-30-502Z-42019aec-9cd2-4fa9-85bf-76c6b1542a68` 실행. `POL-0047`과
   `FP-RP023-RENT` 모두 기본연령 `만 26세 이상`, 연령하향 `불가`, 연 30,000km, 보험료 포함이며
   `age_lowering_cost`가 없음을 새 조회로 확인했다.
-- 차량번호 readback: `309고5544`는 RP023 오플구독 → `POL-0047`이고 동일 조건 및 본문
+- 차량번호 readback: `***5544`는 RP023 오플구독 → `POL-0047`이고 동일 조건 및 본문
   `운전연령하향: 불가`를 확인했다. 운영 수정 전 private backup이 생성됐다.
 - 검증: 로컬 전체 984 PASS / 12 SKIP 뒤 기존 `runtime-policy` 5초 timeout 1건은 단독 5 PASS;
   GitHub Core CI PASS. Claude 독립 검토는 응답 본문이 없어 UNAVAILABLE이며 PASS로 계산하지 않았다.
@@ -3054,10 +3126,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - Actual photo-only atom apply/readback: run `3a40956e-d168-41f8-b6b8-6dfbd068657d`, digest `b9567c2610101472e6ec8990f28d7866087ddbde3b1ead6ab3a391dac6ba549f`, 102 rows, inventory/price changes and deletes all zero. Typed originals and rollback evidence remain private. Empty lists preserve original photos; positive-to-zero restores owned originals rather than dead proxy slots.
 - Actual rollback drill: one product / 50 photos, run `2fd462a4-b23b-4cfa-83cd-9c820494aab4`; typed backup, apply readback, restore plan and restore readback all verified before the full batch.
 - Verification: Data build, architecture/access boundaries, 1,144 passing / 14 skipped tests; ERP typecheck/build and 102 public-contract cases passed. Independent Claude source review returned GO after correcting positive-to-zero and photo-only rollback drift. The later narrow Core-pin follow-up timed out and is not counted as a pass.
-- Production readback: authenticated supplier-backed manifest for `10하8128` returns 50; actual ERP white-label gallery shows 1/50 -> 2/50 and loaded images. All 50 nonempty products' first images eventually returned valid metadata-stripped JPEG; three initial 503s succeeded on bounded sequential recheck. This is representative-byte verification, not all 2,249 bytes or visual plate verification.
-- Source caveat: first photo of `10하8128` visually shows a different plate; next photo shows current `10하8128`. Possible prior registration/photo history is not a proven wrong-vehicle conclusion. Supplier owns photo ordering/association; no silent photo substitution or OCR identity claim.
+- Production readback: authenticated supplier-backed manifest for `***8128` returns 50; actual ERP white-label gallery shows 1/50 -> 2/50 and loaded images. All 50 nonempty products' first images eventually returned valid metadata-stripped JPEG; three initial 503s succeeded on bounded sequential recheck. This is representative-byte verification, not all 2,249 bytes or visual plate verification.
+- Source caveat: first photo of `***8128` visually shows a different plate; next photo shows current `***8128`. Possible prior registration/photo history is not a proven wrong-vehicle conclusion. Supplier owns photo ordering/association; no silent photo substitution or OCR identity claim.
 - Completed publication: canonical prepare `36953691942` SUCCESS; frozen snapshot `20261002021154956-c3085e59dae2`, captured `2026-10-02T02:11:54.956Z`, verified 109 public RP031 products / 50 proxy galleries / 2,249 URLs before apply. Exact ready-run ALL apply `36954572369` SUCCESS, including full atom/F01/F86 parity and plate-photo-link audits.
-- Native Sheets readback: F01/F86 leading title `10.02 11:11 상품리스트 316대`, F86 supplier `이안카 109대`. All 50 expected RP031 photo links matched separately in F01 leading C, F86 leading C and F86 supplier D (150/150, zero discrepancies). Example `10하8128`: F01 C177, F86 C169, supplier D68 -> `https://freepasserp.com/q/4ab2zndgcx`; exact supplier cell was re-read after browser inspection, unchanged. Real native F86 screen and the short-link product gallery were verified.
+- Native Sheets readback: F01/F86 leading title `10.02 11:11 상품리스트 316대`, F86 supplier `이안카 109대`. All 50 expected RP031 photo links matched separately in F01 leading C, F86 leading C and F86 supplier D (150/150, zero discrepancies). Example `***8128`: F01 C177, F86 C169, supplier D68 -> `https://freepasserp.com/q/4ab2zndgcx`; exact supplier cell was re-read after browser inspection, unchanged. Real native F86 screen and the short-link product gallery were verified.
 - Final ERP revision: `53e1d90a57631bd0b67d9e9e44f42af3f807bfa6`, Vercel status SUCCESS and production `/api/version` sha `53e1d90`; CI `36954202676` SUCCESS. Exact engine/Core receipt alignment guard passed; existing offline server-only shim is now used by the whitelabel regression runner, without changing application auth/runtime isolation.
 - Remaining: seven source404 records and 52 empty API photo lists are not supplier website-absence proof; existing originals/identity/inventory/rates are retained. Representative old-plate photo requires supplier clarification. Admin receives absolute canonical photo URLs, but its rendered UI is not verified. No claim of all 109 vehicles having supplier photos or of a new 15-minute inventory/photo-metadata writer.
 - next_start_here: use private typed backup run `3a40956e-d168-41f8-b6b8-6dfbd068657d` for audited photo-only rollback if needed; seek supplier clarification for unresolved IDs/representative history, then repeat fresh photo evidence -> expected-plan apply -> exact-ready canonical publication. Preserve unrelated dirty worktrees and all unresolved source rows.
