@@ -313,6 +313,27 @@ describe('shared sheet local source to Canonical', () => {
       expect(entry.change).toBeUndefined();
     } finally { vi.useRealTimers(); }
   });
+  it('operational refresh applies a plausible odometer increase together with status/rent and updates the asset', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '5,000km' })), 'synthetic-target', undefined, false, true);
+      expect(p.plan.entries[0]!.action).toBe('CHANGE');
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true, plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r.report).toMatchObject({ committed: 1, held: 0 });
+      expect((await s.store.listVehicleAssets())[0]!.odometerKm).toBe(5000);
+    } finally { vi.useRealTimers(); }
+  });
+  it('operational refresh holds an odometer decrease at plan time (anomaly) and leaves the stored value', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '900km' })), 'synthetic-target', undefined, false, true);
+      expect(p.plan.entries[0]!.action).toBe('HOLD');
+      expect(p.plan.entries[0]!.reasons).toContain('OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:SOURCE_ODOMETER_CHANGE');
+      expect((await s.store.listVehicleAssets())[0]!.odometerKm).toBe(1234);
+    } finally { vi.useRealTimers(); }
+  });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {

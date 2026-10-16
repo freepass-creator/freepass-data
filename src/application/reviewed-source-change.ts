@@ -806,6 +806,15 @@ function exactSet(actual: string[], expected: string[]) {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
+/** 운영 갱신(operationalRefresh)이 받아들이는 주행거리 변화: 감소·비정수·한 번에 30,000km 초과 증가는 «이상치»로 보고 막는다(계획 단계 보류·적용 단계 거절 공통).
+ * 이전 값이 비어 있던 첫 채움은 허용한다. 사람이 고친 값(원천 마지막 관측과 다른 값)은 적용 단계에서 따로 보존한다. */
+export const OPERATIONAL_ODOMETER_MAX_INCREASE_KM = 30_000;
+export function isSaneOperationalOdometerChange(before: unknown, after: unknown): boolean {
+  if (typeof after !== 'number' || !Number.isSafeInteger(after) || after < 0) return false;
+  if (before === null || before === undefined) return true;
+  if (typeof before !== 'number' || !Number.isFinite(before)) return false;
+  return after >= before && after - before <= OPERATIONAL_ODOMETER_MAX_INCREASE_KM;
+}
 async function assertOperationalRefresh(
   tx: CatalogTransaction, state: LoadedState, input: ApplyReviewedSourceChangeInput,
   operations: SourceChangeOperation[], now: string
@@ -859,6 +868,8 @@ async function assertOperationalRefresh(
         if (!facts) return null;
         const copy = structuredClone(facts);
         delete copy.fields.supplierStatus;
+        // 같은 명령에 정상 범위의 ASSET_ODOMETER 가 있으면 사실 칸의 주행거리 변화는 그 명령이 소유한다(아래 ASSET_ODOMETER 분기가 이상치·사람 값을 검사).
+        if (operations.some(o => o.kind === 'ASSET_ODOMETER')) delete copy.fields.mileageKm;
         // Provenance, not source facts: a normalizer rule-version bump (and the identity-decision record it adds) re-stamps
         // every fact without changing any value/state/evidence. Treating that as «human divergence» froze the whole
         // operational refresh after a rule upgrade (shared-sheet run 38750295212: 72 of 77 held, only ruleVersion differed).
@@ -873,6 +884,15 @@ async function assertOperationalRefresh(
           !sameValue(withoutStatus(operation.value), withoutStatus(state.asset.sourceVehicleFacts))) {
         throw new ReviewedSourceChangeConflictError('Source facts contain human divergence or changes outside supplier status');
       }
+    } else if (operation.kind === 'ASSET_ODOMETER') {
+      // 주행거리: 마지막 원천 관측과 같은 저장값(사람이 고친 값은 보존)에서만, 감소·과대 증가(이상치)는 거절한다.
+      const lastObserved = old.mileageKm ?? null, stored = state.asset.odometerKm ?? null;
+      if (!sameValue(lastObserved, stored)) {
+        throw new ReviewedSourceChangeConflictError('Existing odometer diverges from the last source observation; preserve human input');
+      }
+      if (!isSaneOperationalOdometerChange(stored, operation.value)) {
+        throw new ReviewedSourceChangeRejectedError('Operational refresh rejects an odometer decrease or an implausible increase');
+      }
     } else if (operation.kind !== 'PRODUCT_STATUS' && operation.kind !== 'ASSET_STATUS') {
       throw new ReviewedSourceChangeRejectedError('Operational refresh is limited to known supplier status and existing period rent');
     }
@@ -880,9 +900,9 @@ async function assertOperationalRefresh(
   const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
   for (const operation of operations) {
     const path = operation.kind === 'OFFER_MONTHLY_RENT'
-      ? `priceTerms.${operation.termKey}.monthlyRent.amount` : 'vehicleFacts';
+      ? `priceTerms.${operation.termKey}.monthlyRent.amount` : operation.kind === 'ASSET_ODOMETER' ? 'mileageKm' : 'vehicleFacts';
     const expected = operation.kind === 'OFFER_MONTHLY_RENT'
-      ? operation.value.amount : state.candidateRecord.candidate.vehicleFacts;
+      ? operation.value.amount : operation.kind === 'ASSET_ODOMETER' ? operation.value : state.candidateRecord.candidate.vehicleFacts;
     const matches = parents.filter((parent) => parent.stage === 'RAW_TO_NORMALIZED' && parent.normalized?.fieldPath === path);
     if (matches.length !== 1 || matches[0]!.runId !== state.run.runId ||
         matches[0]!.sourceId !== state.binding.sourceId || matches[0]!.sourceRecordId !== state.binding.sourceRecordId ||
