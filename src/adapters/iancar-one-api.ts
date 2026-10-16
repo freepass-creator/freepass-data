@@ -543,7 +543,25 @@ function cachedEnvelopesMatch(entry: IancarDetailCacheEntry, record: IancarOneLi
 export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void,
-  opts: { detailCache?: IancarDetailCache | null } = {}
+  opts: { detailCache?: IancarDetailCache | null;
+    /** 캐시 «적재» 전용(1번 커맨드 2026-10-16 닭과 달걀 해소): 차량별 검증을 모두 통과한 상세·가용 봉투를 읽는 즉시 여기에 쌓는다.
+     *  회차가 503 등 «이미 검증한 차의 증거를 무효화하지 않는» 일시 실패로 끝나도 남아 다음 회차에 재사용된다(호출자가 파일에 병합).
+     *  신원 불일치·목록 붕괴 같은 비일시 실패면 비운다. 발행·Firestore 쓰기와 무관(캐시 적재 경로만). */
+    cacheSink?: Record<string, IancarDetailCacheEntry> } = {}
+): Promise<IancarOneListCapture> {
+  const sink = opts.cacheSink;
+  try {
+    return await collectIancarOneFullFactsInner(config, fetcher, now, onProgress, opts, sink);
+  } catch (error) {
+    // 일시 실패(502·503·504·429·시간 초과)만 sink 를 남긴다 — 신원·번호·목록 일관성 실패는 그 회차의 적재를 전부 버린다(Codex P1 ①).
+    const transient = error instanceof IancarOneApiError && ((error.status !== undefined && [429, 502, 503, 504].includes(error.status)) || /TIMEOUT/.test(error.code));
+    if (sink && !transient) for (const key of Object.keys(sink)) delete sink[key];
+    throw error;
+  }
+}
+async function collectIancarOneFullFactsInner(
+  config: IancarOneApiConfig, fetcher: Fetcher, now: string, onProgress: ((completed: number, total: number) => void) | undefined,
+  opts: { detailCache?: IancarDetailCache | null }, sink: Record<string, IancarDetailCacheEntry> | undefined
 ): Promise<IancarOneListCapture> {
   // 상세·가용 캐시(기본 없음): opts.detailCache 가 주어진 회차만 재사용·갱신한다. 요금(rates)은 항상 다시 읽는다(Codex P1: 가격은 캐시 금지).
   const cacheOn = opts.detailCache !== undefined;
@@ -660,8 +678,11 @@ export async function collectIancarOneFullFacts(
       if (keys.has(key)) { rateHold = 'IANCAR_ONE_DUPLICATE_RATE'; break; }
       keys.add(key);
     }
-    if (cacheOn) cacheNext[record.vehicleId] = cached ? cached : { rowDigest, detail: structuredClone(detail) as Record<string, unknown>,
-      availability: structuredClone(availability) as Record<string, unknown>, cachedAt: new Date(observationNow()).toISOString(), detailSyncedAt };
+    if (cacheOn) {
+      cacheNext[record.vehicleId] = cached ? cached : { rowDigest, detail: structuredClone(detail) as Record<string, unknown>,
+        availability: structuredClone(availability) as Record<string, unknown>, cachedAt: new Date(observationNow()).toISOString(), detailSyncedAt };
+      if (sink && !cached) sink[record.vehicleId] = structuredClone(cacheNext[record.vehicleId]!);   // 새로 읽어 검증을 통과한 차만 적재(재사용 차는 파일에 이미 있음)
+    }
     const payload: JsonObject = { ...structuredClone(record.payload),
       detail: structuredClone(detail), availability: structuredClone(availability),
       rates: structuredClone(rates), rateRequestEvidence: {

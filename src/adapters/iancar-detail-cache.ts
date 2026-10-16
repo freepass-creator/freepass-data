@@ -67,3 +67,15 @@ export function iancarRotationIds(cache: IancarDetailCache | null, vehicleIds: r
     .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
   return new Set(withAge.slice(0, Math.max(0, policy.rotationPerCycle)).map(([id]) => id));
 }
+
+/** 파일 병합(런타임 저장용): 기존 항목 위에 이번 회차 적재(sink)를 차량별로 통째 덮어쓰고, 유효 상한이 지난 항목은 버린다(순수 함수).
+ * 회차 성공·실패와 무관하게 쓰며, 실패 회차의 sink 는 호출자가 «일시 실패일 때만» 남긴 것이다. 원래 cachedAt 은 보존(재사용으로 연장하지 않음). */
+export function mergeIancarDetailCache(existing: IancarDetailCache | null, sink: Record<string, IancarDetailCacheEntry>, nowMs: number,
+  policy = IANCAR_DETAIL_CACHE_POLICY): IancarDetailCache {
+  const entries: Record<string, IancarDetailCacheEntry> = {};
+  for (const [id, entry] of Object.entries({ ...(existing?.entries ?? {}), ...sink })) {
+    const age = nowMs - Date.parse(entry.cachedAt);
+    if (Number.isFinite(age) && age >= 0 && age <= policy.maxAgeMs) entries[id] = structuredClone(entry);
+  }
+  return { version: IANCAR_DETAIL_CACHE_VERSION, writtenAt: new Date(nowMs).toISOString(), entries };
+}

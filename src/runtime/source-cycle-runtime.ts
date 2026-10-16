@@ -14,7 +14,7 @@ import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCO
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
-import { parseIancarDetailCache, type IancarDetailCache } from '../adapters/iancar-detail-cache.js';
+import { parseIancarDetailCache, mergeIancarDetailCache, type IancarDetailCache, type IancarDetailCacheEntry } from '../adapters/iancar-detail-cache.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
@@ -294,9 +294,16 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, async () => {
         let detailCache: IancarDetailCache | null = null;
         if (iancarCacheOn) try { detailCache = parseIancarDetailCache(JSON.parse(await readFile(iancarCacheFile, 'utf8'))); } catch { detailCache = null; }
-        const capture = await collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher, undefined, undefined, iancarCacheOn ? { detailCache } : {});
-        if (iancarCacheOn && env.SOURCE_CYCLE_UNATTENDED === '1' && capture.detailCacheOut && capture.readyForRawIngest) await writeJsonAtomic(iancarCacheFile, capture.detailCacheOut);
-        return capture;
+        // 캐시 적재는 회차 성공·실패와 무관(닭과 달걀 해소, 1번 커맨드 2026-10-16): 검증을 통과한 차량별 봉투(sink)를 기존 파일과 병합해 저장한다.
+        // finally 에는 로컬 파일 저장만 두고 원래 예외·실패 상태는 그대로 전파한다 — 발행·Firestore 쓰기 경로는 변하지 않는다(Codex P1 ③).
+        const sink: Record<string, IancarDetailCacheEntry> = {};
+        try {
+          return await collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher, undefined, undefined, iancarCacheOn ? { detailCache, cacheSink: sink } : {});
+        } finally {
+          if (iancarCacheOn && env.SOURCE_CYCLE_UNATTENDED === '1' && Object.keys(sink).length) {
+            try { await writeJsonAtomic(iancarCacheFile, mergeIancarDetailCache(detailCache, sink, Date.now())); } catch { /* 저장 실패는 원래 결과를 가리지 않는다 */ }
+          }
+        }
       }, undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
     } else if (kind === 'MAUMCAR') {
       // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
