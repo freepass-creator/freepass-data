@@ -291,6 +291,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 상태 파일 손상·형식 불일치면 캐시 없음(전수 읽기). 캐시 갱신은 무인 정시 회차만 저장한다(수동 plan 이 파일을 흔들지 않게).
       const iancarCacheOn = (env.SOURCE_CYCLE_IANCAR_DETAIL_CACHE ?? '').trim() === '1';
       const iancarCacheFile = join(directory, 'iancar-detail-cache.json');
+      // 값 지문 안정화(1번 커맨드 오더 2026-10-17, 기본 꺼짐): SOURCE_CYCLE_IANCAR_STABLE_FACTS=1 일 때 관측 시각·사진 자격 URL 을 뺀 원문으로 저장·비교해
+      // 값이 같은 문서를 매 회차 다시 쓰지 않는다. 켜는 첫 회차는 전량 1회 UPDATE(저장 digest 이관), 그다음부터 변화 없는 문서는 쓰기 0.
+      const iancarStableFacts = (env.SOURCE_CYCLE_IANCAR_STABLE_FACTS ?? '').trim() === '1';
       plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, async () => {
         let detailCache: IancarDetailCache | null = null;
         if (iancarCacheOn) try { detailCache = parseIancarDetailCache(JSON.parse(await readFile(iancarCacheFile, 'utf8'))); } catch { detailCache = null; }
@@ -304,7 +307,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             try { await writeJsonAtomic(iancarCacheFile, mergeIancarDetailCache(detailCache, sink, Date.now())); } catch { /* 저장 실패는 원래 결과를 가리지 않는다 */ }
           }
         }
-      }, undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+      }, undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt, { stableFacts: iancarStableFacts })));
     } else if (kind === 'MAUMCAR') {
       // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
       const file = required('SOURCE_CYCLE_MAUMCAR_FILE');
