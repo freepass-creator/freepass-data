@@ -4,6 +4,7 @@
 import { stableDigest } from '../shared/stable-digest.js';
 import type { VehicleIdentityRefinement } from '../ports/source-cycle.js';
 import { aliasCandidates, generationFamilies, generationGuard, type AliasCandidate, type GenerationFamily, type GenerationGuardReason } from './identity-generation-guard.js';
+import { normalizedMasterCandidate } from './identity-normalized-match.js';
 
 /** 정정 경로(repair:vehicle-name-parity)의 계획서 모양 중 이 생성기가 «내는» 부분만 구조적으로 선언한다. application 층은 infra 에 의존하지 않는다(아키텍처 가드):
  * 출력은 infra 의 VehicleNameRepairPlan 에 그대로 대입 가능한 모양이고, 호환은 시험(구조적 대입)이 지킨다. */
@@ -34,7 +35,7 @@ export type IdentityMaster = {
   /** 세대 생산 시작·끝 연도(없으면 null = 제한 없음). */ yearFrom: number | null; yearTo: number | null;
   trims: IdentityMasterTrim[];
 };
-export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | 'TRIM_CONFLICT_EXISTING' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
+export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'NORMALIZED_CANDIDATE' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | 'TRIM_CONFLICT_EXISTING' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
 export type IdentityPromotionResult = {
   plan: VehicleNameRepairPlan;
   /** 정체성 정정과 같은 상품의 세부트림 정정. 정정 경로는 한 계획에 같은 상품을 겹쳐 받지 않으므로(one product per plan)
@@ -54,9 +55,16 @@ const models = (m: IdentityMaster) => [m.model, ...m.model_aliases].map(norm).fi
 function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMaster[] {
   // 엔진 편입 문서(제조사·모델 빈칸)는 마스터로 특정되기 전까지 원문 차명을 sub_model 에 임시로 둔다(source-cycle-firestore nativeCycleFields).
   // 그 sub_model 은 마스터 이름이 아니므로 원문 차명 대조 경로로 보낸다.
-  const engineRaw = !p.maker.trim() && !p.model.trim();
-  const sub = engineRaw ? '' : norm(p.sub_model), model = norm(p.model), raw = norm(p.rawName || (engineRaw ? p.sub_model : ''));
+  // 원문 형태 판정(B3Q 2026-10-16 18:00 회차 후 NO_MASTER_MATCH 88→196): 입구 매핑이 제조사·모델을 채운 뒤에는 세부모델 칸이 아직 원문 차명 그대로여도 «제조사·모델이 있다» 로 보여
+  // 마스터 세부모델 이름과 정확 비교하는 경로로 갔고(원문 형태는 마스터 이름이 아니라 항상 불일치), 채움 표식(makerModelFromSource)이 입력에 없을 때(문서 덤프 등) 그대로였다.
+  // 엔진 임시 표식 문서이고 세부모델이 원문 차명과 같으면(원문 덩어리) 제조사·모델이 채워져 있어도 원문 대조 경로를 쓴다 — 제조사는 제약으로 남기고(다르면 불일치)
+  // 원천이 준 모델 표기는 마스터 모델 이름과 다를 수 있어 제약에서 뺀다. 마스터에 없는 이름은 만들지 않는다(후보가 없으면 NO_MASTER_MATCH).
+  const rawShaped = p.engineTemp === true && !!p.maker.trim() && !!p.rawName.trim() && norm(p.sub_model) === norm(p.rawName);
+  const engineRaw = (!p.maker.trim() && !p.model.trim()) || rawShaped;
+  const sub = engineRaw ? '' : norm(p.sub_model), model = rawShaped ? '' : norm(p.model), raw = norm(p.rawName || (engineRaw ? p.sub_model : ''));
+  const makerKey = rawShaped ? norm(p.maker) : '';
   const hits = masters.filter(m => {
+    if (makerKey && norm(m.maker) !== makerKey) return false;
     if (model && !models(m).includes(model) && !names(m).includes(model)) return false;
     if (sub) return names(m).includes(sub);
     // sub_model 이 비어 있으면 원문 차명 안에 마스터 세부모델(별칭)이 «통째로» 들어 있을 때만(가장 긴 이름 기준은 아래에서).
@@ -76,7 +84,7 @@ function masterCandidates(p: IdentityProduct, masters: readonly IdentityMaster[]
  *  - 세부트림: 원문 차명에 통째로 들어 있는 트림 이름(별칭) 중 가장 긴 것이 정확히 하나일 때만(UNIQUE), 둘 이상이면 AMBIGUOUS, 없으면 NONE. */
 export type IdentityMatch =
   | { state: 'MATCH'; master: IdentityMaster; trim: { state: 'UNIQUE'; name: string } | { state: 'AMBIGUOUS'; candidates: string[] } | { state: 'NONE' } }
-  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
+  | { state: 'HOLD'; reason: 'NO_MASTER_MATCH' | 'NORMALIZED_CANDIDATE' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
 /** 변형 낱말 집합(규칙 15·16): HYBRID(하이브리드·HEV), PHEV(플러그인·PHEV), EV(일렉트릭·단독 EV). 영숫자 단어 경계로만 본다(CHEVROLET 의 HEV·EV6 의 EV 는 변형이 아니다).
  * LPG 는 연료 사양이라 변형으로 보지 않는다. */
 /** 연료 칸 → 변형 낱말(변형 점검 입력). 가솔린·디젤·LPG 는 변형이 아니다. */
@@ -121,7 +129,13 @@ const variantCovered = (rawText: string, master: IdentityMaster, masters: readon
 export function matchIdentity(input: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
   const p: IdentityProduct = input.makerModelFromSource ? { ...input, maker: '', model: '' } : input;
   let cands = masterCandidates(p, masters);
-  if (!cands.length) return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
+  if (!cands.length) {
+    // 정규화 후보(확정 아님): 접두·개발코드·세대 표기·짧은 모델 이름·붙여쓴 표기를 느슨히 정규화해 마스터 세부모델이 «정확히 하나» 잡히면 사유만 달리한다 —
+    // MATCH 가 아니므로 적용되지 않고(엔진 정제기도 null), 사람이 확인하거나 정밀도 측정(golden set) 뒤 승격한다. 마스터에 없는 이름은 만들지 않는다.
+    const nc = normalizedMasterCandidate({ rawName: p.rawName || p.sub_model, year: p.year, maker: p.maker, fuel: fuelVariantWord(p.fuel ?? '') }, masters);
+    if (nc) return { state: 'HOLD', reason: 'NORMALIZED_CANDIDATE', candidates: [nc.master.id] };
+    return { state: 'HOLD', reason: 'NO_MASTER_MATCH', candidates: [] };
+  }
   // 연식으로 세대를 좁힌다: 연식이 있고 후보가 둘 이상일 때만, 범위 안에 들어가는 후보가 «정확히 하나»여야 한다.
   const year = /^\d{4}$/.test(p.year) ? Number(p.year) : null;
   if (cands.length > 1 && year !== null) {

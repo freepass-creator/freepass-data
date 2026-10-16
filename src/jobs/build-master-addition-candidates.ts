@@ -8,10 +8,13 @@ import { parseIdentitySnapshot } from './build-identity-promotion-plan.js';
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 
-export async function runMasterCandidatesCli(argv: { input?: string | undefined; csv?: string | undefined; summary?: string | undefined }) {
+export async function runMasterCandidatesCli(argv: { input?: string | undefined; csv?: string | undefined; summary?: string | undefined; listableOnly?: boolean | undefined }) {
   if (!argv.input || !argv.csv) throw new Error('MASTER_CANDIDATES_ARGS_REQUIRED');
   const snapshot = parseIdentitySnapshot(JSON.parse(await readFile(argv.input, 'utf8')));
-  const result = buildMasterAdditionCandidates(snapshot.products, snapshot.masters);
+  // 마스터 추가 후보는 «노출 중인 문서»가 기준으로 의미 있다(비노출·철회 문서는 현재 원천에 없고 차명 칸이 없는 과거 문서가 섞여 대수를 부풀린다 — B3Q 2026-10-16 확인).
+  // 기본은 종전대로 전체(결과 비교 가능), --listable-only 일 때만 노출 문서로 한정한다. 요약에 범위(입력 전체·노출 대수)를 항상 남긴다.
+  const listableCount = snapshot.products.filter(p => p.listable).length;
+  const result = buildMasterAdditionCandidates(argv.listableOnly ? snapshot.products.filter(p => p.listable) : snapshot.products, snapshot.masters);
   await writeFile(argv.csv, '﻿' + candidatesToCsv(result.rows), { mode: 0o600 });
   const bySupplier: Record<string, Record<string, number>> = {};
   for (const r of result.rows) { const s = (bySupplier[r.supplier || '(미상)'] ??= {}); s[r.reason] = (s[r.reason] ?? 0) + r.count; }
@@ -19,6 +22,7 @@ export async function runMasterCandidatesCli(argv: { input?: string | undefined;
   for (const r of result.rows) { const v = (verdicts[r.verdict] ??= { groups: 0, products: 0 }); v.groups++; v.products += r.count; }
   const priority = result.rows.filter(r => r.blankIdentityCount > 0);
   const summary = { status: 'MASTER_ADDITION_CANDIDATES', writes: 0, products: result.products, heldTotal: result.heldTotal, groups: result.rows.length,
+    scope: { listableOnly: argv.listableOnly === true, inputProducts: snapshot.products.length, listableProducts: listableCount },
     reasonCounts: result.reasonCounts, excludedReasons: result.excludedReasons, verdicts,
     priority: { groups: priority.length, products: priority.reduce((a, r) => a + r.blankIdentityCount, 0) }, bySupplier };
   if (argv.summary) await writeFile(argv.summary, JSON.stringify(summary, null, 2), { mode: 0o600 });
@@ -26,6 +30,6 @@ export async function runMasterCandidatesCli(argv: { input?: string | undefined;
 }
 
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('build-master-addition-candidates.js')) {
-  runMasterCandidatesCli({ input: arg('--input'), csv: arg('--csv'), summary: arg('--summary') }).then(s => console.log(JSON.stringify(s, null, 1)))
+  runMasterCandidatesCli({ input: arg('--input'), csv: arg('--csv'), summary: arg('--summary'), listableOnly: process.argv.includes('--listable-only') }).then(s => console.log(JSON.stringify(s, null, 1)))
     .catch(e => { console.error(e instanceof Error && /^[A-Z_]+$/.test(e.message) ? e.message : 'MASTER_CANDIDATES_FAILED'); process.exitCode = 1; });
 }

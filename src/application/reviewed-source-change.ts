@@ -859,6 +859,14 @@ async function assertOperationalRefresh(
         if (!facts) return null;
         const copy = structuredClone(facts);
         delete copy.fields.supplierStatus;
+        // Provenance, not source facts: a normalizer rule-version bump (and the identity-decision record it adds) re-stamps
+        // every fact without changing any value/state/evidence. Treating that as «human divergence» froze the whole
+        // operational refresh after a rule upgrade (shared-sheet run 38750295212: 72 of 77 held, only ruleVersion differed).
+        // Values, states and evidence strings of every real fact are still compared exactly.
+        delete copy.fields.vehicleIdentitySource;
+        const record = copy as { ruleVersion?: unknown; fields: Record<string, { ruleVersion?: unknown } | undefined> };
+        delete record.ruleVersion;
+        for (const fact of Object.values(record.fields)) if (fact) delete fact.ruleVersion;
         return copy;
       };
       if (!sameValue(oldStatus, state.asset.sourceVehicleFacts?.fields.supplierStatus) ||

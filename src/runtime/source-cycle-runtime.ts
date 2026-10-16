@@ -119,10 +119,44 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort() } };
+    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      ...modelTablesFromMasters(masters) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
+}
+/** 입구 매핑이 쓰는 마스터 모델 표(순수): 허용 집합 = 마스터 «정식 모델 이름»만, 별칭은 «정식 이름으로 변환» 표로만(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
+ * 같은 제조사에서 한 별칭(정규화 키: 공백·대소문자 무시)이 서로 다른 정식 모델 둘 이상에 있으면 모호하므로 그 별칭은 제외한다(틀린 모델을 쓰지 않는다, Codex #706). */
+export function modelTablesFromMasters(masters: ReadonlyArray<{ maker: string; model: string; model_aliases: readonly string[] }>):
+  { models: Record<string, readonly string[]>; modelAliases: Record<string, Record<string, string>> } {
+  const key = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const models: Record<string, Set<string>> = {};
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (maker && model) (models[maker] ??= new Set<string>()).add(model);
+  }
+  const canonicalKeys = (maker: string): Set<string> => new Set([...(models[maker] ?? [])].map(key));
+  const candidates: Record<string, Map<string, Map<string, string>>> = {};   // maker → aliasKey → (정식 키 → 정식 이름)
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (!maker || !model) continue;
+    for (const alias of m.model_aliases) {
+      const a = alias.trim();
+      if (!a || key(a) === key(model)) continue;
+      const byAlias = (candidates[maker] ??= new Map<string, Map<string, string>>());
+      const targets = byAlias.get(key(a)) ?? byAlias.set(key(a), new Map<string, string>()).get(key(a))!;
+      targets.set(key(model), model);
+    }
+  }
+  const modelAliases: Record<string, Record<string, string>> = {};
+  for (const [maker, byAlias] of Object.entries(candidates)) {
+    const own = canonicalKeys(maker);
+    for (const [aliasKey, targets] of byAlias) {
+      if (targets.size !== 1 || own.has(aliasKey)) continue;   // 모호(정식 모델 둘 이상) 또는 다른 정식 이름과 같은 키
+      (modelAliases[maker] ??= {})[aliasKey] = [...targets.values()][0]!;
+    }
+  }
+  return { models: Object.fromEntries(Object.entries(models).map(([k, v]) => [k, [...v].sort()])), modelAliases };
 }
 export const sonogongApiEnabled = (env: NodeJS.ProcessEnv): boolean =>
   env.SOURCE_CYCLE_SONOGONG_API === '1' && !!env.SONOGONG_API_KEY?.trim() && !!env.SONOGONG_API_BASE?.trim();
@@ -134,7 +168,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 정체성 정제: 기본 켜짐, SOURCE_CYCLE_IDENTITY_REFINE=0 이면 끔. 첫 목록 읽기 때 한 번만 읽고(같은 Promise) 회차 내내 같은 마스터를 쓴다.
   // 입구 매핑이 켜진 공급사가 있으면 마스터(제조사 목록)를 읽어야 하므로 REFINE=0 이어도 로드한다(정제 자체는 identityRefine=false 로 끈 채).
   const sourceIdentitySources = (env.SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
-  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0';
+  // 정체성 정제 켜기(IDENTITY-SAME-CYCLE-DESIGN 2단계, 기본 꺼짐으로 뒤집음): SOURCE_CYCLE_IDENTITY_SOURCES=공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다.
+  // 목록이 없으면 SOURCE_CYCLE_IDENTITY_REFINE=1 일 때만 전체에 켠다(명시). 그 밖(미설정 포함)은 꺼짐 — 옵션 사고(#674)의 교훈: 무인 쓰기 경로는 기본 꺼짐.
+  const identitySources = (env.SOURCE_CYCLE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' || (identitySources.length === 0 && env.SOURCE_CYCLE_IDENTITY_REFINE !== '1');
   let identityStatus = refineOff && !sourceIdentitySources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
@@ -147,7 +184,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, identityRefine: !refineOff, identity });
+      sourceIdentitySources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -608,7 +645,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       } catch { /* 첫 회차 또는 기록 없음 */ }
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+            // 상류 갱신 감시(독립 판독기): --watch-sync 를 줄 때만(기본 꺼짐). 창(분)은 SOURCE_CYCLE_IANCAR_WATCH_MIN(기본 20, 1~30) — 예: :50 에 시작해 :10 까지.
+            ...(args.includes('--watch-sync') && args.includes('--only-when-synced') && plugin.family === 'IANCAR'
+              ? { syncWatch: { windowMs: Math.min(30, Math.max(1, Number(env.SOURCE_CYCLE_IANCAR_WATCH_MIN ?? '20') || 20)) * 60_000 } } : {}) });
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {

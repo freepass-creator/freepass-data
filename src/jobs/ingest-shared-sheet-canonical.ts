@@ -232,7 +232,14 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
             maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
+          // The operational-refresh apply mode owns supplier status, source facts and existing period rent only (see
+          // reviewed-source-change.ts «limited to known supplier status and existing period rent»). Any other reviewable change
+          // (odometer, deposit, mileage limit) is rejected there and, as the first CHANGE, aborted the whole run with
+          // CANONICAL_COMMAND_REJECTED. Hold that one vehicle at plan time instead; it stays under its own reviewed command.
+          const unsupported = fence ? [...new Set(review.diffs.filter(x => x.classification === 'REVIEWABLE' &&
+            !OPERATIONAL_REFRESH_ALLOWED_REASONS.has(x.reasonCode)).map(x => x.reasonCode))].sort() : [];
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
+          else if (unsupported.length) reasons.push(...unsupported.map(code => `OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:${code}`));
           else {
             entry.action = 'CHANGE';
             entry.change = { ...base, bindingId, expectedBindingRevision: review.bindingRevision,
@@ -379,6 +386,9 @@ export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
 const PER_ENTRY_REJECTION_CODES: ReadonlySet<string> = new Set(
   ['REVIEWED_SOURCE_CHANGE_REJECTED', 'REVIEWED_SOURCE_CHANGE_CONFLICT', 'REVIEWED_SOURCE_CHANGE_BLOCKED',
     'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH']);
+/** Diff reason codes the operational-refresh apply mode accepts (must match assertOperationalRefresh in reviewed-source-change.ts). */
+const OPERATIONAL_REFRESH_ALLOWED_REASONS: ReadonlySet<string> = new Set(
+  ['SOURCE_EXPOSURE_CHANGE', 'SOURCE_ASSET_STATUS_CHANGE', 'SOURCE_VEHICLE_FACTS_CHANGE', 'SOURCE_MONTHLY_RENT_CHANGE']);
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
@@ -456,8 +466,18 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         !auditOfferEconomicsTerms(offer).invalidFacts.length) {
       for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
         const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
-        if (previous?.state === 'UNKNOWN' || previous?.state === 'NOT_APPLICABLE' ||
-            (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE'))
+        // The operational refresh owns status and changed rent only. A term whose rent did not change keeps its stored
+        // economics exactly (a later fee-policy version is applied by the separate economics recompute, not by this run),
+        // so the readback must compare it with the pre-run value, never with a fresh recompute under a newer policy.
+        // The apply step recomputes a dependent fee from the rent of the fee's reference term (referenceRentBasis.termKey),
+        // not from its own term, so «unchanged» must be judged on that same term or a changed reference rent would be mistaken
+        // for an unchanged one (reviewed-source-change.ts basisKey).
+        const basisKey = previous?.referenceRentBasis?.termKey ?? term.termKey;
+        const rentBefore = before.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentNow = c.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentUnchanged = rentBefore !== undefined && rentNow !== undefined && stableDigest(rentBefore) === stableDigest(rentNow);
+        if (previous && (rentUnchanged || previous.state === 'UNKNOWN' || previous.state === 'NOT_APPLICABLE' ||
+            (previous.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')))
           term[side] = structuredClone(previous);
       }
     }

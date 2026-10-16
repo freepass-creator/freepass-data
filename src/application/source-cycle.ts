@@ -264,7 +264,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
   // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
-  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
+  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC', 'VEHICLE_IDENTITY']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
+  // 사유 집계(진단 전용, 상한 이월 «전»): 이월로 계획에서 빠지는 항목은 이후 경고(VEHICLE_IDENTITY_REFINE 등)가 세지 못한다 —
+  // 정제 사유가 상한에 밀려 보이지 않는지 가리는 근거(2026-10-16 00:00 회차: 정제 0건이 «사유 없음»인지 «이월»인지 구분 불가). 쓰기·계획 내용은 바꾸지 않는다.
+  // 계획(plan.warnings)에 넣지 않는다: 계획 digest·재계획 비교에 들어가면 진단만으로 승인 계획이 달라진다. 계획 밖 보고 필드(reasonCensus)로만 돌려준다.
+  let reasonCensus: string | null = null;
+  {
+    const census = new Map<string, number>();
+    for (const e of plan.entries) for (const r of new Set(e.before?.rewriteReasons ?? [])) if (CAPPED_REASONS.has(r)) census.set(r, (census.get(r) ?? 0) + 1);
+    if (census.size) reasonCensus = `REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`;
+  }
   const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
   const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
@@ -286,6 +295,14 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     .sort((a, b) => Number(!!b.after.listable) - Number(!!a.after.listable) || sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   const overFill = fillEntries.slice(optionsCap);   // 채움 상한도 옵션 상한 설정(기본 100, 최대 400)을 따른다 — 첫 적용 때 여러 회차로 늘어지지 않게
   for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
+  // 정체성 정제(VEHICLE_IDENTITY): «양성 표식»을 받은 기존 문서만 정제한다(상한은 회차당 optionsCap, 키 순서). 가격 변경·재노출 등으로 이미 쓰는 문서도 표식이 없으면 정제하지 않아
+  // 상한을 우회하지 못한다. 옵션 전용 쓰기는 위 합산 예산이 먼저 이월한다. 정제 대상은 다음 회차에 사유가 그대로 남아 순서대로 처리된다(되풀이 아님: 정제되면 사유가 사라진다).
+  // 선정 전에 «실제 정제될 수 있는 공개 문서»로 제한한다(Codex #704 잔여): 하향·비노출·철회 문서는 쓰기에서 정제를 건너뛰므로 상한을 소모해 뒤쪽 정상 문서를 굶기면 안 된다.
+  const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.after.listable && (e.after.publication_withdrawal === null || e.after.publication_withdrawal === undefined)
+    && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
+    .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
+  if (refineEntries.length > optionsCap) plan.warnings.push(`VEHICLE_IDENTITY_DEFERRED:${refineEntries.length - optionsCap}:cap${optionsCap}`);
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
@@ -301,7 +318,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
-  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
+  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products), reasonCensus };
 }
 
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,
@@ -336,10 +353,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, rewriteReasons: _planReasons, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;

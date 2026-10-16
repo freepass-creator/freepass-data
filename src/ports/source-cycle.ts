@@ -15,6 +15,8 @@ export type CycleProduct = {
   /** 계획이 정한 «이 회차에 입구 매핑(제조사·모델·제원 채움)을 한다»(회차 상한 안, 사유가 있거나 신규 편입인 항목만). 이 표식이 없으면 쓰기가 일어나도 채움은 없다 —
    * 사유 없는 UPDATE·재노출 등에서 채움이 상한을 우회하지 못하게 하는 «양성» 표식이다(Codex #685 ③). */
   fillSourceIdentity?: boolean;
+  /** 계획이 정한 «이 회차에 정체성 정제(마스터 이름 채움)를 한다»(기존 문서, 회차 상한 안, VEHICLE_IDENTITY 사유 항목만 — Codex #704 잔여). 이 표식이 없으면 쓰기가 일어나도 기존 문서는 정제하지 않는다(신규 편입은 편입 상한이 따로 건다). */
+  refineIdentity?: boolean;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
@@ -32,7 +34,11 @@ export type VehicleIdentityRefinement = { maker: string; model: string; sub_mode
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
 export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
   /** 활성 차종 마스터에 있는 제조사 이름 목록(입구 매핑이 마스터에 없는 원천 표기를 maker 에 넣지 않게 하는 근거). 없으면 입구 매핑은 채우지 않는다. */
-  makers?: readonly string[] };
+  makers?: readonly string[];
+  /** 제조사별 마스터 «모델 이름 + 별칭» 목록(입구 매핑이 모델을 마스터에 있는 이름일 때만 쓰게 하는 근거, 차종 기준 한 장: 이름은 마스터에 있는 이름만, 괄호·세대·수식어 안 씀). 없으면 입구 매핑은 모델을 쓰지 않는다(fail-closed). */
+  models?: Readonly<Record<string, readonly string[]>>;
+  /** 제조사별 «별칭 → 정식 모델 이름». 원천 표기가 마스터에 등록된 별칭이면 «정식 이름»으로 바꿔 쓴다(별칭 문자열 자체는 쓰지 않는다 — Codex #706). */
+  modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>> };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {
