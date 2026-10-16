@@ -230,6 +230,8 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       capture.issues.find(i => /^[A-Z][A-Z0-9_]{2,63}$/.test(i)) ?? (capture.factScope !== 'FULL_FACTS' ? 'NOT_FULL_FACTS' : 'RECORD_COUNT_MISMATCH');
     return { observedAt: capture.syncedAt, synced_at: capture.syncedAt, complete: full,
       completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: heldReasons.length,
-      ...(heldReasons.length ? { heldReasons } : {}), ...(incompleteReason ? { incompleteReason } : {}) };
+      ...(heldReasons.length ? { heldReasons } : {}), ...(incompleteReason ? { incompleteReason } : {}),
+      // 상세·가용 캐시(#724)를 쓴 회차는 재사용 대수를 요약에 남긴다(운영 검증용 — 값 없음 = 캐시 꺼짐).
+      ...(capture.detailsCached !== undefined ? { notes: [`IANCAR_DETAIL_CACHED:${capture.detailsCached}`] } : {}) };
   }, clock, syncedAt);
 }
