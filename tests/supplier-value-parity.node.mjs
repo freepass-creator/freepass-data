@@ -38,3 +38,17 @@ test('원문 보존 항목은 글자 그대로만 match, 공백 차이는 형식
   assert.equal(judge(raw, 'AB', 'A B'), 'normalized');
   assert.equal(judge(raw, 'AB', 'AC'), 'mismatch');
 });
+
+test('빌린카 매핑에도 제조사·연료 검증이 연결되고, 복합 연료는 일반 연료군에 흡수되지 않는다(관문 2차 P1)', () => {
+  for (const key of ['aica', 'billincar']) {
+    const fm = FIELD_MAPS[key].fields;
+    assert.equal(fm.find(f => f.field.startsWith('제조사')).vk, 'maker', key);
+    assert.equal(fm.find(f => f.field.startsWith('연료')).vk, 'fuel', key);
+  }
+  const fuel = { kind: 'refined', vk: 'fuel' }, maker = { kind: 'refined', vk: 'maker' };
+  assert.equal(judge(fuel, '가솔린', '가솔린하이브리드'), 'mismatch');
+  assert.equal(judge(fuel, '가솔린하이브리드', '가솔린'), 'mismatch');
+  assert.equal(judge(fuel, '하이브리드', '가솔린하이브리드'), 'normalized');
+  assert.equal(judge(maker, '현대', '현대기아'), 'mismatch');
+  assert.equal(judge(maker, '현대자동차', '현대'), 'normalized');
+});

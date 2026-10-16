@@ -64,9 +64,9 @@ export const FIELD_MAPS = Object.freeze({
     textRaw('차명 원문(원문.차명)', '차명(세부모델+트림)', f => f['원문']?.['차명(세부모델+트림)'] ?? f['원문']?.['차명']),
     textRaw('옵션 원문(options)', '옵션', f => f.options),
     textRaw('주행거리(mileage)', '주행거리', f => f.mileage),
-    textRefined('제조사(maker)', '제조사', f => f.maker),
+    textRefined('제조사(maker)', '제조사', f => f.maker, 'maker'),
     textRefined('모델(model)', '모델명', f => f.model),
-    textRefined('연료(fuel_type)', '연료', f => f.fuel_type),
+    textRefined('연료(fuel_type)', '연료', f => f.fuel_type, 'fuel'),
     textRefined('외장색(ext_color)', '외부색상', f => f.ext_color),
     textRefined('내장색(int_color)', '내부색상', f => f.int_color),
     textRefined('분류(product_type)', '분류', f => f.product_type),
@@ -84,9 +84,15 @@ export const FIELD_MAPS = Object.freeze({
 const MAKER_GROUPS = [['현대','현대자동차','hyundai'], ['기아','기아자동차','kia'], ['제네시스','genesis'], ['쉐보레','쉐보레(한국gm)','한국gm','chevrolet'],
   ['르노','르노(삼성)','르노코리아','르노코리아(삼성)','르노삼성','삼성','renault'], ['kgm','kg모빌리티','kg모빌리티(쌍용)','쌍용','ssangyong']];
 const FUEL_GROUPS = [['가솔린','휘발유','gasoline','가솔린터보'], ['디젤','경유','diesel'], ['lpg','lpi','엘피지','lpe'], ['하이브리드','hev','hybrid','가솔린하이브리드','phev'], ['전기','ev','electric','전기차']];
-const groupOf = (groups, v) => { const k = squash(v); return groups.findIndex(g => g.some(x => squash(x) === k || k.includes(squash(x)) && squash(x).length >= 3)); };
+const groupOf = (groups, v, allowContain = false) => {
+  const k = squash(v);
+  const exact = groups.findIndex(g => g.some(x => squash(x) === k));
+  if (exact >= 0 || !allowContain) return exact;
+  const part = groups.map((g, i) => (g.some(x => squash(x).length >= 3 && k.includes(squash(x))) ? i : -1)).filter(i => i >= 0);
+  return part.length === 1 ? part[0] : -1;
+};
 const REFINE_CHECKS = {
-  maker: (a, b) => { const x = groupOf(MAKER_GROUPS, a), y = groupOf(MAKER_GROUPS, b); return x >= 0 && x === y; },
+  maker: (a, b) => { const x = groupOf(MAKER_GROUPS, a, true), y = groupOf(MAKER_GROUPS, b, true); return x >= 0 && x === y; },
   fuel: (a, b) => { const x = groupOf(FUEL_GROUPS, a), y = groupOf(FUEL_GROUPS, b); return x >= 0 && x === y; },
   contain: (a, b) => { const x = squash(a), y = squash(b); return x.length >= 2 && y.length >= 2 && (x.includes(y) || y.includes(x)); }
 };
