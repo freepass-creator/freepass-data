@@ -112,6 +112,16 @@ describe('RAW evidence and existing candidate governance', () => {
     const f = fixture(quote + '\n' + quote); const r = await extractStoredKakaoInformation(f.input, f);
     expect(r.candidates).toHaveLength(0); expect(r.rejected[0]?.reason).toBe('AI_QUOTE_UNGROUNDED_OR_AMBIGUOUS');
   });
+  it.each([
+    { quote: '112가3456 월100만원', plate: '12가3456' },
+    { quote: '12가3456 월100만원 / 345나6789 월120만원', plate: '12가3456' },
+    { quote: '가12가3456 월100만원', plate: '12가3456' },
+  ])('rejects partial or multiple vehicle identity in $quote', async row => {
+    const f = fixture(row.quote);
+    f.ai.extract.mockResolvedValue(reply({ candidates: [{ ...row, type: '가격', value: '100만원' }] }));
+    const r = await extractStoredKakaoInformation(f.input, f);
+    expect(r.candidates).toHaveLength(0); expect(r.rejected[0]?.reason).toBe('AI_PLATE_UNGROUNDED_OR_AMBIGUOUS');
+  });
   it('refuses a whole invalid model contract, preserving raw input', async () => {
     const f = fixture(); f.ai.extract.mockResolvedValue(reply({ candidates: [], approve: true }));
     await expect(extractStoredKakaoInformation(f.input, f)).rejects.toThrow('AI_CANDIDATE_OUTPUT_INVALID');

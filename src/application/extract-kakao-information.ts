@@ -71,7 +71,10 @@ export async function extractStoredKakaoInformation(input: {
     }
     const start = text.indexOf(row.quote);
     if (start < 0 || text.indexOf(row.quote, start + 1) !== -1) { rejected.push({ index, reason: 'AI_QUOTE_UNGROUNDED_OR_AMBIGUOUS' }); continue; }
-    if (row.plate !== null && (!isValidKakaoInfoPlate(row.plate) || !row.quote.includes(row.plate))) { rejected.push({ index, reason: 'AI_PLATE_UNGROUNDED' }); continue; }
+    const literalPlates = row.quote.match(/(?<![0-9가-힣])(?:[가-힣]{2})?\d{2,3}[가-힣]\d{4}(?![0-9가-힣])/gu) ?? [];
+    if (row.plate !== null && (!isValidKakaoInfoPlate(row.plate) || literalPlates.length !== 1 || literalPlates[0] !== row.plate)) {
+      rejected.push({ index, reason: 'AI_PLATE_UNGROUNDED_OR_AMBIGUOUS' }); continue;
+    }
     const checked = createKakaoInfoCandidate({ ...metadata, source: { ...metadata.source, excerpt: row.quote },
       type: row.type as KakaoInfoType, fields: { 항목: '원문 정보', 요약: row.quote, 값: row.value },
       ...(row.plate ? { vehicle: { plateUnverified: row.plate } } : {}),
