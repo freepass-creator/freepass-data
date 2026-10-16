@@ -433,8 +433,12 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         // The operational refresh owns status and changed rent only. A term whose rent did not change keeps its stored
         // economics exactly (a later fee-policy version is applied by the separate economics recompute, not by this run),
         // so the readback must compare it with the pre-run value, never with a fresh recompute under a newer policy.
-        const rentBefore = before.priceTerms.find(x => x.termKey === term.termKey)?.monthlyRent;
-        const rentNow = c.priceTerms.find(x => x.termKey === term.termKey)?.monthlyRent;
+        // The apply step recomputes a dependent fee from the rent of the fee's reference term (referenceRentBasis.termKey),
+        // not from its own term, so «unchanged» must be judged on that same term or a changed reference rent would be mistaken
+        // for an unchanged one (reviewed-source-change.ts basisKey).
+        const basisKey = previous?.referenceRentBasis?.termKey ?? term.termKey;
+        const rentBefore = before.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentNow = c.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
         const rentUnchanged = rentBefore !== undefined && rentNow !== undefined && stableDigest(rentBefore) === stableDigest(rentNow);
         if (previous && (rentUnchanged || previous.state === 'UNKNOWN' || previous.state === 'NOT_APPLICABLE' ||
             (previous.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')))
