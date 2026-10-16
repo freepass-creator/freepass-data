@@ -9,6 +9,7 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
 import type { KakaoQueueReadPort, KakaoQueueReceipt } from '../ports/kakao-archive.js';
 import { summarizeSupplierSources, selectKakaoPilotSuppliers, type SupplierSourceObservation } from '../domain/source-event.js';
 import { sharedSheetHeaders } from '../adapters/shared-sheet-source.js';
+export { extractStoredKakaoInformation } from './extract-kakao-information.js';
 
 /** Evidence only: these cells are not CatalogCandidate facts and do not approve amounts/specifications. */
 export function kakaoTableLineage(item: PreparedKakaoMessage): FieldLineageRecord[] {

@@ -231,6 +231,31 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-17 GPT·Claude 직접 API 공급사 원문 정보 추출
+
+- 사용자 선택: 프리패스 데이터 정보 추출. 기준 main `b7bc8d87a41be8f427fe2e87d274435c1a0a6e8e`, 가지 `work/freepass-data/ai-source-extraction-20261017`, Task `C1016-bacfb994`. 기존 dirty/Claude/PC 연결 보존.
+- 호출 경로: 기존 `application/kakao-source-intake`에서 export한 `extractStoredKakaoInformation` → provider port → `infra/ai-information-extraction`의 직접 HTTPS. 실제 앱은 AI CLI·SSH·PC 공용 명령 실행기에 의존하지 않는다. 완료 RAW 한 건의 원문·fingerprint·촬영확인·신뢰 호출자의 상대방 확인을 검증하고 민감정보/키 포함 문장은 전송 전에 차단한다. 원문 text만 전송하며 공급사·채팅방·발신자·첨부파일 메타데이터는 보내지 않는다.
+- 기존 KakaoInfoCandidate 계약과 원문 인용/값 포함/유일 인용/문자 오프셋을 검증한다. confidence=0, needsSupplierConfirm=true, 번호판은 plateUnverified만, 자동승격=false. REVIEW_REQUIRED 후보 반환이며 RAW·Canonical·Drive·시트 쓰기=0. 실제 영업 상태/금액 확정은 기존 검토·승인 경로의 별도 작업이다. 인용 일치가 의미의 정확성을 보장하지 않으므로 조건·부정문 해석은 검토자가 확인한다.
+- 서버 조합 예시(기존 인가된 SourceIngestionStore의 getRun/listRaw를 주입):
+
+  ```ts
+  import { extractStoredKakaoInformation } from './application/kakao-source-intake.js';
+  import { informationExtractionAiFromEnv } from './infra/ai-information-extraction.js';
+  const result = await extractStoredKakaoInformation({
+    runId, rawRecordId,
+    dataClassification: 'SUPPLIER_NON_SENSITIVE', requestId,
+  }, { source: approvedSourceReader, context: verifiedCaptureContextReader,
+    ai: informationExtractionAiFromEnv('openai') });
+  // Claude 선택: informationExtractionAiFromEnv('claude')
+  ```
+
+- 원문 확인 포트 `context.getVerifiedMessageContext(rawRecordId)`는 기존 신뢰 서버의 촬영·방/메시지·발신자 확인 근거에서 조회한다(새 저장소/등록부를 만들지 않는다). 반환한 RAW ID/fingerprint/공급사/방 ID/메시지 ID/발신자 키를 저장 RAW와 모두 비교한 뒤, 확인된 roomCode/msgNo/상대방 정보만 후보에 붙인다. HTTP/JSON에서 준 roomCode/msgNo/senderVerified는 사용하지 않는다. 확인 포트가 없거나 메시지 ID/발신자 키/매핑이 미확인인 옛 RAW는 호출 전 HOLD. 실제 운영 확인 포트 구현·인가 연결은 아직 미적용이다.
+- 활성화는 서버의 `FREEPASS_DATA_AI_EXTRACTION_ENABLED=1`과 해당 `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` 주입이 필요하다. Claude user key에는 `ANTHROPIC_WORKSPACE_ID`도 주입한다. 키는 소스/브라우저/로그에 넣지 않는다. 모델은 `FREEPASS_AI_OPENAI_MODEL`/`FREEPASS_AI_CLAUDE_MODEL`로 지정하며 기본값은 각각 gpt-6.1-sol/claude-sonnet-5-5. 한 호출은 한 HTTP 요청, timeout 25초, 출력 상한1536 tokens, 자동 재시도/다른 provider 우회 없음. requestId는 상관 식별자이며 공급사 중복방지 약속이 아니다. 호출자에서 중복 업무를 관리하고 UNKNOWN 결과를 무조건 다시 보내지 않는다.
+- 실측: 가상 RAW 문장 `99허0000 월대여료65만원, 보증금0원, 36개월.`로 동일 Data 컴파일 코드를 각 키 보유 PC에서 실행했다. GPT `resp_0bfecdce7d70fd7e016ad2b79efc7c87d0bee84b16c1b10bda`(351/257 tokens), Claude `msg_011Cg6p1yruPKmqGPAi6Q7Nj`(925/758 tokens), 각 후보3/원문 오프셋 대사 PASS/쓰기0. 최초 Claude forced tool 요청은 HTTP400으로 거절됐고 결과를 보존했다. Sonnet5.5 공식 migration 규격대로 auto tool choice로 수정한 별도 v2 요청이 성공했으며, 도구 출력이 없으면 실패로 닫는다. 키 이동·운영 원문 전송 없음.
+- 검증: 초기 build 및 관련100시험 PASS, tool choice 수정 뒤 추출15시험 재검증 PASS. 1번 커맨드의 정적 검토에서 원문-방/메시지/발신자 결합 보완 필요를 받아 위의 확인 포트를 추가하고、불일치6항목/미확인/호출자 메타데이터 주입 차단을 포함한 관련107시험/build/arch/data-access-boundary PASS. 두 실제 응답에서 보존한 추출 사실은 최종 확인 포트 경계에서도 각3건/쓰기0으로 오프라인 재검증했다(추가 API호출0, 새 API응답이라고 세지 않음). 전체 `npm run check`는 초기 source에서4097 PASS/19 SKIP, 4실패+1suite오류: Git Bash jq 미설치(runtime-policy 1/runtime-baseline 2), 병렬 runtime verification timeout1, exposure-apply Vitest 구문 오류1. 해당 파일들은 기준 main과 동일하다. runtime verification 단독 실행은6 PASS/1 SKIP, exposure-apply 자체 node --check PASS; 전체 GREEN으로 표현하지 않는다.
+- 독립 검토: 기존 PC1 메인 Claude의 회신 `Mmvbmgezz-03513c` 수령(조건부 승인, 운영 활성화 전 A/B/C). A의 Bearer 인증은 위 실제 Claude 응답으로 성공 확인; B의 번호판 부분 일치/복수 번호판은 문자 경계·단일 번호판 검사와 반례3개로 차단. E의 신뢰 원문 맥락은 위 확인 포트로 보강했다. 최종 build/관련110시험 PASS, 두 실제 응답의 추출 사실 최종 오프라인 재검증 PASS/추가호출0. 최종 수정본의 무조건 승인으로 확대하지 않는다.
+- 남은 HOLD: 운영 서버 secret 주입·실제 수집업무 호출 지점의 인가/비용/중복처리 연결·운영 배포·실제 공급사 원문 검토 및 승인. Claude 필수 C: sourceFingerprint+provider+model+지시문 버전 결과 캐시, 영속 건/일/월 예산 예약과 사용량·과금된 실패/UNKNOWN 기록을 기존 운영 담당권/원장에 연결하기 전에는 자동 유료 호출을 활성화하지 않는다. 이 앱 라이브러리는 그 영속 예산·캐시 구현을 제공한다고 주장하지 않는다. 새 원장/상시 작업은 만들지 않았다. 읽기 전용 consumer API, 기존 수집 스케줄/작성 주체는 변경하지 않았다.
+
 ### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
 
 - 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.
