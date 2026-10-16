@@ -8,7 +8,7 @@ import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentit
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
-import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
+import { reviewSourceChange, applyReviewedSourceChange, isSaneOperationalOdometerChange } from '../application/reviewed-source-change.js';
 import { auditOfferEconomicsTerms, precomputeOfferEconomics } from '../application/resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from '../application/kakao-catalog-reference.js';
 import { decideSourceHead, type SourceRun, type SourceHead } from '../domain/source.js';
@@ -236,8 +236,10 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           // reviewed-source-change.ts «limited to known supplier status and existing period rent»). Any other reviewable change
           // (odometer, deposit, mileage limit) is rejected there and, as the first CHANGE, aborted the whole run with
           // CANONICAL_COMMAND_REJECTED. Hold that one vehicle at plan time instead; it stays under its own reviewed command.
+          // 주행거리는 감소·과대 증가(이상치)가 아니면 운영 갱신이 반영한다(isSaneOperationalOdometerChange).
           const unsupported = fence ? [...new Set(review.diffs.filter(x => x.classification === 'REVIEWABLE' &&
-            !OPERATIONAL_REFRESH_ALLOWED_REASONS.has(x.reasonCode)).map(x => x.reasonCode))].sort() : [];
+            !OPERATIONAL_REFRESH_ALLOWED_REASONS.has(x.reasonCode) &&
+            !(x.reasonCode === 'SOURCE_ODOMETER_CHANGE' && isSaneOperationalOdometerChange(x.before, x.after))).map(x => x.reasonCode))].sort() : [];
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
           else if (unsupported.length) reasons.push(...unsupported.map(code => `OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:${code}`));
           else {
