@@ -66,7 +66,7 @@ describe('IANCAR clock diagnostics use the existing state/heartbeat path only', 
     const { ctrl } = control(), m = memory();
     const previousComplete = '2026-10-11T23:50:00.000Z';
     await ctrl.save('RP031', { ...emptyCycleState(), failures: 2, lastCompleteAt: previousComplete, lastSyncedAt: previousComplete });
-    const list = vi.spyOn(m.commands, 'list'), storeRaw = vi.fn();
+    const list = vi.spyOn(m.commands, 'list'), storeRaw = vi.fn(async () => ({ stored: 0, absentMarked: 0 }));
     m.commands.storeRaw = storeRaw;
     const p = iancarCyclePlugin(0.5, async () => {
       throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT', undefined, undefined, undefined, diagnostic);
@@ -79,9 +79,13 @@ describe('IANCAR clock diagnostics use the existing state/heartbeat path only', 
     expect(list).not.toHaveBeenCalled();
     expect(storeRaw).not.toHaveBeenCalled();
     expect(m.order).toEqual([]);
-    p.read = async () => ({ raw: capture([], ['ONE_FULL_FACTS']), complete: true, attemptedAt: time, observedAt: time, error: null });
-    await runSourceCycle(p, m.commands, ctrl, { now: () => now });
-    expect((await ctrl.load('RP031')).lastReadClockDiagnostic).toBeUndefined();
+    const nextTime = new Date(now + 60_000).toISOString();
+    p.read = async () => ({ raw: { ...capture([], ['ONE_FULL_FACTS']), observedAt: nextTime },
+      complete: true, attemptedAt: nextTime, observedAt: nextTime, error: null });
+    await runSourceCycle(p, m.commands, ctrl, { now: () => now + 60_000 });
+    expect(await ctrl.load('RP031')).toMatchObject({ lastReadClockDiagnostic: diagnostic, error: null,
+      lastCompleteAt: nextTime, failures: 0 });
+    expect((await ctrl.load('RP031')).lastReadClockDiagnostic!.checkedAt).toBe(time);
   });
 
   it('an arbitrary error cannot inject a raw body into diagnostic state', async () => {

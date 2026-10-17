@@ -87,7 +87,7 @@ export type CyclePlan = {
   warnings: string[]; unassignedPlateCount: number;
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
-  /** Last actual provider read, persisted by the existing state/heartbeat path. No business payloads. */
+  /** Most recent clock diagnosis, retained on success. checkedAt is history, never the current health status. */
   lastReadClockDiagnostic?: SourceClockDiagnostic;
   observationOnlyCount?: number;
   /** 읽기 단계 보류 사유 코드별 건수(대수 대조에서 «왜 못 들어왔나» 를 가르는 근거). 번호·원문은 담지 않는다. */
