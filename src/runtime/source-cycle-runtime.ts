@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { appendFile, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken, invalidateGcloudUserToken } from '../infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, decodeFields, productRecord, gcloudUserToken } from '../infra/source-cycle-firestore.js';
 import { resolveGwsBin } from '../infra/gws-bin.js';
 import { readSheetsUrl } from '../infra/shared-sheet-capture-reader.js';
 import { judgeSheetCount, parseSheetCountState, SHEET_SHRINK_RATIO } from '../adapters/sheet-count-guard.js';
@@ -210,7 +210,6 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
-    if (authenticated && response.status === 401) invalidateGcloudUserToken();
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };

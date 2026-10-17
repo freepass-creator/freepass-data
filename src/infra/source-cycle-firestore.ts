@@ -1,5 +1,5 @@
 import supplierSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -39,78 +39,14 @@ export function encodeValue(v: any): any {
   throw new Error('FIRESTORE_VALUE_INVALID');
 }
 export const encodeFields = (fields: Fields): Fields => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, encodeValue(v)]));
-/** Same provider/permissions; bounded process-memory reuse reduces CLI execution exposure.
- * Cache age is not token lifetime. A 401 still fails closed, without replaying a write. */
-export function createGcloudTokenProvider(options: { load: () => Promise<string>; context: () => Promise<string | null>; now?: () => number }) {
-  const now = options.now ?? Date.now;
-  let epoch = 0, cached: { token: string; context: string; loadedAt: number } | null = null;
-  let pending: { context: string; epoch: number; promise: Promise<string> } | null = null;
-  const counts = { loads: 0, hits: 0, shared: 0, failures: 0, invalidations: 0 };
-  const invalidate = () => { epoch++; cached = null; pending = null; counts.invalidations++; };
-  const load = async () => {
-    counts.loads++;
-    try { const token = await options.load(); if (!token || /\s/.test(token)) throw Error('GCLOUD_TOKEN_REQUIRED'); return token; }
-    catch (error) { counts.failures++; const message = error instanceof Error ? error.message : '';
-      throw Error(['GCLOUD_TOKEN_REQUIRED','GCLOUD_TOKEN_TIMEOUT','GCLOUD_TOKEN_PROCESS_FAILED'].includes(message) ? message : 'GCLOUD_TOKEN_LOAD_FAILED'); }
-  };
-  const get = async (): Promise<string> => {
-    const context = await options.context();
-    if (!context) { invalidate(); return load(); } // Unknown context never shares or caches credentials.
-    const age = cached ? now() - cached.loadedAt : Infinity;
-    if (cached && cached.context === context && age >= 0 && age < 30_000) {
-      const token = cached.token, currentEpoch = epoch;
-      if (await options.context() !== context || currentEpoch !== epoch) { invalidate(); throw Error('GCLOUD_TOKEN_CONTEXT_CHANGED'); }
-      counts.hits++; return token;
-    }
-    cached = null;
-    if (!pending || pending.context !== context) {
-      const currentEpoch = ++epoch, loadedAt = now();
-      const promise = load().then(async token => {
-        if (await options.context() !== context || currentEpoch !== epoch) throw Error('GCLOUD_TOKEN_CONTEXT_CHANGED');
-        cached = { token, context, loadedAt }; return token;
-      });
-      pending = { context, epoch: currentEpoch, promise };
-    } else counts.shared++;
-    const current = pending;
-    try {
-      const token = await current.promise;
-      // Every waiter rechecks, including a configuration change after the loader completed.
-      if (await options.context() !== context || current.epoch !== epoch) throw Error('GCLOUD_TOKEN_CONTEXT_CHANGED');
-      return token;
-    } catch (error) { if (current.epoch === epoch) invalidate(); throw error; }
-    finally { if (pending === current) pending = null; }
-  };
-  return Object.assign(get, { invalidate, snapshot: () => ({ ...counts,
-    cachedAgeMs: cached ? Math.max(0, now() - cached.loadedAt) : null }) });
+export async function gcloudUserToken(): Promise<string> {
+  const { stdout } = await promisify(execFile)(process.platform === 'win32' ? 'powershell.exe' : 'gcloud',
+    process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', '& gcloud.cmd auth print-access-token; exit $LASTEXITCODE']
+      : ['auth', 'print-access-token'], { windowsHide: true, timeout: 30_000 });
+  const token = stdout.trim();
+  if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_REQUIRED');
+  return token;
 }
-
-async function gcloudContext(): Promise<string | null> {
-  const env = process.env, root = env.CLOUDSDK_CONFIG || (env.APPDATA ? join(env.APPDATA, 'gcloud') : env.HOME ? join(env.HOME, '.config', 'gcloud') : '');
-  if (!root) return null;
-  try {
-    const active = env.CLOUDSDK_ACTIVE_CONFIG_NAME || (await readFile(join(root, 'active_config'), 'utf8')).trim();
-    if (!/^[A-Za-z0-9_-]+$/.test(active)) return null;
-    const configuration = await readFile(join(root, 'configurations', `config_${active}`), 'utf8');
-    const credentials = await stat(join(root, 'credentials.db'));
-    // Hash only in memory; no account, path, config or credential bytes enter diagnostics.
-    return stableDigest({ root, active, configuration, credentials: [credentials.mtimeMs, credentials.size],
-      env: Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith('CLOUDSDK_') || key === 'GOOGLE_APPLICATION_CREDENTIALS').sort(([a],[b])=>a.localeCompare(b))) });
-  } catch { return null; }
-}
-const tokenProvider = createGcloudTokenProvider({ context: gcloudContext, load: async () => {
-  try {
-    const { stdout } = await promisify(execFile)(process.platform === 'win32' ? 'powershell.exe' : 'gcloud',
-      process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', '& gcloud.cmd auth print-access-token; exit $LASTEXITCODE']
-        : ['auth', 'print-access-token'], { windowsHide: true, timeout: 30_000, encoding: 'utf8' });
-    return stdout.trim();
-  } catch (error) {
-    const failure = error as { killed?: boolean; code?: string; signal?: string };
-    throw Error(failure.killed || failure.code === 'ETIMEDOUT' ? 'GCLOUD_TOKEN_TIMEOUT' : 'GCLOUD_TOKEN_PROCESS_FAILED');
-  }
-} });
-export const gcloudUserToken = () => tokenProvider();
-export const invalidateGcloudUserToken = () => tokenProvider.invalidate();
-export const gcloudTokenDiagnostics = () => tokenProvider.snapshot();
 /** 가격 맵 정규화: null·undefined·키 누락을 같게 보고(해당 키 제거) 키를 정렬한다. digest 계산·비교·되읽기 대조 공통 기준. */
 export function normalizePrice(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizePrice);
@@ -565,7 +501,6 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       headers: { authorization: `Bearer ${await (options.token ?? gcloudUserToken)()}`, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     if (response.status === 404 && method === 'GET') return null;
-    if (response.status === 401 && (!options.token || options.token === gcloudUserToken)) invalidateGcloudUserToken();
     if (!response.ok) throw new Error(response.status === 409 || response.status === 412 ? 'CAS_CONFLICT' : 'FIRESTORE_REQUEST_FAILED');
     return response.json();
   };

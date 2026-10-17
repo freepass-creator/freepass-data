@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, readFile, writeFile, appendFile } from 'node:fs/p
 import { assessFreshness } from '../src/application/source-freshness.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, statusKindOf, rawTitleBackfillFields, priceDigest, createGcloudTokenProvider } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, statusKindOf, rawTitleBackfillFields, priceDigest } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -15,46 +15,6 @@ import type { CycleProduct } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 const time = '2026-10-13T00:00:00.000Z', now = Date.parse(time), source = 'SYNTHETIC';
-describe('same-context gcloud process-memory reuse', () => {
-  it('shares concurrent loads, reuses for less than30s, and exposes no token/context in diagnostics', async () => {
-    let clock=0; const load=vi.fn(async()=> 'fixture-token');
-    const provider=createGcloudTokenProvider({load,context:async()=> 'fixture-context',now:()=>clock});
-    expect(await Promise.all([provider(),provider(),provider()])).toEqual(['fixture-token','fixture-token','fixture-token']);
-    expect(load).toHaveBeenCalledTimes(1);
-    clock=29_999; await provider(); expect(load).toHaveBeenCalledTimes(1);
-    clock=30_000; await provider(); expect(load).toHaveBeenCalledTimes(2);
-    expect(provider.snapshot()).toMatchObject({loads:2,hits:1,shared:2,failures:0});
-    expect(JSON.stringify(provider.snapshot())).not.toMatch(/fixture-token|fixture-context/);
-  });
-  it('refreshes on context change and explicit401 invalidation without replaying any request', async () => {
-    let context='a';const load=vi.fn(async()=> 'fixture-token');
-    const provider=createGcloudTokenProvider({load,context:async()=>context});
-    await provider();context='b';await provider();provider.invalidate();await provider();
-    expect(load).toHaveBeenCalledTimes(3);
-  });
-  it('does not cache failed or invalid token loads and redacts underlying exception text', async () => {
-    const load=vi.fn().mockRejectedValueOnce(Error('fixture-secret')).mockResolvedValueOnce('two tokens').mockResolvedValue('fixture-token');
-    const provider=createGcloudTokenProvider({load,context:async()=> 'a'});
-    await expect(provider()).rejects.toThrow('GCLOUD_TOKEN_LOAD_FAILED');
-    await expect(provider()).rejects.toThrow('GCLOUD_TOKEN_REQUIRED');
-    await provider();expect(load).toHaveBeenCalledTimes(3);expect(provider.snapshot().failures).toBe(2);
-  });
-  it('rejects mid-load and per-waiter context changes', async () => {
-    let context='a';let release!:(value:string)=>void;
-    const provider=createGcloudTokenProvider({load:()=>new Promise<string>(r=>{release=r;}),context:async()=>context});
-    const result=provider();await new Promise(r=>setTimeout(r,0));context='b';release('fixture-token');
-    await expect(result).rejects.toThrow('GCLOUD_TOKEN_CONTEXT_CHANGED');
-    const contexts=vi.fn().mockResolvedValueOnce('a').mockResolvedValueOnce('a').mockResolvedValueOnce('changed');
-    const waiter=createGcloudTokenProvider({load:async()=> 'fixture-token',context:contexts});
-    await expect(waiter()).rejects.toThrow('GCLOUD_TOKEN_CONTEXT_CHANGED');
-  });
-  it('never shares or caches an unknown credential context and rejects a backwards cache clock', async () => {
-    const load=vi.fn(async()=> 'fixture-token');const uncached=createGcloudTokenProvider({load,context:async()=>null});
-    await Promise.all([uncached(),uncached()]);expect(load).toHaveBeenCalledTimes(2);
-    let clock=10;const provider=createGcloudTokenProvider({load,context:async()=> 'a',now:()=>clock});
-    await provider();clock=0;await provider();expect(load).toHaveBeenCalledTimes(4);
-  });
-});
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const directory = async () => { const dir = await mkdtemp(join(tmpdir(), 'source-cycle-runtime-')); dirs.push(dir); return dir; };
