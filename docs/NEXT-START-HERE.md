@@ -231,6 +231,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-17 Ray EV migration HOLD 한 건 정정 후보 — C1017-c3cf7649
+
+- 목적/정본: 최신 main d7e64014 기반, 기존 PR698의 11대 범위와 독립된 정확 한 건 후보다. 현재 stored 세부모델 더 뉴 레이 → 기존 활성 마스터 더 기아 레이 EV TAM 한 칸만 검토하며 에어·전기·2026·4인승과 원문·가격·옵션·사진·상태·모든 보호 표식을 보존한다. 실제 ID와 before/source/master digest는 Git 밖 비공개 승인 미리보기에만 있다. 기존 ERP4 d11d0ccb migration은 과거 확정 문서의 atom block 위반 때 확정=false/legacy_confirmed=true/HOLD로 보존했다. 해당 상품 audit 0건은 후속 사람 입력이 없다는 증거가 아니다.
+- 변경: 기존 applyVehicleNameReferenceRepair 안에서 이 incident의 단일 sub_model delta만 검증한다. 일반 legacy/human 보호 기본값은 유지한다. 계획 전체 승인 digest 외에도 호스트가 기존 USER 결정을 읽는 trusted reader가 필수이며 이 모듈은 승인 영수증을 발급하지 않는다. USER·동일 참조·상품 ID hash·caseDigest·행동·승인 시각/만료를 두 번 검증한다. 원본 문서와 source_raw/마스터/트림의 전체 digest·나노초 updateTime은 백업 전과 실제 transaction 안에서 재대조한다. 새 사람 표식·잠금·원천/마스터 변경은 거절한다.
+- 원복: 동일 writer를 재사용하며 APPLY/ROLLBACK 모두 상품 update mask는 sub_model 한 칸뿐이다. 적용 되읽기에서 얻은 실제 digest/updateTime을 역방향 계획에 묶고 같은 USER 권한이 ROLLBACK도 허용할 때만 원복한다. 적용 뒤 다른 칸·updateTime이 하나라도 달라지면 원복을 거부한다. 원문·기존 migration 표식 삭제/전체 상품 덮기/새 writer/운영 schema·IAM 변경은 없다.
+- 검증: 기존 fake Firestore 99 PASS + 계획 validator 19 PASS = 관련 118 PASS, tsc/build PASS. 합성 USER reader만 시험에 사용했다. 08:07:37Z(17:07 KST) 실제 read-only transaction의 상품·원천·master pair를 SDK Timestamp와 동일한 나노초 보존 표현으로 봉인해 pure snapshot assertion PASS, 사업 데이터 쓰기 0. 이전 REST-decoded string digest 미리보기는 참고 증거일 뿐 적용 계획으로 사용하지 않는다.
+- 남음/next_start_here: CLI는 trusted USER reader가 없으면 이 후보를 거절한다. 실제 운영 승인 참조 reader 배선·독립 exact code 검토·현재 binding 재조회/사람의 정확 한 행 승인·실DB backup/CAS/readback/ERP5 효과 확인 전 applyReady가 아니다. 비공개 C1017-c3cf7649-ray-approval-preview-v2-private.json은 미승인 후보이며 PENDING_USER_DECISION을 실제 승인으로 바꾸어 해석하지 않는다. 운영 DB/Sheet/runtime 변경 0, PR698 11대는 변경하지 않는다.
+
+
 ### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
 
 - 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.

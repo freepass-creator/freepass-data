@@ -1,6 +1,8 @@
 import { compactFirestoreDocumentIdPart } from '../shared/stable-digest.js';
 
 export const FIRESTORE_COLLECTIONS = Object.freeze({
+  // Existing cycle evidence, read only for reviewed repairs; not the new ingestion raw_records contract.
+  legacySourceCycle: Object.freeze({ raw: 'source_raw' }),
   catalog: Object.freeze({
     vehicleModels: 'catalog_vehicle_models',
     vehicleAssets: 'catalog_vehicle_assets',

@@ -7,6 +7,7 @@ import type { AuditEvent } from '../domain/catalog.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { rawKeyOf } from '../domain/source-raw.js';
 
 export type VehicleNameRepairItem = {
   id: string;
@@ -43,6 +44,8 @@ export type ProductSourceCorrectionItem = {
 
 export type VehicleNameRepairPlan = {
   sourceDigest: string;
+  /** One reviewed migration incident; never an override for legacy/human values. */
+  migrationCase?: MigrationCaseBinding;
   masterRepairs: VehicleNameRepairItem[];
   productRepairs: VehicleNameRepairItem[];
   /** products.maker/model/sub_model repaired together after matching an active vehicle_master identity. */
@@ -80,6 +83,93 @@ export type VehicleNameRepairPlan = {
   /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
   trimCreates?: VehicleMasterDocCreate[];
 };
+
+type ExactUpdateTime = { seconds: number; nanoseconds: number };
+type FrozenMigrationDocument = { id: string; digest: string; updateTime: ExactUpdateTime };
+export type MigrationCaseBinding = {
+  caseId: 'C1017-c3cf7649:ray-ev:1'; direction: 'APPLY' | 'ROLLBACK'; approvalReference: string;
+  originalProductDigest: string; originalProductUpdateTime: ExactUpdateTime;
+  expectedProductDigest: string; expectedProductUpdateTime: ExactUpdateTime;
+  sourceRaw: FrozenMigrationDocument; master: FrozenMigrationDocument; trim: FrozenMigrationDocument;
+};
+export type MigrationApprovalReader = (reference: string) => Promise<{
+  reference: string; actorKind: 'USER'; status: 'APPROVED'; caseDigest: string; productIdDigest: string;
+  actions: Array<'APPLY' | 'ROLLBACK'>; approvedAt: string; expiresAt: string;
+} | null>;
+type MigrationSnapshot = { exists: boolean; updateTime?: unknown; data(): Record<string, unknown> | undefined };
+const MIGRATION_FROM = { maker: '기아', model: '레이', sub_model: '더 뉴 레이' };
+const MIGRATION_TO = { maker: '기아', model: '레이', sub_model: '더 기아 레이 EV TAM' };
+const exactStamp = (value: unknown): ExactUpdateTime => {
+  const v = value as ExactUpdateTime | undefined;
+  if (!v || !Number.isSafeInteger(v.seconds) || !Number.isInteger(v.nanoseconds) || v.nanoseconds < 0 || v.nanoseconds >= 1e9)
+    throw new Error('migration exact updateTime required');
+  return { seconds: v.seconds, nanoseconds: v.nanoseconds };
+};
+export function migrationCaseDigest(plan: VehicleNameRepairPlan): string {
+  const b = plan.migrationCase!;
+  return stableDigest({ caseId: b.caseId, productId: plan.productIdentityRepairs?.[0]?.id,
+    originalProductDigest: b.originalProductDigest, originalProductUpdateTime: b.originalProductUpdateTime,
+    sourceRaw: b.sourceRaw, master: b.master, trim: b.trim, from: MIGRATION_FROM, to: MIGRATION_TO });
+}
+function assertMigrationPlan(plan: VehicleNameRepairPlan) {
+  const b = plan.migrationCase;
+  if (!b) return;
+  if (b.caseId !== 'C1017-c3cf7649:ray-ev:1' || !['APPLY','ROLLBACK'].includes(b.direction)
+    || typeof b.approvalReference !== 'string' || !b.approvalReference.trim()
+    || plan.productIdentityRepairs?.length !== 1
+    || Object.entries(plan).some(([k,v]) => Array.isArray(v) && k !== 'productIdentityRepairs' && v.length !== 0))
+    throw new Error('migration plan must contain exactly the single reviewed identity case');
+  const item = plan.productIdentityRepairs[0]!;
+  const from = b.direction === 'APPLY' ? MIGRATION_FROM : MIGRATION_TO;
+  const to = b.direction === 'APPLY' ? MIGRATION_TO : MIGRATION_FROM;
+  if (item.level !== undefined || stableDigest(item.from) !== stableDigest(from) || stableDigest(item.to) !== stableDigest(to))
+    throw new Error('migration case permits only its exact sub_model delta');
+  for (const digest of [b.originalProductDigest,b.expectedProductDigest,b.sourceRaw?.digest,b.master?.digest,b.trim?.digest])
+    if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('migration snapshot digest required');
+  for (const stamp of [b.originalProductUpdateTime,b.expectedProductUpdateTime,b.sourceRaw.updateTime,b.master.updateTime,b.trim.updateTime]) exactStamp(stamp);
+  for (const doc of [b.sourceRaw,b.master,b.trim]) if (!isDocId(doc.id)) throw new Error('migration document id invalid');
+  if (b.direction === 'APPLY' && (b.expectedProductDigest !== b.originalProductDigest
+    || stableDigest(b.expectedProductUpdateTime) !== stableDigest(b.originalProductUpdateTime))) throw new Error('migration original snapshot mismatch');
+}
+async function assertMigrationApproval(plan: VehicleNameRepairPlan, read?: MigrationApprovalReader) {
+  if (!plan.migrationCase) return;
+  if (!read) throw new Error('migration canonical USER approval reader required');
+  // The host reads an existing human decision from its trusted authority. This module issues no approval.
+  const b = plan.migrationCase, a = await read(b.approvalReference), now = Date.now();
+  if (!a || a.reference !== b.approvalReference || a.actorKind !== 'USER' || a.status !== 'APPROVED'
+    || a.caseDigest !== migrationCaseDigest(plan) || a.productIdDigest !== stableDigest(plan.productIdentityRepairs![0]!.id)
+    || !Array.isArray(a.actions) || !a.actions.includes(b.direction)
+    || !Number.isFinite(Date.parse(a.approvedAt)) || !Number.isFinite(Date.parse(a.expiresAt))
+    || Date.parse(a.approvedAt) > now || Date.parse(a.expiresAt) <= now)
+    throw new Error('migration exact USER approval missing, stale or mismatched');
+}
+export function assertMigrationCaseSnapshot(plan: VehicleNameRepairPlan, product: MigrationSnapshot, evidence: MigrationSnapshot[]) {
+  assertMigrationPlan(plan);
+  const b = plan.migrationCase!; const data = product.data();
+  if (!product.exists || !data || stableDigest(data) !== b.expectedProductDigest
+    || stableDigest(exactStamp(product.updateTime)) !== stableDigest(b.expectedProductUpdateTime)) throw new Error('migration product snapshot changed');
+  const original = { ...data, sub_model: MIGRATION_FROM.sub_model };
+  if (stableDigest(original) !== b.originalProductDigest || data.provider_company_code !== 'RP031'
+    || data.legacy_confirmed !== true || data['확정'] !== false || data.ssot_status !== 'HOLD'
+    || data.ssot_migrated_from !== 'freepasserp3'
+    || stableDigest(data.ssot_hold_reasons) !== stableDigest(['IDENT:세부모델 「더 뉴 레이」이 차종마스터에 없다'])
+    || hasHumanOrConfirmedMarker({ ...data, legacy_confirmed: false }) || productWriteBlock(data)) throw new Error('migration state is not the exact held case');
+  [b.sourceRaw,b.master,b.trim].forEach((expected,i) => {
+    const s = evidence[i];
+    if (!s?.exists || stableDigest(s.data()) !== expected.digest
+      || stableDigest(exactStamp(s.updateTime)) !== stableDigest(expected.updateTime)) throw new Error('migration source/master evidence changed');
+  });
+  const raw = evidence[0]!.data()!, master = evidence[1]!.data()!, trim = evidence[2]!.data()!;
+  if (raw.source_id !== 'RP031' || master.retired === true || trim.retired === true
+    || !Object.entries(MIGRATION_TO).every(([k,v]) => master[k] === v)
+    || trim.master_id !== b.master.id || trim.trim !== '에어' || data.trim_name !== '에어'
+    || !data.source_cycle_record || raw.key !== rawKeyOf('RP031', data.source_cycle_record as Parameters<typeof rawKeyOf>[1])
+    || raw.raw === null || typeof raw.raw !== 'object' || (raw.raw as Record<string,unknown>).name !== '더 기아 레이 EV 에어'
+    || String((raw.raw as Record<string,unknown>).year) !== '2026'
+    || !['전기','전기차'].includes(String((raw.raw as Record<string,unknown>).fuel))
+    || data.fuel_type !== '전기' || String(data.year) !== '2026' || Number(data.seats) !== 4)
+    throw new Error('migration source or active master pair mismatch');
+}
 
 export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>; evidence: string };
 /** `trims` (with `fromTrimsDigest` of the current top-level list) also replaces vehicle_master.trims — consumers match trim names against it. */
@@ -232,6 +322,7 @@ const currentCorrectionKeptInHistory = (current: unknown, history: Record<string
   current === undefined || current === null || history.some((entry) => stableDigest(entry) === stableDigest(current));
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
+  assertMigrationPlan(plan);
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
@@ -493,7 +584,11 @@ export function hasHumanOrConfirmedMarker(data: Record<string, unknown> | undefi
 const aliasNormalizationAllowedFor = (data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }) =>
   isAliasNormalizationCandidate(from, to) && !hasHumanOrConfirmedMarker(data);
 
-export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
+export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: {
+  approvedPlanDigest?: string | undefined;
+  /** Trusted host reader of an existing exact human approval. No CLI override or receipt issuer. */
+  readMigrationApproval?: MigrationApprovalReader;
+} = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
   const planDigest = stableDigest(plan);
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
@@ -504,6 +599,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     throw new Error('approved plan digest required for maker repairs');
   }
   const db = getFirestore(getTargetFirebaseApp());
+  await assertMigrationApproval(plan, options.readMigrationApproval);
+  const migration = plan.migrationCase;
+  const migrationRefs = migration ? [db.collection(FIRESTORE_COLLECTIONS.legacySourceCycle.raw).doc(migration.sourceRaw.id),
+    db.collection('vehicle_master').doc(migration.master.id), db.collection('vehicle_trim_master').doc(migration.trim.id)] : [];
+  const migrationEvidence = migrationRefs.length ? await db.getAll(...migrationRefs) : [];
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
     ...plan.masterRepairs.map((item) => ({ kind: 'master', item, ref: db.collection('vehicle_master').doc(item.id), field: 'sub_model' as RepairField })),
@@ -557,9 +657,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
     const blocked = productWriteBlock(snapshot.data());
     if (blocked) throw new Error(`product write refused ${blocked} ${snapshot.ref.path}`);
-    if (hasHumanOrConfirmedMarker(snapshot.data())
+    if (migration) assertMigrationCaseSnapshot(plan, snapshot, migrationEvidence);
+    if (!migration && (hasHumanOrConfirmedMarker(snapshot.data())
       || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-        && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to))) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+        && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)))) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
@@ -646,6 +747,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
     productIdentityRepairs: identityTargets.map(({ item, ref }) => ({ path: ref.path, ...item })),
+    ...(migration ? { migrationCase: migration, migrationCaseDigest: migrationCaseDigest(plan) } : {}),
     productSourceCorrections: sourceCorrectionTargets.map(({ item, ref }) => ({ path: ref.path, ...item })),
     creates: creates.map(({ c, ref }) => ({ path: ref.path, evidence: c.evidence, data: c.data })),
     variantRepairs: variantRepairs.map((v) => ({ path: `vehicle_master/${v.id}`, ...v })),
@@ -680,7 +782,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
       before: Object.fromEntries(PRODUCT_IDENTITY_FIELDS.map((field) => [field, item.from[field]])),
       after: productIdentityToObject(item),
-      reason: `원문 근거: ${item.evidence}`,
+      reason: `원문 근거: ${item.evidence}${migration ? ` / migration:${migrationCaseDigest(plan)} / approval:${migration.approvalReference} / ${migration.direction}` : ''}`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
     ...retires.map((x, index): AuditEvent => ({
@@ -754,12 +856,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const masterTrimsByPath: Record<string, string[]> = Object.fromEntries(variantRepairs.filter((v) => v.trims).map((v) => [`vehicle_master/${v.id}`, v.trims!]));
 
   await db.runTransaction(async (transaction) => {
+    await assertMigrationApproval(plan, options.readMigrationApproval);
     skippedAlreadyApplied = 0;
     activeSourceCorrectionIndexes.clear();
     correctionByPath = { ...plannedCorrectionByPath };
     correctionHistoryByPath = {};
     const current = refs.length ? await transaction.getAll(...refs) : [];
     const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
+    const migrationCurrent = migrationRefs.length ? await transaction.getAll(...migrationRefs) : [];
     const sourceCorrectionCurrent = sourceCorrectionRefs.length ? await transaction.getAll(...sourceCorrectionRefs) : [];
     identityCurrent.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
@@ -767,9 +871,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
       const blocked = productWriteBlock(snapshot.data());
       if (blocked) throw new Error(`transaction product write refused ${blocked} ${snapshot.ref.path}`);
-      if (hasHumanOrConfirmedMarker(snapshot.data())
+      if (migration) assertMigrationCaseSnapshot(plan, snapshot, migrationCurrent);
+      if (!migration && (hasHumanOrConfirmedMarker(snapshot.data())
         || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
-          && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to))) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
+          && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)))) throw new Error(`transaction productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
       for (const field of PRODUCT_IDENTITY_FIELDS) {
         if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
@@ -836,7 +941,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const retired = await transaction.get(db.collection('vehicle_master').where('retired', '==', true).select('maker', 'model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (retired.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`more than ${MAX_MASTER_IDENTITY_SCAN} retired masters — product identity check would be unbounded`);
       const retiredKeys = new Set(retired.docs.map((doc) => identityKeyFrom(doc.data())));
-      const retiredHit = identityTargets.find((x) => retiredKeys.has(identityKeyFrom(x.item.to)));
+      const effectiveTarget = (x: (typeof identityTargets)[number]) => migration?.direction === 'ROLLBACK' ? x.item.from : x.item.to;
+      const retiredHit = identityTargets.find((x) => retiredKeys.has(identityKeyFrom(effectiveTarget(x))));
       if (retiredHit) throw new Error(`product ${retiredHit.ref.path} would take the identity of a retired master`);
       const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'sub_model_aliases', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — product identity check would be unbounded`);
@@ -853,10 +959,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       for (const c of plan.masterCreates ?? []) activeModels.add(`${clean(c.data.maker)}|${clean(c.data.model)}`);
       const miss = identityTargets.find((x) => x.item.level === 'MODEL'
         ? !activeModels.has(`${clean(x.item.to.maker)}|${clean(x.item.to.model)}`)
-        : (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
+        : (activeKeys[identityKeyFrom(effectiveTarget(x))] ?? []).length !== 1);
       if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
       // 사람 입력 보존 안전선을 «별칭 정규화» 로만 푼다: 덮어쓰기 불가(확정·사람 입력) from 은 대상 마스터의 등록 별칭이고 그 별칭을 가진 활성 마스터가 대상 하나뿐일 때만.
       identityTargets.forEach((x, index) => {
+        if (migration) return; // Exact snapshot + existing USER authority was checked above, twice.
         if (identityFromOverwritable(identityCurrent[index]?.data(), x.item.from)) return;
         // 모델 수준은 별칭 정규화 예외를 쓰지 않는다: 덮어쓰기 불가(사람 입력·확정)면 그대로 거절.
         if (x.item.level === 'MODEL') throw new Error(`transaction productIdentity from is a manual or confirmed value ${x.ref.path}`);
@@ -1054,7 +1161,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
     });
     for (const { ref, fields, aliases } of Object.values(byPath)) {
-      const update = {
+      const update = migration ? { sub_model: identityTargets[0]!.item.to.sub_model } : {
         ...fields,
         ...(variantsByPath[ref.path] ? { variants: variantsByPath[ref.path] } : {}),
         ...(masterTrimsByPath[ref.path] ? { trims: masterTrimsByPath[ref.path] } : {}),
@@ -1064,7 +1171,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
       };
-      if (Object.keys(update).length <= 2) continue;
+      if (!migration && Object.keys(update).length <= 2) continue;
       // 상품 문서는 백업 때의 updateTime 을 전제로만 쓴다(그 사이 엔진·사람이 고쳤으면 서버가 거절 — 세 칸이 같아 보여도 덮어쓰지 않는다).
       if (ref.path in lockedDigest) {
         const live = [...identityCurrent, ...current].find((s) => s.ref.path === ref.path);
@@ -1149,5 +1256,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const sourceCorrectionAuditReadback = await readbackAuditEvents(db, activeSourceCorrectionAuditRefs, activeSourceCorrectionAudits, 'readback source correction audit mismatch');
-  return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
+  const rollbackBinding = migration?.direction === 'APPLY' ? {
+    ...migration, direction: 'ROLLBACK' as const, expectedProductDigest: stableDigest(identityReadback[0]!.data()),
+    expectedProductUpdateTime: exactStamp(identityReadback[0]!.updateTime),
+  } : undefined;
+  return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length,
+    ...(rollbackBinding ? { rollbackBinding } : {}) };
 }
