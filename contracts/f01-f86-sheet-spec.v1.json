@@ -1,6 +1,6 @@
 {
-  "version": "1.2",
-  "effectiveDate": "2026-10-08",
+  "version": "1.3",
+  "effectiveDate": "2026-10-17",
   "owner": "freepass-data",
   "status": "F01_ONLY_PUBLICATION_MERGED_LIVE_READBACK_PENDING",
   "publication": {
@@ -16,6 +16,21 @@
     "preserveInactiveWorkbook": true
   },
   "timezone": "Asia/Seoul",
+  "f01PriceSelection": {
+    "version": "f01-return-terms/1",
+    "scope": "F01_ONLY",
+    "allowedMonths": [1, 6, 12, 24, 36, 48, 60],
+    "settlement": "RETURN",
+    "requireExplicitSourceSettlement": true,
+    "requireSourceRefAndObservedAt": true,
+    "autoplusSupplierId": "RP023",
+    "autoplusAnnualMileageKm": 20000,
+    "missingCell": null,
+    "duplicateMonth": "HOLD",
+    "currency": "KRW",
+    "preserveCanonicalAndErp5AllTerms": true,
+    "operationalStatus": "PREPARED_NOT_PUBLISHED"
+  },
   "supplierInputTransition": {
     "decisionDate": "2026-10-03",
     "targetWorkbook": "F86",

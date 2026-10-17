@@ -4,10 +4,55 @@ import {
   SONOKONG_DEPOSIT_RULE_TEXT,
   classifySonokongRecord,
   hasSonokongDepositRuleViolation,
-  validateF86FeeColumns
+  validateF86FeeColumns,
+  selectF01PriceTerms
 } from '../src/domain/consumer-output-contract.js';
 
 describe('consumer output contracts', () => {
+  it('F01 selects only actual return tuples and never changes ERP5 source terms', () => {
+    const term = (termKey: string, termMonths: number, mileageLimitKmPerYear?: number) => ({termKey,termMonths,
+      settlement: (termKey.includes('_인수형') ? 'BUYOUT' : 'RETURN') as 'BUYOUT' | 'RETURN',
+      monthlyRent:{currency:'KRW' as const,amount:700000},depositState:'UNKNOWN' as const,deposit:null,...(mileageLimitKmPerYear===undefined?{}:{mileageLimitKmPerYear})});
+    const terms=[term('1',1),term('6',6),term('12',12),term('36_인수형',36),term('72',72),term('84',84)];
+    const before=structuredClone(terms);
+    const result=selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test#1',observedAt:'2026-10-17T00:00:00Z',terms});
+    expect(result.cells.map(c=>[c.months,c.rent])).toEqual([[1,700000],[6,700000],[12,700000],[24,null],[36,null],[48,null],[60,null]]);
+    expect(result.cells[0]!.deposit).toBeNull();
+    expect(result.excluded.map(x=>x.reason)).toEqual(['NOT_RETURN','PERIOD_EXCLUDED','PERIOD_EXCLUDED']);
+    expect(terms).toEqual(before);
+    const autoplus=selectF01PriceTerms({supplierId:'RP023',sourceRef:'source:test#2',observedAt:'2026-10-17T00:00:00Z',terms:[term('12_2만',12,20000),term('24_3만',24,30000),term('36_월20000km',36),term('48',48),term('60_2만',60,30000)]});
+    expect(autoplus.cells.filter(c=>c.rent!==null).map(c=>c.months)).toEqual([12]);
+    expect(autoplus.excluded.map(x=>x.reason)).toEqual(['AUTOPLUS_NOT_ANNUAL_20000','AUTOPLUS_NOT_ANNUAL_20000','AUTOPLUS_NOT_ANNUAL_20000','MILEAGE_CONFLICT']);
+    const conflict=selectF01PriceTerms({supplierId:'RP023',sourceRef:'source:test#3',observedAt:'2026-10-17T00:00:00Z',terms:[term('12_2만',12),term('12_연20000km',12)]});
+    expect(conflict.cells.every(c=>c.rent===null)).toBe(true);
+    expect(conflict.excluded.map(x=>x.reason)).toEqual(['MULTIPLE_SOURCE_TUPLES','MULTIPLE_SOURCE_TUPLES']);
+    expect(conflict.cells.find(c=>c.months===12)!.state).toBe('HOLD');
+    expect(conflict.cells.find(c=>c.months===6)!.state).toBe('ABSENT');
+    const monthly=selectF01PriceTerms({supplierId:'RP031',sourceRef:'source:test#4',observedAt:'2026-10-17T00:00:00Z',terms:[term('36_월1000km',36)]});
+    expect(monthly.cells.find(c=>c.months===36)!.contractedMileage).toEqual({km:1000,period:'month'});
+    const alias=selectF01PriceTerms({supplierId:'RP023',sourceRef:'source:test#5',observedAt:'2026-10-17T00:00:00Z',terms:[term('12',12,20000)]});
+    expect(alias.cells.every(c=>c.rent===null)).toBe(true);
+    for(const observedAt of ['2999-01-01T00:00:00Z','2026-10-17T00:00']){
+      expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test#6',observedAt,terms}).cells.find(c=>c.months===1)!.state).toBe('HOLD');
+    }
+    const missing=selectF01PriceTerms({supplierId:'RP012',sourceRef:'',observedAt:'',terms});
+    expect(missing.cells.every(c=>c.rent===null)).toBe(true);
+    expect(missing.cells.every(c=>c.state==='HOLD')).toBe(true);
+    expect(result.cells[0]).toMatchObject({sourceRef:'source:test#1',observedAt:'2026-10-17T00:00:00Z'});
+    for(const amount of [0,-1,0.5]){
+      const invalid={...term('12',12),monthlyRent:{currency:'KRW' as const,amount}};
+      expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[invalid]}).cells.find(c=>c.months===12)!.reasons).toContain('RENT_UNCONFIRMED');
+    }
+    const unknown={...term('12',12),settlement:'UNKNOWN' as const};
+    const wrongCurrency={...term('12',12),monthlyRent:{currency:'USD',amount:700000}} as unknown as typeof unknown;
+    expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[wrongCurrency]}).cells.find(c=>c.months===12)!.reasons).toContain('RENT_UNCONFIRMED');
+    expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[unknown]}).cells.find(c=>c.months===12)!.reasons).toContain('SETTLEMENT_EVIDENCE_MISSING');
+    const conflicting={...term('12_인수형',12),settlement:'RETURN' as const};
+    expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[conflicting]}).cells.find(c=>c.months===12)!.reasons).toContain('SETTLEMENT_CONFLICT');
+    const wrongMonth=selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[term('12',12),term('12',24)]});
+    expect(wrongMonth.cells.find(c=>c.months===12)!.state).toBe('READY');
+    expect(wrongMonth.cells.find(c=>c.months===24)!.state).toBe('HOLD');
+  });
   it('separates Sonogong products from TCar pickup subscription', () => {
     const rent = classifySonokongRecord({ bucket: 'SON_NO_KONG', plateNumber: '123하4567' });
     const subscription = classifySonokongRecord({ bucket: 'SON_NO_KONG', plateNumber: '123가4567' });

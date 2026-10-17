@@ -85,6 +85,15 @@ describe('source cycle planning/application', () => {
     expect(planSourceCycle(config, { ...evidence([]), heldCount: 1 }, snapshot, now).plan.entries).toHaveLength(0);
     expect(planSourceCycle(config, evidence([record('x'), record('x')]), snapshot, now).plan.entries).toHaveLength(0);
   });
+  it('an unconfirmed price row never withdraws a previously verified sellable car', () => {
+    const prior=product('a');const observed=record('a');
+    observed.terms.push({...structuredClone(observed.terms[0]!),months:72,monthlyRent:{state:'UNKNOWN',value:null}});
+    const result=planSourceCycle(config,evidence([observed]),{products:[prior],complete:true},now);
+    expect(result.plan.entries).toHaveLength(0);
+    expect(result.heldReasons.TERMS_HOLD).toBe(1);
+    const sold=structuredClone(observed);sold.status.saleAvailable=false;
+    expect(planSourceCycle(config,evidence([sold]),{products:[prior],complete:true},now).plan.entries[0]!.kind).toBe('DOWNGRADE');
+  });
   it('a price-less car A (identified) does not stop the absence downgrade of car B; an unidentified hold still does', () => {
     const a = record('a'); a.terms[0]!.monthlyRent = { state: 'UNKNOWN', value: null };
     const snapshot = { products: [product('a'), product('b')], complete: true };

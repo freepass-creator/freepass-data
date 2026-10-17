@@ -231,6 +231,50 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-17 16시 실회차 결과와 5개 표본 후속 — C1017-c3cf7649
+
+- 수집 결과: 기존 PR732 runtime의 16:00:03~16:08:23 회차는 인증/preflight/CYCLE_ERROR 0, RP031 하향 2건 APPLIED/엔진 되읽기 2/2, 다른 18개 원천은 변경 0 적용 생략이었다. RP012는 45분 보호 간격으로 HOLD여서 전체 exit 1이다. freshness HEALTHY는 fresh 19 + RP012 exempt 1이며 20개 전부 신선 통과가 아니다. Codex의 운영 파일·예약·차량 DB 직접 쓰기는 0이다.
+- 실소비 검증: 같은 RP031 plan digest의 정확 2개 백업과 현재 raw 부재 표식을 대조했다. 완전 목록에서 미관측된 두 건을 기존 정책으로 비노출 처리한 것이며 판매완료 명시나 삭제가 아니다. 16:10 동일 transaction의 Firestore readback에서 노출 true→false/상태 불가, 가격·4단 이름 보존을 확인했고, 같은 2개 상품 키의 운영 ERP5 API는 모두 404였다. 원천 관측/상품 관측/Firestore update/consumer 조회 시각은 구분한다.
+- 손오공 간격: 실제 pass 15:37:34.561 → nextEligible 16:22:34.561, 원천 관측 15:37:46.656 → 90분 정체 시각 17:07:46.656이다. 기존 다음 17시 회차의 RP012 접근이 늦으면 정체 공백이 가능하며 무기한 SONOGONG_LOCKED exempt가 이를 숨길 수 있다. 원운영 owner/감독에게 전달했고, 보호 간격 우회·수동 수집·새 예약은 만들지 않았다.
+
+| 표본 | 확인한 결함 또는 보존 상태 | 준비와 검증 | 정식 적용/되읽기 남음 |
+|---|---|---|---|
+| 손오공 K3 | Data paid 옵션 1개가 운영 ERP5에서 빠짐. RETURN 5개 금액은 보존. BUYOUT 실제 3개 조건/최신 fee ledger 연결은 미완료 | 기존 ERP5 PR169, exact 88cbb598의 공개 DTO·초기 HTML 보완/목록 배열 제외, 로컬 70 PASS, 자동 Preview build 864 PASS. 가격·보증금에 옵션비를 더하지 않음 | GitHub runner가 결제/한도로 미시작. Preview는 ERP4 feed, production만 Firestore/WIF여서 Preview 옵션 null은 환경 차이다. 동일 production reader 검증/정식 배포 뒤 readback, BUYOUT 계약·수수료 공급과 Excel/F01은 별도 |
+| 오토플러스 니로 EV | 원문 덩어리 sub_model, 빈 trim·연료·연식 | 기존 master/trim 유일 pair, 원천 EV·2023·에어 근거 고정. 기존 fuelName으로 EV→전기/원문 별도 보존 후보. adapter 6/spec 4/TS scoped 0 error. 기존 정체성→트림 2단계 plan 순수 검증 | 각 단계 직전 원본·master 재조회/정확 digest 승인·backup/CAS/readback. RP023 원천 제원 fill opt-in은 변경하지 않음. AP 독립 Claude 검토 TIMEOUT은 PASS 아님 |
+| 아이언 K8 | 기존 4단 이름/트림은 보존. Source의 실제 72개월이 운영 ERP5에서 누락. 현재 정규 수집 대상에 IRON이 없음 | 기존 adapter HTML page 구분자/금액 단위 후보, 실제 원천 42개 완전 읽기. ERP5 PR115 caeeb4f는 72개월 4개 표본 가격행 보존 후보, original/local/remote ref 보존 | Source 후보 검토/운영 owner의 기존 수집 대상 연결 승인·등록 및 다음 회차. ERP5 PR115 정식 채택/실운영 72개월 되읽기. PR169와 정적 patch 호환은 실제 통합 PASS가 아님 |
+| 이안카 Ray EV | stored 더 뉴 레이 ↔ 원천/마스터 더 기아 레이 EV TAM 불일치. 에어·전기·2026·4인승은 보존 | 기존 master pair/원천 근거 확인. 현재 ERP5에는 4인승·기존 옵션 원문 문장 1개가 보여 이전 5석/옵션0을 현재 결함으로 쓰지 않음 | legacy_confirmed의 원래 보호 의미/작성 근거와 기존 정정 허용 경로 확인. 플래그 삭제·범용 overwrite·모호 매칭 통과 강제 없이 정확 대상 계획·승인·readback |
+| 아이카 캐스퍼 | 48개월 실제 조건 보존. 세부모델/트림·세대 근거 부족 | 대표가 지정한 예외. 임의 이름·개발코드·제원을 만들지 않음 | 원문/정본 근거가 들어오기 전 미확정 유지 |
+
+- next_start_here: 같은 Data 개발선의 소유 변경을 정상 commit으로 보존하고, 적용이 철회된 구 인증 후보 2개 commit의 증거는 보존하면서 최신 main의 PR732와 중복되지 않게 정합한다. 기존 진단/정정 capability를 먼저 재사용한다. ERP5 옵션은 기존 PR169/같은 원격 가지에서 계속하며 새 가지·새 writer를 만들지 않는다. 운영 gate 미통과는 완료로 세지 않는다.
+
+### 2026-10-17 16시 정규회차 관측 — PR732 원작성자 배포 복구
+
+- 목적/대상 revision: C1017-c3cf7649를 유지한다. 운영 `C:/dev/fd-cycle`은 다른 담당의 PR732 `bfbc4c7b5499dfbde8904b879d332686691a2cbe`로 바뀌었다. 아래 `dd5b0df8` 기반 Codex 인증 재사용 후보의 적용 허용은 베이스 변경으로 철회됐으며 원본·백업·시험 증거만 보존한다. 두 인증 구현을 겹쳐 적용하지 않는다.
+- 변경/검증: 원작성 Claude가 15:48:33 빌드 디렉터리를 교체했으나 정식 `npm run build`의 스크립트·계약 복사 단계가 누락됐다. 15:50 예약은 약 1초 뒤 exit 1, 새 엔진 결과 로그 없음; Codex 읽기 전용 import에서 `dist/scripts/supplier-input-sheet.mjs` 누락을 재현했다. 원작성자가 15:54:01 스크립트 2개·계약 2개를 복구했다. 이후 원작성자의 15:55:26 임시 원복과 15:55:36 취소 재적용 인계가 있으며, **15:56 독립 조회**에서 운영 HEAD `bfbc4c7b`, 네 자산의 source/dist SHA 모두 일치, runtime import 성공을 확인했다. 컴파일 mtime 15:46:20과 실제 교체 시각은 구분한다.
+- 남음: import 복구는 정규회차 성공이 아니다. 기존 16:00:01 예약의 node 27960이 실행 중이며 원천 완료·RAW 적재·Firestore 적용·ERP5 실값을 이어 확인한다. 두 기존 예약은 enabled 상태를 유지했고 Codex의 운영 파일 변경·예약 조작·수동 수집 기동은 0이다. 운영 후속 작성자는 PR732 원작성자 한쪽, Codex는 독립 되읽기와 정제·출력 후보를 맡는다. 기존 10-14 운영 인계의 `tsc` 단독 지시와 정식 build 복사 단계 차이는 원작성자의 runbook 정정 대상으로 전달했다.
+- 표본/next_start_here: 기존 비공개 5대 표본과 같은 정확 ID를 재사용한다. **07:01:40Z(16:01 KST)**의 동일 read-only transaction으로 이름·제원·가격 키·상품 관측 시각을 다시 고정했다. 이안카는 현재 4인승이며 ERP5 옵션 원문 문장 1개가 보이므로 이전의 5인승/옵션 0 관측을 현재 오류로 쓰지 않는다. 오토플러스 EV 별칭은 기존 `fuelName` 재사용, 원문 `source_fuel_text` 보존과 미인식 연료 미추정 후보를 같은 개발선에 준비했다(어댑터 6 + 제원 4 PASS, 어댑터→기존 fill 경로에서 `전기`·`2023`·`2023-06` 정밀도 보존 확인). RP023 운영 opt-in 확대나 차량 DB 쓰기는 하지 않았다. AP 차종 정정 2단계 계획은 순수 validator 확인까지만; 별도 Claude 반례 검토는 REVIEW_TIMEOUT으로 답변이 없어 PASS가 아니다. 정규회차 결과와 ERP5 대사 뒤 이 항목을 갱신한다.
+
+### 2026-10-17 인증 재사용 최소 운영 후보 — 베이스 변경으로 적용 철회 / 증거 보존
+
+- 목적/대상 revision: C1017-c3cf7649, 기존 원천 수집의 반복 gcloud 인증 프로세스 노출을 줄여 ERP5 원천 신선도 복구. 개발 `codex/erp5-source-delivery-20261017`의 `a2b9c741c47a499dd26a9c17b3da8ea1127ecc8a`와 `abb6561abbd80caf07bb449b141397a669204eb2`; 준비 당시 실제 수집기 `C:/dev/fd-cycle`은 detached `dd5b0df8f4d3505fca09efd67e92f0711e1c36fb`였다. 이후 운영 상태는 바로 위 PR732 인계가 우선한다.
+- 변경/검증: 동일 gcloud 계정·권한·30초 deadline을 유지하는 프로세스 메모리 30초 재사용, 동일 context single-flight, credential metadata fence, 요청별 401 무효화만 준비했다. 관련 118 PASS / 기존 1 skip, TypeScript 5.9.3 scoped compile 오류 0, 최종 Claude 읽기 전용 확인 ANSWERED / exit 0. 첫 cold load의 30초 초과 가능성과 별도 공급사 원천 drift는 남는다.
+- 적용 범위: 승인된 운영 후보는 `src/infra/source-cycle-firestore.ts`, `src/runtime/source-cycle-runtime.ts`와 대응 `dist/src` JS 두 파일뿐이다. 개발 커밋에 테스트 파일도 포함되므로 그대로 cherry-pick하지 않는다. source-only patch의 정상 Git commit과 compiled JS 두 파일 복사 방식으로 범위를 제한한다. 정상 hooks/gates를 우회하지 않는다.
+- 남음: 06:40Z 실제 runtime root에 대한 academy operations 사전점검은 `DIRTY_WORKTREE_REVIEW_REQUIRED` HOLD다. tracked 변경 0과 기존 미추적 증거를 분리하되, 개발 source의 READY를 runtime operations READY로 바꾸어 해석하지 않는다. 정식 배포 경로 확인 전 운영 적용 0; 증거 삭제·이동·ignore·새 정책 완화 0. 두 기존 예약 모두 idle, 활성 writer/lock 없음, 다음 예약 2분 이상, 정확 HEAD/SHA/백업/원래 예약 상태 보존이 모두 필요하다.
+- next_start_here: 같은 담당·장부에서 비공개 `C:/Users/admin/.codex/private/source-cycle/art/C1017-c3cf7649-token-runtime/`의 고정 release plan, 백업, 승인 릴레이, source-only patch, metadata-only inventory를 재사용한다. 15시 실회차와 15:50 RP031 예약 결과를 관측하고 정식 사전점검 회신을 받는다. 기존 회차를 강제 종료하거나 중복 수집을 수동 실행하지 않는다. 적용 뒤에도 원천 완료 시각·상품 관측 시각·발행 시각·ERP5 조회 시각을 구분하여 되읽기 전에는 복구 완료로 보고하지 않는다.
+
+### 2026-10-17 ERP5 실제 공급 정합성 — C1017-c3cf7649 (진행 중)
+
+- 목적/정본: 동일 작업의 실제 공급사 원천 → Data → ERP5/F01/Excel 전달. 기반 main `b2dd2204e1016445ddcb1f80a17d687f0d86fa90`, 작업 가지 `codex/erp5-source-delivery-20261017`. 원래 dirty checkout과 운영 `C:/dev/fd-cycle`은 수정하지 않았다.
+- 준비한 변경: Iron HTML `&amp;page` 링크 해제(24행 반복 → 읽기 전용 실측 42행 complete), 원문 명시 원/천원/만원의 정확한 정수 처리와 원문 보존. 모호한 금액은 UNKNOWN. 가격 보류 때 기존 판매 가능 문서를 철회하거나 관측시각을 새것으로 바꾸지 않는다. 실제 판매 불가 상태는 기존 하향 경로를 따른다.
+- F01 전용 선택 계약: 실제 RETURN, 1/6/12/24/36/48/60개월만. RP023은 명시 연 20,000km tuple만. 중복·충돌 HOLD, 부재 null, 월 주행 단위 보존. Data/ERP5 전체 기간 계약은 축소하지 않는다. 아직 발행기 연결·시트 쓰기 없음.
+- 소비처 별도 변경: ERP5 기존 PR115 `caeeb4f`에서 72개월 누락을 수정했다. 실제 source/stored 4대의 16개 가격행 대사: 현행 운영 72개월 4행 누락, 읽기 전용 후보 차이 0. 커밋/시험과 운영 배포는 구분한다.
+- 실제 손오공 한 대 재조회: 원천 생성 `2026-10-17T05:29:34.488Z`, 읽기 `05:37:41.220Z`. 차종 4칸은 기존 Data/ERP5/F01에 이미 일치. 원문 개발코드 생략은 새 자동 정제에서 NORMALIZED_CANDIDATE이므로 기존 마스터/연식·트림 pair 근거로 승인된 매핑 경로를 보완해야 한다. AI가 코드·제원을 발명하지 않는다.
+- 전달 결함: 손오공 원천 선택옵션이 Data `api_options_paid`에는 있으나 실제 ERP5/F01 표시에서 누락. ERP5 기존 `work/freepasserp5/api-options-20261015` 자산을 발견했고 owner 조율 중이다. 신규 옵션 엔진을 만들지 않는다. 원천 인수형 가격은 수집 raw에만 있으며 현행 정규 terms/ERP5에는 누락된다. F01의 인수형 제외와 별개의 문제다.
+- 수수료: 같은 실차의 과거 ledger와 현재 원천 금액이 달라 과거 계산값을 CURRENT로 사용하지 않는다. main `dbfee16a`/PR516/이 문서가 가리키는 PERIOD-FEE-LEDGER-DESIGN의 10/12 결정이 오래된 F04 10행보다 우선한다. 반납 24~60은 원문 F04 173행과 후속 결정 모두 UNKNOWN. 인수형 Q12 부재를 반납형 또는 옛 Q12로 대체하지 않는다. 실제 개별 상업값·개인 식별자는 비공개 증거에만 둔다.
+- 검증: targeted source/F01 113 PASS, build PASS. 전체 시험 후 두 실패를 발견: 기존 시험의 가격 보류 재발행 기대는 관측시각 보존 요구에 맞게 수정했고 관련 36 PASS, 별도 무인 점검 timeout은 단독 재실행 3 PASS. 전체 final 재검증/최종 Claude 검토는 아직 남음(300초 검토 timeout은 PASS 아님). `exposure-apply.mjs`는 Node로 실행하는 기존 스크립트의 shebang을 주석으로 바꿔 Vitest import 파싱 오류만 해소했다.
+- 실제 적용: 운영 DB/Sheet 쓰기·수집기 pin 변경·운영 배포 0. F01 현행 6탭 발행기/운영 pin 미확정, 옛 RTDB 발행 workflow는 disabled 상태이며 재활성화하지 않는다. Excel 실제 소비 경로도 아직 미연결.
+- next_start_here: 같은 장부/기존 개발선을 유지한다. 비공개 `C:/Users/admin/.codex/private/source-cycle/art/C1017-c3cf7649-sonogong-*`에서 원문/정규결과/실제 ERP5·F01/정책/과거 ledger/수수료 dry-run을 이어 읽는다. 원천 보험·정책 충돌, 새 수집 차종 매핑, 옵션/인수형/내부 수수료 제공·Excel 연결, F01 owner와 실제 발행기, 최종 검증을 해결한 뒤 별도 운영 적용 게이트를 거친다.
+
 ### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
 
 - 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.

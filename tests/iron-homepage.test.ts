@@ -24,6 +24,8 @@ describe('아이언 홈페이지 어댑터', () => {
     const parsed = parseIronListingPage(listPage(card('a1') + card('a2', true), '/vehicles?condition=new&page=2'), `${BASE}/vehicles?condition=new`, 'new');
     expect(parsed.listings.map(l => [l.id, l.sold])).toEqual([['a1', false], ['a2', true]]);
     expect(parsed.nextUrl).toBe(`${BASE}/vehicles?condition=new&page=2`);
+    expect(parseIronListingPage(listPage(card('a1'), '/vehicles?condition=new&amp;page=2'), `${BASE}/vehicles?condition=new`, 'new').nextUrl)
+      .toBe(`${BASE}/vehicles?condition=new&page=2`);
     expect(parseIronListingPage(listPage(card('a1'), 'https://evil.example/vehicles?page=2'), `${BASE}/vehicles`, 'new').nextUrl).toBeNull();
   });
 
@@ -57,7 +59,7 @@ describe('아이언 홈페이지 어댑터', () => {
   it('reads both conditions with pagination and every detail, serially, and flags failures as incomplete', async () => {
     const sleeps: number[] = [];
     const pages: Record<string, string> = {
-      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&page=2'),
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&amp;page=2'),
       [`${BASE}/vehicles?condition=new&page=2`]: listPage(card('n3')),
       [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
       [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/n2`]: detail('12가1002'),
@@ -98,6 +100,22 @@ describe('아이언 홈페이지 어댑터', () => {
     expect(ironDeposit('보증금 150만원')).toEqual({ state: 'KNOWN', value: 1_500_000 });
     expect(ironDeposit('')).toEqual({ state: 'UNKNOWN', value: null });
     expect(ironDeposit('보증금 문의')).toEqual({ state: 'UNKNOWN', value: null });
+  });
+
+  it('normalizes explicit won/thousand/ten-thousand units without guessing bare numbers or rounding', () => {
+    for (const label of ['보증금 2만원', '보증금 20,000원']) expect(ironDeposit(label)).toEqual({state:'KNOWN',value:20_000});
+    expect(ironDeposit('보증금 2,000천원')).toEqual({state:'KNOWN',value:2_000_000});
+    expect(ironDeposit('보증금 2,000원')).toEqual({state:'KNOWN',value:2_000});
+    for (const label of ['보증금 2000', '보증금 2만', '보증금 -2만원', '보증금 1~2만원', '보증금 1만원 또는 2만원', '보증금 1.2원', '보증금 2%', '보증금 1억2만원', '보증금 .5만원', '무보증 또는 2만원', '50만원대', '50만원 이상', '월 39만원부터', '－50,000원', '(5,000원)', '1～2만원', '1〜2만원']) {
+      expect(ironDeposit(label), label).toEqual({state:'UNKNOWN',value:null});
+    }
+    const record = parseIronDetail(detail('12가3456', {rent:[[72,'월 700천원']],deposit:'2,000천원'}), listing(), '2026-10-17T00:00:00Z');
+    expect(record.terms[0]).toMatchObject({months:72,monthlyRent:{state:'KNOWN',value:700_000},deposit:{state:'KNOWN',value:2_000_000},raw:{rent_text:'월 700천원',deposit_text:'보증금 2,000천원',normalized_amount_unit:'KRW'}});
+    expect(record.raw.price_rows).toEqual([{period:'72개월',rent:'월 700천원',rent_html:'월 700천원'}]);
+    const unknown = parseIronDetail(detail('12가3456', {rent:[[72,'월 2000']]}), listing(), 't');
+    expect(unknown.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+    expect(unknown.raw.price_rows).toEqual([{period:'72개월',rent:'월 2000',rent_html:'월 2000'}]);
+    expect(ironDeposit('무보증 36개월')).toEqual({state:'ZERO',value:0});
   });
 
   it('status: 계약 synonyms → 계약중(sellable, provider spelling kept), sold words → not sellable, unknown/mixed badges hold', () => {

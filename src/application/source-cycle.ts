@@ -139,7 +139,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
     // 노출 중인 문서가 모르는 상태값(예: 취소·진행중)으로 보류되면 노출이 그대로 남는다 — 조용히 두지 않고 회차 경고로 센다.
     if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); if (before.listable) statusUnknownExposed++; continue; }
-    if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
+    if (errors.includes('TERMS_HOLD')) {
+      hold('TERMS_HOLD');
+      // A failed price observation is not proof of withdrawal. Keep the last
+      // verified document and its original observation time; other cars continue.
+      if (before && r.status.saleAvailable === true) continue;
+    }
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       hold('OBSERVATION_ORDER'); continue;
     }
