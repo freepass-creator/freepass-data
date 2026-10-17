@@ -3,6 +3,8 @@ import { parseIronListingPage, parseIronDetail, readIronHomepage, parseIronSitem
   IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY } from '../src/adapters/iron-homepage.js';
 import { sourceCyclePlugin } from '../src/adapters/source-cycle-plugins.js';
 import { judgeSonogongApiRead } from '../src/adapters/sonogong-api-guards.js';
+import { validateSourceRecord } from '../src/domain/source-engine.js';
+import { planSourceCycle } from '../src/application/source-cycle.js';
 
 // 값은 전부 가짜(합성). 구조만 실제 홈페이지의 클래스 이름을 따른다.
 const BASE = IRON_HOMEPAGE_POLICY.baseUrl;
@@ -116,6 +118,33 @@ describe('아이언 홈페이지 어댑터', () => {
     expect(unknown.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
     expect(unknown.raw.price_rows).toEqual([{period:'72개월',rent:'월 2000',rent_html:'월 2000'}]);
     expect(ironDeposit('무보증 36개월')).toEqual({state:'ZERO',value:0});
+    expect(ironDeposit('보증금 1천만원')).toEqual({state:'KNOWN',value:10_000_000});
+    expect(ironDeposit('보증금 1억원')).toEqual({state:'KNOWN',value:100_000_000});
+    expect(ironDeposit('보증금 1.200만원')).toEqual({state:'UNKNOWN',value:null});
+  });
+
+  it('excludes an explicit no-offer period only, keeping valid periods sellable and updateable', () => {
+    const at='2026-10-17T00:00:00Z';
+    for(const noOffer of ['문의','-','협의']) {
+      const prior=parseIronDetail(detail('12가3456'),listing(),at);
+      const next=parseIronDetail(detail('12가3456',{rent:[[12,noOffer],[36,'월 80만원'],[72,'월 1천만원']]}),listing(),at);
+      expect(next.terms.map(t=>[t.months,t.monthlyRent.value])).toEqual([[36,800000],[72,10_000_000]]);
+      expect(next.raw.price_rows).toHaveLength(3);
+      expect(validateSourceRecord(next)).toEqual([]);
+      const result=planSourceCycle({sourceId:'RP006',family:'OTHER',maxDowngradeRatio:1},
+        {records:[next],complete:true,observedAt:at,heldCount:0},
+        {products:[{record:prior,listable:true,locked_by_contract:false,publication_withdrawal:null,publication_withdrawal_prior:null}],complete:true},Date.parse(at));
+      expect(result.plan.entries[0]).toMatchObject({kind:'UPDATE',after:{listable:true}});
+      expect(result.plan.entries[0]!.after.record.terms[0]!.monthlyRent.value).toBe(800000);
+    }
+  });
+
+  it('holds implausible monthly amounts instead of accepting unit errors or tiny values', () => {
+    for(const value of ['월 39원','월 39,000,000만원','월 007원']) {
+      const r=parseIronDetail(detail('12가3456',{rent:[[12,value]]}),listing(),'2026-10-17T00:00:00Z');
+      expect(r.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+      expect(validateSourceRecord(r)).toContain('TERMS_HOLD');
+    }
   });
 
   it('status: 계약 synonyms → 계약중(sellable, provider spelling kept), sold words → not sellable, unknown/mixed badges hold', () => {

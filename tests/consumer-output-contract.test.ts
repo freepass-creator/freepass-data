@@ -31,7 +31,7 @@ describe('consumer output contracts', () => {
     const monthly=selectF01PriceTerms({supplierId:'RP031',sourceRef:'source:test#4',observedAt:'2026-10-17T00:00:00Z',terms:[term('36_월1000km',36)]});
     expect(monthly.cells.find(c=>c.months===36)!.contractedMileage).toEqual({km:1000,period:'month'});
     const alias=selectF01PriceTerms({supplierId:'RP023',sourceRef:'source:test#5',observedAt:'2026-10-17T00:00:00Z',terms:[term('12',12,20000)]});
-    expect(alias.cells.every(c=>c.rent===null)).toBe(true);
+    expect(alias.cells.find(c=>c.months===12)).toMatchObject({state:'READY',rent:700000,contractedMileage:{km:20000,period:'year'}});
     for(const observedAt of ['2999-01-01T00:00:00Z','2026-10-17T00:00']){
       expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test#6',observedAt,terms}).cells.find(c=>c.months===1)!.state).toBe('HOLD');
     }
@@ -50,7 +50,12 @@ describe('consumer output contracts', () => {
     const conflicting={...term('12_인수형',12),settlement:'RETURN' as const};
     expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[conflicting]}).cells.find(c=>c.months===12)!.reasons).toContain('SETTLEMENT_CONFLICT');
     const wrongMonth=selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[term('12',12),term('12',24)]});
-    expect(wrongMonth.cells.find(c=>c.months===12)!.state).toBe('READY');
+    expect(wrongMonth.cells.find(c=>c.months===12)!.state).toBe('HOLD');
+    const excludedWrongMonth=selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[term('12',12),term('12',72)]});
+    expect(excludedWrongMonth.cells.find(c=>c.months===12)!.reasons).toContain('TERM_KEY_UNRESOLVED');
+    const depositMismatch={...term('12',12),depositState:'KNOWN' as const,deposit:null};
+    expect(selectF01PriceTerms({supplierId:'RP012',sourceRef:'source:test',observedAt:'2026-10-17T00:00:00Z',terms:[depositMismatch]}).cells.find(c=>c.months===12))
+      .toMatchObject({rent:700000,deposit:null,depositState:'UNKNOWN'});
     expect(wrongMonth.cells.find(c=>c.months===24)!.state).toBe('HOLD');
   });
   it('separates Sonogong products from TCar pickup subscription', () => {

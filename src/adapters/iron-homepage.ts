@@ -4,6 +4,7 @@
  * 안전: 허용 호스트 고정(ironrentcar.com), 직렬·간격·재시도 0, 읽기 GET 만, HTML 응답 아님·번호 형식 오류·목록 순환은 실패.
  * 이 모듈을 import 하는 것만으로 접속하지 않는다(fetch 주입). 번호 전체·원문은 로그·오류에 남기지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
+import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 
@@ -22,7 +23,7 @@ const wonOrNull = (value: string): number | null => {
   const t = text(withoutStruck(value)).normalize('NFKC');
   if (/[~∼〜%−]|\d\s*[-–—]\s*\d|\([^)]*\d[^)]*원[^)]*\)/.test(t)
     || /이상|이하|부터|미만|초과|내외|가량|정도|최소|최대|약\s*\d|원\s*대/.test(t)) return null;
-  const matches = [...t.matchAll(/(-?[\d][\d,.]*)\s*(만|천)?\s*원/g)];
+  const matches = [...t.matchAll(/(-?[\d][\d,.]*)\s*(천만|억|만|천)?\s*원/g)];
   if (matches.length !== 1) return null;
   const hit = matches[0]!;
   if (/[\d.,+-]/.test(t[(hit.index ?? 0) - 1] ?? '') || /\d/.test(t.replace(hit[0], ''))) return null;
@@ -30,7 +31,9 @@ const wonOrNull = (value: string): number | null => {
   if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(number!)) return null;
   // Decimal scaling is exact; fractional won has no authorized rounding rule.
   const [whole, fraction = ''] = number!.replace(/,/g, '').split('.');
-  const scale = unit === '만' ? 4 : unit === '천' ? 3 : 0;
+  // A dot followed by three digits can be a grouping separator; do not guess.
+  if (fraction.length === 3) return null;
+  const scale = unit === '억' ? 8 : unit === '천만' ? 7 : unit === '만' ? 4 : unit === '천' ? 3 : 0;
   if (fraction.length > scale && /[1-9]/.test(fraction.slice(scale))) return null;
   const n = Number(whole! + fraction.slice(0, scale).padEnd(scale, '0'));
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
@@ -143,9 +146,11 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
     const months = Number(/(\d+)\s*개월/.exec(label)?.[1]);
     const rentBlock = /<dd\b[^>]*>([\s\S]*?)<\/dd>/i.exec(m[2]!)?.[1] ?? '';
     rawPriceRows.push({ period: label, rent: text(rentBlock), rent_html: rentBlock });
+    // Explicit no-offer text excludes only that period, under the shared rule.
+    if (isNoPriceText(text(rentBlock))) continue;
     const rent = wonOrNull(rentBlock);
     if (Number.isSafeInteger(months) && months > 0) terms.push({ months,
-      monthlyRent: rent === 0 ? { state: 'ZERO', value: 0 } : rent === null ? { state: 'UNKNOWN', value: null } : amount(rent),
+      monthlyRent: rent !== null && isPlausibleMonthlyRent(rent) ? amount(rent) : { state: 'UNKNOWN', value: null },
       deposit: { ...deposit }, mileage: ironMileage(label), raw: { period_text: label, rent_text: text(withoutStruck(rentBlock)), rent_html: rentBlock, deposit_text: text(depositBlock), normalized_amount_unit: 'KRW' } });
   }
   // 배지는 상품 본문에서만: 배지 묶음(product-detail-badges)이 있으면 그 안, 없으면 <main> 안(추천·비슷한 차 카드의 배지를 섞지 않는다).

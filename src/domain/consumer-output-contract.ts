@@ -15,8 +15,8 @@ export function selectF01PriceTerms(input: { supplierId: string; sourceRef: stri
   for (const term of input.terms) {
     const parsed = parseErp5CompatibilityPriceKey(term.termKey);
     let reason: string | null = !sourceBound ? 'SOURCE_EVIDENCE_MISSING' :
-      !F01_PRICE_SELECTION.allowedMonths.includes(term.termMonths) ? 'PERIOD_EXCLUDED' :
       !parsed || parsed.months !== term.termMonths ? 'TERM_KEY_UNRESOLVED' :
+      !F01_PRICE_SELECTION.allowedMonths.includes(term.termMonths) ? 'PERIOD_EXCLUDED' :
       !term.settlement || term.settlement === 'UNKNOWN' ? 'SETTLEMENT_EVIDENCE_MISSING' :
       term.settlement !== F01_PRICE_SELECTION.settlement ? 'NOT_RETURN' :
       parsed.settlement !== term.settlement ? 'SETTLEMENT_CONFLICT' :
@@ -24,13 +24,14 @@ export function selectF01PriceTerms(input: { supplierId: string; sourceRef: stri
     if (!reason && parsed?.mileageKm != null && term.mileageLimitKmPerYear != null && parsed.mileageKm !== term.mileageLimitKmPerYear) reason = 'MILEAGE_CONFLICT';
     if (!reason && parsed?.contractedMileage?.period === 'month' && term.mileageLimitKmPerYear != null) reason = 'MILEAGE_CONFLICT';
     if (!reason && input.supplierId === F01_PRICE_SELECTION.autoplusSupplierId &&
-      (parsed?.contractedMileage?.period === 'month' || parsed?.mileageKm !== F01_PRICE_SELECTION.autoplusAnnualMileageKm)) reason = 'AUTOPLUS_NOT_ANNUAL_20000';
+      (parsed?.contractedMileage?.period === 'month' || (parsed?.mileageKm ?? term.mileageLimitKmPerYear) !== F01_PRICE_SELECTION.autoplusAnnualMileageKm)) reason = 'AUTOPLUS_NOT_ANNUAL_20000';
     if (reason) excluded.push({ termKey: term.termKey, termMonths: term.termMonths, reason }); else candidates.push(term);
   }
   const cells = F01_PRICE_SELECTION.allowedMonths.map(months => {
     const rows = candidates.filter(t => t.termMonths === months);
     if (rows.length > 1) for (const row of rows) excluded.push({termKey:row.termKey,termMonths:row.termMonths,reason:'MULTIPLE_SOURCE_TUPLES'});
-    const holds = excluded.filter(e => !['NOT_RETURN','PERIOD_EXCLUDED','AUTOPLUS_NOT_ANNUAL_20000'].includes(e.reason) && e.termMonths === months);
+    const holds = excluded.filter(e => !['NOT_RETURN','PERIOD_EXCLUDED','AUTOPLUS_NOT_ANNUAL_20000'].includes(e.reason) &&
+      (e.termMonths === months || parseErp5CompatibilityPriceKey(e.termKey)?.months === months));
     const term = rows.length === 1 && holds.length === 0 ? rows[0]! : null;
     const parsed = term ? parseErp5CompatibilityPriceKey(term.termKey) : undefined;
     const contractedMileage = parsed?.contractedMileage ?? (parsed?.mileageKm != null ? {km:parsed.mileageKm,period:'year' as const} :
@@ -39,7 +40,7 @@ export function selectF01PriceTerms(input: { supplierId: string; sourceRef: stri
       ((term.depositState === 'KNOWN' && term.deposit.amount > 0) || (term.depositState === 'ZERO' && term.deposit.amount === 0));
     return { months, state: !sourceBound || holds.length ? 'HOLD' as const : term ? 'READY' as const : 'ABSENT' as const,
       reasons: !sourceBound ? ['SOURCE_EVIDENCE_MISSING'] : holds.map(h=>h.reason), contractedMileage, termKey: term?.termKey ?? null, rent: term?.monthlyRent.amount ?? null,
-      deposit: knownDeposit ? term!.deposit!.amount : null, depositState: term?.depositState ?? null,
+      deposit: knownDeposit ? term!.deposit!.amount : null, depositState: term ? knownDeposit ? term.depositState : 'UNKNOWN' : null,
       sourceRef: term ? input.sourceRef : null, observedAt: term ? input.observedAt : null };
   });
   return { contractVersion:F01_PRICE_SELECTION.version, workbook:'F01' as const, cells, excluded };
