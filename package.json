@@ -56,6 +56,7 @@
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
     "repair:policy-correction": "tsx src/jobs/apply-policy-correction.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
+    "ingest:iancar-policy-source": "tsx src/jobs/ingest-iancar-policy-source.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
     "source:sonogong": "tsx src/jobs/collect-sonogong.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
