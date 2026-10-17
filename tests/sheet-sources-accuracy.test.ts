@@ -105,9 +105,13 @@ describe('2. 월 대여료 타당 범위(10만~5천만원, 공용 상수)', () =
     const { records } = await f05Records([{ 차량번호: '00가1001', '12개월': '65' }]);
     const prior = structuredClone(records[0]!); prior.terms = [{ months: 12, monthlyRent: { state: 'KNOWN', value: 650000 }, deposit: { state: 'ZERO', value: 0 }, mileage: '20000km', raw: {} }];
     prior.observedAt = '2026-10-13T00:00:00.000Z';
-    const plan = planSourceCycle({ sourceId: records[0]!.sourceId, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
-      { records, complete: true, observedAt: time, heldCount: 1, benignHeldCount: 1 }, { complete: true, products: [doc(prior)] }, now).plan;
-    expect(plan.entries.map(e => e.after.record.terms.map(t => t.monthlyRent.value))).toEqual([[650000]]);
+      const { plan, heldReasons } = planSourceCycle({ sourceId: records[0]!.sourceId, family: 'SHARED_SHEET', maxDowngradeRatio: 1 },
+        { records, complete: true, observedAt: time, heldCount: 1, benignHeldCount: 1 }, { complete: true, products: [doc(prior)] }, now);
+      // A failed price observation must not republish the previous price with a fresh observation time.
+      expect(plan.entries).toEqual([]);
+      expect(heldReasons.TERMS_HOLD).toBe(1);
+      expect(prior.observedAt).toBe('2026-10-13T00:00:00.000Z');
+      expect(prior.terms[0]!.monthlyRent.value).toBe(650000);
   });
 });
 

@@ -10,6 +10,7 @@ import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/so
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 import { autoplusDepositRuleFor, autoplusRuleDeposit, classifyAutoplusVehicleOrigin } from '../domain/autoplus-deposit-rule.js';
+import { fuelName } from './normalize-sonogong.js';
 
 export type AutoplusSheetTab = { title: string; values: unknown[][] };
 export type AutoplusSheetRead = {
@@ -111,13 +112,15 @@ export function readAutoplusSheet(tabs: readonly AutoplusSheetTab[], observedAt:
       const mileage = iMileage >= 0 ? clean(row[iMileage]).replace(/[^\d]/g, '') : '';
       const spec: Record<string, string> = {};
       if (iColor >= 0 && clean(row[iColor])) spec.ext_color = clean(row[iColor]);
-      if (iFuel >= 0 && clean(row[iFuel])) spec.fuel_type = clean(row[iFuel]);
+      const sourceFuel = iFuel >= 0 ? clean(row[iFuel]) : '';
+      const fuel = fuelName(sourceFuel);
+      if (fuel) spec.fuel_type = fuel;
       if (firstYm) { spec.first_registration_date = `${firstYm[1]}-${firstYm[2]!.padStart(2, '0')}`; spec.year = firstYm[1]!; }
       if (mileage) spec.mileage = mileage;
       records.push({ sourceId: 'RP023', uid: plate, plate, vehicleText,
         // 표시 상태는 «출고가능»(판매 가능) 또는 시트 상태 그대로(계약중 등) — 판매 가능 판정은 saleAvailable 하나가 정한다.
         status: { raw: contracted ? '계약중' : sellable ? '출고가능' : status, saleAvailable: sellable }, terms, observedAt,
-        raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, vehicle_origin: origin.origin, product_group: 'LONG_TERM', product_type: '오플구독', ...(Object.keys(spec).length ? { spec } : {}) },
+        raw: { source: 'autoplus-sheet', source_tab: tab.title, source_row: i + 1, sheet_status: status, vehicle_origin: origin.origin, product_group: 'LONG_TERM', product_type: '오플구독', ...(sourceFuel ? { source_fuel_text: sourceFuel } : {}), ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] });
     }
   }

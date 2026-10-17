@@ -4,6 +4,7 @@
  * 안전: 허용 호스트 고정(ironrentcar.com), 직렬·간격·재시도 0, 읽기 GET 만, HTML 응답 아님·번호 형식 오류·목록 순환은 실패.
  * 이 모듈을 import 하는 것만으로 접속하지 않는다(fetch 주입). 번호 전체·원문은 로그·오류에 남기지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
+import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isContractedStatus } from '../domain/erp5-inventory-status.js';
 
@@ -19,19 +20,33 @@ const text = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/&(?:amp|lt
 const withoutStruck = (html: string) => html.replace(/<(del|s|strike)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
 /** 금액 해석: 숫자가 없으면 null(모름), «0원»·«0만원» 은 0. */
 const wonOrNull = (value: string): number | null => {
-  const t = text(withoutStruck(value)).replace(/,/g, '');
-  const man = /(\d+(?:\.\d+)?)\s*만\s*원/.exec(t);
-  if (man) return Math.round(Number(man[1]) * 10_000);
-  const plain = /(\d+(?:\.\d+)?)\s*원/.exec(t);
-  return plain ? Math.round(Number(plain[1])) : null;
+  const t = text(withoutStruck(value)).normalize('NFKC');
+  if (/[~∼〜%−]|\d\s*[-–—]\s*\d|\([^)]*\d[^)]*원[^)]*\)/.test(t)
+    || /이상|이하|부터|미만|초과|내외|가량|정도|최소|최대|약\s*\d|원\s*대/.test(t)) return null;
+  const matches = [...t.matchAll(/(-?[\d][\d,.]*)\s*(천만|억|만|천)?\s*원/g)];
+  if (matches.length !== 1) return null;
+  const hit = matches[0]!;
+  if (/[\d.,+-]/.test(t[(hit.index ?? 0) - 1] ?? '') || /\d/.test(t.replace(hit[0], ''))) return null;
+  const [, number, unit] = matches[0]!;
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(number!)) return null;
+  // Decimal scaling is exact; fractional won has no authorized rounding rule.
+  const [whole, fraction = ''] = number!.replace(/,/g, '').split('.');
+  // A dot followed by three digits can be a grouping separator; do not guess.
+  if (fraction.length === 3) return null;
+  const scale = unit === '억' ? 8 : unit === '천만' ? 7 : unit === '만' ? 4 : unit === '천' ? 3 : 0;
+  if (fraction.length > scale && /[1-9]/.test(fraction.slice(scale))) return null;
+  const n = Number(whole! + fraction.slice(0, scale).padEnd(scale, '0'));
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
 };
-const won = (value: string): number => wonOrNull(value) ?? 0;
 const amount = (n: number): SourceAmount => Number.isSafeInteger(n) && n > 0 ? { state: 'KNOWN', value: n } : { state: 'UNKNOWN', value: null };
 /** 보증금: «0원»·«없음»·«무보증» 은 ZERO(확인된 0), 숫자가 있으면 KNOWN, 블록이 없거나 읽을 수 없으면 UNKNOWN. */
 export const ironDeposit = (block: string): SourceAmount => {
   const t = text(withoutStruck(block));
   if (!t) return { state: 'UNKNOWN', value: null };
-  if (/무보증|보증금\s*없음|^없음$/.test(t)) return { state: 'ZERO', value: 0 };
+  if (/무보증|보증금\s*없음|^없음$/.test(t)) {
+    if (!/\d/.test(t.replace(/\d+\s*개월/g, '')) || wonOrNull(block) === 0) return { state: 'ZERO', value: 0 };
+    return { state: 'UNKNOWN', value: null };
+  }
   const n = wonOrNull(block);
   return n === 0 ? { state: 'ZERO', value: 0 } : n === null ? { state: 'UNKNOWN', value: null } : amount(n);
 };
@@ -52,7 +67,9 @@ export const ironOdometer = (value: string): string | null => {
 };
 const absolute = (href: string, base: string): string | null => {
   try {
-    const url = new URL(href, base);
+    // HTML attribute separators are escaped by the supplier. Passing &amp;
+    // through makes the server ignore page= and repeat the first page.
+    const url = new URL(href.replace(/&amp;/gi, '&'), base);
     return url.protocol === 'https:' && url.hostname === IRON_HOMEPAGE_POLICY.host ? url.toString() : null;   // 다른 호스트로 새지 않는다
   } catch { return null; }
 };
@@ -119,15 +136,22 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
   const plate = (facts.get('차량번호') ?? '').replace(/\s/g, '');
   if (!/^\d{2,3}[가-힣]\d{4}$/.test(plate) || !isAssignedPlate(plate)) throw new Error('IRON_PLATE_INVALID');
   const subtitle = text(/<(\w+)\b[^>]*product-detail-subtitle[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '');
-  const deposit = ironDeposit(/<(\w+)\b[^>]*product-detail-price-block--deposit[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '');
+  const depositBlock = /<(\w+)\b[^>]*product-detail-price-block--deposit[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? '';
+  const deposit = ironDeposit(depositBlock);
   const terms: SourceTerm[] = [];
+  const rawPriceRows: Array<{ period: string; rent: string; rent_html: string }> = [];
   for (const m of html.matchAll(/<(\w+)\b[^>]*product-detail-rent-row[^>]*>([\s\S]*?)<\/\1>/gi)) {
     // 기간 칸에는 약정거리가 함께 올 수 있다(«연 2만km · 48개월») — 개월은 «N개월» 로만, 약정거리는 km 표기로 따로 읽는다.
     const label = text(/<dt\b[^>]*>([\s\S]*?)<\/dt>/i.exec(m[2]!)?.[1] ?? '');
     const months = Number(/(\d+)\s*개월/.exec(label)?.[1]);
-    const rent = won(/<dd\b[^>]*>([\s\S]*?)<\/dd>/i.exec(m[2]!)?.[1] ?? '');
-    if (Number.isSafeInteger(months) && months > 0 && rent > 0) terms.push({ months, monthlyRent: amount(rent),
-      deposit: { ...deposit }, mileage: ironMileage(label), raw: {} });
+    const rentBlock = /<dd\b[^>]*>([\s\S]*?)<\/dd>/i.exec(m[2]!)?.[1] ?? '';
+    rawPriceRows.push({ period: label, rent: text(rentBlock), rent_html: rentBlock });
+    // Explicit no-offer text excludes only that period, under the shared rule.
+    if (isNoPriceText(text(rentBlock))) continue;
+    const rent = wonOrNull(rentBlock);
+    if (Number.isSafeInteger(months) && months > 0) terms.push({ months,
+      monthlyRent: rent !== null && isPlausibleMonthlyRent(rent) ? amount(rent) : { state: 'UNKNOWN', value: null },
+      deposit: { ...deposit }, mileage: ironMileage(label), raw: { period_text: label, rent_text: text(withoutStruck(rentBlock)), rent_html: rentBlock, deposit_text: text(depositBlock), normalized_amount_unit: 'KRW' } });
   }
   // 배지는 상품 본문에서만: 배지 묶음(product-detail-badges)이 있으면 그 안, 없으면 <main> 안(추천·비슷한 차 카드의 배지를 섞지 않는다).
   const main = /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html)?.[1] ?? html;
@@ -150,6 +174,7 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
   return { sourceId: 'RP006', uid: key, plate: key, vehicleText: title,
     status: { raw: status.raw, saleAvailable: status.saleAvailable }, terms, observedAt,
     raw: { source: 'ironrentcar-web', source_external_id: listing.id, condition: listing.condition, sold,
+      price_rows: rawPriceRows, deposit_text: text(depositBlock),
       ...(status.provider ? { provider_status: status.provider } : {}), ...(status.hold ? { status_hold: status.hold, badges: badges.join('|').slice(0, 200) } : {}),
       product_type: listing.condition === 'new' ? '신차렌트' : '중고렌트', product_group: 'LONG_TERM', variant: subtitle.split('·')[0]?.trim() ?? '',
       images, ...(Object.keys(spec).length ? { spec } : {}) },

@@ -411,7 +411,7 @@ export function auditDepositEvidence(products: Record<string, Record<string, unk
 
 const depositRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const depositText = (v: unknown) => typeof v === 'string' ? v.trim() : '';
-const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
+export const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
 
 export type IancarEngineDepositResult =
   | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' }
