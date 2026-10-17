@@ -85,24 +85,24 @@ export function createGcloudTokenSource(opts: { exec?: GcloudTokenExec; now?: ()
   source.invalidate = () => { cached = null; failed = null; };
   return source;
 }
-/** powershell → gcloud.cmd 한 번. 시간 초과 시 powershell 만이 아니라 자식 gcloud(Python) 까지 끝낸다(taskkill /T) — 상한이 실제로 성립하게. */
+/** powershell → gcloud.cmd 한 번. 시간 제한은 타이머 하나로만 관리한다(execFile 자체 timeout 은 쓰지 않는다 — 부모 powershell 이 먼저 죽으면
+ * 자식 gcloud(Python) 가 남아 누적된다, Codex P1). 시간 초과 시 taskkill /T 로 트리 전체를 끝내고, 종료 성공 여부와 무관하게 즉시 거절한다. */
 async function runGcloudPrintAccessToken(timeoutMs: number, account?: string): Promise<string> {
   const args = ['auth', 'print-access-token', ...(account ? ['--account', account] : [])];
   const win = process.platform === 'win32';
   const child = execFile(win ? 'powershell.exe' : 'gcloud', win ? ['-NoProfile', '-NonInteractive', '-Command', `& gcloud.cmd ${args.join(' ')}; exit $LASTEXITCODE`] : args,
-    { windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL' });
+    { windowsHide: true });
   return new Promise<string>((resolve, reject) => {
-    let out = '', err = '', timedOut = false;
+    let out = '', settled = false;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
     const timer = setTimeout(() => {
-      timedOut = true;
-      if (win && child.pid) try { execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* 종료 실패는 무시 */ }
+      if (win && child.pid) { try { execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* 트리 종료 실패는 무시 */ } }
+      try { child.kill('SIGKILL'); } catch { /* 이미 끝났을 수 있다 */ }
+      finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_TIMEOUT')));
     }, timeoutMs);
-    child.stdout?.on('data', d => { out += d; }); child.stderr?.on('data', d => { err += d; });
-    child.on('error', e => { clearTimeout(timer); reject(new Error(timedOut ? 'GCLOUD_TOKEN_FAILED_TIMEOUT' : `GCLOUD_TOKEN_FAILED_CRASH`)); void e; });
-    child.on('close', code => { clearTimeout(timer);
-      if (timedOut) reject(new Error('GCLOUD_TOKEN_FAILED_TIMEOUT'));
-      else if (code !== 0) reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'));
-      else resolve(out); void err; });
+    child.stdout?.on('data', d => { out += d; });
+    child.on('error', () => finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
+    child.on('close', code => finish(() => code === 0 ? resolve(out) : reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
   });
 }
 const fixedAccount = process.env.SOURCE_CYCLE_GCLOUD_ACCOUNT?.trim();
