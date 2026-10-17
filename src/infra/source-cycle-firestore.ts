@@ -44,20 +44,9 @@ export const encodeFields = (fields: Fields): Fields => Object.fromEntries(Objec
 export function createGcloudTokenProvider(options: { load: () => Promise<string>; context: () => Promise<string | null>; now?: () => number }) {
   const now = options.now ?? Date.now;
   let epoch = 0, cached: { token: string; context: string; loadedAt: number } | null = null;
-  let uncachedToken: { token: string; until: number } | null = null;
-  const mayCache = (token: string) => !uncachedToken || now() >= uncachedToken.until || token !== uncachedToken.token;
   let pending: { context: string; epoch: number; promise: Promise<string> } | null = null;
   const counts = { loads: 0, hits: 0, shared: 0, failures: 0, invalidations: 0 };
-  const invalidate = (unauthorizedToken?: string) => {
-    counts.invalidations++;
-    if (unauthorizedToken !== undefined) {
-      uncachedToken = { token: unauthorizedToken, until: now() + 30_000 };
-      if (cached?.token === unauthorizedToken) cached = null;
-      // A late401 for an old token must not cancel a refresh producing a different token.
-      return;
-    }
-    epoch++; cached = null; pending = null;
-  };
+  const invalidate = () => { epoch++; cached = null; pending = null; counts.invalidations++; };
   const load = async () => {
     counts.loads++;
     try { const token = await options.load(); if (!token || /\s/.test(token)) throw Error('GCLOUD_TOKEN_REQUIRED'); return token; }
@@ -66,9 +55,7 @@ export function createGcloudTokenProvider(options: { load: () => Promise<string>
   };
   const get = async (): Promise<string> => {
     const context = await options.context();
-    if (!context) { // Unknown context never shares/caches or cancels other verified requests.
-      return load();
-    }
+    if (!context) { invalidate(); return load(); } // Unknown context never shares or caches credentials.
     const age = cached ? now() - cached.loadedAt : Infinity;
     if (cached && cached.context === context && age >= 0 && age < 30_000) {
       const token = cached.token, currentEpoch = epoch;
@@ -80,8 +67,7 @@ export function createGcloudTokenProvider(options: { load: () => Promise<string>
       const currentEpoch = ++epoch, loadedAt = now();
       const promise = load().then(async token => {
         if (await options.context() !== context || currentEpoch !== epoch) throw Error('GCLOUD_TOKEN_CONTEXT_CHANGED');
-        // A401 suppresses reuse, not fresh acquisition or unrelated authorized requests.
-        cached = mayCache(token) ? { token, context, loadedAt } : null; return token;
+        cached = { token, context, loadedAt }; return token;
       });
       pending = { context, epoch: currentEpoch, promise };
     } else counts.shared++;
@@ -98,8 +84,8 @@ export function createGcloudTokenProvider(options: { load: () => Promise<string>
     cachedAgeMs: cached ? Math.max(0, now() - cached.loadedAt) : null }) });
 }
 
-export async function gcloudCredentialContext(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-  const root = env.CLOUDSDK_CONFIG || (env.APPDATA ? join(env.APPDATA, 'gcloud') : env.HOME ? join(env.HOME, '.config', 'gcloud') : '');
+async function gcloudContext(): Promise<string | null> {
+  const env = process.env, root = env.CLOUDSDK_CONFIG || (env.APPDATA ? join(env.APPDATA, 'gcloud') : env.HOME ? join(env.HOME, '.config', 'gcloud') : '');
   if (!root) return null;
   try {
     const active = env.CLOUDSDK_ACTIVE_CONFIG_NAME || (await readFile(join(root, 'active_config'), 'utf8')).trim();
@@ -111,7 +97,7 @@ export async function gcloudCredentialContext(env: NodeJS.ProcessEnv = process.e
       env: Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith('CLOUDSDK_') || key === 'GOOGLE_APPLICATION_CREDENTIALS').sort(([a],[b])=>a.localeCompare(b))) });
   } catch { return null; }
 }
-const tokenProvider = createGcloudTokenProvider({ context: gcloudCredentialContext, load: async () => {
+const tokenProvider = createGcloudTokenProvider({ context: gcloudContext, load: async () => {
   try {
     const { stdout } = await promisify(execFile)(process.platform === 'win32' ? 'powershell.exe' : 'gcloud',
       process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', '& gcloud.cmd auth print-access-token; exit $LASTEXITCODE']
@@ -123,7 +109,7 @@ const tokenProvider = createGcloudTokenProvider({ context: gcloudCredentialConte
   }
 } });
 export const gcloudUserToken = () => tokenProvider();
-export const invalidateGcloudUserToken = (unauthorizedToken?: string) => tokenProvider.invalidate(unauthorizedToken);
+export const invalidateGcloudUserToken = () => tokenProvider.invalidate();
 export const gcloudTokenDiagnostics = () => tokenProvider.snapshot();
 /** 가격 맵 정규화: null·undefined·키 누락을 같게 보고(해당 키 제거) 키를 정렬한다. digest 계산·비교·되읽기 대조 공통 기준. */
 export function normalizePrice(value: unknown): unknown {
@@ -575,12 +561,11 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     return `/products/${encodeURIComponent(uid)}`;
   };
   const request = async (path: string, method = 'GET', body?: unknown): Promise<any> => {
-    const token = await (options.token ?? gcloudUserToken)();
     const response = await fetcher(base + path, { method, redirect: 'error', signal: AbortSignal.timeout(60_000),
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${await (options.token ?? gcloudUserToken)()}`, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     if (response.status === 404 && method === 'GET') return null;
-    if (response.status === 401 && (!options.token || options.token === gcloudUserToken)) invalidateGcloudUserToken(token);
+    if (response.status === 401 && (!options.token || options.token === gcloudUserToken)) invalidateGcloudUserToken();
     if (!response.ok) throw new Error(response.status === 409 || response.status === 412 ? 'CAS_CONFLICT' : 'FIRESTORE_REQUEST_FAILED');
     return response.json();
   };

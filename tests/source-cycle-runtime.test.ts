@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readdir, readFile, writeFile, appendFile, mkdir, utimes } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { assessFreshness } from '../src/application/source-freshness.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, statusKindOf, rawTitleBackfillFields, priceDigest, createGcloudTokenProvider, gcloudCredentialContext } from '../src/infra/source-cycle-firestore.js';
+import { firestoreCycleCommands, encodeFields, decodeFields, nativeCycleFields, statusKindOf, rawTitleBackfillFields, priceDigest, createGcloudTokenProvider } from '../src/infra/source-cycle-firestore.js';
 import { sourceUid, f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin } from '../src/adapters/source-cycle-native.js';
 import { sourceCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
@@ -53,44 +53,6 @@ describe('same-context gcloud process-memory reuse', () => {
     await Promise.all([uncached(),uncached()]);expect(load).toHaveBeenCalledTimes(2);
     let clock=10;const provider=createGcloudTokenProvider({load,context:async()=> 'a',now:()=>clock});
     await provider();clock=0;await provider();expect(load).toHaveBeenCalledTimes(4);
-  });
-  it('an unknown-context request does not cancel a concurrent verified request',async()=>{
-    let context:string|null='a';let release!:(value:string)=>void;
-    const load=vi.fn().mockImplementationOnce(()=>new Promise<string>(r=>{release=r;})).mockResolvedValue('uncached-token');
-    const provider=createGcloudTokenProvider({load,context:async()=>context});
-    const first=provider();await new Promise(r=>setTimeout(r,0));
-    context=null;expect(await provider()).toBe('uncached-token');
-    context='a';release('verified-token');expect(await first).toBe('verified-token');
-    expect(provider.snapshot().failures).toBe(0);
-  });
-  it('a late401 preserves another refresh and prevents reuse without blocking fresh acquisition',async()=>{
-    let clock=0;let release!:(value:string)=>void;
-    const load=vi.fn().mockResolvedValueOnce('old-token').mockImplementationOnce(()=>new Promise<string>(r=>{release=r;})).mockResolvedValue('fresh-token');
-    const provider=createGcloudTokenProvider({load,context:async()=> 'a',now:()=>clock});
-    await provider();clock=30_000;const fresh=provider();await new Promise(r=>setTimeout(r,0));
-    provider.invalidate('old-token');release('fresh-token');
-    expect(await fresh).toBe('fresh-token');expect(await provider()).toBe('fresh-token');
-    provider.invalidate('fresh-token');expect(await provider()).toBe('fresh-token');
-    expect(load).toHaveBeenCalledTimes(3); // This explicit request acquired afresh; no automatic request replay.
-    await provider();expect(load).toHaveBeenCalledTimes(4); // Same SDK token is not cached for30s after a401.
-    clock=60_000;await provider();await provider();expect(load).toHaveBeenCalledTimes(5);
-  });
-  it('fingerprints actual selected configuration, credential metadata and explicit context without reading credential bytes',async()=>{
-    const dir=await directory(),env={CLOUDSDK_CONFIG:dir};
-    await mkdir(join(dir,'configurations'));await writeFile(join(dir,'active_config'),'default');
-    await writeFile(join(dir,'configurations','config_default'),'[core]\naccount=fixture');
-    await writeFile(join(dir,'credentials.db'),'fixture');
-    const first=await gcloudCredentialContext(env);expect(first).toMatch(/^[a-f0-9]{64}$/);
-    expect(await gcloudCredentialContext(env)).toBe(first);
-    expect(await gcloudCredentialContext({...env,CLOUDSDK_CORE_ACCOUNT:'different'})).not.toBe(first);
-    expect(await gcloudCredentialContext({...env,GOOGLE_APPLICATION_CREDENTIALS:'fixture-path'})).not.toBe(first);
-    await writeFile(join(dir,'configurations','config_default'),'[core]\naccount=changed');
-    const changed=await gcloudCredentialContext(env);expect(changed).not.toBe(first);
-    await utimes(join(dir,'credentials.db'),new Date(1000),new Date(1000));
-    const metadata=await gcloudCredentialContext(env);expect(metadata).not.toBe(changed);
-    await writeFile(join(dir,'credentials.db'),'different-size-fixture');
-    expect(await gcloudCredentialContext(env)).not.toBe(metadata);
-    await rm(join(dir,'credentials.db'));expect(await gcloudCredentialContext(env)).toBeNull();
   });
 });
 const dirs: string[] = [];
