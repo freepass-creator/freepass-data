@@ -231,6 +231,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-17 Ray EV migration HOLD 한 건 정정 후보 — C1017-c3cf7649
+
+- 목적/정본: 최신 main d7e64014 기반, 기존 PR698의 11대 범위와 독립된 정확 한 건 후보다. 현재 stored 세부모델 더 뉴 레이 → 기존 활성 마스터 더 기아 레이 EV TAM 한 칸만 검토하며 에어·전기·2026·4인승과 원문·가격·옵션·사진·상태·모든 보호 표식을 보존한다. 실제 ID와 before/source/master digest는 Git 밖 비공개 승인 미리보기에만 있다. 기존 ERP4 d11d0ccb migration은 과거 확정 문서의 atom block 위반 때 확정=false/legacy_confirmed=true/HOLD로 보존했다. 해당 상품 audit 0건은 후속 사람 입력이 없다는 증거가 아니다.
+- 변경: 기존 applyVehicleNameReferenceRepair 안에서 이 incident의 단일 sub_model delta만 검증한다. 일반 legacy/human 보호 기본값은 유지한다. 계획 전체 승인 digest 외에도 호스트가 기존 USER 결정을 읽는 trusted reader가 필수이며 이 모듈은 승인 영수증을 발급하지 않는다. USER·동일 참조·상품 ID hash·caseDigest·행동·승인 시각/만료를 두 번 검증한다. 상품 전체 digest·나노초 updateTime과 마스터/트림 전체 digest·나노초 updateTime은 백업 전과 실제 transaction 안에서 재대조한다. 원천 RAW는 주기 관측 메타 observed_at/last_seen_at만 제외한 전체 내용 digest로 대조한다. 원천 가격·상태·raw/key/raw_digest 변화는 여전히 거절하되 단순 수집 완료 메타 갱신이 원복 길을 없애지 않게 한다. USER 결정 시각은 UTC ISO·실제 날짜·최대 24시간 유효창만 허용한다. 새 사람 표식·잠금·원천/마스터 변경은 거절한다.
+- 원복: 동일 writer를 재사용하며 APPLY/ROLLBACK 모두 상품 update mask는 sub_model 한 칸뿐이다. 적용 되읽기에서 얻은 실제 digest/updateTime을 역방향 계획에 묶고 같은 USER 권한이 ROLLBACK도 허용할 때만 원복한다. 적용 뒤 다른 칸·updateTime이 하나라도 달라지면 원복을 거부한다. 역계획은 실제 APPLY 감사 이벤트의 내용·producer·run ID·commit updateTime도 고정한다. 같은 case 승인을 갖고 기대 상품 버전을 임의로 최신 시각에 다시 묶어도 이 감사 버전과 다르면 거절한다. 원문·기존 migration 표식 삭제/전체 상품 덮기/새 writer/운영 schema·IAM 변경은 없다.
+- 커밋 후 실패 복구: 되읽기 전체 문서 digest를 transaction에서 고정한 예상 after와 대조한 뒤에만 rollbackBinding을 반환한다. 커밋은 반환됐으나 되읽기가 실패하면 재실행을 막는 별도 오류와 backup/run/audit/예상 after 증거를 보존한다. 복구 helper는 정확 감사 내용·같은 commit updateTime·예상 전체 after를 모두 새 조회로 확인할 때만 역계획 binding을 복구한다. 이 증거는 승인 영수증이 아니며 역계획 실행 때도 기존 USER 권한을 다시 확인한다.
+- 검증: 기존 fake Firestore 106 PASS + 계획 validator 19 PASS = 관련 125 PASS, tsc/build PASS. 합성 USER reader만 시험에 사용했다. 08:07:37Z(17:07 KST) 실제 read-only transaction의 상품·원천·master pair를 SDK Timestamp와 동일한 나노초 보존 표현으로 봉인해 pure snapshot assertion PASS, 사업 데이터 쓰기 0. 이전 REST-decoded string digest 미리보기는 참고 증거일 뿐 적용 계획으로 사용하지 않는다.
+- 남음/next_start_here: 실제 CLI DRY_RUN은 HOLD_TRUSTED_USER_APPROVAL_READER_NOT_BOUND/applyAuthorized=false를 출력하고 --apply는 명시적 미배선 오류로 exit 1이었다(DB 쓰기 0). CLI는 trusted USER reader가 없으면 이 후보를 거절한다. 실제 운영 승인 참조 reader 배선·독립 exact code 검토·현재 binding 재조회/사람의 정확 한 행 승인·실DB backup/CAS/readback/ERP5 효과 확인 전 applyReady가 아니다. 비공개 C1017-c3cf7649-ray-approval-preview-v2-private.json은 미승인 후보이며 PENDING_USER_DECISION을 실제 승인으로 바꾸어 해석하지 않는다. 운영 DB/Sheet/runtime 변경 0, PR698 11대는 변경하지 않는다.
+
+
 ### 2026-10-14 이안카(RP031) 단일 작성 주체 — 옛 발행 경로 폐기, 보증금은 엔진 근거
 
 - 목적/정본: 대표 10-14 «옛날 구버전 거는 과감하게 폐기해, 겹쳐 쓴 거 덮어쓴 거 과감하게 폐기, 어설프게 양립하다가 다 망해». 가지 `work/freepass-data/iancar-single-writer-20261014`.

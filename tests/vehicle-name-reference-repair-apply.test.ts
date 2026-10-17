@@ -14,6 +14,7 @@ const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClo
 // 문서별 updateTime(백업 시점 고정 검증용)과 쓰기 때 걸린 precondition 기록.
 const updateTimes = new Map<string, unknown>();
 const preconditions: Array<[string, unknown]> = [];
+let fakeCommitSeconds = 100;
 const applyUpdate = (path: string, update: Record<string, unknown>) => {
   const doc = { ...store.get(path)! };
   for (const [k, v] of Object.entries(update)) {
@@ -44,17 +45,21 @@ const db = {
   getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
   runTransaction: async (fn: (t: unknown) => Promise<void>) => {
     const writes: Array<() => void> = [];
+    const touched = new Set<string>();
     const t = {
       getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
-      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => applyUpdate(r.path, u)); },
+      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); touched.add(r.path); writes.push(() => applyUpdate(r.path, u)); },
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
+        touched.add(r.path);
         store.set(r.path, structuredClone(d));
       }),
     };
     await fn(t);
     writes.forEach((w) => w());
+    const commitTime = {seconds:++fakeCommitSeconds,nanoseconds:123};
+    touched.forEach(path=>updateTimes.set(path,commitTime));
   },
 };
 vi.mock('firebase-admin/firestore', () => ({
@@ -64,7 +69,8 @@ vi.mock('firebase-admin/firestore', () => ({
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents, migrationCaseDigest, migrationRawContentDigest, recoverMigrationRollbackBinding, MigrationCommitReadbackError } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { rawKeyOf } = await import('../src/domain/source-raw.js');
 
 // 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
 const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
@@ -999,5 +1005,144 @@ describe('alias canonicalization of a confirmed product identity', () => {
     await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
       .rejects.toThrow(/canonical name|manual or confirmed value/);
     expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+});
+
+describe('single reviewed migration case, same writer and CAS rollback', () => {
+  const fixture = () => {
+    const stamp = { seconds: 100, nanoseconds: 123 };
+    const record = { sourceId:'RP031',uid:'synthetic-ray',plate:null,vehicleText:'더 기아 레이 EV 에어',status:{raw:'AVAILABLE',saleAvailable:true},terms:[],observedAt:'2026-10-17T00:00:00Z',raw:{},vehicleHold:[] };
+    const data = { provider_company_code:'RP031',maker:'기아',model:'레이',sub_model:'더 뉴 레이',trim_name:'에어',fuel_type:'전기',year:'2026',seats:4,
+      legacy_confirmed:true,확정:false,ssot_status:'HOLD',ssot_migrated_from:'freepasserp3',ssot_hold_reasons:['IDENT:세부모델 「더 뉴 레이」이 차종마스터에 없다'],
+      source_cycle_record:record,price:{'12':{rent:700000,deposit:0}},options:['기존 옵션'],image_urls:['https://example.invalid/photo'],source_observed_at:record.observedAt,listable:true };
+    store.set('products/migration-case',data);
+    store.set('source_raw/migration-raw',{source_id:'RP031',key:rawKeyOf('RP031',record),raw:{name:'더 기아 레이 EV 에어',fuel:'전기차',year:2026}});
+    store.set('vehicle_master/migration-master',{maker:'기아',model:'레이',sub_model:'더 기아 레이 EV TAM'});
+    store.set('vehicle_trim_master/migration-trim',{master_id:'migration-master',trim:'에어'});
+    for(const path of ['products/migration-case','source_raw/migration-raw','vehicle_master/migration-master','vehicle_trim_master/migration-trim']) updateTimes.set(path,stamp);
+    const frozen=(collection:string,id:string)=>({id,digest:stableDigest(store.get(collection+'/'+id)),updateTime:stamp});
+    const plan: Parameters<typeof applyVehicleNameReferenceRepair>[0] = {sourceDigest:'reviewed-source',masterRepairs:[],productRepairs:[],productIdentityRepairs:[{
+      id:'migration-case',from:{maker:'기아',model:'레이',sub_model:'더 뉴 레이'},to:{maker:'기아',model:'레이',sub_model:'더 기아 레이 EV TAM'},evidence:'합성 원문·마스터 근거'}],
+      migrationCase:{caseId:'C1017-c3cf7649:ray-ev:1',direction:'APPLY',approvalReference:'trusted-human-decision:test',originalProductDigest:stableDigest(data),originalProductUpdateTime:stamp,
+        expectedProductDigest:stableDigest(data),expectedProductUpdateTime:stamp,sourceRaw:{id:'migration-raw',digest:migrationRawContentDigest(store.get('source_raw/migration-raw'))},master:frozen('vehicle_master','migration-master'),trim:frozen('vehicle_trim_master','migration-trim')}};
+    // Test authority only: a host's canonical reader supplies an existing decision; the writer cannot issue one.
+    const approval={reference:plan.migrationCase!.approvalReference,actorKind:'USER' as const,status:'APPROVED' as const,caseDigest:migrationCaseDigest(plan),productIdDigest:stableDigest('migration-case'),
+      actions:['APPLY','ROLLBACK'] as Array<'APPLY'|'ROLLBACK'>,approvedAt:new Date(Date.now()-60_000).toISOString(),expiresAt:new Date(Date.now()+3_600_000).toISOString()};
+    const run=(p=plan,read=async()=>approval)=>applyVehicleNameReferenceRepair(p,{approvedPlanDigest:stableDigest(p),readMigrationApproval:read});
+    return {data,plan,approval,run};
+  };
+
+  it('keeps the old marker guard and requires a separately verified existing human decision',async()=>{
+    const f=fixture();const plain={...f.plan};delete plain.migrationCase;
+    await expect(applyApproved(plain)).rejects.toThrow(/manual or confirmed/);
+    await expect(applyApproved(f.plan)).rejects.toThrow(/approval reader/);
+    expect(store.get('products/migration-case')).toEqual(f.data);
+  });
+
+  it('changes exactly sub_model and uses the original updateTime precondition',async()=>{
+    const f=fixture();preconditions.length=0;const result=await f.run();
+    expect(store.get('products/migration-case')).toEqual({...f.data,sub_model:'더 기아 레이 EV TAM'});
+    expect(preconditions).toEqual([['products/migration-case',{lastUpdateTime:f.plan.migrationCase!.expectedProductUpdateTime}]]);
+    expect(result.rollbackBinding!.direction).toBe('ROLLBACK');
+    expect(result.auditCount).toBe(1);
+  });
+
+  it.each(['reference','actorKind','caseDigest','productIdDigest','actions','expiresAt','approvedAt'])(
+    'refuses mismatched, service, unscoped or expired authority: %s',async key=>{
+      const f=fixture();const changes:Record<string,unknown>={reference:'another',actorKind:'SERVICE',caseDigest:'bad',productIdDigest:'other',actions:[],expiresAt:'2020-01-01T00:00:00Z',approvedAt:'2999-01-01T00:00:00Z'};
+      await expect(f.run(f.plan,async()=>({...f.approval,[key]:changes[key]} as typeof f.approval))).rejects.toThrow(/exact USER approval/);
+      expect(store.get('products/migration-case')).toEqual(f.data);
+    });
+
+  it.each(['products/migration-case','source_raw/migration-raw','vehicle_master/migration-master','vehicle_trim_master/migration-trim'])(
+    'refuses %s drift between review and backup',async path=>{
+      const f=fixture();store.set(path,{...store.get(path),changed:true});
+      await expect(f.run()).rejects.toThrow(/snapshot changed|evidence changed/);
+      expect(store.get('products/migration-case')!.sub_model).toBe('더 뉴 레이');
+    });
+
+  it('refuses a nanos-only product updateTime change',async()=>{
+    const f=fixture();updateTimes.set('products/migration-case',{seconds:100,nanoseconds:124});
+    await expect(f.run()).rejects.toThrow(/snapshot changed/);
+  });
+
+  it('rechecks authority and evidence inside the transaction, before any writes',async()=>{
+    const f=fixture();let calls=0;
+    await expect(f.run(f.plan,async()=>{if(++calls===2)throw Error('authority revoked');return f.approval;})).rejects.toThrow('authority revoked');
+    expect(store.get('products/migration-case')).toEqual(f.data);
+    const original=db.runTransaction;
+    db.runTransaction=async fn=>{store.set('source_raw/migration-raw',{...store.get('source_raw/migration-raw'),changed:true});return original(fn);};
+    try {await expect(f.run()).rejects.toThrow(/evidence changed/);} finally {db.runTransaction=original;}
+    expect(store.get('products/migration-case')).toEqual(f.data);
+  });
+
+  it('rejects an additional human marker even when its changed snapshot was supplied',async()=>{
+    const f=fixture();const data={...f.data,manual_confirmed:true};store.set('products/migration-case',data);
+    f.plan.migrationCase!.originalProductDigest=stableDigest(data);f.plan.migrationCase!.expectedProductDigest=stableDigest(data);
+    f.approval.caseDigest=migrationCaseDigest(f.plan);
+    await expect(f.run()).rejects.toThrow(/not the exact held case/);
+  });
+
+  it('rejects any extra target or business field delta',async()=>{
+    const f=fixture();await expect(f.run({...f.plan,productTrimRepairs:[{id:'another',from:'x',to:'y'}]})).rejects.toThrow(/single reviewed/);
+    const other=structuredClone(f.plan);other.productIdentityRepairs![0]!.to.model='다른 모델';
+    await expect(f.run(other)).rejects.toThrow(/exact sub_model delta/);
+  });
+
+  const rollbackPlan=(f:ReturnType<typeof fixture>,binding:NonNullable<Awaited<ReturnType<typeof applyVehicleNameReferenceRepair>>['rollbackBinding']>)=>({
+    ...f.plan,migrationCase:binding,productIdentityRepairs:f.plan.productIdentityRepairs!.map(x=>({...x,from:x.to,to:x.from}))});
+  it('rolls back only the same unchanged applied document through the same writer',async()=>{
+    const f=fixture();const result=await f.run();const p=rollbackPlan(f,result.rollbackBinding!);
+    expect(migrationCaseDigest(p)).toBe(f.approval.caseDigest);
+    await f.run(p);expect(store.get('products/migration-case')).toEqual(f.data);
+    expect([...store.keys()].filter(k=>k.startsWith('audit_events/'))).toHaveLength(2);
+  });
+
+  it('refuses rollback after any later human or engine change, even unrelated to the name',async()=>{
+    const f=fixture();const result=await f.run();const p=rollbackPlan(f,result.rollbackBinding!);
+    store.set('products/migration-case',{...store.get('products/migration-case'),options:['사람이 후속 수정']});
+    await expect(f.run(p)).rejects.toThrow(/snapshot changed/);
+    expect(store.get('products/migration-case')!.sub_model).toBe('더 기아 레이 EV TAM');
+    expect(store.get('products/migration-case')!.options).toEqual(['사람이 후속 수정']);
+  });
+  it('refuses rollback after a timestamp-only subsequent write',async()=>{
+    const f=fixture();const result=await f.run();const p=rollbackPlan(f,result.rollbackBinding!);
+    updateTimes.set('products/migration-case',{seconds:101,nanoseconds:123});
+    await expect(f.run(p)).rejects.toThrow(/snapshot changed/);
+    expect(store.get('products/migration-case')!.sub_model).toBe('더 기아 레이 EV TAM');
+  });
+  it('cannot rebind rollback to a later product version even with the same case approval',async()=>{
+    const f=fixture();const result=await f.run();const p=rollbackPlan(f,result.rollbackBinding!);
+    const later={seconds:10000,nanoseconds:123};updateTimes.set('products/migration-case',later);
+    p.migrationCase.expectedProductUpdateTime=later;
+    await expect(f.run(p)).rejects.toThrow(/apply audit or version mismatch/);
+    expect(store.get('products/migration-case')!.sub_model).toBe('더 기아 레이 EV TAM');
+  });
+  it('refuses a new duplicate active master even when the pinned master itself is unchanged',async()=>{
+    const f=fixture();store.set('vehicle_master/duplicate',{...store.get('vehicle_master/migration-master')});
+    await expect(f.run()).rejects.toThrow(/exactly one active/);
+    expect(store.get('products/migration-case')!.sub_model).toBe('더 뉴 레이');
+  });
+  it('allows periodic source observation metadata to advance without losing the rollback path',async()=>{
+    const f=fixture();const tick=()=>{store.set('source_raw/migration-raw',{...store.get('source_raw/migration-raw'),observed_at:new Date().toISOString(),last_seen_at:new Date().toISOString()});updateTimes.set('source_raw/migration-raw',{seconds:200,nanoseconds:1});};
+    tick();const result=await f.run();tick();await f.run(rollbackPlan(f,result.rollbackBinding!));
+    expect(store.get('products/migration-case')).toEqual(f.data);
+  });
+  it.each(['1','2026-02-30T00:00:00Z','99999'])('rejects loosely parsed approval date %s',async approvedAt=>{
+    const f=fixture();await expect(f.run(f.plan,async()=>({...f.approval,approvedAt}))).rejects.toThrow(/exact USER approval/);
+  });
+  it('rejects a human approval lasting more than one day',async()=>{
+    const f=fixture();await expect(f.run(f.plan,async()=>({...f.approval,expiresAt:new Date(Date.now()+25*3_600_000).toISOString()}))).rejects.toThrow(/exact USER approval/);
+  });
+  it('returns reconciliation evidence after a committed readback failure and recovers only from its exact audit',async()=>{
+    const f=fixture();const original=db.getAll;let calls=0;db.getAll=async(...refs)=>{if(++calls===3)throw Error('readback unavailable');return original(...refs);};
+    let caught:unknown;try{await f.run();}catch(e){caught=e;}finally{db.getAll=original;}
+    expect(caught).toBeInstanceOf(MigrationCommitReadbackError);
+    const recovery=(caught as InstanceType<typeof MigrationCommitReadbackError>).recovery;
+    updateTimes.set('audit_events/'+recovery.auditEventId,updateTimes.get('products/migration-case'));
+    const evidence=[snap(ref('source_raw','migration-raw')),snap(ref('vehicle_master','migration-master')),snap(ref('vehicle_trim_master','migration-trim'))];
+    const binding=recoverMigrationRollbackBinding(recovery,snap(ref('products','migration-case')),evidence,snap(ref('audit_events',recovery.auditEventId)));
+    await f.run(rollbackPlan(f,binding));expect(store.get('products/migration-case')).toEqual(f.data);
+    expect(()=>recoverMigrationRollbackBinding({...recovery,expectedAuditDigest:'bad'},snap(ref('products','migration-case')),evidence,snap(ref('audit_events',recovery.auditEventId)))).toThrow(/recovery evidence/);
   });
 });
