@@ -603,11 +603,12 @@ async function collectIancarOneFullFactsInner(
   const clockExamples: SourceClockDiagnostic['examples'] = [];
   const safeInstant = (value: unknown): string | null => typeof value === 'string' && Number.isFinite(Date.parse(value))
     ? new Date(Date.parse(value)).toISOString() : null;
-  const noteClock = (envelope: 'DETAIL' | 'AVAILABILITY', value: unknown, checkedAt: number, reasons: SourceClockReason[]) => {
+  const noteClock = (envelope: 'DETAIL' | 'AVAILABILITY', value: unknown, receivedAt: number, checkedAt: number, reasons: SourceClockReason[]) => {
     for (const reason of reasons) reasonEnvelopeCounts[reason]++;
     if (clockExamples.length >= 4) return;
     const syncedAt = safeInstant(value);
     clockExamples.push({ envelope, syncedAt, checkedAt: new Date(checkedAt).toISOString(),
+      receivedAt: new Date(receivedAt).toISOString(), receivedAgeMs: syncedAt ? receivedAt - Date.parse(syncedAt) : null,
       ageMs: syncedAt ? checkedAt - Date.parse(syncedAt) : null,
       behindListMs: syncedAt ? Date.parse(capture.syncedAt) - Date.parse(syncedAt) : null, reasons: [...reasons] });
   };
@@ -635,31 +636,34 @@ async function collectIancarOneFullFactsInner(
     // 상세 봉투의 15분 창은 다시 적용하지 않는다 — 상세 사실(이름·번호·제원)은 정적이고, 그 시효는 유효 상한(24h)·순환 전수·행 지문으로 묶인다(이 PR 의 목적).
     const candidate = cacheOn && !rotation.has(record.vehicleId) ? cachedIancarDetailFor(cache, record.vehicleId, rowDigest, observationNow()) : null;
     const cached = candidate && cachedEnvelopesMatch(candidate, record, capture.syncedAt) ? candidate : null;
-    const responses = await Promise.allSettled(cached
+    const requests = cached
       ? [Promise.resolve(cached.detail as Json), Promise.resolve(cached.availability as Json), client.getRates(record.vehicleId)]
-      : [client.getVehicle(record.vehicleId), client.getAvailability(record.vehicleId), client.getRates(record.vehicleId)]);
+      : [client.getVehicle(record.vehicleId), client.getAvailability(record.vehicleId), client.getRates(record.vehicleId)];
+    // JSON 수신이 끝난 각 시각을 보존한다. 느린 다른 응답을 기다린 시각으로 수신을 대신하지 않는다.
+    const responses = await Promise.allSettled(requests.map(async request => ({ value: await request, receivedAt: observationNow() })));
     if (cached) detailsCached++; else reread++;
     const requestFailure = responses.find(result => result.status === 'rejected'
       && result.reason instanceof IancarOneApiError && result.reason.status === 429)
       ?? responses.find(result => result.status === 'rejected');
     if (requestFailure?.status === 'rejected') throw requestFailure.reason;
-    const [detail, availability, rates] = responses.map(result => {
+    const received = responses.map(result => {
       if (result.status !== 'fulfilled') throw new Error('IANCAR_ONE_UNSETTLED_REQUEST');
       return result.value;
-    }) as [Json, Json, Json];
+    });
+    const [detail, availability, rates] = received.map(response => response.value) as [Json, Json, Json];
     let availabilityDrift = false, sourceDrift = false;
     let detailSyncedAt: string | null = null;
     // 캐시 재사용 차: 봉투 신원·신선도·가용 대조는 캐시 시점에 통과했고, 행 지문이 같으므로(번호·가용 상태 포함) 다시 검사하지 않는다.
-    for (const envelope of cached ? [] : [detail, availability]) {
+    for (const [envelope, receivedAt] of cached ? [] : [[detail, received[0]!.receivedAt], [availability, received[1]!.receivedAt]] as const) {
       if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
         || envelope.data.vehicle_id !== record.vehicleId)
         throw new IancarOneApiError('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
       // A supplier refresh clock can advance while unchanged inventory is being read.
       // Validate freshness and facts separately; clock equality is not fact equality.
-      const responseNow = observationNow();
+      const responseNow = receivedAt, checkedAt = observationNow();
       // 갱신 시각 형식 자체가 깨진 응답은 전송 문제라 회차 전체 실패로 남긴다(봉투 검증).
       if (!instant(envelope.data.synced_at)) {
-        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, ['INVALID_SYNC']);
+        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, checkedAt, ['INVALID_SYNC']);
         throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
       }
       if (envelope === detail) detailSyncedAt = envelope.data.synced_at;
@@ -674,7 +678,7 @@ async function collectIancarOneFullFactsInner(
         if (responseNow - Date.parse(envelope.data.synced_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000) reasons.push('EXPIRED');
         if (Date.parse(envelope.data.synced_at) - responseNow > 60_000) reasons.push('FUTURE');
         if (Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at)) reasons.push('BEHIND_LIST');
-        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, reasons);
+        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, checkedAt, reasons);
         sourceDrift = true; continue;
       }
       for (const field of ['inventory_status', 'available', 'available_from']) {
@@ -689,7 +693,7 @@ async function collectIancarOneFullFactsInner(
     // 못 미치면(요금 없음·기준 밖 값·중복 행) 그 차만 보류한다 — 틀린 요금은 어디에도 쓰지 않고, 나머지 차는 계속 진행한다.
     if (!isObject(rates) || rates.success !== true || !Array.isArray(rates.data)
       || !rates.data.every(isObject) || !instant(rates.updated_at)
-      || Date.parse(rates.updated_at) > observationNow() + 60_000
+      || Date.parse(rates.updated_at) > received[2]!.receivedAt + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
       throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
     // 신원·시효·번호·요금 봉투가 모두 정상일 때만 «가용 상태가 읽는 동안 바뀐 차»를 그 차만 보류한다(검증을 건너뛰어 불일치가 보류로 둔갑하지 않게).

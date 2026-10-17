@@ -32,6 +32,76 @@ function fetcher(changes: Record<number, 'detail' | 'end'> = {}) {
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:00:00Z')); });
 afterEach(() => { vi.useRealTimers(); });
 
+describe('개별 응답 수신 시각과 전체 검증 시각 구분', () => {
+  const observed = '2026-10-17T11:47:31.055Z';
+  const started = '2026-10-17T12:00:04.459Z';
+  const completed = '2026-10-17T12:02:39.693Z';
+  const slowRates = (extra: Record<string, unknown> = {}, endingFresh = true) => {
+    const base = fetcher(); let lists = 0;
+    return (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const body = await (await base(input)).json();
+      if (path === '/v1/vehicles') {
+        const stamp = ++lists > 1 && endingFresh ? completed : observed;
+        body.data = body.data.slice(0, 2).map((r: Record<string, unknown>) => ({ ...r, synced_at: stamp }));
+        body.pagination.total = 2; body.synced_at = stamp;
+      } else if (path.endsWith('/rates')) {
+        await new Promise(resolve => setTimeout(resolve, 155_234));
+      } else Object.assign(body.data, { synced_at: observed }, extra);
+      return Response.json(body);
+    }) as typeof fetch;
+  };
+  it('제때 받은 상세·가용을 느린 요금 때문에 만료로 오인하지 않으며 끝 목록은 신선해야 한다', async () => {
+    vi.setSystemTime(new Date(started));
+    const pending = collectIancarOneFullFacts(config, slowRates()).catch(e => e);
+    await vi.runAllTimersAsync();
+    const capture = await pending;
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.records.filter((r: { hold?: unknown }) => r.hold)).toHaveLength(0);
+    expect(capture.syncedAt).toBe(observed); // 시작 원천 시각을 완료/현재 시각으로 덮지 않는다.
+    expect(capture.observationWindow).toMatchObject({ startInventorySyncedAt: observed, endInventorySyncedAt: completed });
+  });
+  it.each([
+    ['NOT_FRESH_FLAG', { stale: true }],
+    ['FUTURE', { synced_at: '2026-10-17T12:01:05.459Z' }],
+    ['BEHIND_LIST', { synced_at: '2026-10-17T11:46:31.055Z' }],
+    ['EXPIRED', { synced_at: '2026-10-17T11:44:00.000Z' }],
+  ] as const)('늦은 요금이 와도 수신 당시 %s는 계속 보류한다', async (reason, extra) => {
+    vi.setSystemTime(new Date(started));
+    const pending = collectIancarOneFullFacts(config, slowRates(extra)).catch(e => e);
+    await vi.runAllTimersAsync();
+    const error = await pending;
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic.reasonEnvelopeCounts[reason]).toBe(4);
+    expect(error.clockDiagnostic.examples[0]).toMatchObject({ receivedAt: started, checkedAt: completed });
+  });
+  it('끝 목록도 여전히 같은 오래된 원천이면 회복/완전 읽기로 처리하지 않는다', async () => {
+    vi.setSystemTime(new Date(started));
+    const pending = collectIancarOneFullFacts(config, slowRates({}, false)).catch(e => e);
+    await vi.runAllTimersAsync();
+    const capture = await pending;
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED');
+  });
+  it('요금을 받을 때 60초 넘게 미래인 시각도 늦은 상세를 기다린 뒤 정상으로 바뀌지 않는다', async () => {
+    vi.setSystemTime(new Date(started));
+    const base = slowRates();
+    const calls = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/rates')) return Response.json({ success: true, updated_at: '2026-10-17T12:01:05.459Z', data: [rate] });
+      const body = await (await base(input)).json();
+      if (path !== '/v1/vehicles') {
+        await new Promise(resolve => setTimeout(resolve, 155_234));
+        body.data.synced_at = completed;
+      }
+      return Response.json(body);
+    }) as typeof fetch;
+    const pending = collectIancarOneFullFacts(config, calls).catch(e => e);
+    await vi.runAllTimersAsync();
+    expect((await pending).code).toBe('INVALID_IANCAR_ONE_RATES_RESPONSE');
+  });
+});
+
 describe('RP031 읽는 동안 상태가 바뀐 차는 그 차만 보류한다', () => {
   it('상세·가용이 목록과 다른 차 1대: 회차는 완전하고 그 차만 보류(값 계열)', async () => {
     const capture = await collectIancarOneFullFacts(config, fetcher({ 3: 'detail' }));
