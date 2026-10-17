@@ -206,10 +206,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 시트 읽기 전송은 읽기 모듈의 단일 판정(resolveSheetsTransport)을 쓴다: SHEETS_TRANSPORT=gws 면 이미 인증된 gws(회사 계정 위임, 시간 제한 120초·
   // 실패 코드 분류), 그 밖은 ADC 읽기 전용 토큰(온라인 실행기: WIF 서비스 계정, 시트 «보기» 공유). 같은 F05 읽기 안의 캡처(capture-shared-sheet)도 같은 판정이다.
   const sheetsRead = (url: URL) => readSheetsUrl(url, { env });
-  const get = async (url: URL, authenticated: boolean) => {
+  const get = async (url: URL, authenticated: boolean, retriedAuth = false): Promise<Response> => {
     if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
+    // 401 = 캐시 토큰 만료·무효: 한 번만 다시 발급해 재요청(createGcloudTokenSource 참고).
+    if (authenticated && response.status === 401 && !retriedAuth) { gcloudUserToken.invalidate(); return get(url, false || authenticated, true); }
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };
@@ -589,7 +591,11 @@ export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonl
   // 시트 원천은 전송을 명시해야 한다(미설정 기본값은 ADC — 운영 PC 에서 조용히 다른 전송으로 읽지 않게, F05 뿐 아니라 아이카·오토플러스 시트도).
   if (sheets && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
-  catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
+  catch (e) {
+    // 사유 코드(GCLOUD_TOKEN_FAILED_TIMEOUT 등)가 있으면 함께 남긴다 — 10-17 장애 때 «MISSING» 만 남아 원인을 gcloud 로그에서 찾아야 했다.
+    missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING');
+    if (e instanceof Error && /^GCLOUD_TOKEN_FAILED_[A-Z_]+$/.test(e.message)) missing.push(e.message);
+  }
   return missing;
 }
 
