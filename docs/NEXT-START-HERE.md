@@ -245,7 +245,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 이안카 Ray EV | stored 더 뉴 레이 ↔ 원천/마스터 더 기아 레이 EV TAM 불일치. 에어·전기·2026·4인승은 보존 | 기존 master pair/원천 근거 확인. 현재 ERP5에는 4인승·기존 옵션 원문 문장 1개가 보여 이전 5석/옵션0을 현재 결함으로 쓰지 않음 | legacy_confirmed의 원래 보호 의미/작성 근거와 기존 정정 허용 경로 확인. 플래그 삭제·범용 overwrite·모호 매칭 통과 강제 없이 정확 대상 계획·승인·readback |
 | 아이카 캐스퍼 | 48개월 실제 조건 보존. 세부모델/트림·세대 근거 부족 | 대표가 지정한 예외. 임의 이름·개발코드·제원을 만들지 않음 | 원문/정본 근거가 들어오기 전 미확정 유지 |
 
-- next_start_here: 같은 Data 개발선의 소유 변경을 정상 commit으로 보존하고, 적용이 철회된 구 인증 후보 2개 commit의 증거는 보존하면서 최신 main의 PR732와 중복되지 않게 정합한다. 기존 진단/정정 capability를 먼저 재사용한다. ERP5 옵션은 기존 PR169/같은 원격 가지에서 계속하며 새 가지·새 writer를 만들지 않는다. 운영 gate 미통과는 완료로 세지 않는다.
+- 개발 정합/검증: 소유 14파일 후보는 947464eb67e6eb89ed407ffe22544b2fcd9337fa로 보존했다. 철회된 인증 후보 두 commit만 정상 revert(729eb394/e7297bc5)했고 원본 commit·compiled2 정확 SHA 사본은 보존했다. 최신 main d7e64014e3b9bfc52aae72fbf7e9803f924c7ac8을 충돌 없이 정상 merge했으며 source-cycle 인증 source2는 main과 차이 0이다. 같은 범위 9파일 275 PASS/기존1 skip와 정식 npm run build(tsc+필수asset복사) PASS, 운영 runtime 변경 0.
+- next_start_here: 최신 main에 이미 있는 PR705 explain:engine-refine의 네트워크0/쓰기0 순수 진단을 기존 snapshot·master 근거에 재사용해 차종/제원 정정 plan을 구체화한다. ERP5 옵션은 기존 PR169/같은 원격 가지에서 계속하며 새 가지·새 writer를 만들지 않는다. 운영 gate 미통과는 완료로 세지 않는다.
 
 ### 2026-10-17 16시 정규회차 관측 — PR732 원작성자 배포 복구
 

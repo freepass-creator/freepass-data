@@ -39,14 +39,74 @@ export function encodeValue(v: any): any {
   throw new Error('FIRESTORE_VALUE_INVALID');
 }
 export const encodeFields = (fields: Fields): Fields => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, encodeValue(v)]));
-export async function gcloudUserToken(): Promise<string> {
-  const { stdout } = await promisify(execFile)(process.platform === 'win32' ? 'powershell.exe' : 'gcloud',
-    process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', '& gcloud.cmd auth print-access-token; exit $LASTEXITCODE']
-      : ['auth', 'print-access-token'], { windowsHide: true, timeout: 30_000 });
-  const token = stdout.trim();
-  if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_REQUIRED');
-  return token;
+/** gcloud 사용자 토큰 원천(프로세스 안 캐시). 2026-10-17 장애: 요청마다 powershell→gcloud(Python) 를 새로 띄워(회차당 ≈250회) 호스트가 느려지면
+ * 일부가 30초를 넘기거나 stdout 파이프 오류로 죽어 비코드 예외 → CYCLE_ERROR 로 전 공급사가 보류됐다. 이 원천은
+ *  - 발급 토큰을 ttlMs(기본 15분 — gcloud 가 «출력한 시각»은 «발급 시각»이 아니라 1시간을 믿지 않는다) 동안 재사용하고,
+ *  - 동시 요청은 한 발급 Promise 를 공유하며, 실패하면 1회 재시도(더 긴 시간 제한), 최종 실패 뒤 cooldownMs 동안은 같은 코드로 바로 거절(회차 안 누적 지연 방지),
+ *  - 예외는 회차 기록 필터(/^[A-Z_]+$/)를 통과하는 코드만 낸다: GCLOUD_TOKEN_FAILED_TIMEOUT · _CRASH · _EMPTY,
+ *  - 계정은 SOURCE_CYCLE_GCLOUD_ACCOUNT(있으면 --account 고정)로 활성 계정 전환에 흔들리지 않게 한다.
+ * API 가 401 을 돌려주면 호출자가 invalidate() 뒤 한 번 다시 발급한다(만료 시각을 모르는 토큰의 안전망). */
+export type GcloudTokenSource = { (): Promise<string>; invalidate(): void };
+export type GcloudTokenExec = (timeoutMs: number) => Promise<string>;
+export function createGcloudTokenSource(opts: { exec?: GcloudTokenExec; now?: () => number; ttlMs?: number; timeoutMs?: number; retryTimeoutMs?: number;
+  cooldownMs?: number; account?: string } = {}): GcloudTokenSource {
+  const now = opts.now ?? Date.now, ttl = opts.ttlMs ?? 15 * 60_000, timeoutMs = opts.timeoutMs ?? 30_000, retryTimeoutMs = opts.retryTimeoutMs ?? 60_000,
+    cooldown = opts.cooldownMs ?? 60_000;
+  const exec: GcloudTokenExec = opts.exec ?? (ms => runGcloudPrintAccessToken(ms, opts.account));
+  let cached: { token: string; at: number } | null = null, inflight: Promise<string> | null = null, failed: { code: string; at: number } | null = null;
+  const classify = (e: unknown): string => {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/^GCLOUD_TOKEN_FAILED_[A-Z_]+$/.test(m)) return m;
+    if (/timed out|ETIMEDOUT|TIMEOUT/i.test(m)) return 'GCLOUD_TOKEN_FAILED_TIMEOUT';
+    return 'GCLOUD_TOKEN_FAILED_CRASH';
+  };
+  const once = async (ms: number): Promise<string> => {
+    const token = (await exec(ms)).trim();
+    if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_FAILED_EMPTY');
+    return token;
+  };
+  const source = (async (): Promise<string> => {
+    if (cached && now() - cached.at < ttl) return cached.token;
+    if (inflight) return inflight;
+    if (failed && now() - failed.at < cooldown) throw new Error(failed.code);
+    inflight = (async () => {
+      try {
+        let token: string;
+        try { token = await once(timeoutMs); } catch (first) {
+          const firstCode = classify(first);
+          try { token = await once(retryTimeoutMs); } catch (second) { throw new Error(classify(second) === 'GCLOUD_TOKEN_FAILED_EMPTY' ? firstCode : classify(second)); }
+        }
+        cached = { token, at: now() }; failed = null; return token;
+      } catch (e) { cached = null; failed = { code: classify(e), at: now() }; throw new Error(failed.code); }
+      finally { inflight = null; }
+    })();
+    return inflight;
+  }) as GcloudTokenSource;
+  source.invalidate = () => { cached = null; failed = null; };
+  return source;
 }
+/** powershell → gcloud.cmd 한 번. 시간 제한은 타이머 하나로만 관리한다(execFile 자체 timeout 은 쓰지 않는다 — 부모 powershell 이 먼저 죽으면
+ * 자식 gcloud(Python) 가 남아 누적된다, Codex P1). 시간 초과 시 taskkill /T 로 트리 전체를 끝내고, 종료 성공 여부와 무관하게 즉시 거절한다. */
+async function runGcloudPrintAccessToken(timeoutMs: number, account?: string): Promise<string> {
+  const args = ['auth', 'print-access-token', ...(account ? ['--account', account] : [])];
+  const win = process.platform === 'win32';
+  const child = execFile(win ? 'powershell.exe' : 'gcloud', win ? ['-NoProfile', '-NonInteractive', '-Command', `& gcloud.cmd ${args.join(' ')}; exit $LASTEXITCODE`] : args,
+    { windowsHide: true });
+  return new Promise<string>((resolve, reject) => {
+    let out = '', settled = false;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
+    const timer = setTimeout(() => {
+      if (win && child.pid) { try { execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* 트리 종료 실패는 무시 */ } }
+      try { child.kill('SIGKILL'); } catch { /* 이미 끝났을 수 있다 */ }
+      finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_TIMEOUT')));
+    }, timeoutMs);
+    child.stdout?.on('data', d => { out += d; });
+    child.on('error', () => finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
+    child.on('close', code => finish(() => code === 0 ? resolve(out) : reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
+  });
+}
+const fixedAccount = process.env.SOURCE_CYCLE_GCLOUD_ACCOUNT?.trim();
+export const gcloudUserToken: GcloudTokenSource = createGcloudTokenSource(fixedAccount ? { account: fixedAccount } : {});
 /** 가격 맵 정규화: null·undefined·키 누락을 같게 보고(해당 키 제거) 키를 정렬한다. digest 계산·비교·되읽기 대조 공통 기준. */
 export function normalizePrice(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizePrice);
@@ -496,10 +556,15 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
   };
-  const request = async (path: string, method = 'GET', body?: unknown): Promise<any> => {
+  const tokenSource = options.token ?? gcloudUserToken;
+  const request = async (path: string, method = 'GET', body?: unknown, retriedAuth = false): Promise<any> => {
     const response = await fetcher(base + path, { method, redirect: 'error', signal: AbortSignal.timeout(60_000),
-      headers: { authorization: `Bearer ${await (options.token ?? gcloudUserToken)()}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${await tokenSource()}`, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    // 401 = 토큰 만료·무효(발급 시각을 모르는 캐시 토큰의 안전망): 캐시를 비우고 한 번만 다시 발급해 재요청한다.
+    if (response.status === 401 && !retriedAuth && typeof (tokenSource as Partial<GcloudTokenSource>).invalidate === 'function') {
+      (tokenSource as GcloudTokenSource).invalidate(); return request(path, method, body, true);
+    }
     if (response.status === 404 && method === 'GET') return null;
     if (!response.ok) throw new Error(response.status === 409 || response.status === 412 ? 'CAS_CONFLICT' : 'FIRESTORE_REQUEST_FAILED');
     return response.json();
