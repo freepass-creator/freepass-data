@@ -31,6 +31,9 @@ if (!process.argv.includes('--apply')) {
     requestDigest: stableDigest(plan),
     summarize: (value) => ({ count: value.readbackCount, digest: stableDigest(value) }),
   // 승인 digest 를 적용기 함수에도 넘겨 적용기가 «자기 계산한 digest» 와 직접 대조한다(작업 스크립트 검사에만 기대지 않음).
-  }, () => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: process.env.AUTHORIZE_VEHICLE_NAME_REPAIR }));
+  }, () => applyVehicleNameReferenceRepair(plan, {
+    approvedPlanDigest: process.env.AUTHORIZE_VEHICLE_NAME_REPAIR,
+    requireReviewedSnapshot: true,
+  }));
   console.log(JSON.stringify({ status: 'APPLIED', result }, null, 2));
 }
