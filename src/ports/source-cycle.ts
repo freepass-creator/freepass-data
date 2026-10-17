@@ -1,4 +1,18 @@
-import type { SourceFamily, SourceProductRecord } from '../domain/source-engine.js';
+import type { SourceFamily, SourceProductRecord, SourceRead } from '../domain/source-engine.js';
+
+/** Bounded operating evidence only; never business payloads, vehicle IDs or credentials. */
+export type SourceClockReason = 'INVALID_SYNC' | 'NOT_FRESH_FLAG' | 'EXPIRED' | 'FUTURE' | 'BEHIND_LIST';
+export type SourceClockDiagnostic = {
+  kind: 'IANCAR_DETAIL_CLOCK'; stage: 'INVALID_SYNC' | 'DRIFT_LIMIT';
+  listSyncedAt: string | null; checkedAt: string;
+  listedVehicles: number; rereadVehicles: number; cachedVehicles: number;
+  heldVehicles: number; clockHeldVehicles: number; driftLimit: number;
+  /** Per response envelope, not vehicle counts; a response can fail several checks. */
+  reasonEnvelopeCounts: Record<SourceClockReason, number>;
+  examples: Array<{ envelope: 'DETAIL' | 'AVAILABILITY'; syncedAt: string | null; checkedAt: string;
+    ageMs: number | null; behindListMs: number | null; reasons: SourceClockReason[] }>;
+};
+export type CycleRead<T> = SourceRead<T> & { clockDiagnostic?: SourceClockDiagnostic };
 
 export type SupplierFields = { provider_name: string; policy_code: string | null };
 export type CycleProduct = {
@@ -73,6 +87,8 @@ export type CyclePlan = {
   warnings: string[]; unassignedPlateCount: number;
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
+  /** Most recent clock diagnosis, retained on success. checkedAt is history, never the current health status. */
+  lastReadClockDiagnostic?: SourceClockDiagnostic;
   observationOnlyCount?: number;
   /** 읽기 단계 보류 사유 코드별 건수(대수 대조에서 «왜 못 들어왔나» 를 가르는 근거). 번호·원문은 담지 않는다. */
   heldReasons?: Record<string, number>;

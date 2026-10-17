@@ -2,6 +2,7 @@ import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, VEHICLE_PHOTO_
 import { createHash } from 'node:crypto';
 import { cachedIancarDetailFor, iancarListRowDigest, iancarRotationIds, IANCAR_DETAIL_CACHE_VERSION, type IancarDetailCache, type IancarDetailCacheEntry } from './iancar-detail-cache.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import type { SourceClockDiagnostic, SourceClockReason } from '../ports/source-cycle.js';
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -121,7 +122,8 @@ export class IancarOneApiError extends Error {
     readonly code: string,
     readonly status?: number,
     readonly requestId?: string | null,
-    readonly retryAfterSeconds?: number | null
+    readonly retryAfterSeconds?: number | null,
+    readonly clockDiagnostic?: SourceClockDiagnostic
   ) {
     super(code);
     this.name = 'IancarOneApiError';
@@ -595,6 +597,27 @@ async function collectIancarOneFullFactsInner(
   let completed = 0;
   let aborted = false;
   let driftHolds = 0, sourceDriftHolds = 0;
+  const reasonEnvelopeCounts: Record<SourceClockReason, number> = {
+    INVALID_SYNC: 0, NOT_FRESH_FLAG: 0, EXPIRED: 0, FUTURE: 0, BEHIND_LIST: 0,
+  };
+  const clockExamples: SourceClockDiagnostic['examples'] = [];
+  const safeInstant = (value: unknown): string | null => typeof value === 'string' && Number.isFinite(Date.parse(value))
+    ? new Date(Date.parse(value)).toISOString() : null;
+  const noteClock = (envelope: 'DETAIL' | 'AVAILABILITY', value: unknown, checkedAt: number, reasons: SourceClockReason[]) => {
+    for (const reason of reasons) reasonEnvelopeCounts[reason]++;
+    if (clockExamples.length >= 4) return;
+    const syncedAt = safeInstant(value);
+    clockExamples.push({ envelope, syncedAt, checkedAt: new Date(checkedAt).toISOString(),
+      ageMs: syncedAt ? checkedAt - Date.parse(syncedAt) : null,
+      behindListMs: syncedAt ? Date.parse(capture.syncedAt) - Date.parse(syncedAt) : null, reasons: [...reasons] });
+  };
+  const clockDiagnostic = (stage: SourceClockDiagnostic['stage']): SourceClockDiagnostic => ({
+    kind: 'IANCAR_DETAIL_CLOCK', stage, listSyncedAt: safeInstant(capture.syncedAt), checkedAt: new Date(observationNow()).toISOString(),
+    listedVehicles: capture.records.length, rereadVehicles: reread, cachedVehicles: detailsCached,
+    heldVehicles: driftHolds, clockHeldVehicles: sourceDriftHolds,
+    driftLimit: Math.floor((cacheOn ? reread : capture.records.length) * IANCAR_ONE_DRIFT_HOLD_RATIO),
+    reasonEnvelopeCounts: { ...reasonEnvelopeCounts }, examples: structuredClone(clockExamples),
+  });
   const worker = async () => {
   for (;;) {
     if (aborted) return;
@@ -635,14 +658,25 @@ async function collectIancarOneFullFactsInner(
       // Validate freshness and facts separately; clock equality is not fact equality.
       const responseNow = observationNow();
       // 갱신 시각 형식 자체가 깨진 응답은 전송 문제라 회차 전체 실패로 남긴다(봉투 검증).
-      if (!instant(envelope.data.synced_at)) throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+      if (!instant(envelope.data.synced_at)) {
+        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, ['INVALID_SYNC']);
+        throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+      }
       if (envelope === detail) detailSyncedAt = envelope.data.synced_at;
       // 한 차의 상세 시각이 오래됐거나(stale·신선도 창 밖)·미래이거나·목록보다 이전이면 «그 차만» 보류한다(다음 회차에 다시 읽는다) — 한 대 때문에 회차 전체를
       // 못 쓰던 것(2026-10-16 16:00 회차 이안카 노출 89대 STALE)을 좁힌다. 어긋난 차가 많으면(아래 한도 20%) 원천 불안정으로 예전처럼 회차 전체를 실패시킨다.
       if (envelope.data.stale !== false
         || responseNow - Date.parse(envelope.data.synced_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
         || Date.parse(envelope.data.synced_at) - responseNow > 60_000
-        || Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at)) { sourceDrift = true; continue; }
+        || Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at)) {
+        const reasons: SourceClockReason[] = [];
+        if (envelope.data.stale !== false) reasons.push('NOT_FRESH_FLAG');
+        if (responseNow - Date.parse(envelope.data.synced_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000) reasons.push('EXPIRED');
+        if (Date.parse(envelope.data.synced_at) - responseNow > 60_000) reasons.push('FUTURE');
+        if (Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at)) reasons.push('BEHIND_LIST');
+        noteClock(envelope === detail ? 'DETAIL' : 'AVAILABILITY', envelope.data.synced_at, responseNow, reasons);
+        sourceDrift = true; continue;
+      }
       for (const field of ['inventory_status', 'available', 'available_from']) {
         // 목록을 읽은 뒤 이 차의 가용 상태가 실제로 바뀌면(읽는 데 수 분 걸린다) 상세와 목록이 어긋난다. 한 대의 전이로 회차 전체를 실패시키지 않고
         // 그 차만 요금 사실 보류(값 계열)로 둔다 — 다음 회차에 일관된 값으로 다시 읽는다. 어긋난 차가 많으면(아래 한도) 원천 불안정으로 회차를 실패시킨다.
@@ -710,11 +744,19 @@ async function collectIancarOneFullFactsInner(
   const failed = settled.find(result => result.status === 'rejected'
     && result.reason instanceof IancarOneApiError && result.reason.status === 429)
     ?? settled.find(result => result.status === 'rejected');
-  if (failed?.status === 'rejected') throw failed.reason;
+  if (failed?.status === 'rejected') {
+    const error = failed.reason;
+    if (error instanceof IancarOneApiError && error.code === 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' && reasonEnvelopeCounts.INVALID_SYNC > 0) {
+      throw new IancarOneApiError(error.code, error.status, error.requestId, error.retryAfterSeconds, clockDiagnostic('INVALID_SYNC'));
+    }
+    throw error;
+  }
   // 목록·상세 시차로 어긋난 차가 한도(전체의 20%)를 넘으면 개별 전이가 아니라 원천 불안정이다: 예전처럼 회차 전체를 실패시킨다.
   // 캐시를 쓴 회차는 실제로 다시 읽은 차 수를 분모로 둔다(캐시 적중을 «통과»로 세어 비율이 희석되지 않게, Codex P2).
   const driftLimit = Math.floor((cacheOn ? reread : capture.records.length) * IANCAR_ONE_DRIFT_HOLD_RATIO);
-  if (driftHolds > driftLimit) throw new IancarOneApiError(sourceDriftHolds > 0 ? 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' : 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT');
+  if (driftHolds > driftLimit) throw new IancarOneApiError(
+    sourceDriftHolds > 0 ? 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' : 'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT',
+    undefined, undefined, undefined, sourceDriftHolds > 0 ? clockDiagnostic('DRIFT_LIMIT') : undefined);
   const ending = await collectIancarOneVehicleList(config, fetcher, new Date(observationNow()).toISOString());
   const issues = [...ending.issues];
   // Photo credentials may be reissued on every GET; do not compare ephemeral URLs.

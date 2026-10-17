@@ -7,11 +7,12 @@ import { planSourceCycle, applySourceCycle, deepEqual, emptyCycleState,
   type CycleProduct, type CycleCommands, type CycleControl, type CycleEvidence, type CycleConfig } from '../src/application/source-cycle.js';
 import { sourceCyclePlugin, sharedSheetCyclePlugin, iancarCyclePlugin, AICA_SCOPES, type CycleCapture, type CycleSourceKind } from '../src/adapters/source-cycle-plugins.js';
 import { sharedSheetChannels, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
-import type { IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
+import { IancarOneApiError, type IancarOneListCapture } from '../src/adapters/iancar-one-api.js';
 import { fileCycleControl, sourceRunCycleHeartbeat, STALE_LOCK_MS } from '../src/adapters/source-cycle-control.js';
 import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { validateSourceRecord, sourceSaleAvailable, salePriceMap, compactRaw, type SourceProductRecord } from '../src/domain/source-engine.js';
+import type { SourceClockDiagnostic } from '../src/ports/source-cycle.js';
 import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 
@@ -55,6 +56,47 @@ function capture(rows: SourceProductRecord[], scopes = ['inventory']): CycleCapt
 }
 const plugin = (read: () => Promise<CycleCapture>, kind: CycleSourceKind = 'IRON') => sourceCyclePlugin(
   { sourceId: config.sourceId, kind, scopes: kind === 'AICA' ? [...AICA_SCOPES] : ['inventory'], maxDowngradeRatio: 0.5 }, read, () => time);
+
+describe('IANCAR clock diagnostics use the existing state/heartbeat path only', () => {
+  const diagnostic: SourceClockDiagnostic = { kind: 'IANCAR_DETAIL_CLOCK', stage: 'DRIFT_LIMIT', listSyncedAt: time,
+    checkedAt: time, listedVehicles: 10, rereadVehicles: 10, cachedVehicles: 0, heldVehicles: 3, clockHeldVehicles: 3,
+    driftLimit: 2, reasonEnvelopeCounts: { INVALID_SYNC: 0, NOT_FRESH_FLAG: 0, EXPIRED: 0, FUTURE: 0, BEHIND_LIST: 6 }, examples: [] };
+
+  it('a timing HOLD preserves the last complete read and failure count, emits diagnostics, and never reaches RAW or product writes', async () => {
+    const { ctrl } = control(), m = memory();
+    const previousComplete = '2026-10-11T23:50:00.000Z';
+    await ctrl.save('RP031', { ...emptyCycleState(), failures: 2, lastCompleteAt: previousComplete, lastSyncedAt: previousComplete });
+    const list = vi.spyOn(m.commands, 'list'), storeRaw = vi.fn(async () => ({ stored: 0, absentMarked: 0 }));
+    m.commands.storeRaw = storeRaw;
+    const p = iancarCyclePlugin(0.5, async () => {
+      throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT', undefined, undefined, undefined, diagnostic);
+    }, () => time);
+    const result = await runSourceCycle(p, m.commands, ctrl, { now: () => now });
+    expect(result).toMatchObject({ status: 'HOLD', writes: 0 });
+    expect(await ctrl.load('RP031')).toMatchObject({ error: 'IANCAR_ONE_DETAIL_SOURCE_DRIFT', failures: 2, stopped: false,
+      lastCompleteAt: previousComplete, lastSyncedAt: previousComplete, lastReadClockDiagnostic: diagnostic });
+    expect(ctrl.heartbeat).toHaveBeenCalledWith('RP031', expect.objectContaining({ lastReadClockDiagnostic: diagnostic }), null);
+    expect(list).not.toHaveBeenCalled();
+    expect(storeRaw).not.toHaveBeenCalled();
+    expect(m.order).toEqual([]);
+    const nextTime = new Date(now + 60_000).toISOString();
+    p.read = async () => ({ raw: { ...capture([], ['ONE_FULL_FACTS']), observedAt: nextTime },
+      complete: true, attemptedAt: nextTime, observedAt: nextTime, error: null });
+    await runSourceCycle(p, m.commands, ctrl, { now: () => now + 60_000 });
+    expect(await ctrl.load('RP031')).toMatchObject({ lastReadClockDiagnostic: diagnostic, error: null,
+      lastCompleteAt: nextTime, failures: 0 });
+    expect((await ctrl.load('RP031')).lastReadClockDiagnostic!.checkedAt).toBe(time);
+  });
+
+  it('an arbitrary error cannot inject a raw body into diagnostic state', async () => {
+    const p = iancarCyclePlugin(0.5, async () => {
+      throw Object.assign(new Error('IANCAR_ONE_DETAIL_SOURCE_DRIFT'), { clockDiagnostic: { raw: 'DO_NOT_LOG' } });
+    }, () => time);
+    const read = await p.read();
+    expect(read.detail).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(read.clockDiagnostic).toBeUndefined();
+  });
+});
 async function apply(commands: CycleCommands, plan: ReturnType<typeof planSourceCycle>) {
   return applySourceCycle(commands, plan.plan, { apply: true, digest: plan.digest, approval: plan.digest, now });
 }

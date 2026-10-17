@@ -49,6 +49,27 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:
 afterEach(() => { vi.useRealTimers(); });
 
 describe('이안카 상세·가용 캐시', () => {
+  it('시각 진단의 한도·재읽기 수는 캐시 적중으로 희석하지 않는다', async () => {
+    const first = await collectIancarOneFullFacts(config, world().fetcher, undefined, undefined, { detailCache: null });
+    const cache = roundTrip(first.detailCacheOut!);
+    const rereadIds = [...iancarRotationIds(cache, Array.from({ length: N }, (_, i) => `veh${i}`))];
+    const bad = new Set(rereadIds.slice(0, 5));
+    const w = world();
+    const drift = (async (input: string | URL | Request) => {
+      const response = await w.fetcher(input), path = new URL(String(input)).pathname;
+      const id = /\/v1\/vehicles\/(veh\d+)(?:\/availability)?$/.exec(path)?.[1];
+      if (id && bad.has(id)) {
+        const body = await response.json(); body.data.synced_at = '2026-09-30T23:59:00.000Z'; return Response.json(body);
+      }
+      return response;
+    }) as typeof fetch;
+    const error = await collectIancarOneFullFacts(config, drift, undefined, undefined, { detailCache: cache }).catch(e => e);
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic).toMatchObject({ listedVehicles: N, cachedVehicles: 10, rereadVehicles: 20,
+      driftLimit: 4, heldVehicles: 5, clockHeldVehicles: 5, reasonEnvelopeCounts: { BEHIND_LIST: 10 } });
+    expect(w.calls.rates).toBe(N);
+  });
+
   it('첫 회차(캐시 없음)는 전수 3호출; 둘째 회차는 순환 몫(20)만 상세·가용을 읽고 나머지는 재사용, 요금은 전부 다시 읽는다', async () => {
     const w1 = world();
     const first = await collectIancarOneFullFacts(config, w1.fetcher, undefined, undefined, { detailCache: null });
