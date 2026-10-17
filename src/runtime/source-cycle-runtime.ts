@@ -208,9 +208,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const sheetsRead = (url: URL) => readSheetsUrl(url, { env });
   const get = async (url: URL, authenticated: boolean) => {
     if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
+    const token = authenticated ? await gcloudUserToken() : null;
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
-      headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
-    if (authenticated && response.status === 401) invalidateGcloudUserToken();
+      headers: token ? { authorization: `Bearer ${token}` } : {} });
+    if (token && url.hostname === 'firestore.googleapis.com' && response.status === 401) invalidateGcloudUserToken(token);
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };
