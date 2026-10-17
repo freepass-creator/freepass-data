@@ -90,13 +90,24 @@ export type MigrationCaseBinding = {
   caseId: 'C1017-c3cf7649:ray-ev:1'; direction: 'APPLY' | 'ROLLBACK'; approvalReference: string;
   originalProductDigest: string; originalProductUpdateTime: ExactUpdateTime;
   expectedProductDigest: string; expectedProductUpdateTime: ExactUpdateTime;
-  sourceRaw: FrozenMigrationDocument; master: FrozenMigrationDocument; trim: FrozenMigrationDocument;
+  sourceRaw: Pick<FrozenMigrationDocument, 'id' | 'digest'>; master: FrozenMigrationDocument; trim: FrozenMigrationDocument;
+  rollbackProof?: { applyRunId: string; audit: FrozenMigrationDocument };
 };
 export type MigrationApprovalReader = (reference: string) => Promise<{
   reference: string; actorKind: 'USER'; status: 'APPROVED'; caseDigest: string; productIdDigest: string;
   actions: Array<'APPLY' | 'ROLLBACK'>; approvedAt: string; expiresAt: string;
 } | null>;
 type MigrationSnapshot = { exists: boolean; updateTime?: unknown; data(): Record<string, unknown> | undefined };
+/** Cycle completion timestamps are observations, not a change in this vehicle's source facts. */
+export function migrationRawContentDigest(data: Record<string, unknown> | undefined): string {
+  const { observed_at: _observed, last_seen_at: _seen, ...facts } = data ?? {};
+  return stableDigest(facts);
+}
+const approvalInstant = (value: string): number | null => {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)) return null;
+  const n = Date.parse(value);
+  return Number.isFinite(n) && new Date(n).toISOString().slice(0,19) === value.slice(0,19) ? n : null;
+};
 const MIGRATION_FROM = { maker: '기아', model: '레이', sub_model: '더 뉴 레이' };
 const MIGRATION_TO = { maker: '기아', model: '레이', sub_model: '더 기아 레이 EV TAM' };
 const exactStamp = (value: unknown): ExactUpdateTime => {
@@ -109,7 +120,7 @@ export function migrationCaseDigest(plan: VehicleNameRepairPlan): string {
   const b = plan.migrationCase!;
   return stableDigest({ caseId: b.caseId, productId: plan.productIdentityRepairs?.[0]?.id,
     originalProductDigest: b.originalProductDigest, originalProductUpdateTime: b.originalProductUpdateTime,
-    sourceRaw: b.sourceRaw, master: b.master, trim: b.trim, from: MIGRATION_FROM, to: MIGRATION_TO });
+    sourceRaw: { id: b.sourceRaw.id, digest: b.sourceRaw.digest }, master: b.master, trim: b.trim, from: MIGRATION_FROM, to: MIGRATION_TO });
 }
 function assertMigrationPlan(plan: VehicleNameRepairPlan) {
   const b = plan.migrationCase;
@@ -126,21 +137,24 @@ function assertMigrationPlan(plan: VehicleNameRepairPlan) {
     throw new Error('migration case permits only its exact sub_model delta');
   for (const digest of [b.originalProductDigest,b.expectedProductDigest,b.sourceRaw?.digest,b.master?.digest,b.trim?.digest])
     if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('migration snapshot digest required');
-  for (const stamp of [b.originalProductUpdateTime,b.expectedProductUpdateTime,b.sourceRaw.updateTime,b.master.updateTime,b.trim.updateTime]) exactStamp(stamp);
+  for (const stamp of [b.originalProductUpdateTime,b.expectedProductUpdateTime,b.master.updateTime,b.trim.updateTime]) exactStamp(stamp);
   for (const doc of [b.sourceRaw,b.master,b.trim]) if (!isDocId(doc.id)) throw new Error('migration document id invalid');
   if (b.direction === 'APPLY' && (b.expectedProductDigest !== b.originalProductDigest
     || stableDigest(b.expectedProductUpdateTime) !== stableDigest(b.originalProductUpdateTime))) throw new Error('migration original snapshot mismatch');
+  if (b.direction === 'APPLY' && b.rollbackProof) throw new Error('migration APPLY must not carry rollback proof');
+  if (b.direction === 'ROLLBACK' && (!b.rollbackProof?.applyRunId || !isDocId(b.rollbackProof.audit.id)
+    || !/^[a-f0-9]{64}$/.test(b.rollbackProof.audit.digest))) throw new Error('migration rollback committed audit proof required');
 }
 async function assertMigrationApproval(plan: VehicleNameRepairPlan, read?: MigrationApprovalReader) {
   if (!plan.migrationCase) return;
   if (!read) throw new Error('migration canonical USER approval reader required');
   // The host reads an existing human decision from its trusted authority. This module issues no approval.
   const b = plan.migrationCase, a = await read(b.approvalReference), now = Date.now();
+  const approved = a ? approvalInstant(a.approvedAt) : null, expires = a ? approvalInstant(a.expiresAt) : null;
   if (!a || a.reference !== b.approvalReference || a.actorKind !== 'USER' || a.status !== 'APPROVED'
     || a.caseDigest !== migrationCaseDigest(plan) || a.productIdDigest !== stableDigest(plan.productIdentityRepairs![0]!.id)
     || !Array.isArray(a.actions) || !a.actions.includes(b.direction)
-    || !Number.isFinite(Date.parse(a.approvedAt)) || !Number.isFinite(Date.parse(a.expiresAt))
-    || Date.parse(a.approvedAt) > now || Date.parse(a.expiresAt) <= now)
+    || approved === null || expires === null || approved > now || expires <= now || expires - approved > 86_400_000)
     throw new Error('migration exact USER approval missing, stale or mismatched');
 }
 export function assertMigrationCaseSnapshot(plan: VehicleNameRepairPlan, product: MigrationSnapshot, evidence: MigrationSnapshot[]) {
@@ -156,8 +170,8 @@ export function assertMigrationCaseSnapshot(plan: VehicleNameRepairPlan, product
     || hasHumanOrConfirmedMarker({ ...data, legacy_confirmed: false }) || productWriteBlock(data)) throw new Error('migration state is not the exact held case');
   [b.sourceRaw,b.master,b.trim].forEach((expected,i) => {
     const s = evidence[i];
-    if (!s?.exists || stableDigest(s.data()) !== expected.digest
-      || stableDigest(exactStamp(s.updateTime)) !== stableDigest(expected.updateTime)) throw new Error('migration source/master evidence changed');
+    if (!s?.exists || (i === 0 ? migrationRawContentDigest(s.data()) : stableDigest(s.data())) !== expected.digest
+      || (i !== 0 && stableDigest(exactStamp(s.updateTime)) !== stableDigest((expected as FrozenMigrationDocument).updateTime))) throw new Error('migration source/master evidence changed');
   });
   const raw = evidence[0]!.data()!, master = evidence[1]!.data()!, trim = evidence[2]!.data()!;
   if (raw.source_id !== 'RP031' || master.retired === true || trim.retired === true
@@ -169,6 +183,47 @@ export function assertMigrationCaseSnapshot(plan: VehicleNameRepairPlan, product
     || !['전기','전기차'].includes(String((raw.raw as Record<string,unknown>).fuel))
     || data.fuel_type !== '전기' || String(data.year) !== '2026' || Number(data.seats) !== 4)
     throw new Error('migration source or active master pair mismatch');
+  if (b.direction === 'ROLLBACK') {
+    const proof = b.rollbackProof!, audit = evidence[3], a = audit?.data();
+    const reason = `원문 근거: ${plan.productIdentityRepairs![0]!.evidence} / migration:${migrationCaseDigest(plan)} / approval:${b.approvalReference} / APPLY / after:${b.expectedProductDigest}`;
+    const auditId = 'vnr_' + createHash('sha256').update([proof.applyRunId, `products/${plan.productIdentityRepairs![0]!.id}`, 'identity'].join('|')).digest('hex').slice(0,32);
+    if (!audit?.exists || !a || stableDigest(a) !== proof.audit.digest || a.eventId !== proof.audit.id
+      || proof.audit.id !== auditId || stableDigest(a.actor) !== stableDigest({ id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' })
+      || a.commandId !== `vehicle-name-repair:${proof.applyRunId}` || a.entityId !== plan.productIdentityRepairs![0]!.id
+      || a.entityType !== 'products' || a.action !== 'VEHICLE_NAME_REFERENCE_REPAIRED' || a.reason !== reason
+      || stableDigest(a.before) !== stableDigest(MIGRATION_FROM) || stableDigest(a.after) !== stableDigest(MIGRATION_TO)
+      || stableDigest(exactStamp(audit.updateTime)) !== stableDigest(proof.audit.updateTime)
+      || stableDigest(proof.audit.updateTime) !== stableDigest(b.expectedProductUpdateTime)) throw new Error('migration rollback apply audit or version mismatch');
+  }
+}
+
+export type MigrationCommitRecovery = {
+  runId: string; backupPath: string; originalPlan: VehicleNameRepairPlan;
+  expectedAfterDigest: string; auditEventId: string; expectedAuditDigest: string;
+};
+type MigrationRollbackBinding = MigrationCaseBinding & { direction: 'ROLLBACK'; rollbackProof: NonNullable<MigrationCaseBinding['rollbackProof']> };
+export class MigrationCommitReadbackError extends Error {
+  readonly code = 'MIGRATION_COMMIT_READBACK_UNCONFIRMED';
+  constructor(readonly recovery: MigrationCommitRecovery) { super('migration commit returned but readback needs reconciliation; do not replay APPLY'); }
+}
+/** No authority is created. A read host may recover a rollback plan only from the exact committed audit + product.
+ * A different product updateTime, including a later timestamp-only write, makes recovery fail closed. */
+export function recoverMigrationRollbackBinding(recovery: MigrationCommitRecovery, product: MigrationSnapshot,
+  evidence: MigrationSnapshot[], audit: MigrationSnapshot): MigrationRollbackBinding {
+  const plan = recovery.originalPlan, b = plan.migrationCase;
+  assertMigrationPlan(plan);
+  const a = audit.data();
+  if (b?.direction !== 'APPLY' || !audit.exists || !a || stableDigest(a) !== recovery.expectedAuditDigest
+    || a.eventId !== recovery.auditEventId || a.commandId !== `vehicle-name-repair:${recovery.runId}`
+    || a.entityType !== 'products' || a.entityId !== plan.productIdentityRepairs![0]!.id
+    || stableDigest(exactStamp(audit.updateTime)) !== stableDigest(exactStamp(product.updateTime))
+    || stableDigest(product.data()) !== recovery.expectedAfterDigest) throw new Error('migration committed recovery evidence mismatch');
+  const binding: MigrationRollbackBinding = { ...b, direction: 'ROLLBACK', expectedProductDigest: recovery.expectedAfterDigest,
+    expectedProductUpdateTime: exactStamp(product.updateTime), rollbackProof: { applyRunId: recovery.runId,
+      audit: { id: recovery.auditEventId, digest: recovery.expectedAuditDigest, updateTime: exactStamp(audit.updateTime) } } };
+  const rollback = { ...plan, migrationCase: binding, productIdentityRepairs: plan.productIdentityRepairs!.map(x => ({ ...x, from: x.to, to: x.from })) };
+  assertMigrationCaseSnapshot(rollback, product, [...evidence, audit]);
+  return binding;
 }
 
 export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>; evidence: string };
@@ -537,7 +592,7 @@ const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
  * Reads back written audit events. The refs must be exactly the audits' refs (same count); only when both are empty
  * is the read skipped — Firestore.getAll() refuses an empty list, and a mismatch is a bug, not «nothing to check».
  */
-export async function readbackAuditEvents<R>(db: { getAll: (...refs: R[]) => Promise<Array<{ exists: boolean; data: () => Record<string, unknown> | undefined }>> }, refs: R[], audits: Array<{ reason: string }>, message: string) {
+export async function readbackAuditEvents<R>(db: { getAll: (...refs: R[]) => Promise<Array<{ exists: boolean; updateTime?: unknown; data: () => Record<string, unknown> | undefined }>> }, refs: R[], audits: Array<{ reason: string }>, message: string) {
   if (refs.length !== audits.length) throw new Error(`${message}: ${refs.length} audit refs for ${audits.length} audits`);
   if (!refs.length) return [];
   const readback = await db.getAll(...refs);
@@ -602,7 +657,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   await assertMigrationApproval(plan, options.readMigrationApproval);
   const migration = plan.migrationCase;
   const migrationRefs = migration ? [db.collection(FIRESTORE_COLLECTIONS.legacySourceCycle.raw).doc(migration.sourceRaw.id),
-    db.collection('vehicle_master').doc(migration.master.id), db.collection('vehicle_trim_master').doc(migration.trim.id)] : [];
+    db.collection('vehicle_master').doc(migration.master.id), db.collection('vehicle_trim_master').doc(migration.trim.id),
+    ...(migration.direction === 'ROLLBACK' ? [db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(migration.rollbackProof!.audit.id)] : [])] : [];
   const migrationEvidence = migrationRefs.length ? await db.getAll(...migrationRefs) : [];
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -662,6 +718,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       || (!identityFromOverwritable(snapshot.data(), identityTargets[index]!.item.from)
         && !aliasNormalizationAllowedFor(snapshot.data(), identityTargets[index]!.item.from, identityTargets[index]!.item.to)))) throw new Error(`productIdentity from is a manual or confirmed value ${snapshot.ref.path}`);
   });
+  const expectedMigrationAfterDigest = migration ? stableDigest({ ...identitySnapshots[0]!.data(), sub_model: identityTargets[0]!.item.to.sub_model }) : undefined;
   // 백업 시점 updateTime·문서 전체 digest: 상품 문서 쓰기는 이 시각 조건(lastUpdateTime)과 전체 digest 로만 한다(Codex (d)).
   const lockedUpdateTime: Record<string, unknown> = {};
   const lockedDigest: Record<string, string> = {};
@@ -782,7 +839,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
       before: Object.fromEntries(PRODUCT_IDENTITY_FIELDS.map((field) => [field, item.from[field]])),
       after: productIdentityToObject(item),
-      reason: `원문 근거: ${item.evidence}${migration ? ` / migration:${migrationCaseDigest(plan)} / approval:${migration.approvalReference} / ${migration.direction}` : ''}`,
+      reason: `원문 근거: ${item.evidence}${migration ? ` / migration:${migrationCaseDigest(plan)} / approval:${migration.approvalReference} / ${migration.direction} / after:${expectedMigrationAfterDigest}` : ''}`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
     ...retires.map((x, index): AuditEvent => ({
@@ -1189,6 +1246,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     });
   });
 
+  try {
   const readback = refs.length ? await db.getAll(...refs) : [];
   readback.forEach((snapshot, index) => {
     const { kind, item, field } = targets[index]!;
@@ -1207,6 +1265,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
   });
   const identityReadback = identityRefs.length ? await db.getAll(...identityRefs) : [];
+  if (migration && stableDigest(identityReadback[0]?.data()) !== expectedMigrationAfterDigest)
+    throw new Error('migration full readback differs from the transaction-pinned after state');
   identityReadback.forEach((snapshot, index) => {
     const want = productIdentityToObject(identityTargets[index]!.item);
     const data = snapshot.data();
@@ -1259,7 +1319,17 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const rollbackBinding = migration?.direction === 'APPLY' ? {
     ...migration, direction: 'ROLLBACK' as const, expectedProductDigest: stableDigest(identityReadback[0]!.data()),
     expectedProductUpdateTime: exactStamp(identityReadback[0]!.updateTime),
+    rollbackProof: { applyRunId: runId, audit: { id: audits[0]!.eventId, digest: stableDigest(audits[0]!), updateTime: exactStamp(auditReadback[0]!.updateTime) } },
   } : undefined;
+  if (rollbackBinding && stableDigest(rollbackBinding.rollbackProof.audit.updateTime) !== stableDigest(rollbackBinding.expectedProductUpdateTime))
+    throw new Error('migration product and committed audit versions differ; reconcile before rollback');
   return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length,
     ...(rollbackBinding ? { rollbackBinding } : {}) };
+  } catch (error) {
+    if (migration?.direction === 'APPLY' && expectedMigrationAfterDigest) throw new MigrationCommitReadbackError({
+      runId, backupPath, originalPlan: structuredClone(plan), expectedAfterDigest: expectedMigrationAfterDigest,
+      auditEventId: audits[0]!.eventId, expectedAuditDigest: stableDigest(audits[0]!),
+    });
+    throw error;
+  }
 }

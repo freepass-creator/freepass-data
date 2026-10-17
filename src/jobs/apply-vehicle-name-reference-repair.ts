@@ -14,8 +14,10 @@ const counts = validateVehicleNameRepairPlan(plan);
 // Approval binds the whole reviewed plan (every repair item), not only the sourceDigest label inside it.
 const planDigest = stableDigest(plan);
 if (!process.argv.includes('--apply')) {
-  console.log(JSON.stringify({ status: 'DRY_RUN', sourceDigest: plan.sourceDigest, planDigest, ...counts }, null, 2));
+  console.log(JSON.stringify({ status: 'DRY_RUN', sourceDigest: plan.sourceDigest, planDigest, ...counts,
+    ...(plan.migrationCase ? { readiness: 'HOLD_TRUSTED_USER_APPROVAL_READER_NOT_BOUND', applyAuthorized: false } : {}) }, null, 2));
 } else {
+  if (plan.migrationCase) throw new Error('MIGRATION_APPROVAL_READER_NOT_BOUND: this CLI cannot approve or execute a migration case');
   if (process.env.AUTHORIZE_VEHICLE_NAME_REPAIR !== planDigest) {
     throw new Error('exact plan digest authorization is required');
   }
