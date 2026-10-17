@@ -36,17 +36,18 @@
 
 ## 7. 엔진 교체 절차 (2026-10-17 사고 뒤 확정 — 커맨드 센터 지시)
 
-2026-10-17 15:48 #732 교체 때  를  만으로 빌드해  의 두 번째 단계(복사)가 빠졌다 → 런타임이  를 못 찾아
-ERR_MODULE_NOT_FOUND 로 사전점검 전에 종료(기록 없음, 예약 작업 결과 1), 15:50 감시 회차 실패. 복사 대상 4파일: ·,
-·.
+2026-10-17 15:48 #732 교체 때 `dist-new` 를 `tsc` 만으로 빌드해 `npm run build` 의 두 번째 단계(복사)가 빠졌다 → 런타임이 `dist/scripts/supplier-input-sheet.mjs` 를 못 찾아
+ERR_MODULE_NOT_FOUND 로 사전점검 전에 종료(기록 없음, 예약 작업 결과 1), 15:50 감시 회차 실패. 복사 대상 4파일: `dist/scripts/supplier-input-sheet.mjs` · `dist/scripts/sheet-presentation.mjs` ·
+`dist/contracts/supplier-input-sheet-spec.v1.json` · `dist/contracts/f01-f86-sheet-spec.v1.json`.
 
-1. 회차 미실행 확인:  node 프로세스 0 (정시 :00·감시 :50 ±10분은 피한다).
-2. 직전 커밋 기록: .
-3. .
-4. **빌드는  전체**(tsc + 4파일 복사). 라이브 공백을 줄이려면  뒤 같은 4파일을  에 복사하고 이름 바꾸기(→, →).
-5. **읽기 전용 import 되읽기**(필수):  — 모듈 누락 0.
-6. 수동 plan 1회(쓰기 없음):  가 DRY_RUN 과 identityRefine 로드를 보이면 통과.
-7. 이전  은 다음 회차 정상 확인까지 보존(되돌림 = 이름 바꾸기).
+1. 회차 미실행 확인: `source-cycle-runtime` node 프로세스 0 (정시 :00·감시 :50 ±10분은 피한다).
+2. 직전 커밋 기록: `git rev-parse HEAD > <비공개 디렉터리>/fd-cycle-prev-commit.txt`.
+3. `git fetch origin main && git checkout --detach origin/main`.
+4. **빌드는 `npm.cmd run build` 전체**(tsc + 4파일 복사). 라이브 공백을 줄이려면 `npx tsc -p tsconfig.json --outDir dist-new` 뒤 같은 4파일을 `dist-new` 에 복사하고
+   이름 바꾸기(`dist` → `dist-prev-<커밋>`, `dist-new` → `dist`).
+5. **읽기 전용 import 되읽기**(필수): `node -e "import('file:///C:/dev/fd-cycle/dist/src/runtime/source-cycle-runtime.js').then(()=>console.log('import ok'))"` — 모듈 누락 0.
+6. 수동 plan 1회(쓰기 없음): `node dist/src/runtime/source-cycle-runtime.js --plan <파일> --source RP013` 이 DRY_RUN 과 identityRefine 로드를 보이면 통과.
+7. 이전 `dist-prev-<커밋>` 은 다음 회차 정상 확인까지 보존(되돌림 = 이름 바꾸기).
 8. 교체 사실·시각·커밋·백업 이름을 커맨드 센터와 수집 Codex 채널에 한 줄 통보(운영 dist SHA 변경을 «원인 불명 drift»로 오인하지 않게).
 
 ## 6. 열린 후속
