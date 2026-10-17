@@ -83,12 +83,15 @@ describe('개별 응답 수신 시각과 전체 검증 시각 구분', () => {
     expect(capture.readyForRawIngest).toBe(false);
     expect(capture.issues).toContain('IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED');
   });
-  it('요금을 받을 때 60초 넘게 미래인 시각도 늦은 상세를 기다린 뒤 정상으로 바뀌지 않는다', async () => {
+  it.each([
+    ['2026-09-26T00:00:00Z', true], // 요금 개정일과 실제 읽은 시각은 다르다.
+    ['2026-10-17T12:01:05.459Z', false],
+  ] as const)('요금 갱신 %s: 실제 수신 시각을 보존하고 수신 당시 미래는 대기로 숨기지 않는다', async (updatedAt, valid) => {
     vi.setSystemTime(new Date(started));
     const base = slowRates();
     const calls = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;
-      if (path.endsWith('/rates')) return Response.json({ success: true, updated_at: '2026-10-17T12:01:05.459Z', data: [rate] });
+      if (path.endsWith('/rates')) return Response.json({ success: true, updated_at: updatedAt, data: [rate] });
       const body = await (await base(input)).json();
       if (path !== '/v1/vehicles') {
         await new Promise(resolve => setTimeout(resolve, 155_234));
@@ -98,7 +101,13 @@ describe('개별 응답 수신 시각과 전체 검증 시각 구분', () => {
     }) as typeof fetch;
     const pending = collectIancarOneFullFacts(config, calls).catch(e => e);
     await vi.runAllTimersAsync();
-    expect((await pending).code).toBe('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    const result = await pending;
+    if (!valid) expect(result.code).toBe('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    else {
+      expect(result.readyForRawIngest).toBe(true);
+      expect(result.records[0].payload.rateRequestEvidence.captured_at).toBe(started);
+      expect(result.records[0].payload.rates.updated_at).toBe(updatedAt);
+    }
   });
 });
 

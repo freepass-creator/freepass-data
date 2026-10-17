@@ -729,7 +729,7 @@ async function collectIancarOneFullFactsInner(
       rates: structuredClone(rates), rateRequestEvidence: {
         vehicle_id: record.vehicleId,
         path: `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`,
-        captured_at: new Date().toISOString(), response_digest: digest(rates),
+        captured_at: new Date(received[2]!.receivedAt).toISOString(), response_digest: digest(rates),
         attribution: 'REQUEST_PATH_BOUND_BY_DETAIL_ECHO', coverage: 'UNKNOWN'
       } };
     const providerFacts = { ...payload, rateRequestEvidence: {
