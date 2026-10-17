@@ -231,6 +231,24 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-17 17시 회복 실소비 검증 — PR707 선통합 / PR735 정합
+
+- 실제 수집: 기존 runtime bfbc4c7의 정규 회차 08:00:03.565~08:18:11.749Z(17시 KST)는 exit0, HEALTHY/fresh20/unhealthy0/exempt0이었다. RP031은 재노출1/되읽기1, RP012는 하향1·재노출1/되읽기2였다. 원천별 source/exposure 수는 회사 업무 정본 대수로 확대하지 않는다. 직접 runtime·예약·차량 DB 쓰기0.
+- 정확 3건 실대사: 같은 RP031/RP012 plan digest의 정확 새 백업3개를 08:21:32.114Z 동일 read-only transaction으로 되읽었다. RP031 false→true·가격변경/API200, RP012 false→true·가격불변/API200, RP012 true→false·NOT_IN_API·가격불변/API404였다. 모두 4단 이름 보존/예상HTTP 일치. NOT_IN_API는 완전 목록 부재이며 명시 판매완료나 삭제가 아니다. 하향 차량의 옛 원천 관측 시각 보존을 현재 전체 수집 실패로 해석하지 않는다.
+- 시각/정책: RP012 실제 source observedAt 08:08:55.558Z와 직전06:37:46.656Z의 간격은5468.902초=91분8.902초(당시90분 경계68.902초 초과)다. 새 heartbeat/전체 종료는08:18경이라 source 관측과 collector 완료·알림 시각을 구분한다. 이후 원운영 Claude가 커맨드 승인/PR737·C1017-16391a60 근거로 무기한 SONOGONG_LOCKED 면제를 제거하고 다음 프로세스부터135/240 임계값을 적용했다. Codex는08:23:45Z 현재env literal/백업 존재·SHA를 독립 조회했을 뿐 수정하지 않았다. 새135를17시 역사 판정에 소급하지 않으며18시 실제 적용 확인은 남음.
+- 코드/검증: PR707 exact dffd7978은 혼재 모델 null 안전 보완36PASS/build 및 독립 동의·Core/Canon SUCCESS 뒤08:29:54Z 정상 merge(main d38ddbdb)했다. branch/원래commit/기능 범위를 보존했다. 배포 trigger 파일 변경0으로 운영 배포와 구분한다. 기존 PR735의 차단3건 보완2e795f84는 독립 차단0/23 PASS, 로컬157PASS/build 및 실제 CoreCI SUCCESS였다. 최신main 결합은 NEXT 인계 문서 한 충돌의 양쪽 기록을 모두 보존했고 기능 충돌은 없었다. 새 결합 head의 Canon/Core 재검사와 아이언 최초 갱신 계획 검증이 남음.
+- 품질 잔여: FUEL_UNRESOLVED는 손오공 원천 연료 미확정 행, DEPOSIT_RULE_DIFFERS는 기간별 API 원문과 기존 정책 산출 대조 항목이다. 회사 차량/정산 건수로 세지 않는다. PR735는 아이언 파싱·AP EV 별칭·F01 실제 조건 선택만 보완하며 손오공 정책·인수형 공급, ERP5 PR115/169 실반영, 직원 권한 Excel/수수료 연결, F01 실publisher는 별도 미완료다.
+
+
+### 2026-10-17 PR707 인계 — 원산지 피드 계약 파일 한정
+
+- 목적/정본: 총괄의 공식 소유 이관에 따라 기존 work/freepass-data/public-feed-origin-20261016 / PR707을 인수했다. 원래 8de44d95를 보존하고 latest main d7e64014를 정상 merge한 b8552ab8이며 force/rebase/이력 재작성은 없다. 실제 기능 범위 4파일 중 계약 변경은 contracts/public-product-feed-v1.schema.json 하나다. contracts/ 전체나 F01 규격을 소유·변경하는 PR로 취급하지 않는다. 이 범위 명시는 guard 우회가 아니며 원산지 기능을 삭제하지 않는다.
+- 기존 변경: 공개 피드의 optional origin은 제조사 정본 표기/별칭에서 국산·수입/null로 읽기 전용 파생한다. DB·원문·차종 마스터에는 쓰지 않는다. 제조사 단위이므로 같은 제조사의 모델별 차이는 판정하지 못한다. 실제 차량별 원산지 확정이나 소비처 연결·운영 배포 완료로 표현하지 않는다.
+- 독립 검토 보완: 제조사만으로 국내/수입이 섞이는 알려진 모델을 국산 확정하지 않도록 기존 함수에 null 안전 제외를 추가했다(볼트 EV/EUV·일부 쉐보레 SUV·르노 마스터/조에 등). 이 표는 수입 확정이나 차종 이름 변경을 하지 않으며 혼재 제조사에서 모델조차 비면 null이다. 원피드의 model을 같은 정규화 함수에 전달하고 스키마 설명에도 제조사 기준/혼재 확인 필요를 명시했다.
+- 검증/남음: maker-origin 4/public feed 32 = 36 PASS, 새 exact CI와 이 보완의 독립 검토를 회수한 뒤 총괄 반영 관문으로 진행한다. PR735의 다른 F01 계약 파일과 내용 중복은 없으나 현재 canonical guard는 디렉터리 단위로 판정해 PR707 통합 전 PR735를 차단한다. 가드 삭제·임의 policy 완화·F01 spec 제외·PR707 닫기로 우회하지 않는다.
+- next_start_here: 같은 PR707 최신 head의 코드·CI·검토를 확인하고 정식 반영 뒤 PR735의 canonical guard를 다시 실행한다. 운영 runtime pin/예약/Sheet/DB 직접 변경 0.
+
+
 ### 2026-10-17 16시 실회차 결과와 5개 표본 후속 — C1017-c3cf7649
 
 - 수집 결과: 기존 PR732 runtime의 16:00:03~16:08:23 회차는 인증/preflight/CYCLE_ERROR 0, RP031 하향 2건 APPLIED/엔진 되읽기 2/2, 다른 18개 원천은 변경 0 적용 생략이었다. RP012는 45분 보호 간격으로 HOLD여서 전체 exit 1이다. freshness HEALTHY는 fresh 19 + RP012 exempt 1이며 20개 전부 신선 통과가 아니다. Codex의 운영 파일·예약·차량 DB 직접 쓰기는 0이다.
