@@ -14,6 +14,7 @@ import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCO
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
+import { parseIancarDetailCache, mergeIancarDetailCache, type IancarDetailCache, type IancarDetailCacheEntry } from '../adapters/iancar-detail-cache.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
@@ -119,10 +120,44 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort() } };
+    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      ...modelTablesFromMasters(masters) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
+}
+/** 입구 매핑이 쓰는 마스터 모델 표(순수): 허용 집합 = 마스터 «정식 모델 이름»만, 별칭은 «정식 이름으로 변환» 표로만(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
+ * 같은 제조사에서 한 별칭(정규화 키: 공백·대소문자 무시)이 서로 다른 정식 모델 둘 이상에 있으면 모호하므로 그 별칭은 제외한다(틀린 모델을 쓰지 않는다, Codex #706). */
+export function modelTablesFromMasters(masters: ReadonlyArray<{ maker: string; model: string; model_aliases: readonly string[] }>):
+  { models: Record<string, readonly string[]>; modelAliases: Record<string, Record<string, string>> } {
+  const key = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const models: Record<string, Set<string>> = {};
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (maker && model) (models[maker] ??= new Set<string>()).add(model);
+  }
+  const canonicalKeys = (maker: string): Set<string> => new Set([...(models[maker] ?? [])].map(key));
+  const candidates: Record<string, Map<string, Map<string, string>>> = {};   // maker → aliasKey → (정식 키 → 정식 이름)
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (!maker || !model) continue;
+    for (const alias of m.model_aliases) {
+      const a = alias.trim();
+      if (!a || key(a) === key(model)) continue;
+      const byAlias = (candidates[maker] ??= new Map<string, Map<string, string>>());
+      const targets = byAlias.get(key(a)) ?? byAlias.set(key(a), new Map<string, string>()).get(key(a))!;
+      targets.set(key(model), model);
+    }
+  }
+  const modelAliases: Record<string, Record<string, string>> = {};
+  for (const [maker, byAlias] of Object.entries(candidates)) {
+    const own = canonicalKeys(maker);
+    for (const [aliasKey, targets] of byAlias) {
+      if (targets.size !== 1 || own.has(aliasKey)) continue;   // 모호(정식 모델 둘 이상) 또는 다른 정식 이름과 같은 키
+      (modelAliases[maker] ??= {})[aliasKey] = [...targets.values()][0]!;
+    }
+  }
+  return { models: Object.fromEntries(Object.entries(models).map(([k, v]) => [k, [...v].sort()])), modelAliases };
 }
 export const sonogongApiEnabled = (env: NodeJS.ProcessEnv): boolean =>
   env.SOURCE_CYCLE_SONOGONG_API === '1' && !!env.SONOGONG_API_KEY?.trim() && !!env.SONOGONG_API_BASE?.trim();
@@ -171,10 +206,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 시트 읽기 전송은 읽기 모듈의 단일 판정(resolveSheetsTransport)을 쓴다: SHEETS_TRANSPORT=gws 면 이미 인증된 gws(회사 계정 위임, 시간 제한 120초·
   // 실패 코드 분류), 그 밖은 ADC 읽기 전용 토큰(온라인 실행기: WIF 서비스 계정, 시트 «보기» 공유). 같은 F05 읽기 안의 캡처(capture-shared-sheet)도 같은 판정이다.
   const sheetsRead = (url: URL) => readSheetsUrl(url, { env });
-  const get = async (url: URL, authenticated: boolean) => {
+  const get = async (url: URL, authenticated: boolean, retriedAuth = false): Promise<Response> => {
     if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
+    // 401 = 캐시 토큰 만료·무효: 한 번만 다시 발급해 재요청(createGcloudTokenSource 참고).
+    if (authenticated && response.status === 401 && !retriedAuth) { gcloudUserToken.invalidate(); return get(url, false || authenticated, true); }
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };
@@ -252,8 +289,27 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter));
       }, ratio));
     } else if (kind === 'IANCAR') {
-      plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
-        undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+      // 상세·가용 캐시(1번 커맨드 오더 2026-10-16, 기본 꺼짐): SOURCE_CYCLE_IANCAR_DETAIL_CACHE=1 일 때만 직전 회차 캐시를 재사용해 차량별 호출 3→1(요금만).
+      // 상태 파일 손상·형식 불일치면 캐시 없음(전수 읽기). 캐시 갱신은 무인 정시 회차만 저장한다(수동 plan 이 파일을 흔들지 않게).
+      const iancarCacheOn = (env.SOURCE_CYCLE_IANCAR_DETAIL_CACHE ?? '').trim() === '1';
+      const iancarCacheFile = join(directory, 'iancar-detail-cache.json');
+      // 값 지문 안정화(1번 커맨드 오더 2026-10-17, 기본 꺼짐): SOURCE_CYCLE_IANCAR_STABLE_FACTS=1 일 때 관측 시각·사진 자격 URL 을 뺀 원문으로 저장·비교해
+      // 값이 같은 문서를 매 회차 다시 쓰지 않는다. 켜는 첫 회차는 전량 1회 UPDATE(저장 digest 이관), 그다음부터 변화 없는 문서는 쓰기 0.
+      const iancarStableFacts = (env.SOURCE_CYCLE_IANCAR_STABLE_FACTS ?? '').trim() === '1';
+      plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, async () => {
+        let detailCache: IancarDetailCache | null = null;
+        if (iancarCacheOn) try { detailCache = parseIancarDetailCache(JSON.parse(await readFile(iancarCacheFile, 'utf8'))); } catch { detailCache = null; }
+        // 캐시 적재는 회차 성공·실패와 무관(닭과 달걀 해소, 1번 커맨드 2026-10-16): 검증을 통과한 차량별 봉투(sink)를 기존 파일과 병합해 저장한다.
+        // finally 에는 로컬 파일 저장만 두고 원래 예외·실패 상태는 그대로 전파한다 — 발행·Firestore 쓰기 경로는 변하지 않는다(Codex P1 ③).
+        const sink: Record<string, IancarDetailCacheEntry> = {};
+        try {
+          return await collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher, undefined, undefined, iancarCacheOn ? { detailCache, cacheSink: sink } : {});
+        } finally {
+          if (iancarCacheOn && env.SOURCE_CYCLE_UNATTENDED === '1' && Object.keys(sink).length) {
+            try { await writeJsonAtomic(iancarCacheFile, mergeIancarDetailCache(detailCache, sink, Date.now())); } catch { /* 저장 실패는 원래 결과를 가리지 않는다 */ }
+          }
+        }
+      }, undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt, { stableFacts: iancarStableFacts })));
     } else if (kind === 'MAUMCAR') {
       // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
       const file = required('SOURCE_CYCLE_MAUMCAR_FILE');
@@ -535,7 +591,11 @@ export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonl
   // 시트 원천은 전송을 명시해야 한다(미설정 기본값은 ADC — 운영 PC 에서 조용히 다른 전송으로 읽지 않게, F05 뿐 아니라 아이카·오토플러스 시트도).
   if (sheets && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
-  catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
+  catch (e) {
+    // 사유 코드(GCLOUD_TOKEN_FAILED_TIMEOUT 등)가 있으면 함께 남긴다 — 10-17 장애 때 «MISSING» 만 남아 원인을 gcloud 로그에서 찾아야 했다.
+    missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING');
+    if (e instanceof Error && /^GCLOUD_TOKEN_FAILED_[A-Z_]+$/.test(e.message)) missing.push(e.message);
+  }
   return missing;
 }
 
@@ -611,7 +671,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       } catch { /* 첫 회차 또는 기록 없음 */ }
       for (const plugin of selected) {
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+            // 상류 갱신 감시(독립 판독기): --watch-sync 를 줄 때만(기본 꺼짐). 창(분)은 SOURCE_CYCLE_IANCAR_WATCH_MIN(기본 20, 1~30) — 예: :50 에 시작해 :10 까지.
+            ...(args.includes('--watch-sync') && args.includes('--only-when-synced') && plugin.family === 'IANCAR'
+              ? { syncWatch: { windowMs: Math.min(30, Math.max(1, Number(env.SOURCE_CYCLE_IANCAR_WATCH_MIN ?? '20') || 20)) * 60_000 } } : {}) });
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {

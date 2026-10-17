@@ -39,14 +39,74 @@ export function encodeValue(v: any): any {
   throw new Error('FIRESTORE_VALUE_INVALID');
 }
 export const encodeFields = (fields: Fields): Fields => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, encodeValue(v)]));
-export async function gcloudUserToken(): Promise<string> {
-  const { stdout } = await promisify(execFile)(process.platform === 'win32' ? 'powershell.exe' : 'gcloud',
-    process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', '& gcloud.cmd auth print-access-token; exit $LASTEXITCODE']
-      : ['auth', 'print-access-token'], { windowsHide: true, timeout: 30_000 });
-  const token = stdout.trim();
-  if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_REQUIRED');
-  return token;
+/** gcloud 사용자 토큰 원천(프로세스 안 캐시). 2026-10-17 장애: 요청마다 powershell→gcloud(Python) 를 새로 띄워(회차당 ≈250회) 호스트가 느려지면
+ * 일부가 30초를 넘기거나 stdout 파이프 오류로 죽어 비코드 예외 → CYCLE_ERROR 로 전 공급사가 보류됐다. 이 원천은
+ *  - 발급 토큰을 ttlMs(기본 15분 — gcloud 가 «출력한 시각»은 «발급 시각»이 아니라 1시간을 믿지 않는다) 동안 재사용하고,
+ *  - 동시 요청은 한 발급 Promise 를 공유하며, 실패하면 1회 재시도(더 긴 시간 제한), 최종 실패 뒤 cooldownMs 동안은 같은 코드로 바로 거절(회차 안 누적 지연 방지),
+ *  - 예외는 회차 기록 필터(/^[A-Z_]+$/)를 통과하는 코드만 낸다: GCLOUD_TOKEN_FAILED_TIMEOUT · _CRASH · _EMPTY,
+ *  - 계정은 SOURCE_CYCLE_GCLOUD_ACCOUNT(있으면 --account 고정)로 활성 계정 전환에 흔들리지 않게 한다.
+ * API 가 401 을 돌려주면 호출자가 invalidate() 뒤 한 번 다시 발급한다(만료 시각을 모르는 토큰의 안전망). */
+export type GcloudTokenSource = { (): Promise<string>; invalidate(): void };
+export type GcloudTokenExec = (timeoutMs: number) => Promise<string>;
+export function createGcloudTokenSource(opts: { exec?: GcloudTokenExec; now?: () => number; ttlMs?: number; timeoutMs?: number; retryTimeoutMs?: number;
+  cooldownMs?: number; account?: string } = {}): GcloudTokenSource {
+  const now = opts.now ?? Date.now, ttl = opts.ttlMs ?? 15 * 60_000, timeoutMs = opts.timeoutMs ?? 30_000, retryTimeoutMs = opts.retryTimeoutMs ?? 60_000,
+    cooldown = opts.cooldownMs ?? 60_000;
+  const exec: GcloudTokenExec = opts.exec ?? (ms => runGcloudPrintAccessToken(ms, opts.account));
+  let cached: { token: string; at: number } | null = null, inflight: Promise<string> | null = null, failed: { code: string; at: number } | null = null;
+  const classify = (e: unknown): string => {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/^GCLOUD_TOKEN_FAILED_[A-Z_]+$/.test(m)) return m;
+    if (/timed out|ETIMEDOUT|TIMEOUT/i.test(m)) return 'GCLOUD_TOKEN_FAILED_TIMEOUT';
+    return 'GCLOUD_TOKEN_FAILED_CRASH';
+  };
+  const once = async (ms: number): Promise<string> => {
+    const token = (await exec(ms)).trim();
+    if (!token || /\s/.test(token)) throw new Error('GCLOUD_TOKEN_FAILED_EMPTY');
+    return token;
+  };
+  const source = (async (): Promise<string> => {
+    if (cached && now() - cached.at < ttl) return cached.token;
+    if (inflight) return inflight;
+    if (failed && now() - failed.at < cooldown) throw new Error(failed.code);
+    inflight = (async () => {
+      try {
+        let token: string;
+        try { token = await once(timeoutMs); } catch (first) {
+          const firstCode = classify(first);
+          try { token = await once(retryTimeoutMs); } catch (second) { throw new Error(classify(second) === 'GCLOUD_TOKEN_FAILED_EMPTY' ? firstCode : classify(second)); }
+        }
+        cached = { token, at: now() }; failed = null; return token;
+      } catch (e) { cached = null; failed = { code: classify(e), at: now() }; throw new Error(failed.code); }
+      finally { inflight = null; }
+    })();
+    return inflight;
+  }) as GcloudTokenSource;
+  source.invalidate = () => { cached = null; failed = null; };
+  return source;
 }
+/** powershell → gcloud.cmd 한 번. 시간 제한은 타이머 하나로만 관리한다(execFile 자체 timeout 은 쓰지 않는다 — 부모 powershell 이 먼저 죽으면
+ * 자식 gcloud(Python) 가 남아 누적된다, Codex P1). 시간 초과 시 taskkill /T 로 트리 전체를 끝내고, 종료 성공 여부와 무관하게 즉시 거절한다. */
+async function runGcloudPrintAccessToken(timeoutMs: number, account?: string): Promise<string> {
+  const args = ['auth', 'print-access-token', ...(account ? ['--account', account] : [])];
+  const win = process.platform === 'win32';
+  const child = execFile(win ? 'powershell.exe' : 'gcloud', win ? ['-NoProfile', '-NonInteractive', '-Command', `& gcloud.cmd ${args.join(' ')}; exit $LASTEXITCODE`] : args,
+    { windowsHide: true });
+  return new Promise<string>((resolve, reject) => {
+    let out = '', settled = false;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
+    const timer = setTimeout(() => {
+      if (win && child.pid) { try { execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* 트리 종료 실패는 무시 */ } }
+      try { child.kill('SIGKILL'); } catch { /* 이미 끝났을 수 있다 */ }
+      finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_TIMEOUT')));
+    }, timeoutMs);
+    child.stdout?.on('data', d => { out += d; });
+    child.on('error', () => finish(() => reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
+    child.on('close', code => finish(() => code === 0 ? resolve(out) : reject(new Error('GCLOUD_TOKEN_FAILED_CRASH'))));
+  });
+}
+const fixedAccount = process.env.SOURCE_CYCLE_GCLOUD_ACCOUNT?.trim();
+export const gcloudUserToken: GcloudTokenSource = createGcloudTokenSource(fixedAccount ? { account: fixedAccount } : {});
 /** 가격 맵 정규화: null·undefined·키 누락을 같게 보고(해당 키 제거) 키를 정렬한다. digest 계산·비교·되읽기 대조 공통 기준. */
 export function normalizePrice(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizePrice);
@@ -226,8 +286,47 @@ export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
 }
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
-export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = ''): Fields {
+/** 모델 키: 공백·대소문자·전각 차이만 무시(괄호·세대·수식어는 지우지 않는다 — 일치하지 않으면 마스터에 없는 이름이다). */
+const modelKey = (v: unknown): string => textOf(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+/** 마스터 모델 목록(제조사 → 키 → «정식 모델 이름»). 정식 이름은 자기 자신으로, 등록된 별칭은 정식 이름으로 변환한다. */
+export type SourceModels = ReadonlyMap<string, ReadonlyMap<string, string>>;
+export const sourceModelsOf = (models: Readonly<Record<string, readonly string[]>> | undefined,
+  aliases?: Readonly<Record<string, Readonly<Record<string, string>>>>): SourceModels | null => {
+  if (!models) return null;
+  const out = new Map<string, Map<string, string>>();
+  for (const [maker, names] of Object.entries(models)) {
+    const byKey = new Map<string, string>();
+    for (const name of [...names].sort()) if (modelKey(name) && !byKey.has(modelKey(name))) byKey.set(modelKey(name), textOf(name));   // 같은 키의 정식 이름이 둘이면 정렬 첫 번째로 고정
+    // 별칭: 정식 이름(저장된 값)으로 변환한다(별칭 대상 표기가 대소문자만 달라도 정식 값을 쓴다). 같은 별칭 키가 서로 다른 정식으로 가면 제외(모호).
+    const aliasTargets = new Map<string, Set<string>>();
+    for (const [alias, canonical] of Object.entries(aliases?.[maker] ?? {})) {
+      const canon = byKey.get(modelKey(canonical));
+      if (!modelKey(alias) || !canon || byKey.has(modelKey(alias))) continue;
+      (aliasTargets.get(modelKey(alias)) ?? aliasTargets.set(modelKey(alias), new Set<string>()).get(modelKey(alias))!).add(canon);
+    }
+    for (const [aliasKey, targets] of aliasTargets) if (targets.size === 1) byKey.set(aliasKey, [...targets][0]!);
+    out.set(maker.trim(), byKey);
+  }
+  return out;
+};
+/** 원천 모델 표기의 «정식 마스터 모델 이름»(없으면 null). */
+const canonicalModel = (models: SourceModels | null, maker: unknown, model: unknown): string | null =>
+  !models || !modelKey(model) ? null : models.get(textOf(maker))?.get(modelKey(model)) ?? null;
+/** 입구 매핑이 이미 쓴 모델이 마스터 모델 이름이 아니면(괄호·세대·«신형/더 뉴» 수식어 등) 되돌려야 하는가(대표 2026-10-16 «마스터가 작동을 안 한다»):
+ * 채움 그대로(표식·세 값 일치·트림 빈칸)이고 마스터 목록을 읽었고 모델이 목록에 없을 때만. 사람 입력·마스터 정제로 확정된 값은 해당 없음. */
+export const sourceModelRevertDue = (f: Fields, models: SourceModels | null): boolean =>
+  // 되돌리기는 «검토 필요 true 이면서 채움 기록과 현재 값이 같을 때만»(사람이 값을 승인하고 검토를 끝낸 문서는 보존, Codex #706 ②).
+  !!models && f.vehicle_review_required === true && f.vehicle_maker_model_source === SOURCE_FIELDS_MARK && filledByUs(f) && !!textOf(f.model)
+  && canonicalModel(models, f.maker, f.model) !== textOf(f.model);
+export function sourceIdentityFields(r: SourceProductRecord, original: Fields, refinedThisCycle: boolean, makers: ReadonlySet<string> | null = null, subModelAtFill = '',
+  models: SourceModels | null = null): Fields {
   if (refinedThisCycle) return {};
+  // 이미 쓴 모델이 마스터 이름이 아니면 모델만 비운다(제조사·세부모델·표식은 그대로, 정제 대기).
+  if (sourceModelRevertDue(original, models)) {
+    const filled = original.vehicle_maker_model_filled as { maker?: unknown; sub_model?: unknown };
+    const canonical = canonicalModel(models, original.maker, original.model) ?? '';   // 등록된 별칭이면 정식 이름으로, 아니면 비움
+    return { model: canonical, vehicle_maker_model_filled: { maker: textOf(filled.maker), model: canonical, sub_model: textOf(filled.sub_model) } };
+  }
   if (textOf(original.maker) || textOf(original.model)) return {};
   if (original.vehicle_maker_model_source !== undefined && original.vehicle_maker_model_source !== null) {
     // 이미 시도했다. 원천 값이 바뀌었으면 표식이 SOURCE_FIELDS 인 문서에 한해 갱신(사람·마스터가 채운 문서는 위에서 걸러짐).
@@ -238,7 +337,9 @@ export function sourceIdentityFields(r: SourceProductRecord, original: Fields, r
   // 제조사는 활성 차종 마스터에 «있는 표기»일 때만 채운다(옛 표기 르노삼성 등이 maker 에 들어가 교정 대상에서 빠지는 것을 막는다, Codex #685 (c)).
   // 마스터를 못 읽었거나(목록 없음) 마스터에 없는 표기면 채우지 않고 표식(UNMAPPED)만 남긴다 — 마스터에 제조사가 생긴 뒤의 재시도는 별도 승인(표식 초기화).
   if (!makers || !maker || !makers.has(maker)) return original.vehicle_maker_model_source === undefined || original.vehicle_maker_model_source === null ? { vehicle_maker_model_source: 'UNMAPPED' } : {};
-  return { maker, model, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model, sub_model: subModelAtFill } };
+  // 모델은 마스터 모델 이름(별칭 포함)과 일치할 때만 쓴다 — 괄호·세대·«신형/더 뉴/디 올뉴» 수식어가 든 원천 표기는 쓰지 않고 정제 대기로 둔다(마스터 목록이 없으면 쓰지 않음).
+  const writeModel = canonicalModel(models, maker, model) ?? '';
+  return { maker, model: writeModel, vehicle_maker_model_source: SOURCE_FIELDS_MARK, vehicle_maker_model_filled: { maker, model: writeModel, sub_model: subModelAtFill } };
 }
 const yearOf = (v: unknown): string => { const m = /^(\d{4})/.exec(typeof v === 'number' ? String(v) : textOf(v)); return m ? m[1]! : ''; };
 const specOf = (r: SourceProductRecord | undefined): Fields => {
@@ -260,7 +361,7 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
     ...(!isNew && !yearOf(original.year) && sourceYear ? { year: sourceYear } : {}) };
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
-  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null): CycleProduct {
+  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -299,6 +400,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_review_required === true
     && !textOf(f.maker) && !textOf(f.model) && (f.vehicle_maker_model_source === undefined || f.vehicle_maker_model_source === null)
     && engineOwnedIdentity(f, false, record)) rewriteReasons.push('SOURCE_IDENTITY');   // 선정에도 같은 소유 검사: 사람이 세부모델·트림을 입력한 행은 사유 자체를 주지 않는다(되풀이 쓰기 방지)
+  // 이미 쓴 모델이 마스터 모델 이름이 아니면(괄호·세대·수식어) 모델만 비우는 되돌리기: 채움 그대로인 문서에만, 같은 사유·같은 회차 상한(되풀이 없음: 비우면 조건이 거짓).
+  else if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && sourceModelRevertDue(f, sourceModels) && engineOwnedIdentity(f, false, record)) rewriteReasons.push('SOURCE_IDENTITY');   // 선정에도 쓰기와 같은 소유 검사(선정만 되고 안 써져 되풀이되는 일 방지)
   // 제원 입구 매핑: 제원 칸이 비어 있고 확인 표식(vehicle_spec_source_checked)이 없는 노출 문서는 한 번 다시 써서 원천 제원을 채운다. 옛 저장 기록은 제원이 digest 라
   // 기록만으로는 알 수 없으므로 문서 상태와 표식으로 정한다 — 표식을 항상 쓰므로(채울 값이 없어도) 되풀이되지 않는다. 같은 허용 공급사·회차 상한을 쓴다.
   if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
@@ -369,7 +472,7 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
-export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null } = {}): Fields {
+export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null } = {}): Fields {
   const r = p.record;
   const isNew = !Object.keys(original).length;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
@@ -409,7 +512,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
-      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model)) : {}),
+      ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model), opts.sourceModels ?? null) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
       ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
@@ -445,17 +548,23 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   // 공급사 허용 목록이 있으면 그 공급사 문서·레코드에만 정제기를 건넨다(없으면 종전: identityRefine 이 전체를 정한다).
   const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
   const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity);
+  const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels());
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
-    sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null });
+    sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
   };
-  const request = async (path: string, method = 'GET', body?: unknown): Promise<any> => {
+  const tokenSource = options.token ?? gcloudUserToken;
+  const request = async (path: string, method = 'GET', body?: unknown, retriedAuth = false): Promise<any> => {
     const response = await fetcher(base + path, { method, redirect: 'error', signal: AbortSignal.timeout(60_000),
-      headers: { authorization: `Bearer ${await (options.token ?? gcloudUserToken)()}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${await tokenSource()}`, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    // 401 = 토큰 만료·무효(발급 시각을 모르는 캐시 토큰의 안전망): 캐시를 비우고 한 번만 다시 발급해 재요청한다.
+    if (response.status === 401 && !retriedAuth && typeof (tokenSource as Partial<GcloudTokenSource>).invalidate === 'function') {
+      (tokenSource as GcloudTokenSource).invalidate(); return request(path, method, body, true);
+    }
     if (response.status === 404 && method === 'GET') return null;
     if (!response.ok) throw new Error(response.status === 409 || response.status === 412 ? 'CAS_CONFLICT' : 'FIRESTORE_REQUEST_FAILED');
     return response.json();
@@ -557,7 +666,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels()); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');

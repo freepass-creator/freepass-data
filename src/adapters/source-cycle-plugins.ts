@@ -7,6 +7,7 @@ const KNOWN_SALE_STATUS: ReadonlySet<string> = new Set([...Object.keys(ERP5_INVE
 export const SHEET_NOT_SELLABLE_STATUS: ReadonlySet<string> = new Set(['출고불가', '출고완료', '인도완료', '판매완료']);
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
 import type { IancarOneListCapture } from './iancar-one-api.js';
+import { stableIancarPayload } from './iancar-stable-facts.js';
 
 export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION' | 'FILE';
 export type CycleSourceDefinition = {
@@ -176,7 +177,7 @@ export function validCalendarDate(text: string): boolean {
 /** Read an existing ONE full-facts result. No second API client; PREPARING is a sellable source
  * state by SPEC2 even when provider `available` is false. Missing rates remain UNKNOWN/HOLD. */
 export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise<IancarOneListCapture>,
-  clock?: () => string, syncedAt?: () => Promise<string | null>) {
+  clock?: () => string, syncedAt?: () => Promise<string | null>, opts: { stableFacts?: boolean } = {}) {
   return sourceCyclePlugin({ sourceId: 'RP031', kind: 'IANCAR', scopes: ['ONE_FULL_FACTS'], maxDowngradeRatio }, async () => {
     const capture = await read();
     const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -188,7 +189,8 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
     // 목록 단계에서 멈춘 수집은 요금을 읽지 않아 행을 내면 원천 원문 계층(source_raw)에 «요금 없음(terms=[])»이 전 차량에 덮인다.
     const heldReasons: string[] = [];
     const rows = !full ? [] : capture.records.flatMap(item => {
-      const raw = item.payload, detail = object(object(raw.detail).data);
+      // 값 지문 안정화(iancar-stable-facts, 기본 꺼짐): 관측 시각·자격 URL 을 뺀 payload 를 원문으로 삼아 저장·비교 모두 같은 규칙을 쓴다.
+      const raw = opts.stableFacts ? stableIancarPayload(item.payload) : item.payload, detail = object(object(raw.detail).data);
       // 번호로 문서를 특정할 수 없는 차(식별 보류)는 행을 내지 않고 보류로만 센다 — 어느 문서인지 모르므로 이 회차의 부재 하향은 유보된다.
       if (item.hold?.identity) { heldReasons.push(item.hold.code); return []; }
       // 요금 사실 보류 차는 행(번호·상태·차명)은 내되 요금 항은 비운다. 보류 사유는 값 계열이라 다른 차의 부재 하향을 막지 않는다(jobs VALUE_CLASS_HOLDS).
@@ -230,6 +232,10 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       capture.issues.find(i => /^[A-Z][A-Z0-9_]{2,63}$/.test(i)) ?? (capture.factScope !== 'FULL_FACTS' ? 'NOT_FULL_FACTS' : 'RECORD_COUNT_MISMATCH');
     return { observedAt: capture.syncedAt, synced_at: capture.syncedAt, complete: full,
       completedScopes: full ? ['ONE_FULL_FACTS'] : [], visibilityComplete: true, rows, heldCount: heldReasons.length,
-      ...(heldReasons.length ? { heldReasons } : {}), ...(incompleteReason ? { incompleteReason } : {}) };
+      ...(heldReasons.length ? { heldReasons } : {}), ...(incompleteReason ? { incompleteReason } : {}),
+      // 상세·가용 캐시(#724)를 쓴 회차는 재사용 대수를 요약에 남긴다(운영 검증용 — 값 없음 = 캐시 꺼짐).
+      ...(capture.detailsCached !== undefined || opts.stableFacts ? { notes: [
+        ...(capture.detailsCached !== undefined ? [`IANCAR_DETAIL_CACHED:${capture.detailsCached}`] : []),
+        ...(opts.stableFacts ? ['IANCAR_STABLE_FACTS:1'] : [])] } : {}) };
   }, clock, syncedAt);
 }

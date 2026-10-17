@@ -269,6 +269,71 @@ describe('shared sheet local source to Canonical', () => {
       expect(stableDigest(await s.store.listOffers())).toBe(before);
     } finally { vi.useRealTimers(); }
   });
+  it('refreshes status/rent when stored source facts differ only by normalizer ruleVersion, but still holds a real fact change', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const asset = (await s.store.listVehicleAssets())[0]!;
+      const old = structuredClone(asset) as any;
+      old.sourceVehicleFacts.ruleVersion = 'shared-sheet-normalizer/0';
+      for (const [key, fact] of Object.entries(old.sourceVehicleFacts.fields) as [string, any][]) if (key !== 'supplierStatus') fact.ruleVersion = 'shared-sheet-normalizer/0';
+      delete old.sourceVehicleFacts.fields.vehicleIdentitySource;
+      await s.store.seed({ vehicleAssets: [old] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r1 = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r1.report).toMatchObject({ committed: 1, held: 0 });
+    } finally { vi.useRealTimers(); }
+  });
+  it('readback compares an unchanged-rent term with its pre-run economics, not a recompute under a newer fee policy', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = structuredClone((await s.store.listOffers())[0]!) as any;
+      const older = structuredClone(offer.internalEconomicsTerms);
+      for (const t of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee', 'channelPayoutFee']) {
+        if (t[side]?.sourceRefs) t[side].sourceRefs = [...t[side].sourceRefs, 'older-policy-evidence'];
+      }
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect((r.report as any).reconciliation?.readbackMismatches ?? 0).toBe(0);
+      expect(older).toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it('holds, at plan time, a vehicle whose refresh also changes an odometer, instead of aborting the apply run', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '99,999km' })), 'synthetic-target', undefined, false, true);
+      const entry = p.plan.entries[0]!;
+      expect(entry.action).toBe('HOLD');
+      expect(entry.reasons).toContain('OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:SOURCE_ODOMETER_CHANGE');
+      expect(entry.change).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it('operational refresh applies a plausible odometer increase together with status/rent and updates the asset', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '5,000km' })), 'synthetic-target', undefined, false, true);
+      expect(p.plan.entries[0]!.action).toBe('CHANGE');
+      const r = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true, plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(r.report).toMatchObject({ committed: 1, held: 0 });
+      expect((await s.store.listVehicleAssets())[0]!.odometerKm).toBe(5000);
+    } finally { vi.useRealTimers(); }
+  });
+  it('operational refresh holds an odometer decrease at plan time (anomaly) and leaves the stored value', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777, 주행거리: '900km' })), 'synthetic-target', undefined, false, true);
+      expect(p.plan.entries[0]!.action).toBe('HOLD');
+      expect(p.plan.entries[0]!.reasons).toContain('OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:SOURCE_ODOMETER_CHANGE');
+      expect((await s.store.listVehicleAssets())[0]!.odometerKm).toBe(1234);
+    } finally { vi.useRealTimers(); }
+  });
   it('preserves human rent through the actual scheduled plan and apply path', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
@@ -283,6 +348,7 @@ describe('shared sheet local source to Canonical', () => {
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
       expect(result.report).toMatchObject({ status: 'PARTIAL_HOLD', committed: 0, held: 1 });
       expect(result.report).toHaveProperty('rejectedByCode');
+      expect(result.report).toHaveProperty('rejectedByReason');
       expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
     } finally { vi.useRealTimers(); }
   });
@@ -832,5 +898,13 @@ describe('commandFailureDetail', () => {
     expect(JSON.stringify(d)).not.toContain('secret-id');
     expect(commandFailureDetail(new Error('something odd 12345'), 'CHANGE').category).toBe('UNCLASSIFIED');
     expect(commandFailureDetail('not an error', 'UNKNOWN')).toMatchObject({ errorClass: 'NonError' });
+  });
+});
+
+describe('reviewedRejectionReason', () => {
+  it('maps only fixed reviewed-command messages; unknown text stays UNLISTED and is never echoed', async () => {
+    const { reviewedRejectionReason } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(reviewedRejectionReason(new Error('Existing rent diverges from the last source observation; preserve human input'))).toBe('EXISTING_RENT_DIVERGES');
+    expect(reviewedRejectionReason(new Error('Candidate not found: secret-id'))).toBe('UNLISTED');
   });
 });

@@ -64,6 +64,10 @@
     "copy:iancar-photos:daily": "tsx src/jobs/iancar-photo-daily.ts",
     "plan:supplier-photo-intake": "tsx src/jobs/plan-supplier-photo-intake.ts",
     "source:aica:capture": "tsx src/jobs/collect-aica.ts",
+    "parity:supplier": "node scripts/supplier-value-parity.mjs",
+    "test:parity": "node --test tests/supplier-value-parity.node.mjs",
+    "intake:coverage": "node scripts/supplier-intake-coverage.mjs",
+    "test:intake-coverage": "node --test tests/supplier-intake-coverage.node.mjs",
     "source:iron:capture": "tsx src/jobs/collect-iron.ts",
     "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",
     "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon",
@@ -77,7 +81,8 @@
     "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts",
     "apply:period-fee-ledger": "tsx src/jobs/apply-period-fee-ledger.ts",
     "test:source-cycle-ci": "node --test tests/source-cycle-dry-run-ci.node.mjs",
-    "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts"
+    "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts",
+    "explain:engine-refine": "tsx src/jobs/explain-engine-refine.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

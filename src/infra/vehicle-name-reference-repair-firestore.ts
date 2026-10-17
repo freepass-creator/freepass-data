@@ -17,6 +17,9 @@ export type VehicleNameRepairItem = {
 };
 export type VehicleProductIdentityRepairItem = {
   id: string;
+  /** 'MODEL' = 모델 수준 정정(2026-10-16, AI 정제 모델만 확정 건): to.maker·to.model 은 활성 마스터에 존재해야 하고 sub_model 은 from 과 «글자 그대로» 같게 유지(바꾸지 않음),
+   * from.model 은 빈칸이어야 한다. 그 밖의 안전선(승인 digest·백업·lastUpdateTime·되읽기·사람 입력 거절)은 전체 정정과 같다. 없으면 종전(세 칸 모두 정확히 하나의 활성 마스터). */
+  level?: 'MODEL';
   from: { maker: string; model: string; sub_model: string };
   to: { maker: string; model: string; sub_model: string };
   evidence: string;
@@ -205,7 +208,9 @@ const matchesProductIdentityFromField = (stored: unknown, from: string) => from 
 const matchesIdentityFrom = (stored: Record<string, unknown> | undefined, from: VehicleProductIdentityRepairItem['from']) =>
   PRODUCT_IDENTITY_FIELDS.every((field) => matchesProductIdentityFromField(stored?.[field], from[field]));
 const productIdentityToObject = (item: VehicleProductIdentityRepairItem) => ({
-  maker: clean(item.to.maker), model: clean(item.to.model), sub_model: clean(item.to.sub_model),
+  maker: clean(item.to.maker), model: clean(item.to.model),
+  // 모델 수준은 세부모델을 «저장된 글자 그대로» 유지한다(정규화해 쓰면 의도하지 않은 변경이 된다).
+  sub_model: item.level === 'MODEL' ? item.to.sub_model : clean(item.to.sub_model),
 });
 const sameProductSourceCorrection = (stored: unknown, item: ProductSourceCorrectionItem, sourceDigest: string) => {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
@@ -352,9 +357,20 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const side of ['from', 'to'] as const) {
       for (const field of PRODUCT_IDENTITY_FIELDS) if (typeof item[side]?.[field] !== 'string') throw new Error(`productIdentity ${item.id} ${side}.${field} must be a string`);
     }
+    if (item.level !== undefined && item.level !== 'MODEL') throw new Error(`productIdentity ${item.id} level must be MODEL when present`);
+    const modelLevel = item.level === 'MODEL';
     for (const field of PRODUCT_IDENTITY_FIELDS) {
-      if (!clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      // 모델 수준에서 저장 세부모델이 «빈칸»이면 to.sub_model 도 빈칸으로 둔다(제조사·모델 채우기만, 제목이 비어 있는 시트 공급사 문서). 칸은 쓰지 않는다.
+      const keepsBlankSubModel = modelLevel && field === 'sub_model' && item.from.sub_model === '' && item.to.sub_model === '';
+      if (!clean(item.to[field]) && !keepsBlankSubModel) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      // 모델 수준에서 sub_model 은 «현재 저장값 그대로»를 유지하므로(원문형 문자열일 수 있다) 정규화 요구를 걸지 않고 from 과 같음을 요구한다.
+      if (modelLevel && field === 'sub_model') continue;
       if (item.to[field] !== clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} must be normalized text`);
+    }
+    if (modelLevel) {
+      if (item.to.sub_model !== item.from.sub_model) throw new Error(`productIdentity ${item.id} MODEL level must keep sub_model unchanged`);
+      if (item.from.model !== '') throw new Error(`productIdentity ${item.id} MODEL level requires blank from.model`);
+      if (item.from.maker !== '' && item.from.maker !== item.to.maker) throw new Error(`productIdentity ${item.id} MODEL level must not change a stored maker`);
     }
     if (PRODUCT_IDENTITY_FIELDS.every((field) => clean(item.from[field]) === clean(item.to[field]))) throw new Error(`no-op productIdentity:${item.id}`);
   }
@@ -706,7 +722,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     for (const field of PRODUCT_IDENTITY_FIELDS) {
       if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
-      entry.fields[field] = clean(item.to[field]);
+      // 모델 수준은 세부모델을 저장된 글자 그대로 쓴다(정규화해 쓰면 의도하지 않은 변경). 저장 세부모델이 빈칸이면 그 칸은 쓰지 않는다.
+      if (item.level === 'MODEL' && field === 'sub_model' && item.from.sub_model === '') continue;
+      entry.fields[field] = item.level === 'MODEL' && field === 'sub_model' ? item.to[field] : clean(item.to[field]);
     }
     byPath[ref.path] = entry;
   }
@@ -829,11 +847,19 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       };
       for (const doc of stored.docs) addActive(identityKeyFrom(doc.data()), doc.id, doc.data().retired);
       for (const c of plan.masterCreates ?? []) addActive(masterNameKey(c.data), c.id);
-      const miss = identityTargets.find((x) => (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
+      // 모델 수준 항목은 제조사·모델 쌍이 활성 마스터에 «존재»하면 된다(세부모델은 바꾸지 않으므로 마스터 세부모델과 대조하지 않는다).
+      const activeModels = new Set<string>();
+      for (const doc of stored.docs) if (doc.data().retired !== true) activeModels.add(`${clean(doc.data().maker)}|${clean(doc.data().model)}`);
+      for (const c of plan.masterCreates ?? []) activeModels.add(`${clean(c.data.maker)}|${clean(c.data.model)}`);
+      const miss = identityTargets.find((x) => x.item.level === 'MODEL'
+        ? !activeModels.has(`${clean(x.item.to.maker)}|${clean(x.item.to.model)}`)
+        : (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
       if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
       // 사람 입력 보존 안전선을 «별칭 정규화» 로만 푼다: 덮어쓰기 불가(확정·사람 입력) from 은 대상 마스터의 등록 별칭이고 그 별칭을 가진 활성 마스터가 대상 하나뿐일 때만.
       identityTargets.forEach((x, index) => {
         if (identityFromOverwritable(identityCurrent[index]?.data(), x.item.from)) return;
+        // 모델 수준은 별칭 정규화 예외를 쓰지 않는다: 덮어쓰기 불가(사람 입력·확정)면 그대로 거절.
+        if (x.item.level === 'MODEL') throw new Error(`transaction productIdentity from is a manual or confirmed value ${x.ref.path}`);
         const from = clean(x.item.from.sub_model);
         const targetKey = identityKeyFrom(x.item.to);
         const family = (doc: { data: () => Record<string, unknown> }) => clean(doc.data().maker) === clean(x.item.to.maker) && clean(doc.data().model) === clean(x.item.to.model);
@@ -1077,7 +1103,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   identityReadback.forEach((snapshot, index) => {
     const want = productIdentityToObject(identityTargets[index]!.item);
     const data = snapshot.data();
-    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => clean(data?.[field]) !== want[field])) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
+    const modelLevel = identityTargets[index]!.item.level === 'MODEL';
+    const blankSub = modelLevel && identityTargets[index]!.item.from.sub_model === '';   // 쓰지 않은 칸: 저장값이 빈칸/없음 그대로인지만 본다
+    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => {
+      if (blankSub && field === 'sub_model') return clean(data?.[field]) !== '';
+      return modelLevel && field === 'sub_model' ? data?.[field] !== want[field] : clean(data?.[field]) !== want[field];
+    })) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
   });
   const sourceCorrectionReadback = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   sourceCorrectionReadback.forEach((snapshot, index) => {

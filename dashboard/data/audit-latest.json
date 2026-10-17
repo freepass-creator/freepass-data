@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 3,
-      "CHANGED": 302,
+      "ADDED": 0,
+      "CHANGED": 3,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1849
+      "UNCHANGED": 2198
     },
     "current": {
-      "count": 2154,
-      "digest": "0715485ca6cc820822ede75a0981fa20ddd3d223b54808efc104dda6ce6e283a",
-      "readTime": "2026-10-15T12:00:35.720250Z"
+      "count": 2201,
+      "digest": "52dbe22c9e0d552d718b3099ff9b42a088df3abf99a3b08cdef677d00a8cab5e",
+      "readTime": "2026-10-17T06:05:49.095463Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "fdeb60880575b26789e25fe5297cc18c62b8a705c40a4f754f5ab66ae8438f2a",
-    "inventoryTransitionCount": 4,
+    "digest": "fff4e3660e183ce35b75b8f95ecb28fb6390e82ae68c9d42626ae2e223885745",
+    "inventoryTransitionCount": 3,
     "previous": {
-      "count": 2151,
-      "digest": "f89c5af31ff81d9cd5ac40fffb5a66ff3584f750ecbeff459b105ea94e375061",
-      "readTime": "2026-10-15T09:27:38.094440Z"
+      "count": 2201,
+      "digest": "879d8669c03d36932d5da3789c305a1190212c4ad4b1462df30ea65a122188b9",
+      "readTime": "2026-10-17T04:11:18.380266Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 4,
-    "mappedForReview": 153,
-    "mappingHold": 2001,
+    "inventoryTransitionCount": 3,
+    "mappedForReview": 152,
+    "mappingHold": 2049,
     "productFieldPathCount": 1157
   },
-  "runId": "38731333112-1",
+  "runId": "39008600618-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 2154
+      "products": 2201
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "0715485ca6cc820822ede75a0981fa20ddd3d223b54808efc104dda6ce6e283a",
+    "digest": "52dbe22c9e0d552d718b3099ff9b42a088df3abf99a3b08cdef677d00a8cab5e",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-15T12:00:35.720250Z"
+    "readTime": "2026-10-17T06:05:49.095463Z"
   },
   "version": "erp5-source-inventory/1"
 }
