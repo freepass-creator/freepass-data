@@ -10,6 +10,8 @@ export type SourceClockDiagnostic = {
   /** Per response envelope, not vehicle counts; a response can fail several checks. */
   reasonEnvelopeCounts: Record<SourceClockReason, number>;
   examples: Array<{ envelope: 'DETAIL' | 'AVAILABILITY'; syncedAt: string | null; checkedAt: string;
+    /** Optional for receipts recorded before endpoint timing was separated. */
+    receivedAt?: string; receivedAgeMs?: number | null;
     ageMs: number | null; behindListMs: number | null; reasons: SourceClockReason[] }>;
 };
 export type CycleRead<T> = SourceRead<T> & { clockDiagnostic?: SourceClockDiagnostic };

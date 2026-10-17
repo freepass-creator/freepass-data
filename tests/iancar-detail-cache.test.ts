@@ -49,6 +49,56 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-01T00:
 afterEach(() => { vi.useRealTimers(); });
 
 describe('이안카 상세·가용 캐시', () => {
+  it('21시 실측 반례: 같은 원천 시각·stale=false라도 읽는 동안 15분을 넘은 14/20대는 보류하고 새 원천에서만 회복한다', async () => {
+    // 2026-10-17 21시 익명 시각만 실측. 차량·요금·HTTP는 전부 합성, 외부 호출 0.
+    const observed = '2026-10-17T11:47:31.055Z';
+    const started = '2026-10-17T12:00:04.459Z';
+    const facts = Array.from({ length: 116 }, (_, i) => row(i, undefined, { synced_at: observed, photos: [] }));
+    const cache: IancarDetailCache = { version: IANCAR_DETAIL_CACHE_VERSION, writtenAt: observed,
+      entries: Object.fromEntries(facts.map((fact, i) => [fact.vehicle_id, {
+        rowDigest: iancarListRowDigest(fact), detail: { success: true, data: fact }, availability: { success: true, data: fact },
+        cachedAt: new Date(Date.parse(observed) + i).toISOString(), detailSyncedAt: observed }])) };
+    const rotation = iancarRotationIds(cache, facts.map(f => f.vehicle_id));
+    let stamp = observed, delayed = true, rates = 0, detail = 0, availability = 0;
+    const waitById = new Map<string, number>();
+    const calls = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v1/vehicles') {
+        const page = Number(url.searchParams.get('page') ?? 1);
+        return Response.json({ success: true, data: facts.slice((page - 1) * 100, page * 100).map(f => ({ ...f, synced_at: stamp })),
+          pagination: { page, page_size: 100, total: facts.length }, synced_at: stamp, stale: false });
+      }
+      const id = /\/vehicles\/(veh\d+)/.exec(url.pathname)![1]!;
+      const index = Number(id.slice(3));
+      if (delayed && rotation.has(id) && !waitById.has(id)) waitById.set(id, waitById.size < 6 ? 45_000 : 20_234);
+      if (delayed && rotation.has(id)) await new Promise(resolve => setTimeout(resolve, waitById.get(id)!));
+      if (url.pathname.endsWith('/rates')) {
+        rates++;
+        return Response.json({ success: true, updated_at: stamp, data: [rate] });
+      }
+      if (url.pathname.endsWith('/availability')) availability++; else detail++;
+      return Response.json({ success: true, data: { ...facts[index]!, synced_at: stamp } });
+    }) as typeof fetch;
+    vi.setSystemTime(new Date(started));
+    const pending = collectIancarOneFullFacts(config, calls, undefined, undefined, { detailCache: cache }).catch(error => error);
+    await vi.runAllTimersAsync();
+    const error = await pending;
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic).toMatchObject({ listSyncedAt: observed, listedVehicles: 116,
+      rereadVehicles: 20, cachedVehicles: 96, clockHeldVehicles: 14, driftLimit: 4,
+      reasonEnvelopeCounts: { EXPIRED: 28, INVALID_SYNC: 0, NOT_FRESH_FLAG: 0, FUTURE: 0, BEHIND_LIST: 0 } });
+    expect(error.clockDiagnostic.examples[0]).toMatchObject({ syncedAt: observed,
+      checkedAt: '2026-10-17T12:02:39.693Z', ageMs: 908_638, behindListMs: 0, reasons: ['EXPIRED'] });
+    expect({ rates, detail, availability }).toEqual({ rates: 116, detail: 20, availability: 20 });
+    // 이 반례는 실제 개별 수신도 만료된 경우다. 새로운 원천 시각에서만 회복한다.
+    stamp = '2026-10-17T12:07:00.000Z'; delayed = false; rates = 0;
+    vi.setSystemTime(new Date('2026-10-17T12:10:00.000Z'));
+    const recovered = await collectIancarOneFullFacts(config, calls, undefined, undefined, { detailCache: cache });
+    expect(recovered.readyForRawIngest).toBe(true);
+    expect(recovered.records.filter(r => r.hold)).toHaveLength(0);
+    expect(rates).toBe(116); // 같은 목록 사실이어도 가격은 다시 확인한다.
+  });
+
   it('시각 진단의 한도·재읽기 수는 캐시 적중으로 희석하지 않는다', async () => {
     const first = await collectIancarOneFullFacts(config, world().fetcher, undefined, undefined, { detailCache: null });
     const cache = roundTrip(first.detailCacheOut!);
