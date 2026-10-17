@@ -437,7 +437,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   for (const field of PUBLIC_NUMBER_FIELDS) {
     result[field] = cleanNumber(product[field], field);
   }
-  if (process.env.FREEPASS_DATA_PUBLIC_ORIGIN !== '0') result.origin = originOfMaker(result.maker);
+  if (process.env.FREEPASS_DATA_PUBLIC_ORIGIN !== '0') result.origin = originOfMaker(result.maker, result.model);
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
   const sourceRawOn = process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1';
