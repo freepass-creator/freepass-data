@@ -6,7 +6,8 @@ const KNOWN_SALE_STATUS: ReadonlySet<string> = new Set([...Object.keys(ERP5_INVE
  * 뜻이 갈리는 «취소»·«진행중» 은 넣지 않는다 — 모르는 값으로 남아 STATUS_UNKNOWN 보류·회차 경고(STATUS_UNKNOWN_EXPOSED)로 드러난다(결정 필요). */
 export const SHEET_NOT_SELLABLE_STATUS: ReadonlySet<string> = new Set(['출고불가', '출고완료', '인도완료', '판매완료']);
 import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-source.js';
-import type { IancarOneListCapture } from './iancar-one-api.js';
+import { IancarOneApiError, type IancarOneListCapture } from './iancar-one-api.js';
+import type { CycleRead } from '../ports/source-cycle.js';
 import { stableIancarPayload } from './iancar-stable-facts.js';
 
 export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION' | 'FILE';
@@ -32,6 +33,7 @@ export type CycleCapture = {
   notes?: string[];
 };
 export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
+  read(): Promise<CycleRead<T>>;
   observationOnly?: boolean;
   observationCountOfRead?(read: SourceRead<T>): number;
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
@@ -54,7 +56,7 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
     ...(syncedAt ? { syncedAt } : {}),
     observationCountOfRead: read => read.raw?.observationOnlyCount ?? 0,
     syncedAtOfRead: read => read.raw?.synced_at ?? null,
-    async read(): Promise<SourceRead<CycleCapture>> {
+    async read(): Promise<CycleRead<CycleCapture>> {
       const attemptedAt = clock();
       try {
         const raw = await readCapture();
@@ -67,7 +69,8 @@ export function sourceCyclePlugin(def: CycleSourceDefinition, readCapture: () =>
           ...(!complete && raw.incompleteReason ? { detail: raw.incompleteReason } : {}) };
       } catch (e) {
         const { error, detail } = classifyReadError(e);
-        return { raw: null, complete: false, attemptedAt, observedAt: null, error, detail };
+        return { raw: null, complete: false, attemptedAt, observedAt: null, error, detail,
+          ...(def.kind === 'IANCAR' && e instanceof IancarOneApiError && e.clockDiagnostic ? { clockDiagnostic: e.clockDiagnostic } : {}) };
       }
     },
     toRecords(read) {

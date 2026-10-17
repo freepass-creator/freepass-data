@@ -143,6 +143,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
           read = await plugin.read();
         }
       }
+      if (read.clockDiagnostic) state.lastReadClockDiagnostic = read.clockDiagnostic;
+      else delete state.lastReadClockDiagnostic;
       // 읽기 자체가 던진 실패는 detail 이 사유 코드에 이미 합쳐진다. 읽기는 됐지만 불완전한 경우에만 별도로 남긴다.
       readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
       // 상류 원천의 갱신 시각 때문에 읽기를 마치지 못한 경우(정지 UPSTREAM_STALE, 상세를 읽는 사이 신선도 창을 넘긴 DETAIL_SOURCE_DRIFT)는 우리 쪽 실패가 아니다.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collectIancarOneFullFacts, IANCAR_ONE_API_ORIGIN, IANCAR_ONE_DRIFT_HOLD_RATIO } from '../src/adapters/iancar-one-api.js';
+import { collectIancarOneFullFacts, IancarOneApiError, IANCAR_ONE_API_ORIGIN, IANCAR_ONE_DRIFT_HOLD_RATIO } from '../src/adapters/iancar-one-api.js';
 
 // 읽는 동안 상태가 바뀐 차 한 대가 회차 전체를 실패시키지 않는다(2026-10-16 10:05 KST RP031 READ_FAILED_..._AVAILABILITY_DRIFT). 값은 전부 합성.
 const config = { baseUrl: IANCAR_ONE_API_ORIGIN, apiKey: 'synthetic-key-never-real' };
@@ -139,5 +139,44 @@ describe('RP031 상세 갱신 시각이 어긋난 차는 그 차만 보류한다
     await expect(collectIancarOneFullFacts(config, withDetailClock([4], 'invalid'))).rejects.toThrow('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
     const two = await collectIancarOneFullFacts(config, withDetailClock([1, 2], '2026-09-30T23:30:00.000Z'));
     expect(two.records.filter(r => r.hold)).toHaveLength(2);   // 한도 안(2대)
+  });
+
+  it('목록보다 1분 이전인 상세·가용: 기존 보류를 유지하며 시각 차이와 봉투 수를 남기고 신원·본문은 싣지 않는다', async () => {
+    const error = await collectIancarOneFullFacts(config, withDetailClock([1, 2, 3], '2026-09-30T23:59:00.000Z',
+      { private_note: 'DO_NOT_LOG_SOURCE_BODY' })).catch(e => e);
+    expect(error).toBeInstanceOf(IancarOneApiError);
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic).toMatchObject({ kind: 'IANCAR_DETAIL_CLOCK', stage: 'DRIFT_LIMIT',
+      listSyncedAt: '2026-10-01T00:00:00.000Z', listedVehicles: N, rereadVehicles: N, cachedVehicles: 0,
+      heldVehicles: 3, clockHeldVehicles: 3, driftLimit: 2, reasonEnvelopeCounts: { BEHIND_LIST: 6 } });
+    expect(error.clockDiagnostic.examples).toHaveLength(4);
+    expect(error.clockDiagnostic.examples[0]).toMatchObject({ syncedAt: '2026-09-30T23:59:00.000Z',
+      checkedAt: '2026-10-01T00:00:00.000Z', ageMs: 60_000, behindListMs: 60_000, reasons: ['BEHIND_LIST'] });
+    const serialized = JSON.stringify(error.clockDiagnostic);
+    for (const secret of ['DO_NOT_LOG_SOURCE_BODY', config.apiKey, 'veh1', plate(1), 'monthly_rate', 'private_note'])
+      expect(serialized).not.toContain(secret);
+  });
+
+  it.each([
+    ['NOT_FRESH_FLAG', '2026-10-01T00:00:00.000Z', { stale: true }],
+    ['EXPIRED', '2026-09-30T23:44:00.000Z', {}],
+    ['FUTURE', '2026-10-01T00:02:00.000Z', {}],
+  ] as const)('기존 %s 검사는 바꾸지 않고 실제 응답 봉투별 사유를 보존한다', async (reason, stamp, extra) => {
+    const error = await collectIancarOneFullFacts(config, withDetailClock([1, 2, 3], stamp, extra)).catch(e => e);
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic.stage).toBe('DRIFT_LIMIT');
+    expect(error.clockDiagnostic.reasonEnvelopeCounts[reason]).toBe(6);
+    expect(error.clockDiagnostic.examples.every((s: { reasons: string[] }) => s.reasons.includes(reason))).toBe(true);
+  });
+
+  it('깨진 synced_at 원문은 null로만 기록하고 모든 워커가 정리된 뒤 진단을 전달한다', async () => {
+    const secret = 'invalid synthetic-key-never-real veh4';
+    const error = await collectIancarOneFullFacts(config, withDetailClock([4], secret)).catch(e => e);
+    expect(error.code).toBe('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+    expect(error.clockDiagnostic.stage).toBe('INVALID_SYNC');
+    expect(error.clockDiagnostic.reasonEnvelopeCounts.INVALID_SYNC).toBeGreaterThan(0);
+    expect(error.clockDiagnostic.examples[0]).toMatchObject({ syncedAt: null, ageMs: null, behindListMs: null, reasons: ['INVALID_SYNC'] });
+    expect(JSON.stringify(error.clockDiagnostic)).not.toContain(secret);
+    expect(JSON.stringify(error.clockDiagnostic)).not.toContain(config.apiKey);
   });
 });
