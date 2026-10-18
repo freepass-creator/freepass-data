@@ -1177,6 +1177,15 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     const diff = fixture(); withOriginal(diff, { 차명: 'old source', 차번: '00가0001', 전체: { 차량번호: '00가0000' } });
     await expect(apply(diff)).rejects.toThrow(/vehicle mismatch/);
   });
+  it.each([
+    ['number', { 차번: 1234 }], ['array', { 차번: ['00가0000'] }], ['null', { 차번: null }],
+    ['single wrong number', { 차번: '00가0001' }], ['empty string', { 차번: '' }],
+    ['empty string beside a good field', { 차번: '', 전체: { 차량번호: '00가0000' } }],
+    ['non-object middle path (number)', { 전체: 1234 }], ['non-object middle path (array)', { 전체: [] }],
+  ])('refuses a malformed or wrong original plate: %s', async (_name, original) => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', ...original });
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
   it('refuses when the preserved original has no plate field at all', async () => {
     const p = fixture(); withOriginal(p, { 차명: 'old source', 옵션: 'x' });
     await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
