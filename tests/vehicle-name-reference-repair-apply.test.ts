@@ -1180,12 +1180,19 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     else item(r).to.sub_model = 'unapproved';
     await expect(apply(r)).rejects.toThrow(/rollback|LOCKED_BY_CONTRACT/);
   });
-  it.each(['missing', 'null', 'empty'])('restores exact %s values rather than collapsing them', async (mode) => {
+  it.each(['null', 'empty'])('restores exact %s values rather than collapsing them', async (mode) => {
     const p = fixture(); const data = store.get('products/fake-product')!;
-    if (mode === 'missing') { delete data.trim_name; delete item(p).from.trim_name; }
-    else { data.trim_name = mode === 'null' ? null : ''; item(p).from.trim_name = data.trim_name as string | null; }
+    data.trim_name = mode === 'null' ? null : ''; item(p).from.trim_name = data.trim_name as string | null;
     await apply(p); await apply(reverse(p));
-    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(mode !== 'missing');
-    expect(store.get('products/fake-product')!.trim_name).toBe(mode === 'missing' ? undefined : mode === 'null' ? null : '');
+    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
+    expect(store.get('products/fake-product')!.trim_name).toBe(mode === 'null' ? null : '');
+  });
+
+  it('refuses to restore a missing field by deletion (data-access boundary forbids erasing stored fields)', async () => {
+    const p = fixture(); const data = store.get('products/fake-product')!;
+    delete data.trim_name; delete item(p).from.trim_name;
+    await apply(p);
+    await expect(apply(reverse(p))).rejects.toThrow(/field deletion is not allowed/);
+    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
   });
 });

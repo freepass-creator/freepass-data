@@ -672,8 +672,10 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
       const after = { ...data };
       const update: Record<string, unknown> = {};
       for (const field of changedIdentityFields(item)) {
-        if (Object.hasOwn(item.to, field)) { after[field] = item.to[field]; update[field] = item.to[field]; }
-        else { delete after[field]; update[field] = FieldValue.delete(); }
+        // 저장된 칸을 지우지 않는다(data-access boundary: 지우기 금지). 바꾸는 칸은 반드시 값으로 채운다 —
+        // 원래 없던 칸으로 되돌리는 역계획은 여기서 거부하고 사람이 확인한다.
+        if (!Object.hasOwn(item.to, field)) throw new Error(`correction must set changed field ${field} (field deletion is not allowed)`);
+        after[field] = item.to[field]; update[field] = item.to[field];
       }
       writes.push({ update, audit: {
         eventId: eventIds[index], commandId: `product-identity-correction:${planDigest}`, entityType: 'products', entityId: item.id,
