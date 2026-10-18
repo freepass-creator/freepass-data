@@ -57,6 +57,7 @@ const db = {
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
         store.set(r.path, structuredClone(d.committedAt === 'ts' ? { ...d, committedAt: { seconds: correctionClock, nanoseconds: 0 } } : d));
+        if (d.committedAt === 'ts') updateTimes.set(r.path, { seconds: correctionClock, nanoseconds: 0 }); // 같은 커밋의 모든 문서는 같은 updateTime
       }),
     };
     const result = await fn(t);
@@ -1135,17 +1136,30 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     item(p).evidence.correction.archiveVehicleNumber = '00가0001';
     await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: digest })).rejects.toThrow(/exact plan digest|unresolved/);
   });
-  it('treats a document updateTime a few ms after the audit committedAt as the same committed result (server timestamps differ)', async () => {
+  it('links the exact committed version: audit doc and product share updateTime even when committedAt (server timestamp) differs by ms', async () => {
     const p = fixture(); await apply(p);
-    const committed = audits()[0]!.committedAt as { seconds: number; nanoseconds: number };
-    updateTimes.set('products/00가0000', { seconds: committed.seconds, nanoseconds: committed.nanoseconds + 15_000_000 });
+    const audit = [...store.entries()].find(([, x]) => x.action === 'PRODUCT_IDENTITY_CORRECTED')!;
+    const committed = audit[1].committedAt as { seconds: number; nanoseconds: number };
+    audit[1].committedAt = { seconds: committed.seconds, nanoseconds: committed.nanoseconds + 15_000_000 };
+    expect(updateTimes.get('products/00가0000')).toEqual(updateTimes.get(audit[0]));
     expect((await apply(p)).skippedAlreadyApplied).toBe(1);
   });
-  it('refuses a replay whose document updateTime is earlier than the audit committedAt', async () => {
+  it('refuses a replay when another write changed and restored the document (same data, different version)', async () => {
     const p = fixture(); await apply(p);
-    const committed = audits()[0]!.committedAt as { seconds: number; nanoseconds: number };
-    updateTimes.set('products/00가0000', { seconds: committed.seconds - 1, nanoseconds: 0 });
+    const v = updateTimes.get('products/00가0000') as { seconds: number; nanoseconds: number };
+    updateTimes.set('products/00가0000', { seconds: v.seconds, nanoseconds: v.nanoseconds + 1 });
     await expect(apply(p)).rejects.toThrow(/replay/);
+    updateTimes.set('products/00가0000', { seconds: v.seconds - 1, nanoseconds: v.nanoseconds });
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('allows reversal only from the exact committed version, even if the data is identical', async () => {
+    const p = fixture(); await apply(p);
+    const v = updateTimes.get('products/00가0000') as { seconds: number; nanoseconds: number };
+    const stale = reverse(p); updateTimes.set('products/00가0000', { seconds: v.seconds, nanoseconds: v.nanoseconds + 1 });
+    item(stale).expectedUpdateTime = updateTimes.get('products/00가0000') as ReturnType<typeof item>['expectedUpdateTime'];
+    await expect(apply(stale)).rejects.toThrow(/rollback no longer matches/);
+    updateTimes.set('products/00가0000', v);
+    const ok = reverse(p); await expect(apply(ok)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
   });
   it('explicitly refuses documents without a plate-number id', async () => {
     const p = fixture(); item(p).id = 'RP000:MONTHLY:fake'; item(p).evidence.vehicleNumber = 'RP000:MONTHLY:fake'; item(p).evidence.correction.archiveVehicleNumber = 'RP000:MONTHLY:fake';
