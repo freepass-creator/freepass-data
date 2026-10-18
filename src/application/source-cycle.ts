@@ -1,6 +1,7 @@
 import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, comparableRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { validateSourceSpec } from '../domain/source-spec-validation.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
 import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
@@ -39,7 +40,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
     ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
     ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}),
-    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}) }, plannedAt: now,
+    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}),
+    ...(config.specValidation ? { specValidation: true } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -95,8 +97,19 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const fp = p.record.raw?.row_fingerprint;
     if (typeof fp === 'string' && fp && !isAssignedPlate(p.record.plate)) (fingerprintPool.get(fp) ?? fingerprintPool.set(fp, []).get(fp)!).push(p);
   }
+  // 규격 검증(기본 꺼짐): 위반 칸만 보류한 복사본으로 계획을 세운다. 원문(raw.list·detail)은 그대로, 값을 고쳐 쓰지 않는다.
+  const specViolationByField: Record<string, number> = {};
+  let specViolatedRecords = 0;
   for (const original of evidence.records) {
     let r = original;
+    if (config.specValidation) {
+      const checked = validateSourceSpec(r);
+      if (checked.violations.length) {
+        specViolatedRecords++;
+        for (const field of new Set(checked.violations.map(x => x.field))) specViolationByField[field] = (specViolationByField[field] ?? 0) + 1;
+        r = checked.record;
+      }
+    }
     let key = sourceProductKey(r), before = mine.get(key) ?? null;
     if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
       let candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
@@ -213,6 +226,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
   }
+  // 규격 위반 경고(번호 없음): 필드별 건수. 위반이 읽은 차의 20% 를 넘으면 원천 형식 변경 의심 — 회차를 보류한다(이안카 드리프트 한도와 같은 방식, 최소 5건).
+  for (const [field, count] of Object.entries(specViolationByField).sort(([a], [b]) => a.localeCompare(b))) plan.warnings.push(`SPEC_VIOLATION:${field}:${count}`);
+  if (specViolatedRecords >= 5 && specViolatedRecords > Math.floor(evidence.records.length * 0.2) && !plan.blockers.includes('SPEC_FORMAT_DRIFT')) plan.blockers.push('SPEC_FORMAT_DRIFT');
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);

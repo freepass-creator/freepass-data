@@ -511,6 +511,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
+        // 규격 검증(기본 꺼짐): SOURCE_CYCLE_SPEC_VALIDATION_SOURCES 에 RP012 가 있을 때만.
+        if ((env.SOURCE_CYCLE_SPEC_VALIDATION_SOURCES ?? '').split(',').map(x => x.trim()).includes('RP012')) apiPlugin.specValidation = true;
         { const optCap = Number(env.SOURCE_CYCLE_API_OPTIONS_CAP ?? ''); if (Number.isSafeInteger(optCap) && optCap > 100 && optCap <= 400) apiPlugin.optionsRewriteCap = optCap; }
         plugins.push(apiPlugin);
       } else

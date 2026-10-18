@@ -77,6 +77,8 @@ export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngrade
   enrollCapOnce?: number;
   /** 옵션 칸 채움(API_OPTIONS 사유 전용) 회차 상한 상향(기본 100, 운영 변수 SOURCE_CYCLE_API_OPTIONS_CAP, 최대 400). 다른 쓰기와 합산 상한은 그대로 적용된다. */
   optionsRewriteCap?: number;
+  /** 규격 검증(대표 2026-10-16 승인, 기본 꺼짐·원천별): 쓰기 직전 위반 칸만 보류하고 SPEC_VIOLATION 경고를 남긴다. 위반이 읽은 차의 20% 를 넘으면 SPEC_FORMAT_DRIFT 로 회차 보류. */
+  specValidation?: boolean;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;
   unassignedPlateCount?: number;
