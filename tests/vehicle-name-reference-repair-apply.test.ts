@@ -1120,6 +1120,33 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     const car = fixture(); store.get('products/00가0000')!.car_number = '00가0001';
     await expect(apply(car)).rejects.toThrow(/vehicle mismatch/);
   });
+  it('accepts spacing inside the original number but refuses a hyphenated different number', async () => {
+    const spaced = fixture(); const all = (store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체; all.차량번호 = '00가 0000';
+    const o = store.get('products/00가0000')!.원문; item(spaced).evidence.original.contentDigest = stableDigest(o); item(spaced).evidence.correctsOriginalDigest = stableDigest(o);
+    await expect(apply(spaced)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses a hyphenated number as a different vehicle', async () => {
+    const p = fixture(); const all = (store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체; all.차량번호 = '00가-0000';
+    const o = store.get('products/00가0000')!.원문; item(p).evidence.original.contentDigest = stableDigest(o); item(p).evidence.correctsOriginalDigest = stableDigest(o);
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('binds approval to the archive vehicle number: changing it after approval is refused', async () => {
+    const p = fixture(); const digest = vehicleNameRepairPlanDigest(p);
+    item(p).evidence.correction.archiveVehicleNumber = '00가0001';
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: digest })).rejects.toThrow(/exact plan digest|unresolved/);
+  });
+  it('treats a document updateTime a few ms after the audit committedAt as the same committed result (server timestamps differ)', async () => {
+    const p = fixture(); await apply(p);
+    const committed = audits()[0]!.committedAt as { seconds: number; nanoseconds: number };
+    updateTimes.set('products/00가0000', { seconds: committed.seconds, nanoseconds: committed.nanoseconds + 15_000_000 });
+    expect((await apply(p)).skippedAlreadyApplied).toBe(1);
+  });
+  it('refuses a replay whose document updateTime is earlier than the audit committedAt', async () => {
+    const p = fixture(); await apply(p);
+    const committed = audits()[0]!.committedAt as { seconds: number; nanoseconds: number };
+    updateTimes.set('products/00가0000', { seconds: committed.seconds - 1, nanoseconds: 0 });
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
   it('explicitly refuses documents without a plate-number id', async () => {
     const p = fixture(); item(p).id = 'RP000:MONTHLY:fake'; item(p).evidence.vehicleNumber = 'RP000:MONTHLY:fake'; item(p).evidence.correction.archiveVehicleNumber = 'RP000:MONTHLY:fake';
     await expect(apply(p)).rejects.toThrow(/unresolved/);
