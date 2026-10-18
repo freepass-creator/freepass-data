@@ -33,6 +33,12 @@ export type CycleProduct = {
   fillSourceIdentity?: boolean;
   /** 계획이 정한 «이 회차에 정체성 정제(마스터 이름 채움)를 한다»(기존 문서, 회차 상한 안, VEHICLE_IDENTITY 사유 항목만 — Codex #704 잔여). 이 표식이 없으면 쓰기가 일어나도 기존 문서는 정제하지 않는다(신규 편입은 편입 상한이 따로 건다). */
   refineIdentity?: boolean;
+  /** 제원 확인 표식(vehicle_spec_source_checked)이 이미 찍힌 노출 문서의 «빈 제원 칸» 목록(읽기 경로가 계산하는 표시, 쓰기 결과에는 남지 않는다 — 대표 2026-10-19).
+   * 계획이 이번 관측 원천(raw.spec)에 그 칸의 형식 맞는 값이 있을 때만 다시 채움(SOURCE_SPEC)으로 고른다(domain/spec-refill). 값이 있는 칸·계약 잠금 문서는 목록에 없다. */
+  specRefillKeys?: string[];
+  /** 정체성이 확정되고 연료가 빈 노출 문서의 마스터 연료(vehicle_trim_master, 하나로 모일 때만 — 읽기 경로가 계산). 계획 digest·백업 대조에 고정되고,
+   * 계획이 검증·압축 전 원문에 연료 원문이 없을 때만(domain/spec-refill masterFuelFallback) after 에 남기고, 쓰기는 after 의 이 값만 쓴다. */
+  specMasterFuel?: string;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
@@ -54,7 +60,10 @@ export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: s
   /** 제조사별 마스터 «모델 이름 + 별칭» 목록(입구 매핑이 모델을 마스터에 있는 이름일 때만 쓰게 하는 근거, 차종 기준 한 장: 이름은 마스터에 있는 이름만, 괄호·세대·수식어 안 씀). 없으면 입구 매핑은 모델을 쓰지 않는다(fail-closed). */
   models?: Readonly<Record<string, readonly string[]>>;
   /** 제조사별 «별칭 → 정식 모델 이름». 원천 표기가 마스터에 등록된 별칭이면 «정식 이름»으로 바꿔 쓴다(별칭 문자열 자체는 쓰지 않는다 — Codex #706). */
-  modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>> };
+  modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** 정체성이 마스터로 확정된 차(제조사·모델·세부모델·세부트림)의 vehicle_trim_master 연료가 표준 이름으로 «하나로» 모일 때만 그 값(대표 2026-10-19 요령 «마스터» 열).
+   * 연식·배기량이 있으면 그것과 어긋나는 행을 뺀다(남는 행이 없으면 null). 없거나 갈리면 null. */
+  trimFuel?: (identity: { maker: string; model: string; sub_model: string; trim_name: string; year?: string; engine_cc?: string }) => string | null };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

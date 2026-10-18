@@ -48,9 +48,10 @@ const text = (value: unknown) => typeof value === 'string' ? value.trim() : valu
 const compact = (value: unknown) => text(value).replace(/\s+/g, '');
 const int = (value: unknown) => normalizeErp5CompatibilityInteger(value);
 /** 전기차 배기량 0·차량가격 0 은 «값 없음» 표시다 — 알려진 값도, 보류 사유도 아니다(내부 정합 대조에서 확인). */
-/** 공통 시트와 같은 연료 허용 목록·별칭. «가솔린+전기» 는 하이브리드/플러그인을 뜻으로 가를 수 없어 추정하지 않는다(보류). */
+/** 공통 시트 드롭다운 어휘(«플러그인하이브리드» 붙여 씀)로 돌려주는 옛 정규화기(로그인 수집 계열)·오토플러스 시트용 표.
+ * 제품 문서 연료 칸(fuel_type)에 쓰는 값의 정본 별칭 표는 domain/fuel-alias(canonicalFuel)다 — 손오공 공식 API 어댑터와 제원 채움은 그 표를 쓴다(2026-10-19). */
 const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
-/** 손오공 공식 API 어댑터(sonogong-api.ts)도 같은 표를 쓴다 — 별칭·허용 목록을 두 벌 두지 않는다. 모르면 null(추정하지 않음). */
+/** 모르면 null(추정하지 않음). */
 export const fuelName = (value: unknown): string | null => {
   const t = text(value);
   if (!t) return null;

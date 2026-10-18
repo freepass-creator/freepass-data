@@ -12,6 +12,8 @@ import { SOURCE_ENGINE_WRITER } from '../domain/deposit-evidence.js';
 import { boundedOptions, asBoundedOptions, OPTIONS_MAX_ITEMS } from '../domain/sonogong-options.js';
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
+import { refillableSpecValues } from '../domain/spec-refill.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -270,18 +272,46 @@ export function intColorOnlyFields(spec: unknown, original: Fields): Fields {
   if (specBlank(original.int_color) && typeof v === 'string' && SPEC_VALID.int_color(v.trim())) out.int_color = v.trim();
   return out;
 }
-export function sourceSpecFillFields(spec: unknown, original: Fields): Fields {
-  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return {};
-  if (original.vehicle_spec_source_checked === true) return {};   // 이미 확인한 문서는 다른 변경으로 갱신돼도 다시 채우지 않는다(Codex #688 ④)
-  const src = spec as Record<string, unknown>;
+export function sourceSpecFillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null): Fields {
+  if (original.vehicle_spec_source_checked === true) return {};   // 이미 확인한 문서는 다른 변경으로 갱신돼도 여기서는 다시 채우지 않는다(Codex #688 ④) — 빈 칸 다시 채움은 sourceSpecRefillFields
   const out: Fields = {};
-  for (const key of SPEC_FILL_KEYS) {
-    const v = src[key];
-    if (specBlank(original[key]) && typeof v === 'string' && SPEC_VALID[key](v.trim())) out[key] = v.trim();
+  if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+    const src = spec as Record<string, unknown>;
+    for (const key of SPEC_FILL_KEYS) {
+      const v = src[key];
+      if (!specBlank(original[key]) || typeof v !== 'string') continue;
+      // 연료는 별칭 표(domain/fuel-alias: 휘발유→가솔린, 가솔린+전기→하이브리드 …)로 표준 이름으로 바꾼 뒤에만 채운다(대표 2026-10-19).
+      const value = key === 'fuel_type' ? canonicalFuel(v, vehicleText) : v.trim();
+      if (value && SPEC_VALID[key](value)) out[key] = value;
+    }
   }
+  // 원천에 연료 원문이 없고 정체성이 마스터로 확정된 차: 계획이 고정한 마스터 연료(masterFuelFallback 를 거친 값)만 빈 연료 칸에 쓴다.
+  if (specBlank(original.fuel_type) && out.fuel_type === undefined && masterFuel && SPEC_VALID.fuel_type(masterFuel)) out.fuel_type = masterFuel;
   // 전기·수소 차(문서 연료 또는 이번에 채울 연료)에는 배기량을 채우지 않는다 — 의미 충돌(Codex #688 ②).
   const fuel = typeof original.fuel_type === 'string' && original.fuel_type.trim() ? original.fuel_type.trim() : typeof out.fuel_type === 'string' ? out.fuel_type : '';
   if (ELECTRIC_FUELS.has(fuel)) delete out.engine_cc;
+  return out;
+}
+/** 제원 확인 표식이 이미 있는 노출 문서의 «빈 제원 칸» 목록(대표 2026-10-19): 값이 있는 칸은 넣지 않는다. 전기·수소 문서의 배기량은 빈 칸이어도 넣지 않는다. */
+export const specRefillKeysOf = (f: Fields): string[] =>
+  SPEC_FILL_KEYS.filter(k => specBlank(f[k]) && !(k === 'engine_cc' && ELECTRIC_FUELS.has(String(f.fuel_type ?? '').trim())));
+/** 확정 정체성(검토 끝남·제조사·모델·세부모델·세부트림 모두 있음)이고 연료가 빈 문서의 마스터 연료(vehicle_trim_master, 하나로 모일 때만). 아니면 null. */
+export function masterFuelOf(f: Fields, trimFuel: VehicleIdentityRefiner['trimFuel'] | null | undefined): string | null {
+  if (!trimFuel || !specBlank(f.fuel_type) || f.vehicle_review_required !== false) return null;
+  const [maker, model, sub_model, trim_name] = [f.maker, f.model, f.sub_model, f.trim_name].map(textOf);
+  if (!maker || !model || !sub_model || !trim_name) return null;
+  const year = yearOf(f.year), cc = f.engine_cc === undefined || f.engine_cc === null ? '' : String(f.engine_cc).trim();
+  return trimFuel({ maker, model, sub_model, trim_name, ...(year ? { year } : {}), ...(cc ? { engine_cc: cc } : {}) });
+}
+/** 빈 칸 다시 채움(대표 2026-10-19 «한 번만 채움» 표식 재검토): 확인 표식이 있는 문서라도 «문서 칸이 비어 있고 지금 원천에 형식 맞는 값이 있으면» 그 칸만 채운다.
+ * 값이 있는 칸은 덮지 않는다. 원천에 연료가 없으면 마스터 연료(masterFuel)로. 판정은 계획과 같은 순수 함수(domain/spec-refill)를 쓴다. 표식은 바꾸지 않는다. */
+export function sourceSpecRefillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null): Fields {
+  if (original.vehicle_spec_source_checked !== true) return {};
+  const out: Fields = { ...refillableSpecValues(spec, specRefillKeysOf(original), vehicleText, original.fuel_type) };
+  if (specBlank(original.fuel_type) && out.fuel_type === undefined && masterFuel && SPEC_VALID.fuel_type(masterFuel)) {
+    out.fuel_type = masterFuel;
+    if (ELECTRIC_FUELS.has(masterFuel)) delete out.engine_cc;
+  }
   return out;
 }
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
@@ -361,7 +391,8 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
     ...(!isNew && !yearOf(original.year) && sourceYear ? { year: sourceYear } : {}) };
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
-  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null): CycleProduct {
+  identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null,
+  specSources: ReadonlySet<string> | null = sourceIdentitySources, trimFuel: VehicleIdentityRefiner['trimFuel'] | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -404,12 +435,22 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   else if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && sourceModelRevertDue(f, sourceModels) && engineOwnedIdentity(f, false, record)) rewriteReasons.push('SOURCE_IDENTITY');   // 선정에도 쓰기와 같은 소유 검사(선정만 되고 안 써져 되풀이되는 일 방지)
   // 제원 입구 매핑: 제원 칸이 비어 있고 확인 표식(vehicle_spec_source_checked)이 없는 노출 문서는 한 번 다시 써서 원천 제원을 채운다. 옛 저장 기록은 제원이 digest 라
   // 기록만으로는 알 수 없으므로 문서 상태와 표식으로 정한다 — 표식을 항상 쓰므로(채울 값이 없어도) 되풀이되지 않는다. 같은 허용 공급사·회차 상한을 쓴다.
-  if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned
+  // 제원 채움 공급사(specSources): 입구 매핑 공급사 + 제원 채움만 켠 공급사(SOURCE_CYCLE_SPEC_FILL_SOURCES).
+  const specAllowed = !!specSources && specSources.has(String(f.provider_company_code)) && engineOwned;
+  const lockedNow = isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record));
+  let specRefillKeys: string[] = [];
+  if (specAllowed
     && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
     && SPEC_FILL_KEYS.some(k => specBlank(f[k]) && !(k === 'engine_cc' && ELECTRIC_FUELS.has(String(f.fuel_type ?? '').trim())))) rewriteReasons.push('SOURCE_SPEC');
   // 제원 확인을 이미 마친 문서의 내장색 보완(내장색 전용 표식으로 문서당 한 번 — 저장 기록은 제원이 digest 라 원천에 내장색이 있는지는 쓰기 때 현재 관측으로 정한다).
-  else if (sourceIdentitySources && sourceIdentitySources.has(String(f.provider_company_code)) && engineOwned && f.vehicle_spec_source_checked === true
+  else if (specAllowed && f.vehicle_spec_source_checked === true
     && f[INT_COLOR_MARK] !== true && specBlank(f.int_color)) rewriteReasons.push('SOURCE_SPEC');
+  // 확인 표식이 있는 문서의 빈 칸 다시 채움(대표 2026-10-19): 빈 칸 목록만 실어 두고, 이번 관측 원천에 형식 맞는 값이 있는지는 계획이 정한다(domain/spec-refill).
+  // 원천에 연료가 없어도 정체성이 확정된 차는 마스터 연료가 하나로 모이면 그 자체가 채울 근거다(쓰면 연료가 생겨 되풀이되지 않음). 계약 잠금 문서는 제외.
+  else if (specAllowed && f.vehicle_spec_source_checked === true && !lockedNow) specRefillKeys = specRefillKeysOf(f);
+  // 정체성이 확정된 연료 빈 문서의 마스터 연료(하나로 모일 때만). 값을 읽기 경로에 실어 계획 digest·백업 대조에 고정한다 — 계획 뒤 마스터 연료가 바뀌면 백업 대조가 멈춘다(Codex 검토).
+  // 쓸지 말지는 계획이 이번 관측 원천에 연료 원문이 «없을 때만» 정한다(masterFuelFallback).
+  const specMasterFuel = specAllowed && !lockedNow ? masterFuelOf(f, trimFuel) : null;
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -418,7 +459,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
     identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
-  return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}),
+  return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
@@ -472,9 +513,15 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
-export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null } = {}): Fields {
+export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null;
+  /** 제원 채움 공급사(입구 매핑 공급사 + 제원만 켠 공급사). 없으면 sourceIdentitySources 와 같다. */ specFillSources?: ReadonlySet<string> | null;
+  } = {}): Fields {
   const r = p.record;
   const isNew = !Object.keys(original).length;
+  const specSources = opts.specFillSources === undefined ? opts.sourceIdentitySources : opts.specFillSources;
+  const specFill = !!specSources?.has(r.sourceId) && p.fillSourceIdentity === true;
+  // 마스터 연료는 계획이 검증·압축 전 원문으로 판정해 고정한 값(after.specMasterFuel)만 쓴다 — 쓰기 시점에 다시 계산·판정하지 않는다(Codex 검토).
+  const masterFuel = specFill && !isNew && typeof p.specMasterFuel === 'string' && p.specMasterFuel ? p.specMasterFuel : null;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
   // 기존 문서의 하향·철회(after 가 노출 안 함·철회 표식)에는 정체성 정제를 섞지 않는다(Codex #704 (c)): 철회 작업이 이름까지 바꾸지 않게.
   const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
@@ -489,7 +536,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     salePriceMap(r.terms);
   return { car_number: r.plate, provider_company_code: r.sourceId, car_name: r.vehicleText,
     ...(isNew ? { ...p.supplierFields, maker: '', model: '', sub_model: r.vehicleText, trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
-      원문: { 차명: r.vehicleText, source: r.raw }, ...(opts.sourceIdentitySources?.has(r.sourceId) ? {} : sheetSpecFields(r.raw.spec)) } : {}),
+      원문: { 차명: r.vehicleText, source: r.raw }, ...(opts.sourceIdentitySources?.has(r.sourceId) || specSources?.has(r.sourceId) ? {} : sheetSpecFields(r.raw.spec)) } : {}),
     ...(identity ? identityFields(identity, original, r, isNew) : {}),
     price, source_cycle_price_digest: priceDigest(price),
     ...(price === original.price ? {} : calculatedDepositFields(r)),
@@ -514,11 +561,11 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model), opts.sourceModels ?? null) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked !== true
-      ? { ...sourceSpecFillFields(r.raw?.spec, original), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
-    // 이미 제원 채움을 마친 문서의 내장색만 보완(채울 값이 있을 때만 사유가 생긴다).
-    ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && original.vehicle_spec_source_checked === true
-      ? intColorOnlyFields(r.raw?.spec, original) : {}),
+    ...(specFill && original.vehicle_spec_source_checked !== true
+      ? { ...sourceSpecFillFields(r.raw?.spec, original, r.vehicleText, masterFuel), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
+    // 이미 제원 채움을 마친 문서: 내장색 보완(표식으로 한 번) + 빈 칸 다시 채움(빈 칸 + 원천 값 있음, 대표 2026-10-19). 값이 있는 칸은 덮지 않는다.
+    ...(specFill && original.vehicle_spec_source_checked === true
+      ? { ...intColorOnlyFields(r.raw?.spec, original), ...sourceSpecRefillFields(r.raw?.spec, original, r.vehicleText, masterFuel) } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -532,6 +579,8 @@ const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
+  /** 제원 채움만 켤 공급사(입구 매핑 없이 빈 제원 칸 채움·다시 채움, 대표 2026-10-19). 입구 매핑 공급사는 이 목록과 상관없이 제원도 채운다. */
+  specFillSources?: readonly string[];
   /** 정체성 정제(마스터 이름 채움)를 켤 공급사 코드 목록(IDENTITY-SAME-CYCLE-DESIGN 2단계). 값이 있으면 그 공급사만, 없으면(undefined) identityRefine 이 전체를 정한다. */
   identityRefineSources?: readonly string[];
   /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
@@ -541,6 +590,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const monthly = options.writeMonthlyProductType === true;
   const apiOptions = options.writeApiOptions === true;
   const srcIdentity: ReadonlySet<string> | null = options.sourceIdentitySources?.length ? new Set(options.sourceIdentitySources) : null;
+  const specSrc: ReadonlySet<string> | null = srcIdentity || options.specFillSources?.length
+    ? new Set([...(options.sourceIdentitySources ?? []), ...(options.specFillSources ?? [])]) : null;
   let refiner: VehicleIdentityRefiner | null = null;
   const ready = async () => { refiner = options.identity ? await options.identity().catch(() => null) : null; };
   // 정체성 정제(마스터 이름 덮어쓰기)는 identityRefine=false 면 끈다(입구 매핑용 제조사 목록만 읽은 경우).
@@ -549,9 +600,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
   const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
   const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels());
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null);
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
-    sourceIdentitySources: srcIdentity, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
+    sourceIdentitySources: srcIdentity, specFillSources: specSrc, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
@@ -666,7 +717,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels()); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');

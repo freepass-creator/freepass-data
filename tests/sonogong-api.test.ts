@@ -322,16 +322,17 @@ describe('손오공 공식 API 어댑터', () => {
   it('최초등록일은 상세의 실제 칸이 있을 때만, 연료는 공통 별칭으로 바꾸고 모르면 비운다(원문은 raw 에 보존)', async () => {
     const read = await readSonogongApi(world(u => {
       if (u.pathname.endsWith('/vehicles')) return json(u.searchParams.get('tab') === 'sub'
-        ? [row(1, '100하1111', { fuel: 'HEV' }), row(2, '100하2222', { fuel: '가솔린+전기' }), row(3, '100하3333', { fuel: '휘발유' })] : []);
+        ? [row(1, '100하1111', { fuel: 'HEV' }), row(2, '100하2222', { fuel: '가솔린+전기' }), row(3, '100하3333', { fuel: '휘발유' }), row(4, '100하4444', { fuel: 'GSL' })] : []);
       const id = Number(u.pathname.split('/').at(-1));
       return json(detail(id, `100하${String(id).repeat(4)}`, id === 1 ? { firstRegistrationDate: '2023-07-15' } : id === 2 ? { firstRegistrationDate: '2023-02-30' } : {}));
     }).client);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.raw.spec as Record<string, string>]));
     expect(by['1111']).toMatchObject({ fuel_type: '하이브리드', first_registration_date: '2023-07-15', manufacture_year_month: '2023-05', year: '2023' });
-    expect(by['2222']).not.toHaveProperty('fuel_type');                  // 하이브리드/플러그인 구분 불가 → 추정하지 않음
+    expect(by['2222']).toMatchObject({ fuel_type: '하이브리드' });       // 대표 2026-10-19 연료 별칭 표: «가솔린+전기» → 하이브리드(차명에 플러그인/PHEV 가 있으면 보류)
     expect(by['2222']).not.toHaveProperty('first_registration_date');    // 없는 날짜는 거른다
     expect((read.records.find(r => r.plate!.endsWith('2222'))!.raw.list as Record<string, unknown>).fuel).toBe('가솔린+전기');
     expect(by['3333']).toMatchObject({ fuel_type: '가솔린' });
+    expect(by['4444']).not.toHaveProperty('fuel_type');                  // 표에 없는 표기는 추정하지 않는다
     expect(read.notes).toContain('FUEL_UNRESOLVED:1');
   });
   it('보류된 행(상태 미상·ID 없음)은 다른 탭의 같은 번호 정상 행을 가리지 않는다, 정상 행끼리는 rent > sub > pick', async () => {
