@@ -5,6 +5,8 @@ import { stableDigest } from '../src/shared/stable-digest.js';
 const store = new Map<string, Record<string, unknown>>();
 const put = (path: string, data: Record<string, unknown>) => { store['set'](path, data); };
 const UNION = Symbol('union');
+const DELETE = Symbol('delete');
+let correctionClock = 100;
 type Ref = { path: string; id: string; parent: { id: string } };
 const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${id}`, id, parent: { id: collection } });
 // Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
@@ -20,7 +22,8 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
     if (v && typeof v === 'object' && UNION in v) {
       const prev = Array.isArray(doc[k]) ? (doc[k] as unknown[]) : [];
       doc[k] = [...prev, ...((v as never)[UNION] as unknown[]).filter((x) => !prev.includes(x))];
-    } else doc[k] = v;
+    } else if (v === DELETE) delete doc[k];
+    else doc[k] = v;
   }
   store.set(path, doc);
 };
@@ -40,31 +43,36 @@ const runQuery = (q: Query) => {
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
-  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
+  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f), limit: (n: number) => query(c).limit(n) }),
   getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
-  runTransaction: async (fn: (t: unknown) => Promise<void>) => {
+  runTransaction: async (fn: (t: unknown) => Promise<unknown>) => {
     const writes: Array<() => void> = [];
     const t = {
       getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
-      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => applyUpdate(r.path, u)); },
+      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => {
+        applyUpdate(r.path, u);
+        if (typeof updateTimes.get(r.path) === 'object') updateTimes.set(r.path, { seconds: correctionClock, nanoseconds: 0 });
+      }); },
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
-        store.set(r.path, structuredClone(d));
+        store.set(r.path, structuredClone(d.committedAt === 'ts' ? { ...d, committedAt: { seconds: correctionClock, nanoseconds: 0 } } : d));
       }),
     };
-    await fn(t);
+    const result = await fn(t);
+    correctionClock++;
     writes.forEach((w) => w());
+    return result;
   },
 };
 vi.mock('firebase-admin/firestore', () => ({
   getFirestore: () => db,
-  FieldValue: { arrayUnion: (...v: unknown[]) => ({ [UNION]: v }), serverTimestamp: () => 'ts' },
+  FieldValue: { arrayUnion: (...v: unknown[]) => ({ [UNION]: v }), serverTimestamp: () => 'ts', delete: () => DELETE },
 }));
-vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
-vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
+vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({ options: { projectId: 'test-project' } }) }));
+vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: vi.fn(async () => undefined) }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents, vehicleNameRepairPlanDigest } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 // 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
 const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
@@ -999,5 +1007,192 @@ describe('alias canonicalization of a confirmed product identity', () => {
     await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
       .rejects.toThrow(/canonical name|manual or confirmed value/);
     expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+});
+
+describe('confirmed product identity correction (isolated approval path)', () => {
+  type Plan = import('../src/infra/vehicle-name-reference-repair-firestore.js').VehicleNameRepairPlan;
+  const fixture = (): Plan => {
+    const from = { maker: 'Maker', model: 'Model', sub_model: 'Wrong', trim_name: 'Old' };
+    const to = { maker: 'Maker', model: 'Model', sub_model: 'Right', trim_name: 'New' };
+    const original = { vehicle_key: 'fake-vehicle', text: 'old source' };
+    const correction = { vehicle_key: 'fake-vehicle', text: 'corrected source' };
+    const master = { id: 'fake-master', maker: to.maker, model: to.model, sub_model: to.sub_model };
+    const trim = { ...master, id: 'fake-trim', master_id: master.id, trim: to.trim_name };
+    put('products/fake-product', { ...from, vehicle_key: 'fake-vehicle', 원문: original, 원문_정정: correction, confirmed: true, unrelated: 'keep' });
+    put('vehicle_master/fake-master', master);
+    put('vehicle_trim_master/fake-trim', trim);
+    updateTimes.set('products/fake-product', { seconds: 1, nanoseconds: 123 });
+    const source = (data: unknown, name: string) => ({ source: name, authoredAt: '2026-01-01T00:00:00Z', retrievedAt: '2026-01-02T00:00:00Z', archiveRef: 'private:fake-reference', contentDigest: stableDigest(data) });
+    return { kind: 'PRODUCT_IDENTITY_CORRECTION', projectId: 'test-project', sourceDigest: 'fake-source', masterRepairs: [], productRepairs: [], productIdentityCorrections: [{
+      id: 'fake-product', from, to, expectedUpdateTime: { seconds: 1, nanoseconds: 123 }, reason: 'Reviewed correction explicitly replaces the wrong source identity',
+      evidence: { original: source(original, 'supplier'), correction: source(correction, '지지오토'), vehicleIdentityField: 'vehicle_key', vehicleIdentityDigest: stableDigest('fake-vehicle'), correctsOriginalDigest: stableDigest(original), correctedFields: ['sub_model', 'trim_name'], resolvedIdentity: to, conflicts: [] },
+      master: { id: master.id, trimId: trim.id, contentDigest: stableDigest(master), trimContentDigest: stableDigest(trim) },
+    }] };
+  };
+  const apply = (p: Plan) => applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) });
+  const item = (p: Plan) => p.productIdentityCorrections![0]!;
+  const audits = () => [...store.values()].filter((x) => String(x.action).startsWith('PRODUCT_IDENTITY_CORRECT'));
+  const reverse = (p: Plan): Plan => {
+    const prior = audits()[0]!;
+    const next = structuredClone(p);
+    const i = item(next);
+    i.from = structuredClone(item(p).to); i.to = structuredClone(item(p).from);
+    i.expectedUpdateTime = updateTimes.get('products/fake-product') as typeof i.expectedUpdateTime;
+    i.rollbackOf = prior.eventId as string;
+    i.reason = 'Approved reversal of this exact correction';
+    return next;
+  };
+  it('corrects confirmed fields atomically and preserves source and unrelated fields', async () => {
+    const p = fixture(); const before = structuredClone(store.get('products/fake-product')!);
+    const result = await apply(p);
+    expect(result.readbackCount).toBe(1); expect(result.auditCount).toBe(1);
+    expect(store.get('products/fake-product')).toEqual({ ...before, ...item(p).to });
+    expect(audits()[0]).toMatchObject({ action: 'PRODUCT_IDENTITY_CORRECTED', planDigest: vehicleNameRepairPlanDigest(p), before: item(p).from, after: item(p).to });
+    expect(preconditions.at(-1)?.[1]).toEqual({ lastUpdateTime: item(p).expectedUpdateTime });
+  });
+  it('refuses ordinary approval even with the exact correction digest', async () => {
+    const p = fixture();
+    await expect(applyVehicleNameReferenceRepair(p, { approvedPlanDigest: vehicleNameRepairPlanDigest(p) })).rejects.toThrow(/AUTHORIZE_PRODUCT/);
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: stableDigest(p) })).rejects.toThrow(/AUTHORIZE_PRODUCT/);
+  });
+  it('binds approval to the project and every reviewed field', async () => {
+    const p = fixture(); const digest = vehicleNameRepairPlanDigest(p); item(p).reason += ' changed';
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: digest })).rejects.toThrow(/digest/);
+    p.projectId = 'other-project'; await expect(apply(p)).rejects.toThrow(/project mismatch/);
+  });
+  it.each(['masterRepairs', 'productRepairs', 'productIdentityRepairs', 'productTrimRepairs', 'masterCreates'] as const)('refuses mixed %s plans', async (key) => {
+    const p = fixture(); (p as unknown as Record<string, unknown>)[key] = [{ id: 'fake-other', from: 'a', to: 'b' }];
+    await expect(apply(p)).rejects.toThrow(/mix/);
+  });
+  it('refuses 11 products, duplicate IDs and empty correction batches', async () => {
+    const p = fixture(); const first = item(p);
+    p.productIdentityCorrections = Array.from({ length: 11 }, (_, n) => ({ ...first, id: `fake-${n}` }));
+    await expect(apply(p)).rejects.toThrow(/1\.\.10/);
+    p.productIdentityCorrections = [first, first]; await expect(apply(p)).rejects.toThrow(/duplicate/);
+    p.productIdentityCorrections = []; await expect(apply(p)).rejects.toThrow(/1\.\.10/);
+  });
+  it.each([{ locked_by_contract: true }, { locked_by_contract: 'locked' }, { publication_withdrawal: { reason: 'withdrawn' } }])('refuses protected products %j', async (flag) => {
+    const p = fixture(); Object.assign(store.get('products/fake-product')!, flag);
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT|PUBLICATION_WITHDRAWN/); expect(audits()).toHaveLength(0);
+  });
+  it.each([undefined, null, '', ' Wrong'])('compares from without normalization: %s', async (value) => {
+    const p = fixture(); const data = store.get('products/fake-product')!;
+    if (value === undefined) delete data.sub_model; else data.sub_model = value;
+    await expect(apply(p)).rejects.toThrow(/from\/version/);
+  });
+  it('refuses a changed version even when all four names are unchanged', async () => {
+    const p = fixture(); updateTimes.set('products/fake-product', { seconds: 1, nanoseconds: 124 });
+    await expect(apply(p)).rejects.toThrow(/version/);
+  });
+  it('rechecks product state after backup and aborts the entire batch', async () => {
+    const p = fixture();
+    const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('products/fake-product')!.locked_by_contract = true; });
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/); expect(audits()).toHaveLength(0);
+  });
+  it.each(['원문', '원문_정정'])('refuses changed %s content', async (field) => {
+    const p = fixture(); (store.get('products/fake-product')![field] as Record<string, unknown>).text = 'changed';
+    await expect(apply(p)).rejects.toThrow(/evidence changed/);
+  });
+  it('requires the same vehicle in both evidence records and product', async () => {
+    const p = fixture(); store.get('products/fake-product')!.vehicle_key = 'different-fake-vehicle';
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('refuses unresolved higher-priority evidence conflicts', async () => {
+    const p = fixture(); item(p).evidence.conflicts = ['registration disagrees'];
+    await expect(apply(p)).rejects.toThrow(/unresolved/);
+  });
+  it('requires preserved source provenance and explicit supersession', async () => {
+    const p = fixture(); item(p).evidence.original.archiveRef = '';
+    await expect(apply(p)).rejects.toThrow(/provenance/);
+    item(p).evidence.original.archiveRef = 'private:fake'; item(p).evidence.correctsOriginalDigest = 'bad';
+    await expect(apply(p)).rejects.toThrow(/identify the original/);
+  });
+  it.each(['duplicate', 'retired', 'changed'])('refuses %s masters', async (mode) => {
+    const p = fixture(); const m = store.get('vehicle_master/fake-master')!;
+    if (mode === 'duplicate') put('vehicle_master/fake-duplicate', { ...m });
+    else m[mode === 'retired' ? 'retired' : 'other'] = true;
+    await expect(apply(p)).rejects.toThrow(/master ambiguous/);
+  });
+  it.each(['duplicate', 'retired', 'wrong-link', 'old-trim'])('refuses %s trims', async (mode) => {
+    const p = fixture(); const t = store.get('vehicle_trim_master/fake-trim')!;
+    if (mode === 'duplicate') put('vehicle_trim_master/fake-duplicate', { ...t });
+    else if (mode === 'retired') t.retired = true;
+    else if (mode === 'wrong-link') t.master_id = 'fake-other';
+    else { item(p).to.trim_name = 'Old'; item(p).evidence.resolvedIdentity = { ...item(p).to }; }
+    await expect(apply(p)).rejects.toThrow(/trim ambiguous/);
+  });
+  it('rechecks master evidence after backup', async () => {
+    const p = fixture(); const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('vehicle_master/fake-master')!.retired = true; });
+    await expect(apply(p)).rejects.toThrow(/master ambiguous/);
+  });
+  it('does not write when private backup fails', async () => {
+    const p = fixture(); const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockRejectedValueOnce(new Error('backup failed'));
+    await expect(apply(p)).rejects.toThrow(/backup failed/);
+    expect(store.get('products/fake-product')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+  });
+  it('rejects the whole batch when the second product fails', async () => {
+    const p = fixture(); const second = structuredClone(item(p)); second.id = 'fake-second';
+    put('products/fake-second', { ...store.get('products/fake-product')!, locked_by_contract: true });
+    updateTimes.set('products/fake-second', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+    expect(store.get('products/fake-product')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+  });
+  it('only treats a matching audit AND complete actual result as already applied', async () => {
+    const p = fixture(); await apply(p);
+    expect((await apply(p)).skippedAlreadyApplied).toBe(1); expect(audits()).toHaveLength(1);
+    store.get('products/fake-product')!.unrelated = 'later edit';
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses a corrupted replay receipt', async () => {
+    const p = fixture(); await apply(p); audits()[0]!.itemDigest = 'corrupted';
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses changed before-images even when the receipt digest label remains unchanged', async () => {
+    const p = fixture(); await apply(p); audits()[0]!.before = { maker: 'tampered' };
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses a partial batch receipt without writing the missing member', async () => {
+    const p = fixture(); const second = structuredClone(item(p)); second.id = 'fake-second';
+    put('products/fake-second', { ...store.get('products/fake-product')! });
+    updateTimes.set('products/fake-second', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    const before = structuredClone(store.get('products/fake-second')!);
+    await apply(p);
+    for (const [path, data] of store) if (data.entityId === 'fake-second' && data.action === 'PRODUCT_IDENTITY_CORRECTED') store.delete(path);
+    put('products/fake-second', before); updateTimes.set('products/fake-second', second.expectedUpdateTime);
+    await expect(apply(p)).rejects.toThrow(/partial correction/);
+    expect(store.get('products/fake-second')!.sub_model).toBe('Wrong');
+  });
+  it('requires fresh approval for reverse and restores only changed fields', async () => {
+    const p = fixture(); await apply(p); const r = reverse(p);
+    await expect(applyVehicleNameReferenceRepair(r, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) })).rejects.toThrow(/digest/);
+    await apply(r); expect(store.get('products/fake-product')).toMatchObject({ ...item(p).from, unrelated: 'keep', confirmed: true });
+    expect(audits().at(-1)!.action).toBe('PRODUCT_IDENTITY_CORRECTION_REVERSED');
+    expect((await apply(r)).skippedAlreadyApplied).toBe(1);
+  });
+  it.each(['version', 'lock', 'edited-target'])('refuses reverse after %s change', async (mode) => {
+    const p = fixture(); await apply(p); const r = reverse(p);
+    if (mode === 'version') { updateTimes.set('products/fake-product', { seconds: 9999, nanoseconds: 0 }); item(r).expectedUpdateTime = { seconds: 9999, nanoseconds: 0 }; }
+    else if (mode === 'lock') store.get('products/fake-product')!.locked_by_contract = true;
+    else item(r).to.sub_model = 'unapproved';
+    await expect(apply(r)).rejects.toThrow(/rollback|LOCKED_BY_CONTRACT/);
+  });
+  it.each(['null', 'empty'])('restores exact %s values rather than collapsing them', async (mode) => {
+    const p = fixture(); const data = store.get('products/fake-product')!;
+    data.trim_name = mode === 'null' ? null : ''; item(p).from.trim_name = data.trim_name as string | null;
+    await apply(p); await apply(reverse(p));
+    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
+    expect(store.get('products/fake-product')!.trim_name).toBe(mode === 'null' ? null : '');
+  });
+
+  it('refuses to restore a missing field by deletion (data-access boundary forbids erasing stored fields)', async () => {
+    const p = fixture(); const data = store.get('products/fake-product')!;
+    delete data.trim_name; delete item(p).from.trim_name;
+    await apply(p);
+    await expect(apply(reverse(p))).rejects.toThrow(/field deletion is not allowed/);
+    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
   });
 });

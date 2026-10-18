@@ -42,6 +42,9 @@ export type ProductSourceCorrectionItem = {
 };
 
 export type VehicleNameRepairPlan = {
+  kind?: 'PRODUCT_IDENTITY_CORRECTION';
+  projectId?: string;
+  productIdentityCorrections?: ProductIdentityCorrection[];
   sourceDigest: string;
   masterRepairs: VehicleNameRepairItem[];
   productRepairs: VehicleNameRepairItem[];
@@ -232,6 +235,7 @@ const currentCorrectionKeptInHistory = (current: unknown, history: Record<string
   current === undefined || current === null || history.some((entry) => stableDigest(entry) === stableDigest(current));
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
+  if (plan.kind !== undefined || plan.productIdentityCorrections !== undefined) return validateIdentityCorrectionPlan(plan);
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
@@ -493,8 +497,221 @@ export function hasHumanOrConfirmedMarker(data: Record<string, unknown> | undefi
 const aliasNormalizationAllowedFor = (data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }) =>
   isAliasNormalizationCandidate(from, to) && !hasHumanOrConfirmedMarker(data);
 
-export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
+const CORRECTION_FIELDS = ['maker', 'model', 'sub_model', 'trim_name'] as const;
+/** Omitted key = missing field; null and empty string are distinct, including in reverse plans. */
+type ExactIdentity = Partial<Record<(typeof CORRECTION_FIELDS)[number], string | null>>;
+type ReviewedTime = { seconds: number; nanoseconds: number };
+type CorrectionSource = { source: string; authoredAt: string; retrievedAt: string; contentDigest: string; archiveRef: string };
+export type ProductIdentityCorrection = {
+  id: string; from: ExactIdentity; to: ExactIdentity; expectedUpdateTime: ReviewedTime; reason: string;
+  evidence: {
+    original: CorrectionSource; correction: CorrectionSource;
+    /** Same exact identity field in product, original and correction, pinned by digest (never guessed from names). */
+    vehicleIdentityField: string; vehicleIdentityDigest: string;
+    correctsOriginalDigest: string; correctedFields: Array<(typeof CORRECTION_FIELDS)[number]>;
+    resolvedIdentity: ExactIdentity;
+    /** Reviewed conflicts, including higher-priority evidence; nonempty always HOLD. */
+    conflicts: string[];
+  };
+  master: { id: string; trimId: string; contentDigest: string; trimContentDigest: string };
+  /** Reverse only this committed event's changed fields, never a whole-document restore. */
+  rollbackOf?: string;
+};
+const exactIdentity = (data: Record<string, unknown>): ExactIdentity => Object.fromEntries(
+  CORRECTION_FIELDS.filter((f) => Object.hasOwn(data, f)).map((f) => [f, data[f]]),
+) as ExactIdentity;
+const sameIdentity = (a: ExactIdentity, b: ExactIdentity) => stableDigest(a) === stableDigest(b);
+const timestampValue = (value: unknown): ReviewedTime | null => {
+  if (!value || typeof value !== 'object') return null;
+  const { seconds, nanoseconds } = value as ReviewedTime;
+  return Number.isSafeInteger(seconds) && Number.isInteger(nanoseconds) && nanoseconds >= 0 && nanoseconds < 1e9
+    ? { seconds, nanoseconds } : null;
+};
+const sameTime = (a: unknown, b: unknown) => timestampValue(a) !== null && timestampValue(b) !== null
+  && stableDigest(timestampValue(a)) === stableDigest(timestampValue(b));
+const digestOk = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+const textOk = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+const objectOk = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const identityShape = (v: unknown) => objectOk(v) && Object.entries(v).every(([k, value]) =>
+  (CORRECTION_FIELDS as readonly string[]).includes(k) && (value === null || typeof value === 'string'));
+const changedIdentityFields = (item: ProductIdentityCorrection) => CORRECTION_FIELDS.filter((f) =>
+  Object.hasOwn(item.from, f) !== Object.hasOwn(item.to, f) || item.from[f] !== item.to[f]);
+export const vehicleNameRepairPlanDigest = (plan: VehicleNameRepairPlan) => plan.kind === 'PRODUCT_IDENTITY_CORRECTION'
+  ? stableDigest({ kind: plan.kind, projectId: plan.projectId, plan }) : stableDigest(plan);
+const correctionAuditMatches = (event: Record<string, unknown> | undefined, plan: VehicleNameRepairPlan, item: ProductIdentityCorrection) => {
+  if (!event) return false;
+  const planDigest = vehicleNameRepairPlanDigest(plan);
+  const expected = {
+    eventId: `pic_${stableDigest({ planDigest, id: item.id })}`, commandId: `product-identity-correction:${planDigest}`,
+    entityType: 'products', entityId: item.id, projectId: plan.projectId, planDigest, itemDigest: stableDigest(item),
+    action: item.rollbackOf ? 'PRODUCT_IDENTITY_CORRECTION_REVERSED' : 'PRODUCT_IDENTITY_CORRECTED',
+    before: item.from, after: item.to, evidence: item.evidence, evidenceDigest: stableDigest(item.evidence),
+    master: item.master, masterDigest: stableDigest(item.master), expectedUpdateTime: item.expectedUpdateTime,
+    reason: item.reason, authorizationId: `AUTHORIZE_PRODUCT_IDENTITY_CORRECTION:${planDigest}`,
+    actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+  };
+  return Object.entries(expected).every(([key, value]) => stableDigest(event[key] ?? null) === stableDigest(value))
+    && (event.rollbackOf ?? null) === (item.rollbackOf ?? null) && textOk(event.occurredAt);
+};
+
+function validateIdentityCorrectionPlan(plan: VehicleNameRepairPlan) {
+  if (plan.kind !== 'PRODUCT_IDENTITY_CORRECTION' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(plan.projectId ?? '')
+    || !textOk(plan.sourceDigest)) throw new Error('correction kind, projectId and sourceDigest required');
+  const allowed = new Set(['kind', 'projectId', 'sourceDigest', 'productIdentityCorrections', 'masterRepairs', 'productRepairs']);
+  if (!Array.isArray(plan.masterRepairs) || plan.masterRepairs.length || !Array.isArray(plan.productRepairs) || plan.productRepairs.length
+    || Object.keys(plan).some((k) => !allowed.has(k))) throw new Error('correction cannot mix with ordinary repairs or master changes');
+  const items = plan.productIdentityCorrections;
+  if (!Array.isArray(items) || !items.length || items.length > 10) throw new Error('correction batch must contain 1..10 products');
+  const ids = new Set<string>();
+  for (const item of items) {
+    if (!item || !isDocId(item.id) || ids.has(item.id)) throw new Error('invalid or duplicate correction id');
+    ids.add(item.id);
+    if (!identityShape(item.from) || !identityShape(item.to) || !changedIdentityFields(item).length
+      || !timestampValue(item.expectedUpdateTime) || !textOk(item.reason)) throw new Error('invalid correction identity, version or reason');
+    if (item.rollbackOf !== undefined && !/^pic_[a-f0-9]{64}$/.test(item.rollbackOf)) throw new Error('invalid rollback event');
+    if (!item.rollbackOf && CORRECTION_FIELDS.some((f) => !textOk(item.to[f]) || item.to[f] !== clean(item.to[f]))) {
+      throw new Error('correction to requires four normalized nonempty names');
+    }
+    const e = item.evidence;
+    if (!e || !Array.isArray(e.conflicts) || e.conflicts.length || !identityShape(e.resolvedIdentity)
+      || (!item.rollbackOf && !sameIdentity(e.resolvedIdentity, item.to))
+      || !textOk(e.vehicleIdentityField) || !digestOk(e.vehicleIdentityDigest)
+      || !Array.isArray(e.correctedFields) || !e.correctedFields.length
+      || e.correctedFields.some((f) => !CORRECTION_FIELDS.includes(f))
+      || (!item.rollbackOf && changedIdentityFields(item).some((f) => !e.correctedFields.includes(f)))) throw new Error('unresolved correction evidence');
+    for (const source of [e.original, e.correction]) {
+      if (!source || !textOk(source.source) || !textOk(source.archiveRef) || !digestOk(source.contentDigest)
+        || !textOk(source.authoredAt) || !textOk(source.retrievedAt)
+        || !Number.isFinite(Date.parse(source.authoredAt)) || !Number.isFinite(Date.parse(source.retrievedAt))
+        || Date.parse(source.authoredAt) > Date.parse(source.retrievedAt)) throw new Error('incomplete correction source provenance');
+    }
+    if (e.correctsOriginalDigest !== e.original.contentDigest || e.original.contentDigest === e.correction.contentDigest
+      || e.correction.source !== '지지오토') throw new Error('correction must identify the original and 지지오토 source');
+    const m = item.master;
+    if (!m || !isDocId(m.id) || !isDocId(m.trimId) || !digestOk(m.contentDigest) || !digestOk(m.trimContentDigest)) {
+      throw new Error('correction master and trim fingerprints required');
+    }
+  }
+  if (items.some((i) => !!i.rollbackOf) && items.some((i) => !i.rollbackOf)) throw new Error('cannot mix correction and rollback');
+  return { masterCount: 0, productCount: 0, productIdentityCorrectionCount: items.length };
+}
+
+async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDigest?: string) {
+  // Freeze the reviewed input before the first await (caller mutation cannot change an approved write).
+  plan = structuredClone(plan);
+  const planDigest = vehicleNameRepairPlanDigest(plan);
+  if (approvedDigest !== planDigest) throw new Error('AUTHORIZE_PRODUCT_IDENTITY_CORRECTION exact plan digest required');
+  const app = getTargetFirebaseApp();
+  if (app.options.projectId !== plan.projectId) throw new Error('correction Firebase project mismatch');
+  const db = getFirestore(app);
+  const items = plan.productIdentityCorrections!;
+  const refs = items.map((i) => db.collection('products').doc(i.id));
+  const eventIds = items.map((i) => `pic_${stableDigest({ planDigest, id: i.id })}`);
+  const auditRefs = eventIds.map((id) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(id));
+  const before = await db.getAll(...refs);
+  const backupDir = join(homedir(), '.codex', 'private', 'freepass-data-vehicle-name-backups');
+  await mkdir(backupDir, { recursive: true });
+  const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+  const backupPath = join(backupDir, `${runId}.json`);
+  await writeFile(backupPath, JSON.stringify({ runId, planDigest, plan, documents: before.map((s) => ({
+    path: s.ref.path, data: s.data(), updateTime: timestampValue(s.updateTime),
+  })) }, null, 2), { flag: 'wx', mode: 0o600 });
+  const skippedAlreadyApplied = await db.runTransaction(async (tx) => {
+    const current = await tx.getAll(...refs);
+    const events = await tx.getAll(...auditRefs);
+    // Read all dependencies before any write. Queries are transaction reads, including uniqueness checks.
+    const masters = await tx.get(db.collection('vehicle_master').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+    if (masters.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error('correction master scan limit');
+    const trims = await tx.getAll(...items.map((i) => db.collection('vehicle_trim_master').doc(i.master.trimId)));
+    const trimSets = [];
+    for (const item of items) trimSets.push(await tx.get(db.collection('vehicle_trim_master').where('master_id', '==', item.master.id).limit(MAX_MASTER_IDENTITY_SCAN + 1)));
+    const reverseRefs = items.filter((i) => i.rollbackOf).map((i) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(i.rollbackOf!));
+    const reverseEvents = reverseRefs.length ? await tx.getAll(...reverseRefs) : [];
+    const writes: Array<{ update: Record<string, unknown>; audit: Record<string, unknown> }> = [];
+    for (const [index, item] of items.entries()) {
+      const snapshot = current[index]!;
+      const data = snapshot.data();
+      if (!snapshot.exists || !data) throw new Error('correction product missing');
+      const blocked = productWriteBlock(data);
+      if (blocked) throw new Error(`correction refused ${blocked}`);
+      const itemDigest = stableDigest(item);
+      const event = events[index]!.data();
+      if (events[index]!.exists) {
+        if (!correctionAuditMatches(event, plan, item)
+          || !sameIdentity(exactIdentity(data), item.to) || event?.afterDocumentDigest !== stableDigest(data)
+          || !sameTime(snapshot.updateTime, event?.committedAt)) throw new Error('correction replay audit/result mismatch');
+        continue;
+      }
+      if (!sameTime(snapshot.updateTime, item.expectedUpdateTime) || !sameIdentity(exactIdentity(data), item.from)) throw new Error('correction from/version changed');
+      if (!sameTime(snapshot.updateTime, before[index]!.updateTime) || stableDigest(data) !== stableDigest(before[index]!.data())) throw new Error('correction changed since backup');
+      const e = item.evidence;
+      const original = data.원문, correction = data.원문_정정;
+      if (!objectOk(original) || !objectOk(correction) || stableDigest(original) !== e.original.contentDigest
+        || stableDigest(correction) !== e.correction.contentDigest) throw new Error('correction evidence changed');
+      if ([data, original, correction].some((d) => !textOk(d[e.vehicleIdentityField])
+        || stableDigest(d[e.vehicleIdentityField]) !== e.vehicleIdentityDigest)) throw new Error('correction evidence vehicle mismatch');
+      if (item.rollbackOf) {
+        const prior = reverseEvents[index]?.data();
+        if (!prior || prior.action !== 'PRODUCT_IDENTITY_CORRECTED' || prior.projectId !== plan.projectId || prior.entityId !== item.id
+          || !sameIdentity(prior.after as ExactIdentity, item.from) || !sameIdentity(prior.before as ExactIdentity, item.to)
+          || prior.afterDocumentDigest !== stableDigest(data) || !sameTime(snapshot.updateTime, prior.committedAt)
+          || prior.evidenceDigest !== stableDigest(e) || prior.masterDigest !== stableDigest(item.master)) throw new Error('rollback no longer matches committed correction');
+      } else {
+        const candidates = masters.docs.filter((s) => s.data().retired !== true
+          && PRODUCT_IDENTITY_FIELDS.every((f) => s.data()[f] === item.to[f]));
+        const master = candidates[0];
+        const trim = trims[index]!;
+        const rows = trimSets[index]!;
+        const matchingTrims = rows.docs.filter((s) => s.data().retired !== true && s.data().trim === item.to.trim_name);
+        if (candidates.length !== 1 || master?.id !== item.master.id || stableDigest(master.data()) !== item.master.contentDigest) throw new Error('correction master ambiguous, retired or changed');
+        if (rows.docs.length > MAX_MASTER_IDENTITY_SCAN || matchingTrims.length !== 1 || matchingTrims[0]!.id !== item.master.trimId
+          || !trim.exists || trim.data()?.retired === true || trim.data()?.master_id !== item.master.id
+          || trim.data()?.trim !== item.to.trim_name || PRODUCT_IDENTITY_FIELDS.some((f) => trim.data()?.[f] !== item.to[f])
+          || stableDigest(trim.data()) !== item.master.trimContentDigest) throw new Error('correction trim ambiguous, mismatched or changed');
+      }
+      const after = { ...data };
+      const update: Record<string, unknown> = {};
+      for (const field of changedIdentityFields(item)) {
+        // 저장된 칸을 지우지 않는다(data-access boundary: 지우기 금지). 바꾸는 칸은 반드시 값으로 채운다 —
+        // 원래 없던 칸으로 되돌리는 역계획은 여기서 거부하고 사람이 확인한다.
+        if (!Object.hasOwn(item.to, field)) throw new Error(`correction must set changed field ${field} (field deletion is not allowed)`);
+        after[field] = item.to[field]; update[field] = item.to[field];
+      }
+      writes.push({ update, audit: {
+        eventId: eventIds[index], commandId: `product-identity-correction:${planDigest}`, entityType: 'products', entityId: item.id,
+        action: item.rollbackOf ? 'PRODUCT_IDENTITY_CORRECTION_REVERSED' : 'PRODUCT_IDENTITY_CORRECTED',
+        projectId: plan.projectId, planDigest, itemDigest, before: item.from, after: item.to,
+        afterDocumentDigest: stableDigest(after), expectedUpdateTime: item.expectedUpdateTime,
+        evidence: e, evidenceDigest: stableDigest(e), master: item.master, masterDigest: stableDigest(item.master),
+        reason: item.reason, authorizationId: `AUTHORIZE_PRODUCT_IDENTITY_CORRECTION:${planDigest}`,
+        actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+        occurredAt: new Date().toISOString(), committedAt: FieldValue.serverTimestamp(),
+        ...(item.rollbackOf ? { rollbackOf: item.rollbackOf } : {}),
+      } });
+    }
+    // A committed batch is all-or-nothing. A partial receipt set is corruption, never a reason to finish the remainder.
+    if (writes.length && writes.length !== items.length) throw new Error('partial correction audit batch');
+    writes.forEach((w, i) => {
+      tx.update(refs[i]!, w.update, { lastUpdateTime: current[i]!.updateTime! });
+      tx.create(auditRefs[i]!, w.audit);
+    });
+    return items.length - writes.length;
+  });
+  const readback = await db.getAll(...refs);
+  const audits = await db.getAll(...auditRefs);
+  readback.forEach((s, i) => {
+    const event = audits[i]!.data();
+    if (!s.exists || !audits[i]!.exists || !correctionAuditMatches(event, plan, items[i]!)
+      || !sameIdentity(exactIdentity(s.data()!), items[i]!.to) || event?.afterDocumentDigest !== stableDigest(s.data())
+      || !sameTime(s.updateTime, event?.committedAt)) throw new Error('correction readback mismatch; reconcile before retry');
+  });
+  return { runId, backupPath, masterCount: 0, productCount: 0, productIdentityCorrectionCount: items.length,
+    skippedAlreadyApplied, readbackCount: readback.length, auditCount: audits.length };
+}
+
+export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined; approvedCorrectionDigest?: string | undefined } = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
+  if (plan.kind === 'PRODUCT_IDENTITY_CORRECTION') return applyIdentityCorrections(plan, options.approvedCorrectionDigest);
   const planDigest = stableDigest(plan);
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
   if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
