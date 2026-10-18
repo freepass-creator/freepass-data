@@ -1015,20 +1015,28 @@ describe('confirmed product identity correction (isolated approval path)', () =>
   const fixture = (): Plan => {
     const from = { maker: 'Maker', model: 'Model', sub_model: 'Wrong', trim_name: 'Old' };
     const to = { maker: 'Maker', model: 'Model', sub_model: 'Right', trim_name: 'New' };
-    const original = { vehicle_key: 'fake-vehicle', text: 'old source' };
-    const correction = { vehicle_key: 'fake-vehicle', text: 'corrected source' };
+    const original = { 차명: 'old source', 전체: { 차량번호: '00가0000' } };
+    const correction = { 차명: 'corrected source' };
     const master = { id: 'fake-master', maker: to.maker, model: to.model, sub_model: to.sub_model };
     const trim = { ...master, id: 'fake-trim', master_id: master.id, trim: to.trim_name };
-    put('products/fake-product', { ...from, vehicle_key: 'fake-vehicle', 원문: original, 원문_정정: correction, confirmed: true, unrelated: 'keep' });
+    put('products/00가0000', { ...from, 원문: original, 원문_정정: correction, confirmed: true, unrelated: 'keep' });
     put('vehicle_master/fake-master', master);
     put('vehicle_trim_master/fake-trim', trim);
-    updateTimes.set('products/fake-product', { seconds: 1, nanoseconds: 123 });
+    updateTimes.set('products/00가0000', { seconds: 1, nanoseconds: 123 });
     const source = (data: unknown, name: string) => ({ source: name, authoredAt: '2026-01-01T00:00:00Z', retrievedAt: '2026-01-02T00:00:00Z', archiveRef: 'private:fake-reference', contentDigest: stableDigest(data) });
     return { kind: 'PRODUCT_IDENTITY_CORRECTION', projectId: 'test-project', sourceDigest: 'fake-source', masterRepairs: [], productRepairs: [], productIdentityCorrections: [{
-      id: 'fake-product', from, to, expectedUpdateTime: { seconds: 1, nanoseconds: 123 }, reason: 'Reviewed correction explicitly replaces the wrong source identity',
-      evidence: { original: source(original, 'supplier'), correction: source(correction, '지지오토'), vehicleIdentityField: 'vehicle_key', vehicleIdentityDigest: stableDigest('fake-vehicle'), correctsOriginalDigest: stableDigest(original), correctedFields: ['sub_model', 'trim_name'], resolvedIdentity: to, conflicts: [] },
+      id: '00가0000', from, to, expectedUpdateTime: { seconds: 1, nanoseconds: 123 }, reason: 'Reviewed correction explicitly replaces the wrong source identity',
+      evidence: { original: source(original, 'supplier'), correction: { ...source(correction, '지지오토'), archiveVehicleNumber: '00가0000' }, vehicleNumber: '00가0000', correctsOriginalDigest: stableDigest(original), correctedFields: ['sub_model', 'trim_name'], resolvedIdentity: to, conflicts: [] },
       master: { id: master.id, trimId: trim.id, contentDigest: stableDigest(master), trimContentDigest: stableDigest(trim) },
     }] };
+  };
+  // 두 번째 가짜 차량: 번호판·원문 번호·보관 번호를 모두 새 번호로 맞춰 다른 근거 지문을 만든다.
+  const secondOf = (p: Plan) => {
+    const second = structuredClone(item(p)); second.id = '00가0001';
+    const base = store.get('products/00가0000')!; const original = { ...(base.원문 as Record<string, unknown>), 전체: { 차량번호: '00가0001' } };
+    second.evidence.vehicleNumber = '00가0001'; second.evidence.correction.archiveVehicleNumber = '00가0001';
+    second.evidence.original.contentDigest = stableDigest(original); second.evidence.correctsOriginalDigest = stableDigest(original);
+    return { second, original };
   };
   const apply = (p: Plan) => applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) });
   const item = (p: Plan) => p.productIdentityCorrections![0]!;
@@ -1038,16 +1046,16 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     const next = structuredClone(p);
     const i = item(next);
     i.from = structuredClone(item(p).to); i.to = structuredClone(item(p).from);
-    i.expectedUpdateTime = updateTimes.get('products/fake-product') as typeof i.expectedUpdateTime;
+    i.expectedUpdateTime = updateTimes.get('products/00가0000') as typeof i.expectedUpdateTime;
     i.rollbackOf = prior.eventId as string;
     i.reason = 'Approved reversal of this exact correction';
     return next;
   };
   it('corrects confirmed fields atomically and preserves source and unrelated fields', async () => {
-    const p = fixture(); const before = structuredClone(store.get('products/fake-product')!);
+    const p = fixture(); const before = structuredClone(store.get('products/00가0000')!);
     const result = await apply(p);
     expect(result.readbackCount).toBe(1); expect(result.auditCount).toBe(1);
-    expect(store.get('products/fake-product')).toEqual({ ...before, ...item(p).to });
+    expect(store.get('products/00가0000')).toEqual({ ...before, ...item(p).to });
     expect(audits()[0]).toMatchObject({ action: 'PRODUCT_IDENTITY_CORRECTED', planDigest: vehicleNameRepairPlanDigest(p), before: item(p).from, after: item(p).to });
     expect(preconditions.at(-1)?.[1]).toEqual({ lastUpdateTime: item(p).expectedUpdateTime });
   });
@@ -1073,31 +1081,48 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     p.productIdentityCorrections = []; await expect(apply(p)).rejects.toThrow(/1\.\.10/);
   });
   it.each([{ locked_by_contract: true }, { locked_by_contract: 'locked' }, { publication_withdrawal: { reason: 'withdrawn' } }])('refuses protected products %j', async (flag) => {
-    const p = fixture(); Object.assign(store.get('products/fake-product')!, flag);
+    const p = fixture(); Object.assign(store.get('products/00가0000')!, flag);
     await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT|PUBLICATION_WITHDRAWN/); expect(audits()).toHaveLength(0);
   });
   it.each([undefined, null, '', ' Wrong'])('compares from without normalization: %s', async (value) => {
-    const p = fixture(); const data = store.get('products/fake-product')!;
+    const p = fixture(); const data = store.get('products/00가0000')!;
     if (value === undefined) delete data.sub_model; else data.sub_model = value;
     await expect(apply(p)).rejects.toThrow(/from\/version/);
   });
   it('refuses a changed version even when all four names are unchanged', async () => {
-    const p = fixture(); updateTimes.set('products/fake-product', { seconds: 1, nanoseconds: 124 });
+    const p = fixture(); updateTimes.set('products/00가0000', { seconds: 1, nanoseconds: 124 });
     await expect(apply(p)).rejects.toThrow(/version/);
   });
   it('rechecks product state after backup and aborts the entire batch', async () => {
     const p = fixture();
     const { writeFile } = await import('node:fs/promises');
-    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('products/fake-product')!.locked_by_contract = true; });
+    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('products/00가0000')!.locked_by_contract = true; });
     await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/); expect(audits()).toHaveLength(0);
   });
   it.each(['원문', '원문_정정'])('refuses changed %s content', async (field) => {
-    const p = fixture(); (store.get('products/fake-product')![field] as Record<string, unknown>).text = 'changed';
+    const p = fixture(); (store.get('products/00가0000')![field] as Record<string, unknown>).차명 = 'changed';
     await expect(apply(p)).rejects.toThrow(/evidence changed/);
   });
-  it('requires the same vehicle in both evidence records and product', async () => {
-    const p = fixture(); store.get('products/fake-product')!.vehicle_key = 'different-fake-vehicle';
-    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  it('binds identity by vehicle number even when source and correction names differ and the product has no name field', async () => {
+    const p = fixture(); const data = store.get('products/00가0000')!;
+    expect(Object.hasOwn(data, '차명')).toBe(false); expect((data.원문 as Record<string, unknown>).차명).not.toBe((data.원문_정정 as Record<string, unknown>).차명);
+    await expect(apply(p)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses when any of the three vehicle numbers differs', async () => {
+    const original = fixture(); ((store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체).차량번호 = '00가0001';
+    original.productIdentityCorrections![0]!.evidence.original.contentDigest = stableDigest(store.get('products/00가0000')!.원문);
+    original.productIdentityCorrections![0]!.evidence.correctsOriginalDigest = stableDigest(store.get('products/00가0000')!.원문);
+    await expect(apply(original)).rejects.toThrow(/vehicle mismatch/);
+    const archive = fixture(); item(archive).evidence.correction.archiveVehicleNumber = '00가0001';
+    await expect(apply(archive)).rejects.toThrow(/unresolved/);
+    const claimed = fixture(); item(claimed).evidence.vehicleNumber = '00가0001';
+    await expect(apply(claimed)).rejects.toThrow(/unresolved/);
+    const car = fixture(); store.get('products/00가0000')!.car_number = '00가0001';
+    await expect(apply(car)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('explicitly refuses documents without a plate-number id', async () => {
+    const p = fixture(); item(p).id = 'RP000:MONTHLY:fake'; item(p).evidence.vehicleNumber = 'RP000:MONTHLY:fake'; item(p).evidence.correction.archiveVehicleNumber = 'RP000:MONTHLY:fake';
+    await expect(apply(p)).rejects.toThrow(/unresolved/);
   });
   it('refuses unresolved higher-priority evidence conflicts', async () => {
     const p = fixture(); item(p).evidence.conflicts = ['registration disagrees'];
@@ -1132,19 +1157,19 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     const p = fixture(); const { writeFile } = await import('node:fs/promises');
     vi.mocked(writeFile).mockRejectedValueOnce(new Error('backup failed'));
     await expect(apply(p)).rejects.toThrow(/backup failed/);
-    expect(store.get('products/fake-product')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+    expect(store.get('products/00가0000')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
   });
   it('rejects the whole batch when the second product fails', async () => {
-    const p = fixture(); const second = structuredClone(item(p)); second.id = 'fake-second';
-    put('products/fake-second', { ...store.get('products/fake-product')!, locked_by_contract: true });
-    updateTimes.set('products/fake-second', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    const p = fixture(); const { second, original } = secondOf(p);
+    put('products/00가0001', { ...store.get('products/00가0000')!, 원문: original, locked_by_contract: true });
+    updateTimes.set('products/00가0001', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
     await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/);
-    expect(store.get('products/fake-product')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+    expect(store.get('products/00가0000')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
   });
   it('only treats a matching audit AND complete actual result as already applied', async () => {
     const p = fixture(); await apply(p);
     expect((await apply(p)).skippedAlreadyApplied).toBe(1); expect(audits()).toHaveLength(1);
-    store.get('products/fake-product')!.unrelated = 'later edit';
+    store.get('products/00가0000')!.unrelated = 'later edit';
     await expect(apply(p)).rejects.toThrow(/replay/);
   });
   it('refuses a corrupted replay receipt', async () => {
@@ -1156,43 +1181,43 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     await expect(apply(p)).rejects.toThrow(/replay/);
   });
   it('refuses a partial batch receipt without writing the missing member', async () => {
-    const p = fixture(); const second = structuredClone(item(p)); second.id = 'fake-second';
-    put('products/fake-second', { ...store.get('products/fake-product')! });
-    updateTimes.set('products/fake-second', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
-    const before = structuredClone(store.get('products/fake-second')!);
+    const p = fixture(); const { second, original } = secondOf(p);
+    put('products/00가0001', { ...store.get('products/00가0000')!, 원문: original });
+    updateTimes.set('products/00가0001', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    const before = structuredClone(store.get('products/00가0001')!);
     await apply(p);
-    for (const [path, data] of store) if (data.entityId === 'fake-second' && data.action === 'PRODUCT_IDENTITY_CORRECTED') store.delete(path);
-    put('products/fake-second', before); updateTimes.set('products/fake-second', second.expectedUpdateTime);
+    for (const [path, data] of store) if (data.entityId === '00가0001' && data.action === 'PRODUCT_IDENTITY_CORRECTED') store.delete(path);
+    put('products/00가0001', before); updateTimes.set('products/00가0001', second.expectedUpdateTime);
     await expect(apply(p)).rejects.toThrow(/partial correction/);
-    expect(store.get('products/fake-second')!.sub_model).toBe('Wrong');
+    expect(store.get('products/00가0001')!.sub_model).toBe('Wrong');
   });
   it('requires fresh approval for reverse and restores only changed fields', async () => {
     const p = fixture(); await apply(p); const r = reverse(p);
     await expect(applyVehicleNameReferenceRepair(r, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) })).rejects.toThrow(/digest/);
-    await apply(r); expect(store.get('products/fake-product')).toMatchObject({ ...item(p).from, unrelated: 'keep', confirmed: true });
+    await apply(r); expect(store.get('products/00가0000')).toMatchObject({ ...item(p).from, unrelated: 'keep', confirmed: true });
     expect(audits().at(-1)!.action).toBe('PRODUCT_IDENTITY_CORRECTION_REVERSED');
     expect((await apply(r)).skippedAlreadyApplied).toBe(1);
   });
   it.each(['version', 'lock', 'edited-target'])('refuses reverse after %s change', async (mode) => {
     const p = fixture(); await apply(p); const r = reverse(p);
-    if (mode === 'version') { updateTimes.set('products/fake-product', { seconds: 9999, nanoseconds: 0 }); item(r).expectedUpdateTime = { seconds: 9999, nanoseconds: 0 }; }
-    else if (mode === 'lock') store.get('products/fake-product')!.locked_by_contract = true;
+    if (mode === 'version') { updateTimes.set('products/00가0000', { seconds: 9999, nanoseconds: 0 }); item(r).expectedUpdateTime = { seconds: 9999, nanoseconds: 0 }; }
+    else if (mode === 'lock') store.get('products/00가0000')!.locked_by_contract = true;
     else item(r).to.sub_model = 'unapproved';
     await expect(apply(r)).rejects.toThrow(/rollback|LOCKED_BY_CONTRACT/);
   });
   it.each(['null', 'empty'])('restores exact %s values rather than collapsing them', async (mode) => {
-    const p = fixture(); const data = store.get('products/fake-product')!;
+    const p = fixture(); const data = store.get('products/00가0000')!;
     data.trim_name = mode === 'null' ? null : ''; item(p).from.trim_name = data.trim_name as string | null;
     await apply(p); await apply(reverse(p));
-    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
-    expect(store.get('products/fake-product')!.trim_name).toBe(mode === 'null' ? null : '');
+    expect(Object.hasOwn(store.get('products/00가0000')!, 'trim_name')).toBe(true);
+    expect(store.get('products/00가0000')!.trim_name).toBe(mode === 'null' ? null : '');
   });
 
   it('refuses to restore a missing field by deletion (data-access boundary forbids erasing stored fields)', async () => {
-    const p = fixture(); const data = store.get('products/fake-product')!;
+    const p = fixture(); const data = store.get('products/00가0000')!;
     delete data.trim_name; delete item(p).from.trim_name;
     await apply(p);
     await expect(apply(reverse(p))).rejects.toThrow(/field deletion is not allowed/);
-    expect(Object.hasOwn(store.get('products/fake-product')!, 'trim_name')).toBe(true);
+    expect(Object.hasOwn(store.get('products/00가0000')!, 'trim_name')).toBe(true);
   });
 });

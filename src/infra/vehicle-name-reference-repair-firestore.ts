@@ -501,13 +501,17 @@ const CORRECTION_FIELDS = ['maker', 'model', 'sub_model', 'trim_name'] as const;
 /** Omitted key = missing field; null and empty string are distinct, including in reverse plans. */
 type ExactIdentity = Partial<Record<(typeof CORRECTION_FIELDS)[number], string | null>>;
 type ReviewedTime = { seconds: number; nanoseconds: number };
-type CorrectionSource = { source: string; authoredAt: string; retrievedAt: string; contentDigest: string; archiveRef: string };
+/** 확정값 정정은 번호판이 문서 id 인 상품만 대상(번호판 없는 id 는 거부). */
+const PLATE_ID = /^\d{2,3}[가-힣]\d{4}$/;
+type CorrectionSource = { source: string; authoredAt: string; retrievedAt: string; contentDigest: string; archiveRef: string;
+  /** 정정 원문만: archiveRef 가 가리키는 보관 기록에 적힌 차량번호(검토자 선언 — 원문_정정에는 이 칸이 없다). */
+  archiveVehicleNumber?: string };
 export type ProductIdentityCorrection = {
   id: string; from: ExactIdentity; to: ExactIdentity; expectedUpdateTime: ReviewedTime; reason: string;
   evidence: {
     original: CorrectionSource; correction: CorrectionSource;
-    /** Same exact identity field in product, original and correction, pinned by digest (never guessed from names). */
-    vehicleIdentityField: string; vehicleIdentityDigest: string;
+    /** 차량 동일성은 이름이 아니라 번호로 묶는다: 상품 문서 id == 원문.전체.차량번호 == 정정 보관 기록의 번호. */
+    vehicleNumber: string;
     correctsOriginalDigest: string; correctedFields: Array<(typeof CORRECTION_FIELDS)[number]>;
     resolvedIdentity: ExactIdentity;
     /** Reviewed conflicts, including higher-priority evidence; nonempty always HOLD. */
@@ -575,7 +579,8 @@ function validateIdentityCorrectionPlan(plan: VehicleNameRepairPlan) {
     const e = item.evidence;
     if (!e || !Array.isArray(e.conflicts) || e.conflicts.length || !identityShape(e.resolvedIdentity)
       || (!item.rollbackOf && !sameIdentity(e.resolvedIdentity, item.to))
-      || !textOk(e.vehicleIdentityField) || !digestOk(e.vehicleIdentityDigest)
+      || !textOk(e.vehicleNumber) || !PLATE_ID.test(e.vehicleNumber) || e.vehicleNumber !== item.id
+      || e.correction?.archiveVehicleNumber !== e.vehicleNumber
       || !Array.isArray(e.correctedFields) || !e.correctedFields.length
       || e.correctedFields.some((f) => !CORRECTION_FIELDS.includes(f))
       || (!item.rollbackOf && changedIdentityFields(item).some((f) => !e.correctedFields.includes(f)))) throw new Error('unresolved correction evidence');
@@ -648,8 +653,11 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
       const original = data.원문, correction = data.원문_정정;
       if (!objectOk(original) || !objectOk(correction) || stableDigest(original) !== e.original.contentDigest
         || stableDigest(correction) !== e.correction.contentDigest) throw new Error('correction evidence changed');
-      if ([data, original, correction].some((d) => !textOk(d[e.vehicleIdentityField])
-        || stableDigest(d[e.vehicleIdentityField]) !== e.vehicleIdentityDigest)) throw new Error('correction evidence vehicle mismatch');
+      // 차량 동일성: 상품 문서 id(번호판) == 원문.전체.차량번호 (상품에 car_number 가 있으면 그것도). 원문_정정은 지문 + 보관 기록 번호(계획의 archiveVehicleNumber)로 묶는다.
+      const originalAll = objectOk(original.전체) ? original.전체 : undefined;
+      const sameNumber = (v: unknown) => typeof v === 'string' && v.replace(/\s/g, '') === item.id;
+      if (!PLATE_ID.test(item.id) || e.vehicleNumber !== item.id || !sameNumber(originalAll?.차량번호)
+        || (data.car_number !== undefined && !sameNumber(data.car_number))) throw new Error('correction evidence vehicle mismatch');
       if (item.rollbackOf) {
         const prior = reverseEvents[index]?.data();
         if (!prior || prior.action !== 'PRODUCT_IDENTITY_CORRECTED' || prior.projectId !== plan.projectId || prior.entityId !== item.id
