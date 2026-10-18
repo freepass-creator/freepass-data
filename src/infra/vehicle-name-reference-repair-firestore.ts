@@ -503,6 +503,8 @@ type ExactIdentity = Partial<Record<(typeof CORRECTION_FIELDS)[number], string |
 type ReviewedTime = { seconds: number; nanoseconds: number };
 /** 확정값 정정은 번호판이 문서 id 인 상품만 대상(번호판 없는 id 는 거부). */
 const PLATE_ID = /^\d{2,3}[가-힣]\d{4}$/;
+/** 보존 원문(products.원문)에서 차량번호가 들어 있을 수 있는 칸(경로). 공급사 원문 형식이 둘이다: 전체.차량번호 / 최상위 차번. */
+const ORIGINAL_PLATE_FIELDS: ReadonlyArray<readonly string[]> = [['전체', '차량번호'], ['차번']];
 type CorrectionSource = { source: string; authoredAt: string; retrievedAt: string; contentDigest: string; archiveRef: string;
   /** 정정 원문만: archiveRef 가 가리키는 보관 기록에 적힌 차량번호(검토자 선언 — 원문_정정에는 이 칸이 없다). */
   archiveVehicleNumber?: string };
@@ -655,9 +657,10 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
       if (!objectOk(original) || !objectOk(correction) || stableDigest(original) !== e.original.contentDigest
         || stableDigest(correction) !== e.correction.contentDigest) throw new Error('correction evidence changed');
       // 차량 동일성: 상품 문서 id(번호판) == 원문.전체.차량번호 (상품에 car_number 가 있으면 그것도). 원문_정정은 지문 + 보관 기록 번호(계획의 archiveVehicleNumber)로 묶는다.
-      const originalAll = objectOk(original.전체) ? original.전체 : undefined;
       const sameNumber = (v: unknown) => typeof v === 'string' && v.replace(/\s/g, '') === item.id;
-      if (!PLATE_ID.test(item.id) || e.vehicleNumber !== item.id || !sameNumber(originalAll?.차량번호)
+      // 보존 원문의 차량번호 칸은 ORIGINAL_PLATE_FIELDS 한 곳에서만 정한다. 하나 이상 있어야 하고, 있는 칸은 모두 같아야 통과한다.
+      const originalPlates = ORIGINAL_PLATE_FIELDS.map((path) => path.reduce<unknown>((v, key) => (objectOk(v) ? v[key] : undefined), original)).filter((v) => v !== undefined);
+      if (!PLATE_ID.test(item.id) || e.vehicleNumber !== item.id || !originalPlates.length || !originalPlates.every(sameNumber)
         || (data.car_number !== undefined && !sameNumber(data.car_number))) throw new Error('correction evidence vehicle mismatch');
       if (item.rollbackOf) {
         const prior = reverseEvents[index]?.data();

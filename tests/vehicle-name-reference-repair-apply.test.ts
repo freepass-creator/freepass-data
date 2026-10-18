@@ -1161,6 +1161,26 @@ describe('confirmed product identity correction (isolated approval path)', () =>
     updateTimes.set('products/00가0000', v);
     const ok = reverse(p); await expect(apply(ok)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
   });
+  const withOriginal = (p: Plan, original: Record<string, unknown>) => {
+    store.get('products/00가0000')!.원문 = original;
+    item(p).evidence.original.contentDigest = stableDigest(original); item(p).evidence.correctsOriginalDigest = stableDigest(original);
+  };
+  it('accepts the supplier original top-level 차번 field when 전체.차량번호 is absent', async () => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', 차번: '00가0000' });
+    await expect(apply(p)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('requires both original plate fields to agree when both exist', async () => {
+    const same = fixture(); withOriginal(same, { 차명: 'old source', 차번: '00가0000', 전체: { 차량번호: '00가 0000' } });
+    await expect(apply(same)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses when the two original plate fields disagree', async () => {
+    const diff = fixture(); withOriginal(diff, { 차명: 'old source', 차번: '00가0001', 전체: { 차량번호: '00가0000' } });
+    await expect(apply(diff)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('refuses when the preserved original has no plate field at all', async () => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', 옵션: 'x' });
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
   it('explicitly refuses documents without a plate-number id', async () => {
     const p = fixture(); item(p).id = 'RP000:MONTHLY:fake'; item(p).evidence.vehicleNumber = 'RP000:MONTHLY:fake'; item(p).evidence.correction.archiveVehicleNumber = 'RP000:MONTHLY:fake';
     await expect(apply(p)).rejects.toThrow(/unresolved/);
