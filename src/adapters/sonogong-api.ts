@@ -6,7 +6,8 @@
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
-import { fuelName, SONOGONG_RENT_RULE, truncateSonogongRent } from './normalize-sonogong.js';
+import { SONOGONG_RENT_RULE, truncateSonogongRent } from './normalize-sonogong.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 import { computeSupplierRuleDeposit, supplierDepositPolicy } from '../domain/supplier-deposit-policy.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache } from './sonogong-detail-cache.js';
@@ -294,9 +295,12 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       // 내장색(상세 interiorColor, 없으면 목록): 대표 2026-10-16 화면 대조 «제원 칸이 전부 비어 있다». 문자열이 아니면 칸을 비운다.
       const interior = typeof detail?.interiorColor === 'string' && detail.interiorColor.trim() ? detail.interiorColor.trim() : typeof row.interiorColor === 'string' ? row.interiorColor.trim() : '';
       if (interior) spec.int_color = interior;
-      // 연료: 공통 허용 목록·별칭(normalize-sonogong 의 표)으로만 바꾼다. 모르면 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
+      // 연료: 연료 별칭 표(domain/fuel-alias, 차종 기준 한 장 제원 목록)로만 바꾼다 — «가솔린+전기»→하이브리드, «전기(EV)»→전기(대표 2026-10-19).
+      // 모르거나 차명과 어긋나면(«1.6 HEV» 인데 «휘발유») 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
+      const fuelCarName = typeof detail?.carName === 'string' && detail.carName.trim() ? detail.carName.trim()
+        : [row.brand, row.model, row.detailName].filter(x => typeof x === 'string' && x).join(' ');
       if (typeof row.fuel === 'string' && row.fuel.trim()) {
-        const fuel = fuelName(row.fuel);
+        const fuel = canonicalFuel(row.fuel, fuelCarName);
         if (fuel) spec.fuel_type = fuel; else fuelUnresolved++;
       }
       // 제조연월은 최초등록일이 아니다: manufacture_year_month 로 따로 두고, 최초등록일은 상세에 실제 칸이 있을 때만 쓴다.

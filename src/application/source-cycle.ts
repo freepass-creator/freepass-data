@@ -2,6 +2,7 @@ import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdenti
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { validateSourceSpec } from '../domain/source-spec-validation.js';
+import { refillableSpecValues, masterFuelFallback } from '../domain/spec-refill.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
 import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
@@ -71,6 +72,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
+    delete after.specRefillKeys; delete after.specMasterFuel;
     if (observed) after.record = structuredClone(observed);
     after.record.status.saleAvailable = false;
     after.listable = false;
@@ -82,6 +84,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     return after;
   };
   let identityHolds = false, depositPreserved = 0, uidBridged = 0;
+  // 빈 제원 칸 다시 채움이 정해진 항목 키(계획 항목의 before 는 읽기 경로 그대로 두고, 사유는 여기서만 더한다 — reasonsOf).
+  const specRefill = new Set<string>();
   // 문서 ID 가 다른 같은 차량(옛 ID 체계로 만든 문서): 같은 공급사 안에서 차량번호가 같은 문서가 정확히 하나이고 어떤 원천 행과도 직접
   // 대응하지 않으면 그 문서를 갱신 대상으로 잇는다. 새 문서를 만들고 옛 문서를 내리면 문서에 붙은 사진·정책 등이 새 문서에 없어
   // 화면이 퇴보한다(2026-10-13 이안카: 옛 iancar_* ID 문서 21건 하향 + 번호판 ID 23건 편입 계획). 문서 ID 는 옮기지 않는다.
@@ -206,10 +210,21 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // Vehicle master review stays attached; source facts/conditions may enroll without inventing a model.
     // 보정 허용으로 통과한 문서는 값이 원천과 같아도 한 번 다시 쓴다: 저장된 가격 digest 를 현재 값에 맞춰야 다음 회차부터
     // 보정 허용 없이 통과한다(안 쓰면 digest 가 낡은 채 남아 매 회차 DRIFT HOLD 가 반복된다 — 2026-10-13 RP013 실측).
+    // 빈 제원 칸 다시 채움(대표 2026-10-19): 확인 표식이 있는 노출 문서의 빈 칸(before.specRefillKeys) 중 이번 관측 원천(raw.spec)에 형식 맞는 값이 있으면
+    // 제원 채움(SOURCE_SPEC)과 같은 상한·양성 표식으로 고른다. before 자체는 바꾸지 않는다(백업·CAS 가 읽기 경로 envelope 와 같은 before 를 대조한다).
+    // 마스터 연료 보완 결정은 여기서 한 번만, 검증·압축 «전» 원문(original)으로 정해 after 에 고정한다(Codex 재검토: 규격 검증이 지운 연료·압축된 raw 를 «원천에 없음»으로 오인하지 않게).
+    // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
+    const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
+    if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
+    const refillDue = !!before?.specRefillKeys?.length && after.listable &&
+      (Object.keys(refillableSpecValues(r.raw?.spec, before.specRefillKeys, r.vehicleText)).length > 0
+        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel));
+    if (refillDue) specRefill.add(key);
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
-        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable)) continue;
+        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable) && !refillDue) continue;
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다
+    delete after.specRefillKeys;
     plan.entries.push({ kind: !before ? 'ENROLL' : before.listable && !after.listable ? 'DOWNGRADE' :
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }
@@ -289,13 +304,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 사유 집계(진단 전용, 상한 이월 «전»): 이월로 계획에서 빠지는 항목은 이후 경고(VEHICLE_IDENTITY_REFINE 등)가 세지 못한다 —
   // 정제 사유가 상한에 밀려 보이지 않는지 가리는 근거(2026-10-16 00:00 회차: 정제 0건이 «사유 없음»인지 «이월»인지 구분 불가). 쓰기·계획 내용은 바꾸지 않는다.
   // 계획(plan.warnings)에 넣지 않는다: 계획 digest·재계획 비교에 들어가면 진단만으로 승인 계획이 달라진다. 계획 밖 보고 필드(reasonCensus)로만 돌려준다.
+  // 항목의 사유 = 읽기 경로 사유 + 계획이 정한 빈 칸 다시 채움(SOURCE_SPEC). 상한·이월·채움 표식은 모두 이 합친 사유로 정한다.
+  type PlanEntry = (typeof plan.entries)[number];
+  const reasonsOf = (e: PlanEntry): string[] => [...(e.before?.rewriteReasons ?? []), ...(specRefill.has(sourceProductKey(e.after.record)) ? ['SOURCE_SPEC'] : [])];
   let reasonCensus: string | null = null;
   {
     const census = new Map<string, number>();
-    for (const e of plan.entries) for (const r of new Set(e.before?.rewriteReasons ?? [])) if (CAPPED_REASONS.has(r)) census.set(r, (census.get(r) ?? 0) + 1);
+    for (const e of plan.entries) for (const r of new Set(reasonsOf(e))) if (CAPPED_REASONS.has(r)) census.set(r, (census.get(r) ?? 0) + 1);
     if (census.size) reasonCensus = `REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`;
   }
-  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
+  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before && reasonsOf(e).length > 0 && reasonsOf(e).every(r => CAPPED_REASONS.has(r)) &&
     e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
   const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
   const optionsAllowed = Math.max(0, optionsCap - (plan.entries.length - optionsOnly.length));
@@ -309,7 +327,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 입구 매핑(제조사·모델 채움)은 «양성» 표식(fillSourceIdentity)을 받은 항목에서만 일어난다: 사유(SOURCE_IDENTITY)가 있는 기존 문서와 신규 편입(ENROLL)만, 회차당
   // OPTIONS_REWRITE_CAP 대까지(키 순서). 사유 없는 UPDATE·재노출은 쓰기가 일어나도 채우지 않으므로 상한을 우회하지 못한다. 쓰기가 «채움뿐»인 초과분은 계획에서 뺀다.
   // 신규 편입(ENROLL)도 같은 상한에 센다(Codex #685 (b)): 편입은 쓰기가 어차피 일어나지만 maker·model 채움은 입구 매핑이므로 채움 몫에 포함한다.
-  const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
+  const fillEntries = plan.entries.filter(e => reasonsOf(e).some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
     || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string'
       || (!!e.after.record.raw?.spec && typeof e.after.record.raw.spec === 'object' && Object.keys(e.after.record.raw.spec as object).length > 0))))
     // 채움 우선순위: 노출되는(after.listable) 문서가 먼저, 같은 군 안에서는 키 순서(결정적). 노출 중인 차의 빈 제원이 비노출 차보다 먼저 채워진다.
@@ -327,7 +345,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
-      const onlyFill = e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
+      const onlyFill = e.kind === 'UPDATE' && !!e.before && reasonsOf(e).length > 0 && reasonsOf(e).every(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
       if (onlyFill) drop.add(e);
     }
     plan.entries = plan.entries.filter(e => !drop.has(e));
@@ -374,10 +392,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;

@@ -30,6 +30,7 @@ import { captureVehicleMasterSnapshotReadOnly } from '../jobs/data-access-runtim
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { masterTrimFuelLookup } from '../domain/fuel-alias.js';
 import { createHash } from 'node:crypto';
 import { readXlsx } from '../adapters/xlsx-reader.js';
 import { convertMaumcarWorkbook, MAUMCAR_SOURCE_ID, type MaumcarConversion } from '../adapters/maumcar-file.js';
@@ -121,7 +122,9 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
-      ...modelTablesFromMasters(masters) } };
+      ...modelTablesFromMasters(masters),
+      // 확정 정체성 → vehicle_trim_master 연료(하나로 모일 때만, 대표 2026-10-19): 제원 채움이 원천에 연료가 없을 때만 쓴다.
+      trimFuel: masterTrimFuelLookup(records) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
@@ -173,7 +176,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 목록이 없으면 SOURCE_CYCLE_IDENTITY_REFINE=1 일 때만 전체에 켠다(명시). 그 밖(미설정 포함)은 꺼짐 — 옵션 사고(#674)의 교훈: 무인 쓰기 경로는 기본 꺼짐.
   const identitySources = (env.SOURCE_CYCLE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
   const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' || (identitySources.length === 0 && env.SOURCE_CYCLE_IDENTITY_REFINE !== '1');
-  let identityStatus = refineOff && !sourceIdentitySources.length ? 'DISABLED' : 'NOT_LOADED';
+  // 제원 채움만 켜는 공급사(대표 2026-10-19 «연료가 빠지면 안 된다»): 입구 매핑(제조사·모델)은 켜지 않고 빈 제원 칸 채움·다시 채움만 켠다. 기본 꺼짐(쉼표 목록).
+  // 입구 매핑 공급사(SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES)는 지금처럼 제원 채움도 함께 한다.
+  const specFillSources = (env.SOURCE_CYCLE_SPEC_FILL_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  let identityStatus = refineOff && !sourceIdentitySources.length && !specFillSources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
     : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.status; return r.refiner; });
@@ -185,7 +191,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
+      sourceIdentitySources, specFillSources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

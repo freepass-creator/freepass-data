@@ -41,12 +41,13 @@ function fakeFirestore() {
 }
 const MODELS = { 현대: ['아반떼', '그랜저', '쏘나타'], 기아: ['K5', '카니발', '스포티지'] };
 const knownMakers: VehicleIdentityRefiner = { digest: 't', match: () => null, makers: ['현대', '기아'], models: MODELS };
-async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers, extra: { identityRefineSources?: string[] } = {}) {
+async function setup(sourceIdentitySources: string[] = ['RP012'], identity: VehicleIdentityRefiner | undefined = knownMakers, extra: { identityRefineSources?: string[]; specFillSources?: string[] } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'source-identity-')); dirs.push(dir);
   const fake = fakeFirestore();
   const commands = firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, token: async () => 'synthetic-token', fetcher: fake.fetcher,
     supplierDefaults: { RP012: { provider_name: '합성손오공', policy_code: 'SYNTHETIC_POLICY' } }, sourceIdentitySources,
     ...(extra.identityRefineSources ? { identityRefineSources: extra.identityRefineSources } : {}),
+    ...(extra.specFillSources ? { specFillSources: extra.specFillSources } : {}),
     identity: async () => identity });
   return { commands, fake };
 }
@@ -330,16 +331,17 @@ describe('Codex #688 지적(제원 입구 매핑)', () => {
     expect(sourceSpecFillFields({ engine_cc: '1598' }, { fuel_type: '디젤' })).toEqual({ engine_cc: '1598' });
   });
 
-  it('④ 이미 확인한 문서(vehicle_spec_source_checked)는 다른 변경으로 갱신돼도 제원을 다시 채우지 않는다', async () => {
+  it('④ 이미 확인한 문서(vehicle_spec_source_checked)는 첫 채움을 다시 하지 않고, 대표 2026-10-19 이후 «빈 칸 + 원천 값 있음» 칸만 다시 채운다(값 있는 칸은 비접촉)', async () => {
     const { sourceSpecFillFields: fill } = await import('../src/infra/source-cycle-firestore.js');
     expect(fill({ ext_color: '흰색' }, { vehicle_spec_source_checked: true })).toEqual({});
     const { commands, fake } = await setup();
     const r = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' });
-    fake.put('12가4001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_spec_source_checked: true }));
+    fake.put('12가4001', legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_review_required: false, vehicle_spec_source_checked: true, fuel_type: '디젤' }));
     const changed = specRec('12가4001', { ext_color: '흰색', fuel_type: '가솔린' }); changed.terms[0]!.monthlyRent = { state: 'KNOWN', value: 540000 };
-    expect((await run(commands, [changed])).kinds).toEqual(['UPDATE']);   // 가격 변경 쓰기
-    expect(decodeFields(fake.docs.get('12가4001').fields)).toMatchObject({ price: { 36: { rent: 540000 } } });
-    expect(decodeFields(fake.docs.get('12가4001').fields).ext_color).toBeUndefined();
+    expect((await run(commands, [changed])).kinds).toEqual(['UPDATE']);   // 가격 변경 + 빈 칸 다시 채움
+    const doc = decodeFields(fake.docs.get('12가4001').fields);
+    expect(doc).toMatchObject({ price: { 36: { rent: 540000 } }, ext_color: '흰색', fuel_type: '디젤' });   // 빈 외장색만 채움, 있는 연료는 원천과 달라도 덮지 않음
+    expect((await run(commands, [changed])).kinds).toEqual([]);             // 되풀이 없음
   });
 
   it('③ 신규 편입 중 제조사·모델 없이 제원만 있는 차량도 기존 보정과 합쳐 채움 상한(100)에 센다', async () => {
@@ -485,6 +487,122 @@ describe('Codex #697 비차단: 제원 채움을 마친 문서의 내장색 보�
     expect(doc.int_color ?? '').toBe('');
     expect((await run(commands, [r])).kinds).toEqual([]);      // 다시 쓰지 않는다
   });
+});
+
+describe('대표 2026-10-19 연료 빈칸: 별칭 표 + 빈 칸 다시 채움 + 마스터 연료', () => {
+  const specRec = (plate: string, spec: Record<string, unknown> | null, vehicleText?: string): SourceProductRecord => {
+    const r = rec(plate);
+    return { ...r, ...(vehicleText ? { vehicleText } : {}), raw: { ...r.raw, ...(spec ? { spec } : {}) } };
+  };
+  const checkedDoc = (r: SourceProductRecord, extra: Record<string, unknown> = {}) =>
+    legacyDoc(r, { maker: '현대', model: '아반떼', vehicle_maker_model_source: 'SOURCE_FIELDS', vehicle_spec_source_checked: true, vehicle_int_color_source_checked: true,
+      ext_color: '흰색', int_color: '검정', year: '2024', mileage: '1000', engine_cc: '1580', seats: '5', first_registration_date: '2024-01-02', ...extra });
+
+  it('확인 표식이 찍힌 문서의 빈 연료를 «가솔린+전기» 원천으로 하이브리드로 채우고, 되풀이하지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = specRec('71가1001', { fuel_type: '가솔린+전기' }, '현대_아반떼_하이브리드 1.6');
+    fake.put('71가1001', checkedDoc(r));
+    const first = await run(commands, [r]);
+    expect(first.kinds).toEqual(['UPDATE']);
+    expect(first.applied?.status).toBe('APPLIED');
+    expect(decodeFields(fake.docs.get('71가1001').fields)).toMatchObject({ fuel_type: '하이브리드', ext_color: '흰색', engine_cc: '1580' });
+    expect((await run(commands, [r])).kinds).toEqual([]);
+  });
+
+  it('원천에 값이 없거나 표에 없는 표기·차명과 어긋나는 표기면 고르지도 쓰지도 않는다', async () => {
+    const { commands, fake } = await setup();
+    const none = specRec('71가1002', null), odd = specRec('71가1003', { fuel_type: 'GSL' }), clash = specRec('71가1004', { fuel_type: '휘발유' }, '현대_싼타페_1.6 HEV AWD');
+    for (const r of [none, odd, clash]) fake.put(r.plate!, checkedDoc(r));
+    expect((await run(commands, [none, odd, clash])).kinds).toEqual([]);
+    for (const r of [none, odd, clash]) expect(decodeFields(fake.docs.get(r.plate!).fields).fuel_type).toBeUndefined();
+  });
+
+  it('계약 잠금 문서는 빈 칸이어도 다시 채우지 않는다', async () => {
+    const { commands, fake } = await setup();
+    const r = specRec('71가1005', { fuel_type: '가솔린' });
+    fake.put('71가1005', checkedDoc(r, { locked_by_contract: true }));
+    await run(commands, [r]);
+    expect(decodeFields(fake.docs.get('71가1005').fields).fuel_type).toBeUndefined();
+  });
+
+  it('원천에 연료가 없어도 정체성이 확정된 차는 마스터 연료가 하나로 모일 때만 채운다', async () => {
+    const trimFuel: VehicleIdentityRefiner['trimFuel'] = id => id.trim_name === '모던' ? '하이브리드' : null;
+    const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimFuel });
+    const one = specRec('71가1006', null), two = specRec('71가1007', null), unconfirmed = specRec('71가1008', null);
+    fake.put('71가1006', checkedDoc(one, { sub_model: '더 뉴 아반떼 하이브리드 CN7', trim_name: '모던', vehicle_review_required: false }));
+    fake.put('71가1007', checkedDoc(two, { sub_model: '더 뉴 아반떼 하이브리드 CN7', trim_name: '스마트', vehicle_review_required: false }));   // 마스터가 하나로 안 모임
+    fake.put('71가1008', checkedDoc(unconfirmed, { sub_model: '더 뉴 아반떼 하이브리드 CN7', trim_name: '모던', vehicle_review_required: true }));   // 정체성 미확정
+    const first = await run(commands, [one, two, unconfirmed]);
+    expect(first.kinds).toEqual(['UPDATE']);
+    expect(decodeFields(fake.docs.get('71가1006').fields).fuel_type).toBe('하이브리드');
+    expect(decodeFields(fake.docs.get('71가1007').fields).fuel_type).toBeUndefined();
+    expect(decodeFields(fake.docs.get('71가1008').fields).fuel_type).toBeUndefined();
+    expect((await run(commands, [one, two, unconfirmed])).kinds).toEqual([]);
+  });
+
+  it('원천 연료 원문이 있으면(해석 보류·차명 충돌 포함) 마스터로 덮지 않는다(Codex 검토 P1)', async () => {
+    const trimFuel: VehicleIdentityRefiner['trimFuel'] = () => '하이브리드';
+    const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimFuel });
+    const phev = specRec('71가1010', { fuel_type: 'HEV' }, '기아_니로_플러그인 하이브리드'), odd = specRec('71가1011', { fuel_type: 'GSL' });
+    for (const r of [phev, odd]) fake.put(r.plate!, checkedDoc(r, { sub_model: '니로 하이브리드 SG2', trim_name: '노블레스', vehicle_review_required: false }));
+    expect((await run(commands, [phev, odd])).kinds).toEqual([]);
+    for (const r of [phev, odd]) expect(decodeFields(fake.docs.get(r.plate!).fields).fuel_type).toBeUndefined();
+  });
+
+  it('다른 빈 칸 때문에 고른 문서도 원천 연료 원문(목록 원문·규격 검증으로 지운 값)이 있으면 마스터 연료를 쓰지 않는다(Codex 재검토 P1)', async () => {
+    const trimFuel: VehicleIdentityRefiner['trimFuel'] = () => '하이브리드';
+    const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimFuel });
+    const listOnly = specRec('71가1013', { ext_color: '빨강' }); listOnly.raw = { ...listOnly.raw, list: { fuel: 'GSL' } };
+    const validated = specRec('71가1014', { ext_color: '빨강', fuel_type: 'GSL' });
+    for (const r of [listOnly, validated]) fake.put(r.plate!, checkedDoc(r, { ext_color: '', sub_model: '아반떼 하이브리드 CN7', trim_name: '모던', vehicle_review_required: false }));
+    const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1, specValidation: true }, { records: [listOnly, validated], observedAt: time, heldCount: 0, complete: true },
+      await commands.list(source), now);
+    expect(built.plan.entries).toHaveLength(2);   // 외장색 다시 채움으로 선정
+    await applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
+    for (const r of [listOnly, validated]) {
+      const doc = decodeFields(fake.docs.get(r.plate!).fields);
+      expect(doc.ext_color).toBe('빨강');
+      expect(doc.fuel_type).toBeUndefined();
+    }
+  });
+
+  it('계획 뒤 마스터 연료가 바뀌면 같은 승인 계획으로 쓰지 않는다(Codex 검토 P1: 계획에 마스터 연료 고정)', async () => {
+    let fuel = '하이브리드';
+    const refiner: VehicleIdentityRefiner = { ...knownMakers, trimFuel: () => fuel };
+    const { commands, fake } = await setup(['RP012'], refiner);
+    const r = specRec('71가1012', null);
+    fake.put('71가1012', checkedDoc(r, { sub_model: '아반떼 하이브리드 CN7', trim_name: '모던', vehicle_review_required: false }));
+    const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 }, { records: [r], observedAt: time, heldCount: 0, complete: true },
+      await commands.list(source), now);
+    expect(built.plan.entries[0]?.before?.specMasterFuel).toBe('하이브리드');
+    fuel = '가솔린';
+    const applied = await applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now }).catch((e: Error) => ({ status: e.message }));
+    expect(applied.status).not.toBe('APPLIED');
+    expect(decodeFields(fake.docs.get('71가1012').fields).fuel_type).toBeUndefined();
+  });
+
+  it('제원만 켠 공급사(specFillSources)는 제원은 채우되 제조사·모델 입구 매핑은 하지 않는다', async () => {
+    const { commands, fake } = await setup([], knownMakers, { specFillSources: ['RP012'] });
+    const r = specRec('71가1009', { fuel_type: '휘발유', ext_color: '파랑' });
+    fake.put('71가1009', legacyDoc(r));
+    await run(commands, [r]);
+    const doc = decodeFields(fake.docs.get('71가1009').fields);
+    expect(doc).toMatchObject({ fuel_type: '가솔린', ext_color: '파랑', vehicle_spec_source_checked: true, maker: '' });
+    expect(doc.vehicle_maker_model_source).toBeUndefined();
+  });
+
+  it('다시 채움도 채움 상한(기본 100)에 들어가고 남은 차는 다음 회차에 이어 채운다', async () => {
+    const { commands, fake } = await setup();
+    const records = Array.from({ length: 120 }, (_, i) => specRec(`72나${String(7000 + i)}`, { fuel_type: '가솔린+전기' }, '현대_아반떼_하이브리드'));
+    for (const r of records) fake.put(r.plate!, checkedDoc(r));
+    const first = await run(commands, records);
+    expect(first.warnings.some(w => /_DEFERRED:20:/.test(w))).toBe(true);   // 채움 전용 쓰기 상한 이월(옵션·채움 공통 예산)
+    const filled = () => records.filter(r => decodeFields(fake.docs.get(r.plate!).fields).fuel_type === '하이브리드').length;
+    expect(filled()).toBe(OPTIONS_REWRITE_CAP);
+    await run(commands, records);
+    expect(filled()).toBe(120);
+    expect((await run(commands, records)).kinds).toEqual([]);
+  }, 60_000);
 });
 
 describe('2026-10-16 «마스터가 작동을 안 한다»: 모델은 마스터 모델 이름일 때만(괄호·세대·수식어 금지)', () => {
