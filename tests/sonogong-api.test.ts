@@ -214,7 +214,7 @@ describe('손오공 공식 API 어댑터', () => {
       : json(detail(1, '100하1111', { prices }))).client);
     expect(read.complete).toBe(true);
     expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([
-      [12, 512345, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
+      [12, 512000, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
     expect(read.notes).toContain('AMOUNT_UNPARSEABLE:2');   // 36개월 월 대여료 '문의' + 48개월 보증금 -5 (소수 금액은 Codex #643 ① 테스트가 본다)
     expect(read.notes).toContain('DEPOSIT_PLACEHOLDER_ZERO:1');
   });
@@ -356,5 +356,20 @@ describe('손오공 공식 API 어댑터', () => {
     expect(sonogongApiRowFloor(10, 200)).toBe(160);
     expect(SONOGONG_API_POLICY.pageSize).toBeLessThanOrEqual(50);
     expect(SONOGONG_API_POLICY.minIntervalMs).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+describe('손오공 공식 API 대여료 천원 미만 절사(대표 2026-10-19)', () => {
+  it('정리값만 절사, 원문은 record.raw.prices 와 term.raw.source_monthly_rent 에 보존, 보증금 산출식도 절사 대여료로', async () => {
+    const sub = { SUBSCRIBE_RETURN: { monthly: { 12: 929381, 24: 1000999, 36: 929000 }, deposit: { 12: 0, 24: 0, 36: 0 } } };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices: sub })] : [])
+      : json(detail(1, '100하1111', { prices: sub }))).client);
+    const r = read.records[0]!;
+    expect(r.terms.map(t => [t.months, t.monthlyRent.value, t.raw.source_monthly_rent, t.raw.rent_rule, t.deposit.value])).toEqual([
+      [12, 929000, 929381, 'SONOGONG_RENT_TRUNCATE_1000', 929000],
+      [24, 1000000, 1000999, 'SONOGONG_RENT_TRUNCATE_1000', 2000000],
+      [36, 929000, undefined, undefined, 2787000]]);
+    expect((r.raw.prices as { SUBSCRIBE_RETURN: { monthly: Record<string, number> } }).SUBSCRIBE_RETURN.monthly).toEqual({ 12: 929381, 24: 1000999, 36: 929000 });
   });
 });
