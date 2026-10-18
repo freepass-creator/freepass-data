@@ -231,6 +231,18 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-18 확정값 정정 전용 경로 — 로컬 구현, 운영 미적용
+
+- 목적 / 대상 revision: `f286e4036c10a7df32f59dfe5b189c7a23504bbb`, `work/vehicle-identity-correction`. 기존 수리기·비공개 백업·감사 컬렉션을 확장했다. Academy READY. 원격 조회·커밋·푸시 없이 PC1 Claude 검토용 작업 트리로 남긴다.
+- 변경: `kind: PRODUCT_IDENTITY_CORRECTION`, 명시적 `projectId`, `productIdentityCorrections` 전용 계획. 일반 수리 배열은 빈 배열이고 다른 수리·생성 키와 혼합 불가. 최대 10건, 중복 ID 거부. `vehicleNameRepairPlanDigest`가 kind/대상 프로젝트/계획 전체를 묶으며 `AUTHORIZE_PRODUCT_IDENTITY_CORRECTION` 승인만 적용기에 전달한다. 기존 일반 수리 승인과 동작은 유지한다.
+- 계획 각 항목: `id`, `from`/`to`(maker/model/sub_model/trim_name), `expectedUpdateTime: {seconds,nanoseconds}`, `reason`, `evidence`, `master`. from은 저장값 그대로이고 누락 키/null/빈 문자열을 구분한다. 정정 to는 네 칸 모두 정규화된 활성 마스터 이름이어야 한다. master에는 `id`, `trimId`, 두 문서의 `contentDigest`/`trimContentDigest`를 고정한다. 활성 마스터와 그 마스터의 동일 트림 후보가 각각 하나일 때만 허용한다.
+- 근거 계약: 상품의 보존된 `원문`·`원문_정정` 객체 전체 지문을 각각 `evidence.original`/`correction.contentDigest`에 고정한다. 각 근거는 `source`, `authoredAt`, `retrievedAt`, `archiveRef` 필수이며 correction.source는 지지오토다. `vehicleIdentityField`의 값은 상품과 두 원문에 동일하게 존재하고 `vehicleIdentityDigest`와 일치해야 한다. `correctsOriginalDigest`, `correctedFields`, `resolvedIdentity`, 빈 `conflicts`는 검토자가 원문 대조 후 작성하는 선언이다. 자동 텍스트 추론이 사실을 입증하지 않는다. 원문에 공통 식별 근거가 없거나 상위 증거 충돌·복수 후보·트림 불명이면 계획을 만들지 않고 HOLD. 근거를 맞추려고 기존 원문에 필드를 추가하지 않는다.
+- 보호 / 검증: 계약 잠금·노출 철회 무조건 거부. 비공개 백업 성공 후 트랜잭션 안에서 상품 버전·네 칸·전체 백업 상태·근거·마스터를 재검사한다. 상품에는 달라진 차종 칸만 쓰며 원문/철회 표식/확정 표식은 보존한다. `PRODUCT_IDENTITY_CORRECTED` 감사에는 이전/이후, 지문, 근거 참조, 승인 식별자, 실행자, commit 시각을 함께 기록한다. 재실행은 전체 감사 내용·실제 문서 지문·commit 시각이 모두 맞아야 이미 적용됨이다. 부분 감사 묶음은 거부한다.
+- 복원: 새 전용 계획에서 from/to를 뒤집고 `rollbackOf`에 원래 감사 eventId, expectedUpdateTime에는 정정 직후 버전을 넣어 새 digest로 승인한다. 근거/master 핀은 원래 감사와 동일해야 한다. 원래 정정 이후 문서나 버전이 달라졌거나 잠금·철회되면 거부한다. 변경했던 칸만 복원하며 누락 필드는 삭제 sentinel로 복원한다. 잘못된 옛 이름 복원을 위해 활성 마스터 일치 검사를 우회하는 것은 검증된 역방향 감사 계획에만 한정된다.
+- 모의 실행: 기존 job의 `--apply` 없는 경로는 대상 프로젝트·건수·전후 값·승인 지문·거부 조건을 출력한다. `liveChecks: NOT_CHECKED_OFFLINE`이며 운영 상품 상태를 검사했다고 주장하지 않는다. 실제 승인 전 별도 최신 원문/상품/마스터 조회가 필요하다. 계획과 실행 출력은 비공개 경로에만 둔다.
+- 검증 결과: 관련 두 파일 143 PASS(기존 97 + 신규 46), `npm.cmd run build` 타입 검사 PASS, `git diff --check` PASS. 전체 `npm.cmd test -- --maxWorkers=2`: 4,163 PASS / 19 FAIL / 19 SKIP, 파일 248 PASS / 9 FAIL / 4 SKIP. 기본 병렬 실행도 실패했으며 동시 실행 수를 줄여 재검증했다. 실패 로그에는 샌드박스의 사용자 경로·jq 실행 권한 거부, 자식 tsx의 `uv_os_get_passwd ENOMEM`, 시간초과 및 로컬 서버 연결 실패가 있다. 전체 통과로 판정하지 않는다. 실제 43건 근거 검토, Firestore 쓰기/되읽기, 배포 없음. 독립 검토는 지시대로 PC1 Claude가 수행한다.
+- next_start_here: PC1에서 diff·기존/신규 시험·타입 검사 확인 → 각 실제 차량의 보존 근거와 유일한 마스터/트림 검토 → 최대 10건씩 비공개 계획/모의 출력 검토 → 각 묶음의 별도 승인 → 실제 되읽기. 운영 미검증과 전체 시험의 환경 실패를 PASS로 바꾸지 않는다.
+
 ### 2026-10-17 21시 실측 반례 / 개별 수신 시각 분리 — 후속 후보, 운영 미반영
 
 - 목적/정본: PR738 운영 main `544c16288ddd81e68e55b6c8b878f1090ef22ccd`의 실제 21시 진단을 기존 작업선에서 재현한다. 원 writer의20:25:47반영과 Codex20:27:34독립 조회는653해시·4자산·전체이전빌드·import/network0/env불변 일치였다.20:50실제116건/원천109=노출109와 동일2키 SDK→ERP5 이름·가격·200/404가 일치했다(비공개 증거 SHA `5e13bfbeddbca9577f7d3014b3b024bbcd59acd929996868083b81fc18515e96`).

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { stableDigest } from '../src/shared/stable-digest.js';
-import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan, vehicleNameRepairPlanDigest } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
   it('accepts exact non-overlapping master and product repairs', () => {
@@ -262,7 +262,17 @@ describe('vehicle-name reference repair gate', () => {
   });
   it('keeps existing plan digest unchanged when product identity repairs are absent', () => {
     const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }] };
+    expect(vehicleNameRepairPlanDigest(base)).toBe(stableDigest(base));
     expect(stableDigest(base)).toBe(stableDigest({ ...base, productIdentityRepairs: undefined }));
     expect(stableDigest(base)).toBe(stableDigest({ ...base, productSourceCorrections: undefined }));
+  });
+  it('domain-separates correction approval and binds its project and full plan', () => {
+    const plan = { kind: 'PRODUCT_IDENTITY_CORRECTION' as const, projectId: 'fake-project', sourceDigest: 'fake-source', masterRepairs: [], productRepairs: [], productIdentityCorrections: [] };
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(stableDigest(plan));
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(vehicleNameRepairPlanDigest({ ...plan, projectId: 'fake-other' }));
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(vehicleNameRepairPlanDigest({ ...plan, sourceDigest: 'different' }));
+  });
+  it('does not silently ignore corrections without their dedicated kind', () => {
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'fake', masterRepairs: [], productRepairs: [], productIdentityCorrections: [] })).toThrow(/kind/);
   });
 });
