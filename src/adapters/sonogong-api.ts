@@ -6,7 +6,7 @@
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
-import { fuelName } from './normalize-sonogong.js';
+import { fuelName, SONOGONG_RENT_RULE, truncateSonogongRent } from './normalize-sonogong.js';
 import { computeSupplierRuleDeposit, supplierDepositPolicy } from '../domain/supplier-deposit-policy.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache } from './sonogong-detail-cache.js';
@@ -250,9 +250,15 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const terms: SourceTerm[] = [];
       const policy = supplierDepositPolicy('RP012', tab);
       for (const months of MONTHS) {
-        const rent = parseSonogongAmount(monthly[String(months)]);
-        if (rent.unparseable) amountUnparseable++;
-        if (rent.amount.state !== 'KNOWN') continue;
+        const parsedRent = parseSonogongAmount(monthly[String(months)]);
+        if (parsedRent.unparseable) amountUnparseable++;
+        if (parsedRent.amount.state !== 'KNOWN') continue;
+        // 대여료 정리값 = 천원 미만 절사(normalize-sonogong 의 SONOGONG_RENT_TRUNCATE_UNIT 하나, 대표 2026-10-19). 원문은 record.raw.prices 에 그대로 남고,
+        // 바뀐 항은 term.raw.source_monthly_rent 에 원문 값을 함께 둔다. 보증금 산출식도 절사한 대여료로 계산한다(손오공 자체 보증금과 같은 기준).
+        const sourceRent = parsedRent.amount.value;
+        const truncatedRent = truncateSonogongRent(sourceRent);
+        if (truncatedRent === null) { amountUnparseable++; continue; }   // 천원 미만 양수 — 0 원(무료)으로 바꾸지 않는다
+        const rent = { amount: { state: 'KNOWN' as const, value: truncatedRent } };
         // 공급사 정책 정제(domain/supplier-deposit-policy, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»):
         // 양수 원문 금액 = KNOWN(모든 탭). 원문 0·빈칸 = 자리채움(API 에 무보증 표시 칸 없음) → sub·pick 은 손오공 정책 «월 대여료 × 약정연수(최대 3개월)»
         // 계산값(KNOWN, raw.deposit_rule), rent 는 UNKNOWN. 어느 경우도 ZERO 가 되지 않는다.
@@ -263,7 +269,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
           if (parsed.unparseable) amountUnparseable++;
           apiDeposit = parsed.amount;
         }
-        const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab] };
+        const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab],
+          ...(truncatedRent !== sourceRent ? { source_monthly_rent: sourceRent, rent_rule: SONOGONG_RENT_RULE } : {}) };
         // 숫자가 먼저, 숫자가 없을 때 산출식(«값이 숫자로 존재하거나 산출식으로 존재», READ-RUNTIME «양수 원문 금액 우선»):
         // 양수 원문 금액은 어느 탭이든 KNOWN(원문 금액, 계산 표식 없음). 구독 항의 규칙 값이 다르면 raw.rule_deposit 와 경고로만 남긴다.
         if (apiDeposit?.state === 'KNOWN') {

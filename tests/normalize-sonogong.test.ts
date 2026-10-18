@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
-import { sonogongNormalizer } from '../src/adapters/normalize-sonogong.js';
+import { sonogongNormalizer, truncateSonogongRent, SONOGONG_RENT_TRUNCATE_UNIT, SONOGONG_RENT_RULE } from '../src/adapters/normalize-sonogong.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import type { SourceIntakeBatch } from '../src/domain/source-intake.js';
 import type { RawRecord } from '../src/domain/source.js';
@@ -193,5 +193,39 @@ describe('Sonogong RAW to candidate normalizer', () => {
       expect(dump).not.toContain(leak);
     }
     expect(normalized.record.status).toBe('REJECTED');
+  });
+});
+
+describe('손오공 대여료 천원 미만 절사(대표 2026-10-19)', () => {
+  it('규칙: 929,381 → 929,000 · 1,000,999 → 1,000,000 · 딱 떨어지는 값은 그대로 · 천원 미만 양수는 0 원으로 바꾸지 않는다', () => {
+    expect(SONOGONG_RENT_TRUNCATE_UNIT).toBe(1000);
+    expect(truncateSonogongRent(929381)).toBe(929000);
+    expect(truncateSonogongRent(1000999)).toBe(1000000);
+    expect(truncateSonogongRent(929000)).toBe(929000);
+    expect(truncateSonogongRent(1000000)).toBe(1000000);
+    expect(truncateSonogongRent(0)).toBe(0);
+    expect(truncateSonogongRent(999)).toBeNull();
+    expect(truncateSonogongRent(-1)).toBeNull();
+    expect(truncateSonogongRent(1.5)).toBeNull();
+  });
+  it('정리값만 절사하고 원문은 그대로 — 계보에 원문 값·정리값·절사 규칙을 함께 남긴다, 보증금 원문은 바꾸지 않는다', () => {
+    const original = payload('fake-id');
+    (original.detail.estimates as Record<string, unknown>[]) = [estimate({ monthly12: '929,381', monthly24: 1000999, monthly36: 929000, securityDepositAmount: 2787000 })];
+    const before = structuredClone(original);
+    const normalized = normalizeOne(original)!;
+    expect(normalized.record.candidate.priceTerms.map(term => [term.termKey, term.monthlyRent.amount, term.deposit?.amount]))
+      .toEqual([['m12', 929000, 2787000], ['m24', 1000000, 2787000], ['m36', 929000, 2787000]]);
+    expect(original).toEqual(before);
+    const rent = (key: string) => normalized.lineage.find(item => item.normalized?.fieldPath === `priceTerms.${key}.monthlyRent.amount`)!;
+    expect([rent('m12').source.value, rent('m12').normalized?.value, rent('m12').transformId]).toEqual([929381, 929000, SONOGONG_RENT_RULE]);
+    expect([rent('m24').source.value, rent('m24').normalized?.value]).toEqual([1000999, 1000000]);
+    expect([rent('m36').source.value, rent('m36').normalized?.value]).toEqual([929000, 929000]);
+  });
+  it('천원 미만 양수 대여료는 0 원 확정이 아니라 읽을 수 없는 값으로 보류한다', () => {
+    const original = payload('fake-id');
+    (original.detail.estimates as Record<string, unknown>[]) = [estimate({ monthly12: 500, monthly24: 420000 })];
+    const normalized = normalizeOne(original)!;
+    expect(normalized.record.candidate.priceTerms.map(term => [term.termKey, term.monthlyRent.amount])).toEqual([['m24', 420000]]);
+    expect(normalized.record.candidate.issues).toContain('MONTHLY_RENT_INVALID:m12');
   });
 });
