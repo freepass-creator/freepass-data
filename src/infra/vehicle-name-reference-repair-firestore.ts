@@ -533,6 +533,7 @@ const timestampValue = (value: unknown): ReviewedTime | null => {
 };
 const sameTime = (a: unknown, b: unknown) => timestampValue(a) !== null && timestampValue(b) !== null
   && stableDigest(timestampValue(a)) === stableDigest(timestampValue(b));
+/** 정확한 버전 연결: 한 트랜잭션의 모든 쓰기는 같은 서버 확정 시각(updateTime)을 받는다. 감사 문서는 create 전용이라 그 updateTime 이 «원래 커밋한 그 버전»이다 — 상품 updateTime 이 그것과 정확히 같을 때만 «그 커밋 그대로»로 본다(서버 타임스탬프 committedAt 은 수 ms 달라 쓰지 않는다). 시각 근사는 쓰지 않는다. */
 const digestOk = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const textOk = (v: unknown) => typeof v === 'string' && v.trim() !== '';
 const objectOk = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -644,7 +645,7 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
       if (events[index]!.exists) {
         if (!correctionAuditMatches(event, plan, item)
           || !sameIdentity(exactIdentity(data), item.to) || event?.afterDocumentDigest !== stableDigest(data)
-          || !sameTime(snapshot.updateTime, event?.committedAt)) throw new Error('correction replay audit/result mismatch');
+          || !sameTime(snapshot.updateTime, events[index]!.updateTime)) throw new Error('correction replay audit/result mismatch');
         continue;
       }
       if (!sameTime(snapshot.updateTime, item.expectedUpdateTime) || !sameIdentity(exactIdentity(data), item.from)) throw new Error('correction from/version changed');
@@ -662,7 +663,7 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
         const prior = reverseEvents[index]?.data();
         if (!prior || prior.action !== 'PRODUCT_IDENTITY_CORRECTED' || prior.projectId !== plan.projectId || prior.entityId !== item.id
           || !sameIdentity(prior.after as ExactIdentity, item.from) || !sameIdentity(prior.before as ExactIdentity, item.to)
-          || prior.afterDocumentDigest !== stableDigest(data) || !sameTime(snapshot.updateTime, prior.committedAt)
+          || prior.afterDocumentDigest !== stableDigest(data) || !sameTime(snapshot.updateTime, reverseEvents[index]!.updateTime)
           || prior.evidenceDigest !== stableDigest(e) || prior.masterDigest !== stableDigest(item.master)) throw new Error('rollback no longer matches committed correction');
       } else {
         const candidates = masters.docs.filter((s) => s.data().retired !== true
@@ -711,7 +712,7 @@ async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDig
     const event = audits[i]!.data();
     if (!s.exists || !audits[i]!.exists || !correctionAuditMatches(event, plan, items[i]!)
       || !sameIdentity(exactIdentity(s.data()!), items[i]!.to) || event?.afterDocumentDigest !== stableDigest(s.data())
-      || !sameTime(s.updateTime, event?.committedAt)) throw new Error('correction readback mismatch; reconcile before retry');
+      || !sameTime(s.updateTime, audits[i]!.updateTime)) throw new Error('correction readback mismatch; reconcile before retry');
   });
   return { runId, backupPath, masterCount: 0, productCount: 0, productIdentityCorrectionCount: items.length,
     skippedAlreadyApplied, readbackCount: readback.length, auditCount: audits.length };
