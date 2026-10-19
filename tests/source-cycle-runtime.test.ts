@@ -377,7 +377,8 @@ describe('native mappings and UID', () => {
     const match = vi.fn(({ year }: { rawName: string; year: string }) => year === '2023'
       ? { maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' } : null);
     expect(f05NativeCapture(s.source, s.capture, s.visibility).rows[0]!.record.raw).not.toHaveProperty('spec');
-    const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match }).rows[0]!.record;
+    const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+      allowsYear: (id, year) => id === 'synthetic-master' && year === 2023 }).rows[0]!.record;
     expect(match).toHaveBeenCalledWith({ rawName: '합성 원문 차종', year: '2023' });
     expect(r.raw.spec).toEqual({ year: '2023' });
     expect(r.raw.spec_master_digest).toBe('synthetic-master-digest');
@@ -393,11 +394,11 @@ describe('native mappings and UID', () => {
     expect(nativeCycleFields(p, original)).not.toHaveProperty('year');
   });
   it('F05 leaves missing, malformed, master-conflicting and registration-conflicting years in RAW without promoting them', () => {
-    const match = vi.fn(({ year }: { rawName: string; year: string }) => year === '2023'
-      ? { maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' } : null);
+    const match = vi.fn(() => ({ maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' }));
     for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2000 }, { 연식: 2023, 최초등록일: '2025-01' }]) {
       const s = sheet([row]);
-      const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match }).rows[0]!.record;
+      const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+        allowsYear: (_id, year) => year === 2023 }).rows[0]!.record;
       expect(r.raw).not.toHaveProperty('spec');
       expect(r.raw.cells).toEqual(s.capture.tabs.find(t => t.rowCount > 1)!.values[1]);
     }

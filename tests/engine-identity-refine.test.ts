@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -198,10 +198,36 @@ describe('차종 마스터 스냅샷 → 대조기 (회차당 한 번, 실패 �
     expect(ok.status).toMatch(/^ENABLED:[0-9a-f]{12}$/);
     expect(ok.refiner?.match({ rawName: '아이오닉5 프레스티지', year: '2023' })).toEqual({ maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE', trim_name: '프레스티지', master_id: 'vm1' });
     expect(ok.refiner?.match({ rawName: '아이오닉5 프레스티지', year: '2019' })).not.toBeNull();   // 후보가 하나면 연식으로 거르지 않는다(기존 규칙 그대로)
+    expect(ok.refiner?.allowsYear?.('vm1', 2019)).toBe(false);
+    expect(ok.refiner?.allowsYear?.('vm1', 2023)).toBe(true);
+    expect(ok.refiner?.allowsYear?.('unknown-master', 2023)).toBe(false);
     expect(await loadIdentityRefiner(async () => { throw new Error('PERMISSION_DENIED'); })).toEqual({ status: 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null });
     expect(await loadIdentityRefiner(async () => snapshot(), () => Date.parse(readAt) + 3_600_000)).toEqual({ status: 'SKIPPED:VEHICLE_MASTER_INVALID', refiner: null });
     const tampered = { ...snapshot(), digest: '0'.repeat(64) };
     expect((await loadIdentityRefiner(async () => tampered, () => Date.parse(readAt))).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
     expect((await loadIdentityRefiner(() => new Promise(() => {}), Date.now, 20)).status).toBe('SKIPPED:VEHICLE_MASTER_READ_TIMEOUT');
+  });
+  it('waits for real elapsed time on small server clock lead without rewriting sealed evidence or weakening validation', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(readAt) - 1400);
+      const sealed = snapshot(), before = structuredClone(sealed);
+      let done = false;
+      const pending = loadIdentityRefiner(async () => sealed).then(r => { done = true; return r; });
+      await vi.advanceTimersByTimeAsync(1400);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending).status).toMatch(/^ENABLED:/);
+      expect(sealed).toEqual(before);
+      vi.setSystemTime(Date.parse(readAt) - 6000);
+      expect((await loadIdentityRefiner(async () => sealed)).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
+      vi.setSystemTime(Date.parse(readAt) - 1400);
+      const tampered = loadIdentityRefiner(async () => ({ ...sealed, digest: '0'.repeat(64) }));
+      await vi.advanceTimersByTimeAsync(1401);
+      expect((await tampered).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
+      const frozen = loadIdentityRefiner(async () => sealed, () => Date.parse(readAt) - 1400);
+      await vi.advanceTimersByTimeAsync(1401);
+      expect((await frozen).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
+    } finally { vi.useRealTimers(); }
   });
 });
