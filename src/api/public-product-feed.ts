@@ -1,5 +1,5 @@
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import { approvedPhotoCount, parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
+import { approvedPhotoCount, parsePhotoCopySuppliers, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
 
 type Rec = Record<string, unknown>;
 
@@ -324,9 +324,8 @@ const cleanImages = (product: Rec): string[] => {
     if (!/^https:\/\/[^\s]{1,492}$/.test(text)) continue;
     if (BLOCKED_PUBLIC_VALUE.test(text)) throw new Error('PUBLIC_URL_FORBIDDEN');
     if (!urls.includes(text)) urls.push(text);
-    if (urls.length > 200) throw new Error('PUBLIC_IMAGES_LIMIT');
   }
-  return urls;
+  return urls.slice(0, PUBLIC_VEHICLE_PHOTO_LIMIT);
 };
 
 const publicPrice = (product: Rec): PublicProduct['price'] => {

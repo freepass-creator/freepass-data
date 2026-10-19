@@ -1,6 +1,6 @@
 import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
 import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
-import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT } from '../domain/consumer-output-contract.js';
+import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
 import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
@@ -551,7 +551,7 @@ export function createConsumerGateway(
         || (size !== undefined && size !== 'list' && size !== 'detail')) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
-      if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= 200)
+      if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= PUBLIC_VEHICLE_PHOTO_LIMIT)
         || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
@@ -590,7 +590,7 @@ export function createConsumerGateway(
         reply.header('X-Photo-Cache', 'HIT');
         return reply.type(result.contentType).send(result.bytes);
       }
-      if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
+      if (!Number.isSafeInteger(result.count) || result.count < 0)
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
       if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
@@ -620,7 +620,7 @@ export function createConsumerGateway(
         catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
       }
-      if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
+      if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, result.count) });
       if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes)) renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType, sourceCheckedAt: result.sourceCheckedAt ?? Date.now(), ...(result.albumFingerprint !== undefined ? { albumFingerprint: result.albumFingerprint } : {}), ...(result.sourceSha256 !== undefined ? { sourceSha256: result.sourceSha256 } : {}) });
       return reply.type(outputType).send(outputBytes);
     } catch (error) {

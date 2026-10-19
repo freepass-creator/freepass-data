@@ -128,11 +128,17 @@ describe('public product feed v1', () => {
     expect(quote?.product.image_urls).toEqual(['https://example.test/cache-0.jpg', 'https://example.test/cache-1.jpg']);
   });
 
-  it('preserves complete galleries and rejects oversized galleries', () => {
+  it('publishes the first 50 ordered photos without mutating larger source galleries', () => {
     const images = Array.from({ length: 50 }, (_, i) => `https://example.test/${i}.jpg`);
     const quote = buildPublicProductQuote(snapshot({ P1: product({ image_urls: images }) }), 'P1', {});
     expect(quote?.product.image_urls).toHaveLength(50);
-    expect(() => buildPublicProductQuote(snapshot({ P1: product({ image_urls: Array.from({ length: 201 }, (_, i) => `https://example.test/${i}.jpg`) }) }), 'P1', {})).toThrow('PUBLIC_IMAGES_LIMIT');
+    for (const count of [0, 1, 49, 50, 51, 201]) {
+      const originals = Array.from({ length: count }, (_, i) => `https://example.test/${i}.jpg`);
+      const source = snapshot({ P1: product({ image_urls: originals, image_url: null }) });
+      const before = JSON.stringify(source);
+      expect(buildPublicProductQuote(source, 'P1', {})?.product.image_urls).toEqual(originals.slice(0,50));
+      expect(JSON.stringify(source)).toBe(before);
+    }
   });
 
   it('resolves whole hyphenated keys before tokens and legacy share suffixes', () => {

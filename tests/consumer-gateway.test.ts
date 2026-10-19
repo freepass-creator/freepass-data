@@ -246,6 +246,25 @@ describe('read-only consumer gateway', () => {
     expect(product.photo_link).toBe('https://supplier.example/tcar');
     await app.close();
   });
+  it('caps public photo manifests at 50 and rejects ordinal 50 before reading while retaining smaller albums', async () => {
+    for (const count of [0, 1, 49, 50, 51, 201]) {
+      const reads: (number | undefined)[] = [];
+      const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer: string, _product: string, index?: number) => {
+        reads.push(index);
+        return { count, bytes: index === undefined ? null : Buffer.from([255,216,255]), contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true };
+      } };
+      const { app } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+      const url = compatUrl + '/products/P1/photos';
+      const manifest = await app.inject({ url, headers });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.json().count).toBe(Math.min(50,count));
+      expect((await app.inject({ url: url+'/50', headers })).statusCode).toBe(400);
+      expect(reads).toEqual([undefined]);
+      if(count>=50)expect((await app.inject({ url: url+'/49', headers })).statusCode).toBe(200);
+      await app.close();
+    }
+  });
+
   it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
     let reads = 0;
     const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer: string, product: string, index?: number) => {
