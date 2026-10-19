@@ -13,6 +13,7 @@ import { boundedOptions, asBoundedOptions, OPTIONS_MAX_ITEMS } from '../domain/s
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
+import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from '../domain/reviewed-spec-correction.js';
 import { refillableSpecValues } from '../domain/spec-refill.js';
 
 type Fields = Record<string, unknown>;
@@ -393,7 +394,7 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
   identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null,
   specSources: ReadonlySet<string> | null = sourceIdentitySources, trimFuel: VehicleIdentityRefiner['trimFuel'] | null = null,
-  provenanceUids: ReadonlySet<string> = new Set()): CycleProduct {
+  provenanceUids: ReadonlySet<string> = new Set(), reviewedApprovals: ReadonlyMap<string, ReviewedSpecApproval> = new Map()): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -443,6 +444,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   if (provenanceUids.has(uid) && engineOwned && !lockedNow && record.raw.source === 'shared-sheet'
     && f.source_cycle_write == null && !f.publication_withdrawal && !f._deleted && !f.deletedAt
     && !['RP012', 'RP031'].includes(record.sourceId)) rewriteReasons.push('SOURCE_PROVENANCE');
+  const reviewedSpec = engineOwned && !lockedNow && f.listable === true && !f.publication_withdrawal && !f._deleted && !f.deletedAt
+    ? reviewedSpecOf(uid, f, reviewedApprovals.get(uid)) : undefined;
   let specRefillKeys: string[] = [];
   if (specAllowed
     && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
@@ -453,6 +456,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 확인 표식이 있는 문서의 빈 칸 다시 채움(대표 2026-10-19): 빈 칸 목록만 실어 두고, 이번 관측 원천에 형식 맞는 값이 있는지는 계획이 정한다(domain/spec-refill).
   // 원천에 연료가 없어도 정체성이 확정된 차는 마스터 연료가 하나로 모이면 그 자체가 채울 근거다(쓰면 연료가 생겨 되풀이되지 않음). 계약 잠금 문서는 제외.
   else if (specAllowed && f.vehicle_spec_source_checked === true && !lockedNow) specRefillKeys = specRefillKeysOf(f);
+  if (reviewedSpec) specRefillKeys = [...new Set([...specRefillKeys, ...Object.keys(reviewedSpec.values)])];
   // 정체성이 확정된 연료 빈 문서의 마스터 연료(하나로 모일 때만). 값을 읽기 경로에 실어 계획 digest·백업 대조에 고정한다 — 계획 뒤 마스터 연료가 바뀌면 백업 대조가 멈춘다(Codex 검토).
   // 쓸지 말지는 계획이 이번 관측 원천에 연료 원문이 «없을 때만» 정한다(masterFuelFallback).
   const specMasterFuel = specAllowed && !lockedNow ? masterFuelOf(f, trimFuel) : null;
@@ -464,7 +468,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
     identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
-  return { record, ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}),
+  return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
@@ -571,6 +575,10 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     // 이미 제원 채움을 마친 문서: 내장색 보완(표식으로 한 번) + 빈 칸 다시 채움(빈 칸 + 원천 값 있음, 대표 2026-10-19). 값이 있는 칸은 덮지 않는다.
     ...(specFill && original.vehicle_spec_source_checked === true
       ? { ...intColorOnlyFields(r.raw?.spec, original), ...sourceSpecRefillFields(r.raw?.spec, original, r.vehicleText, masterFuel) } : {}),
+    ...(p.fillSourceIdentity === true && p.reviewedSpec && !withdrawing
+      && stableDigest(original.원문_정정 ?? null) === p.reviewedSpec.correctionDigest
+      ? { ...refillableSpecValues(p.reviewedSpec.values, Object.keys(p.reviewedSpec.values).filter(k => specBlank(original[k])), r.vehicleText, original.fuel_type),
+        vehicle_spec_correction: { correctionDigest: p.reviewedSpec.correctionDigest, at: r.observedAt } } : {}),
     source_observed_at: r.observedAt, source_cycle_record: compactRecord(r),
     publication_withdrawal: p.publication_withdrawal, publication_withdrawal_prior: p.publication_withdrawal_prior };
 }
@@ -608,7 +616,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
   const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
   const provenanceUids = new Set(options.provenanceUids ?? []);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids);
+  const reviewedApprovals = reviewedSpecApprovals(options.env?.SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS);
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals);
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
     sourceIdentitySources: srcIdentity, specFillSources: specSrc, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
@@ -712,6 +721,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
           'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked', 'vehicle_int_color_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
+        if (reviewedApprovals.size) for (const field of ['원문_정정', '원문_정정_이력']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
         const result = await request('/products?' + query);
@@ -725,7 +735,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
