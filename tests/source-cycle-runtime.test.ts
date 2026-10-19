@@ -77,6 +77,34 @@ const apply = (commands: Awaited<ReturnType<typeof setup>>['commands'], built: R
   applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
 
 describe('Firestore REST runtime offline', () => {
+  it('repairs missing provenance only for reviewed UID, using the existing CAS writer and fresh source; repeat is noop', async () => {
+    const p = product('00가1001'); p.record.raw.source = 'shared-sheet';
+    const fake = fakeFirestore([p]);
+    delete fake.docs.get(p.record.uid).fields.source_cycle_write;
+    const dir = await directory();
+    const make = (uids: string[]) => firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' },
+      token: async () => 'synthetic-token', fetcher: fake.fetcher, provenanceUids: uids });
+    const plan = async (commands: ReturnType<typeof make>) => planSourceCycle({ sourceId: source, family: 'SHARED_SHEET', maxDowngradeRatio: 0.5 },
+      { records: [p.record], observedAt: time, complete: true, heldCount: 0 }, await commands.list(source), now);
+    expect((await plan(make([]))).plan.entries).toEqual([]);
+    const commands = make([p.record.uid]);
+    const before = structuredClone(decodeFields(fake.docs.get(p.record.uid).fields).price);
+    const built = planSourceCycle({ sourceId: source, family: 'SHARED_SHEET', maxDowngradeRatio: 0.5 },
+      { records: [p.record], observedAt: time, complete: true, heldCount: 0 }, await commands.list(source), now);
+    expect(built.plan.entries).toHaveLength(1);
+    expect(built.plan.entries[0]!.before!.rewriteReasons).toContain('SOURCE_PROVENANCE');
+    // Preparation of the repair itself must not write.
+    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(0);
+    expect(before).toEqual(decodeFields(fake.docs.get(p.record.uid).fields).price);
+    fake.docs.get(p.record.uid).fields.locked_by_contract = { stringValue: 'LEDGER' };
+    expect((await commands.list(source)).products[0]!.rewriteReasons ?? []).not.toContain('SOURCE_PROVENANCE');
+    delete fake.docs.get(p.record.uid).fields.locked_by_contract;
+    expect(await apply(commands, await plan(commands))).toMatchObject({ status: 'APPLIED', verified: 1 });
+    const stored = decodeFields(fake.docs.get(p.record.uid).fields);
+    expect(stored.source_cycle_write).toMatchObject({ by: 'source-engine', at: time });
+    expect(stored.price).toEqual(before);
+    expect((await plan(commands)).plan.entries).toEqual([]);
+  });
   it('SPEC3E enrolls independent modes from all supplier documents, including non-listable', async () => {
     const existing = ['A', 'B', 'C'].map(uid => ({ ...product(uid), listable: false }));
     const { commands, fake } = await setup(existing);

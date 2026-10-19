@@ -7,6 +7,48 @@ import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
 import { readIancarEngineDeposit } from '../src/domain/deposit-evidence.js';
 import { salePriceMap, type SourceTerm } from '../src/domain/source-engine.js';
 
+describe('verified shared-sheet waiver supersedes stale legacy RAW only for its exact term', () => {
+  const at = '2026-10-18T00:00:00.000Z';
+  const fixture = () => ({ provider_company_code: 'RP008', product_type: '중고렌트', listable: true,
+    car_number: 'SYNTHETIC', _key: 'SYNTHETIC', locked_by_contract: false,
+    source_cycle_write: { by: 'source-engine', at },
+    source_cycle_record: { sourceId: 'RP008', uid: 'SYNTHETIC', plate: 'SYNTHETIC', observedAt: at,
+      status: { raw: '출고가능', saleAvailable: true }, raw: { source: 'shared-sheet' },
+      terms: [{ months: 24, monthlyRent: { state: 'KNOWN', value: 500000 }, deposit: { state: 'ZERO', value: 0 },
+        mileage: '20000km', raw: { longDeposit: '무보증', shortDeposit: '' } }] },
+    price: { '24': { rent: 500000, deposit: 0 } }, 원문: { 전체: { 장기보증: '800,000' } } });
+  const resolve = (p: Record<string, unknown>) => resolveDepositWithRuleNote(depositEvidenceInputFromProduct(p, 0,
+    { termMonths: 24, monthlyRent: 500000 }));
+  it('uses explicit source term, preserving original RAW and stored amounts', () => {
+    const p = fixture(), before = structuredClone(p);
+    expect(resolve(p)).toMatchObject({ state: 'ZERO', amount: 0, depositEvidenceBasis: { field: 'source_cycle_record.terms', at } });
+    expect(p).toEqual(before);
+    delete (p as any).원문;
+    expect(resolve(p)).toMatchObject({ state: 'ZERO', amount: 0 });
+  });
+  it.each(['mark', 'identity', 'plate', 'period', 'rent', 'literal', 'numeric', 'future', 'uid', 'ambiguous', 'locked', 'nonlistable', 'source'])('%s cannot establish new waiver evidence', mutation => {
+    const p: any = fixture();
+    if (mutation === 'mark') delete p.source_cycle_write;
+    if (mutation === 'identity') p.source_cycle_record.sourceId = 'RP031';
+    if (mutation === 'plate') p.car_number = 'OTHER';
+    if (mutation === 'period') p.source_cycle_record.terms[0].months = 36;
+    if (mutation === 'rent') p.source_cycle_record.terms[0].monthlyRent.value++;
+    if (mutation === 'literal') p.source_cycle_record.terms[0].raw.longDeposit = '';
+    if (mutation === 'numeric') p.source_cycle_record.terms[0].raw.longDeposit = 0;
+    if (mutation === 'future') p.source_cycle_record.observedAt = p.source_cycle_write.at = '2099-01-01T00:00:00Z';
+    if (mutation === 'uid') p._key = 'OTHER';
+    if (mutation === 'ambiguous') p.source_cycle_record.terms.push(structuredClone(p.source_cycle_record.terms[0]));
+    if (mutation === 'locked') p.locked_by_contract = 'LEDGER';
+    if (mutation === 'nonlistable') p.listable = false;
+    if (mutation === 'source') p.source_cycle_record.raw.source = 'api';
+    expect(resolve(p).state).not.toBe('ZERO');
+  });
+  it('retains paid-note and negative-confirmation conflicts', () => {
+    expect(resolve({ ...fixture(), deposit_note: '보증금 1개월' }).state).toBe('UNKNOWN');
+    expect(resolve({ ...fixture(), deposit_free: false }).state).toBe('UNKNOWN');
+  });
+});
+
 describe('deposit evidence never promotes a placeholder to waiver', () => {
   const waiverBasis = { field: '원문.전체.장기보증', text: '무보증' } as const;
   const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };

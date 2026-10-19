@@ -73,7 +73,38 @@ export function depositSourceWaiverFieldForTermMonths(termMonths: unknown): type
 function isValidDepositSourceWaiverBasis(value: unknown): value is DepositEvidenceBasis {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as DepositEvidenceBasis;
-  return (record.field === '원문.전체.장기보증' || record.field === '원문.전체.단기보증') && record.text === '무보증';
+  return record.text === '무보증' && ((record.field === '원문.전체.장기보증' || record.field === '원문.전체.단기보증')
+    || (record.field === 'source_cycle_record.terms' && record.source === SOURCE_ENGINE_WRITER && depositInstant(record.at)));
+}
+
+/** Existing shared-sheet writer evidence only. Never infer waiver from numeric zero or a legacy RAW snapshot. */
+export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, sourceAmount: unknown,
+  months: unknown, rent: unknown, now = new Date().toISOString()): DepositEvidenceBasis | undefined {
+  const mark = product.source_cycle_write, record = product.source_cycle_record;
+  if (!depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER || !depositRecord(record)
+    || !depositRecord(record.raw) || record.raw.source !== 'shared-sheet'
+    || !/^RP\d{3}$/.test(String(record.sourceId)) || ['RP012', 'RP031'].includes(String(record.sourceId))
+    || record.sourceId !== product.provider_company_code || typeof record.uid !== 'string' || !record.uid
+    || (record.plate ?? null) !== (product.car_number ?? null)
+    || product._deleted || product.deletedAt || product.publication_withdrawal || product.listable !== true
+    || (product.locked_by_contract !== undefined && product.locked_by_contract !== null && product.locked_by_contract !== false && product.locked_by_contract !== '')
+    || product.status_kind === '계약중' || product.status === '계약중'
+    || !depositInstant(record.observedAt) || mark.at !== record.observedAt || !depositInstant(now)
+    || Date.parse(record.observedAt) > Date.parse(now) || sourceAmount !== 0
+    || !Number.isSafeInteger(months) || (months as number) <= 0 || !Number.isSafeInteger(rent) || (rent as number) <= 0
+    || !Array.isArray(record.terms)) return undefined;
+  if ((product._key !== undefined && product._key !== record.uid) || !depositRecord(record.status) || record.status.saleAvailable !== true) return undefined;
+  const matching = record.terms.filter((term: unknown) => depositRecord(term) && term.months === months);
+  // Ambiguous mileage/settlement variants must be resolved by the caller's exact term, never selected by rent alone.
+  if (matching.length !== 1) return undefined;
+  const term = matching[0];
+  const raw = depositRecord(term) ? term.raw : undefined;
+  if (!engineTerm(term) || term.monthlyRent.state !== 'KNOWN' || term.monthlyRent.value !== rent
+    || term.deposit.state !== 'ZERO' || term.deposit.value !== 0 || !depositRecord(raw)
+    || raw[(months as number) <= 12 ? 'shortDeposit' : 'longDeposit'] !== '무보증') return undefined;
+  const stored = depositRecord(product.price) ? product.price[String(months)] : undefined;
+  if (!depositRecord(stored) || stored.rent !== rent || stored.deposit !== 0) return undefined;
+  return { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: record.observedAt };
 }
 
 function depositFreeConfirmationBasis(value: unknown): DepositEvidenceBasis | null {
@@ -153,15 +184,16 @@ export function depositEvidenceInputFromProduct(
     ruleScope?: 'ANY' | 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
   } = {},
 ) {
+  const engineWaiver = sharedSheetEngineWaiverBasis(product, sourceAmount, extra.termMonths, extra.monthlyRent);
   return {
     supplierId: product.provider_company_code,
     productType: product.product_type,
     note: product.deposit_note,
     depositFree: product.deposit_free,
     depositFreeConfirmation: product.deposit_free_confirmation,
-    depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product, extra.termMonths),
-    depositSourceWaiverText: sourceWaiverTextFromProduct(product, extra.termMonths).text,
-    depositSourceRawAmount: sourceRawAmountFromProduct(product, extra.termMonths),
+    depositSourceWaiverBasis: engineWaiver ?? sourceWaiverBasisFromProduct(product, extra.termMonths),
+    depositSourceWaiverText: engineWaiver ? '무보증' : sourceWaiverTextFromProduct(product, extra.termMonths).text,
+    depositSourceRawAmount: engineWaiver ? undefined : sourceRawAmountFromProduct(product, extra.termMonths),
     ...(calculatedDepositRuleFromProduct(product, extra.termMonths) ? { calculatedDepositRule: calculatedDepositRuleFromProduct(product, extra.termMonths) } : {}),
     sourceAmount,
     ...extra,
