@@ -5,6 +5,7 @@ import { isAssignedPlate, isValidSheetPlate, plateIdentityKey } from '../domain/
 import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
 
 const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 } : typeof v === 'number' && Number.isSafeInteger(v) && v > 0
   ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
@@ -60,7 +61,8 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 }
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
-export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility): CycleCapture {
+export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>): CycleCapture {
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
@@ -143,7 +145,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     }
   }
   copy.digest = sharedSheetCaptureDigest(copy);
-  const engine = sharedSheetEngine(async () => copy);
+  const engine = sharedSheetEngine(async () => copy, () => capture.readTime, sourceYearMaster);
   const converted = engine.toRecords({ raw: copy, observedAt: copy.readTime, attemptedAt: copy.readTime, complete, error: null });
   const zeroRent = converted.records.reduce((n, r) => n + (typeof r.raw.rent_zero_terms === 'number' ? r.raw.rent_zero_terms : 0), 0);
   return { observedAt: capture.readTime, complete, completedScopes: complete ? scopes : [], visibilityComplete: complete,
@@ -153,6 +155,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
         ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
+        ...(record.raw.spec ? { spec: record.raw.spec, spec_master_digest: record.raw.spec_master_digest,
+          spec_master_id: record.raw.spec_master_id } : {}),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */

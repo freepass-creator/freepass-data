@@ -116,13 +116,27 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
   let timer: NodeJS.Timeout | undefined;
   try {
     const snapshot = await Promise.race([load(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('VEHICLE_MASTER_READ_TIMEOUT')), timeoutMs); })]) as VehicleMasterSnapshot;
+    // A server-issued readTime can be slightly ahead of the collector clock. Wait for real
+    // time to catch up once; keep the sealed timestamp and the existing validator unchanged.
+    // Large skew and a clock that fails to advance still fail closed.
+    const futureMs = Date.parse(snapshot?.readAt) - now();
+    if (futureMs > 1000 && futureMs <= Math.min(5000, timeoutMs)) {
+      await new Promise(resolve => setTimeout(resolve, futureMs + 1));
+    }
     let records;
     try { records = verifiedMasterRecords(snapshot, now()); }
     catch { return { status: 'SKIPPED:VEHICLE_MASTER_INVALID', refiner: null }; }
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
+    const eligibleTrims = new Set(records.map(r => r.trimId));
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      sourceYearEvidence: { records, snapshotDigest: snapshot.digest, readAt: snapshot.readAt },
+      allowsYear: (id, year) => Number.isInteger(year) && masters.some(m => m.id === id && m.yearFrom !== null &&
+        year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)) &&
+        (year <= new Date(now()).getUTCFullYear() || snapshot.trims.some(t => eligibleTrims.has(t.id) &&
+          t.data.master_id === id && /^(?:19|20)\d{2}$/.test(String(t.data.model_year_start ?? '')) &&
+          Number(t.data.model_year_start) === year)),
       ...modelTablesFromMasters(masters),
       // 확정 정체성 → vehicle_trim_master 연료(하나로 모일 때만, 대표 2026-10-19): 제원 채움이 원천에 연료가 없을 때만 쓴다.
       trimFuel: masterTrimFuelLookup(records) } };
@@ -290,7 +304,11 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === code).map(c => c.tab))];
         plugins.push(sourceCyclePlugin({ sourceId: code, kind: 'F05', scopes, maxDowngradeRatio: ratio }, async () => {
           const read = env.SOURCE_CYCLE_F05_SOURCE_ROWS === '1' ? await (f05Capture ??= readF05()) : await readF05();
-          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility));
+          const yearRefiner = env.SOURCE_CYCLE_F05_SOURCE_YEARS === '1' && (sourceIdentitySources.includes(code) || specFillSources.includes(code))
+            ? await identity() : null;
+          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility,
+            yearRefiner ? { ...yearRefiner,
+              sourceYearUids: new Set((env.SOURCE_CYCLE_F05_SOURCE_YEAR_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean)) } : undefined));
         }));
       }
     } else if (kind === 'AICA') {

@@ -5,12 +5,14 @@ import type { RawRecord } from '../domain/source.js';
 import type { SourceAmount, SourceEngine, SourceProductRecord, SourceRead, SourceRowHold } from '../domain/source-engine.js';
 import { classifyReadError, sourceProductKey, validateSourceRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
 
 /** Capture transport is injected from capture-shared-sheet; no second Sheets client.
  * UID is an actual captured cell. No position/plate-based fallback, no UID sheet writes.
  * An extra UID header may occur anywhere; legacy captures remain readable but UID-HOLD.
  */
-export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>, now = () => new Date().toISOString()): SourceEngine<SharedSheetCapture> {
+export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>, now = () => new Date().toISOString(),
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>): SourceEngine<SharedSheetCapture> {
   return {
     async read() {
       const attemptedAt = now();
@@ -28,7 +30,7 @@ export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>
           ...(error === 'READ_FAILED' && classified.detail ? { detail: classified.detail } : {}) };
       }
     },
-    toRecords: sharedSheetRecords,
+    toRecords: read => sharedSheetRecords(read, sourceYearMaster),
   };
 }
 export function legacyCapture(capture: SharedSheetCapture) {
@@ -43,7 +45,7 @@ export function legacyCapture(capture: SharedSheetCapture) {
   legacy.digest = sharedSheetCaptureDigest(legacy);
   return { legacy, batch: buildSharedSheetBatch(legacy) };
 }
-export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
+export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>) {
   const held: SourceRowHold[] = [], records: SourceProductRecord[] = [];
   if (!read.raw) return { records, held };
   const capture = read.raw;
@@ -60,7 +62,7 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
     const raw: RawRecord = { rawRecordId: `offline:${i}`, runId: 'offline', sourceId: batch.source.sourceId,
       sourceRecordId: item.sourceRecordId, sourceFingerprint: stableDigest(p), observedAt: String(p.readTime), payload: p };
     // Reuse the existing term/deposit and master-HOLD rules; do not borrow legacy supplements.
-    const normalized = normalizeSharedSheet(raw, undefined, { sourceEngineRentRules: true });
+    const normalized = normalizeSharedSheet(raw, sourceYearMaster?.sourceYearEvidence, { sourceEngineRentRules: true });
     const cells = p.values as unknown[];
     const cell = (h: string) => cells[sharedSheetHeaders.indexOf(h)] ?? null;
     const text = (h: string) => String(cell(h) ?? '').trim();
@@ -77,6 +79,29 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>) {
       observedAt: String(p.readTime), raw: { cells: structuredClone(tab.values[row - 1]), headers: [...tab.values[0]!],
         ...(normalized.zeroRentTerms ? { rent_zero_terms: normalized.zeroRentTerms } : {}) },
       vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
+    // Preserve the supplied year through the existing spec writer only after the active master
+    // admits that exact source name/year. Names and publication HOLD remain independent.
+    // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.
+    const sourceYear = normalized.record.candidate.vehicleFacts?.fields.modelYear;
+    if (sourceYearMaster?.digest && (!sourceYearMaster.sourceYearUids || sourceYearMaster.sourceYearUids.has(r.uid))
+        && sourceYear?.state === 'KNOWN' && typeof sourceYear.value === 'number' &&
+        !normalized.record.candidate.issues.includes('YEAR_REGISTRATION_MISMATCH')) {
+      const facts = normalized.record.candidate.vehicleFacts?.fields;
+      const evidence = sourceYearMaster.sourceYearEvidence;
+      const names = ['maker', 'model', 'subModel', 'trimName'].map(key => facts?.[key]);
+      // Reuse the existing structured normalizer's accepted identity. The raw-name matcher is a different
+      // conservative path and can reject an identity already verified from the four sheet names/specs.
+      // A structured HOLD never falls back to that matcher. Product names/HOLD themselves remain unchanged.
+      const ids = evidence && facts?.vehicleIdentitySource?.state === 'KNOWN' && names.every(f => f?.state === 'KNOWN')
+        ? new Set(evidence.records.filter(record => record.names.every((name, index) => name === names[index]!.value)).map(record => record.masterId)) : new Set<string>();
+      const matched = evidence ? ids.size === 1 ? { master_id: [...ids][0]! } : null
+        : sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) });
+      if (matched && sourceYearMaster.allowsYear?.(matched.master_id, sourceYear.value) === true) {
+        r.raw.spec = { year: String(sourceYear.value) };
+        r.raw.spec_master_digest = evidence?.snapshotDigest ?? sourceYearMaster.digest;
+        r.raw.spec_master_id = matched.master_id;
+      }
+    }
     // An invalid supplied period must not disappear from an otherwise apparently valid bundle.
     if (normalized.suppliedTerms !== r.terms.length) r.terms.push({ months: 0, monthlyRent: { state: 'UNKNOWN', value: null },
       deposit: { state: 'UNKNOWN', value: null }, mileage: null, raw: {} });

@@ -399,6 +399,58 @@ describe('existing unattended F05 producer source-head stage',()=>{
   });
 });
 describe('native mappings and UID', () => {
+  it('uses the existing structured normalizer for a known source year when raw-name matching remains unresolved', () => {
+    const s = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '합성세대', 세부트림: '합성트림',
+      연식: 2023, 연료: '', 배기량: '', 인승: '', 구동방식: '', 최초등록일: '', '차명 원문': '원문 그대로' }]);
+    const match = vi.fn(() => null);
+    const sourceYearEvidence = { snapshotDigest: 'verified-snapshot', readAt: s.capture.readTime,
+      records: [{ masterId: 'synthetic-master', trimId: 'synthetic-trim', names: ['합성', '합성모델', '합성세대', '합성트림'] as const,
+        aliases: [[], [], [], []], modelYearStart: 2020, modelYearEnd: 2024 }] };
+    const master = { digest: 'synthetic-master-digest', match, sourceYearEvidence, allowsYear: (id: string, year: number) => id === 'synthetic-master' && year === 2023 };
+    const r = f05NativeCapture(s.source, s.capture, s.visibility, master).rows[0]!.record;
+    expect(r.raw.spec).toEqual({ year: '2023' });
+    expect(r.raw.spec_master_digest).toBe('verified-snapshot');
+    expect(r.vehicleHold).toEqual(['VEHICLE_MASTER_REVIEW_REQUIRED']);
+    expect(match).not.toHaveBeenCalled();
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set() }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set(['OTHER']) }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set([r.uid]) }).rows[0]!.record.raw.spec).toEqual({ year: '2023' });
+    const bad = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '다른세대', 세부트림: '확인필요', 연식: 2023 }]);
+    expect(f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw).not.toHaveProperty('spec');
+  });
+  it('F05 preserves an explicitly supplied master-admitted year through the existing spec writer without changing RAW or identity HOLD', () => {
+    const s = sheet([{ 연식: 2023, '차명 원문': '합성 원문 차종', 최초등록일: 'https://example.invalid/not-a-date' }]);
+    const before = structuredClone(s.capture);
+    const match = vi.fn(({ year }: { rawName: string; year: string }) => year === '2023'
+      ? { maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' } : null);
+    expect(f05NativeCapture(s.source, s.capture, s.visibility).rows[0]!.record.raw).not.toHaveProperty('spec');
+    const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+      allowsYear: (id, year) => id === 'synthetic-master' && year === 2023 }).rows[0]!.record;
+    expect(match).toHaveBeenCalledWith({ rawName: '합성 원문 차종', year: '2023' });
+    expect(r.raw.spec).toEqual({ year: '2023' });
+    expect(r.raw.spec_master_digest).toBe('synthetic-master-digest');
+    expect(r.vehicleHold).toContain('VEHICLE_MASTER_REVIEW_REQUIRED');
+    expect(s.capture).toEqual(before);
+    const p: CycleProduct = { record: r, listable: true, locked_by_contract: false,
+      publication_withdrawal: null, publication_withdrawal_prior: null, fillSourceIdentity: true };
+    const original = { car_number: r.plate, year: '', vehicle_spec_source_checked: true };
+    const fields = nativeCycleFields(p, original, { specFillSources: new Set([s.source]) });
+    expect(fields.year).toBe('2023');
+    expect((fields.source_cycle_record as typeof r).raw.spec).toEqual({ year: '2023' });
+    expect(nativeCycleFields(p, { ...original, year: '2024' }, { specFillSources: new Set([s.source]) })).not.toHaveProperty('year');
+    expect(nativeCycleFields(p, original)).not.toHaveProperty('year');
+  });
+  it('F05 leaves missing, malformed, master-conflicting and registration-conflicting years in RAW without promoting them', () => {
+    const match = vi.fn(() => ({ maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' }));
+    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2000 }, { 연식: 2023, 최초등록일: '2025-01' }]) {
+      const s = sheet([row]);
+      const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+        allowsYear: (_id, year) => year === 2023 }).rows[0]!.record;
+      expect(r.raw).not.toHaveProperty('spec');
+      expect(r.raw.cells).toEqual(s.capture.tabs.find(t => t.rowCount > 1)!.values[1]);
+    }
+    expect(match.mock.calls).toEqual([[{ rawName: '합성', year: '2000' }]]);
+  });
   it('keeps an exclusive registered supplier row when its company cell is blank, preserving RAW and identity HOLD', () => {
     const s = sheet([{ 회사명: '' }]);
     expect(sharedSheetChannels.filter(c => c.tab === s.capture.tabs.find(t => t.rowCount > 1)!.title)).toHaveLength(1);
