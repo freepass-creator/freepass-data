@@ -217,7 +217,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
     const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
     if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
-    const reviewed = plannedReviewedSpec(before?.reviewedSpec, r.raw?.spec, r.vehicleText);
+    const reviewed = plannedReviewedSpec(before?.reviewedSpec, original.raw, original.vehicleText);
     if (reviewed && after.listable) after.reviewedSpec = reviewed; else delete after.reviewedSpec;
     const refillDue = !!before?.specRefillKeys?.length && after.listable &&
       (Object.keys(refillableSpecValues(r.raw?.spec, before.specRefillKeys, r.vehicleText)).length > 0

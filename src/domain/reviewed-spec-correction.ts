@@ -1,3 +1,4 @@
+import { sharedSheetFactNumber, sharedSheetFactYear, sharedSheetFactRegistration } from './shared-sheet-fact-parsing.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { SPEC_FORMAT_RULES } from './source-spec-validation.js';
 import { canonicalFuel } from './fuel-alias.js';
@@ -36,11 +37,32 @@ export function reviewedSpecOf(uid: string, f: Record<string, unknown>, approval
   if (['전기','수소'].includes(String(f.fuel_type || values.fuel_type || ''))) delete values.engine_cc;
   return Object.keys(values).length ? { correctionDigest: approval.correctionDigest, values } : undefined;
 }
-/** A conflicting explicit source model year stays held. First registration never supplies model year. */
-export function plannedReviewedSpec(value: ReviewedSpec | undefined, sourceSpec: unknown, vehicleText?: unknown): ReviewedSpec | undefined {
+/** Compare independent facts against the original current RAW cells, before spec/master gates can omit them. */
+export function plannedReviewedSpec(value: ReviewedSpec | undefined, sourceRaw: unknown, vehicleText?: unknown): ReviewedSpec | undefined {
   if (!value) return;
-  const values = { ...value.values }, source = object(sourceSpec);
-  if (!specValueBlank(source.year) && String(source.year).trim() !== values.year) delete values.year;
+  const raw = object(sourceRaw), values = { ...value.values };
+  if (raw.source !== 'shared-sheet' || !Array.isArray(raw.headers) || !Array.isArray(raw.cells)) return;
+  const headers: unknown[] = raw.headers, cells: unknown[] = raw.cells;
+  const labels = { year: '연식', first_registration_date: '최초등록일', fuel_type: '연료', engine_cc: '배기량' } as const;
+  let sourceFuel: string | null = null;
+  for (const [field, label] of Object.entries(labels)) {
+    const indexes = headers.flatMap((h, i) => h === label ? [i] : []);
+    if (indexes.length !== 1) { delete values[field]; continue; }
+    const cell = cells[indexes[0]!], text = String(cell ?? '').trim();
+    const parsed = field === 'year' ? sharedSheetFactYear(text)
+      : field === 'first_registration_date' ? sharedSheetFactRegistration(text, cell)
+      : field === 'fuel_type' ? canonicalFuel(text) : sharedSheetFactNumber(text, 'cc');
+    if (field === 'fuel_type') sourceFuel = typeof parsed === 'string' ? parsed : null;
+    if (parsed === null || !values[field]) continue;
+    const known = String(parsed);
+    if (!SPEC_FORMAT_RULES[field]?.(known)) continue;
+    // Month-only archived registration and an exact day in that month do not contradict one another.
+    const same = field === 'first_registration_date'
+      ? known === values[field] || (known.length === 7 || values[field]!.length === 7) && known.slice(0, 7) === values[field]!.slice(0, 7)
+      : known === values[field];
+    if (!same) delete values[field];
+  }
+  if (sourceFuel === '전기' || sourceFuel === '수소') delete values.engine_cc;
   const eligible = Object.fromEntries(Object.entries(refillableSpecValues(values, Object.keys(values), vehicleText)).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   return Object.keys(eligible).length ? { correctionDigest: value.correctionDigest, values: eligible } : undefined;
 }

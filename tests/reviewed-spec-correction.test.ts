@@ -11,7 +11,7 @@ const uid='12가1001', source='RP018', time='2026-10-19T10:00:00.000Z';
 const correction={차명:'합성 가솔린',연식:'2025',최초등록:'2024-12',연료:'가솔린',배기량:'2497',출처:'지지오토 사양조회',조회일:'2026-10-18T02:10:40',key:'archive-key',sourceDigest:'a'.repeat(64),기록시각:time};
 const approval={uid,sourceId:source,correctionDigest:stableDigest(correction),fields:['year','first_registration_date','fuel_type','engine_cc']};
 const fields=()=>({car_number:uid,provider_company_code:source,원문_정정:structuredClone(correction),원문_정정_이력:[structuredClone(correction)]});
-const record=():SourceProductRecord=>({sourceId:source,uid,plate:uid,vehicleText:'합성 가솔린',status:{raw:'출고가능',saleAvailable:true},observedAt:time,vehicleHold:[],raw:{source:'shared-sheet'},terms:[{months:24,monthlyRent:{state:'KNOWN',value:500000},deposit:{state:'UNKNOWN',value:null},mileage:null,raw:{}}]});
+const record=():SourceProductRecord=>({sourceId:source,uid,plate:uid,vehicleText:'합성 가솔린',status:{raw:'출고가능',saleAvailable:true},observedAt:time,vehicleHold:[],raw:{source:'shared-sheet',headers:['연식','최초등록일','연료','배기량'],cells:['','','','']},terms:[{months:24,monthlyRent:{state:'KNOWN',value:500000},deposit:{state:'UNKNOWN',value:null},mileage:null,raw:{}}]});
 it('requires exact reviewed UID/supplier/digest/history and explicit physical field scope',()=>{
  expect(reviewedSpecApprovals(undefined).size).toBe(0);
  expect(reviewedSpecApprovals(JSON.stringify([approval])).get(uid)).toEqual(approval);
@@ -24,7 +24,7 @@ it('preserves existing values and rejects conflicting source year without inferr
  const f={...fields(),year:'2026',fuel_type:'디젤',engine_cc:'1998'};
  expect(reviewedSpecOf(uid,f,approval)?.values).toEqual({first_registration_date:'2024-12'});
  const selected=reviewedSpecOf(uid,fields(),approval);
- expect(plannedReviewedSpec(selected,{year:'2024'})?.values.year).toBeUndefined();
+ expect(plannedReviewedSpec(selected,{source:'shared-sheet',headers:['연식','최초등록일','연료','배기량'],cells:['2024','','','']})?.values.year).toBeUndefined();
  const absent={...correction,연식:null},a={...approval,correctionDigest:stableDigest(absent)};
  expect(reviewedSpecOf(uid,{...fields(),원문_정정:absent,원문_정정_이력:[absent]},a)?.values.year).toBeUndefined();
 });
@@ -58,4 +58,15 @@ it('default-off, contract lock and withdrawal cannot select a correction write',
 it('a correction changed after planning cannot be applied using the old digest',async()=>{
  const s=await setup(),built=await s.plan();s.mutate();await expect(applySourceCycle(s.commands,built.plan,{apply:true,digest:built.digest,approval:built.digest,now:Date.parse(time)})).rejects.toThrow('CYCLE_REPLAN_REQUIRED');
  expect(s.current().year).toBeUndefined();
+});
+
+it('checks original RAW conflicts even when the master-gated spec map is missing',()=>{
+ const selected=reviewedSpecOf(uid,fields(),approval)!;
+ const raw=(cells:unknown[])=>({source:'shared-sheet',headers:['연식','최초등록일','연료','배기량'],cells});
+ expect(plannedReviewedSpec(selected,raw(['2024','','','']))?.values.year).toBeUndefined();
+ expect(plannedReviewedSpec({...selected,values:{...selected.values,fuel_type:'디젤'}},raw(['','','가솔린','']))?.values.fuel_type).toBeUndefined();
+ expect(plannedReviewedSpec({...selected,values:{...selected.values,engine_cc:'1999'}},raw(['','','','3000']))?.values.engine_cc).toBeUndefined();
+ expect(plannedReviewedSpec(selected,raw(['2025','https://drive.google.com/folder','휘발유','2,497cc']))?.values).toEqual(selected.values);
+ expect(plannedReviewedSpec(selected,{...raw(['','','','']),headers:['연식','최초등록일','연료','연식']})?.values.year).toBeUndefined();
+ expect(plannedReviewedSpec(selected,{source:'shared-sheet',spec:{year:'2025'}})).toBeUndefined();
 });
