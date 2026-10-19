@@ -288,7 +288,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === code).map(c => c.tab))];
         plugins.push(sourceCyclePlugin({ sourceId: code, kind: 'F05', scopes, maxDowngradeRatio: ratio }, async () => {
           const read = env.SOURCE_CYCLE_F05_SOURCE_ROWS === '1' ? await (f05Capture ??= readF05()) : await readF05();
-          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility));
+          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility,
+            env.SOURCE_CYCLE_F05_SOURCE_YEARS === '1' && (sourceIdentitySources.includes(code) || specFillSources.includes(code))
+              ? await identity() ?? undefined : undefined));
         }));
       }
     } else if (kind === 'AICA') {

@@ -3370,3 +3370,12 @@ This file exists so another session can continue without re-discovering or re-cr
 - 기존 deploy-read-runtime run39215873092 SUCCESS. freepass-data-read-00055-hjd Ready/100% traffic, image sha256:8f5be5e12efa3e01e8bd10eb6d9f8fbef8cfd09e808d4727e247b2c9e5a65286. 이전 00054-s6b/source950053/image1cc383 baseline을 검증한 단일 배포다. IAM denial 및 authenticated compatibility readback도 통과했다.
 - 실제 인가된 photos-only manifest 표본133호6494는 HTTP200/count10, 같은 ERP5 API도10, 상류 photos/50은400이었다. 51/201개 fixture는 공개 API에서 정상50 반환하고 원본 불변을 검증했다. 별도 승인되지 않은 원본을 공개하는 근거가 아니다.
 - ERP5 PR189/main8f7acaf4aacbf735a90d9cda4f6bc5f13e472316 운영 배포(dpl_DCrWB4qzjnqZ4s7YP5GcEmgAEmyD)와 호환된다. ERP5 전체924 PASS/216 build smoke PASS. 실차104허3046은 원본25=API25=앨범 마지막25/25 실제 사진 표시를 확인했다. 업무 원본 수정·삭제 및 수집 프로세스 변경은 없다. 기존 source/정산/사진 검증 HOLD는 이 표시 정책으로 해제하지 않는다.
+
+## 2026-10-19 원117건 복구 — F05 연식 전달과 기존 검토 경로
+
+- C1019-fdb7fa3f의 원래 분모는 계획 HOLD116 + 실행 중 FIXED_ECONOMICS_DIFFER1 = 고유 원천키117이다. 기존 operator gateway의 원71개 명령 영수증 조회에서70개 존재/1개 부재를 대조했다. 명단·RAW·차량번호·실제 금액은 Git 밖 비공개 Evidence에 보존한다. 원천 총량이나 HTTP200은 원117 완료 증거가 아니다.
+- 실제 ERP5 `/api/catalog`는 기존 products를 Firestore로 읽는다. 기준 조회에서 원117 중 실번호63행과 기존 임시 FP 상품4행이 보였다. 번호 미정 상품을 누락 또는 확정 실물 차량으로 세지 않는다. 비공개/중복/정당 HOLD/이번 정정은 같은 원117키별로 분리해 후속 되읽기한다.
+- F05 어댑터가 원문 연식을 기존 `raw.spec`에 전달하지 않아, 실제 가격이 반영된 상품의 빈 연식이 ERP5에서도 빠지는 원인을 확인했다. `SOURCE_CYCLE_F05_SOURCE_YEARS=1`과 기존 spec/source-identity 공급사 허용 목록을 함께 충족한 코드에서만, 기존 정상화기가 읽은 연식과 활성 마스터의 원문 차명·연식 유일 대조가 통과하면 `raw.spec.year`와 마스터 digest를 전달한다. 연식·등록 모순과 마스터 미연결은 RAW로 보존하고, 이름/판매 HOLD·기존값·계약 잠금·기존 계획 상한/백업/CAS/되읽기를 유지한다. 기본 off이며 다른 제원 또는 새로운 이름을 추정하지 않는다.
+- 현재 source-head 복구 PR755/main50ba1fc와 운영 활성화는 별개다. 기존 GitHub DAILY는 off, 수동 apply gate는 environment/repository 모두 미등록이지만 이미 시작된 회차의 완료를 기다린 뒤 같은 PC1 F05 task 한 개만 전환한다. 기존 RP031 실행·다른 PC·공급사 입력 원문을 덮지 않는다. 원16칸 입력 덮어쓰기 계획은 미적용이며 정제 대조 후보로만 보존했다.
+- 검토 분담: 기존 PC3 Claude는 구현·운영 신선도와 실제 화면/소비를 검토하고, 모순·위험이 있는 사실 판정은 기존 PC1 gateway의 Gemini를 사용한다. 같은 자료는 기존 ANSWERED 영수증을 재사용한다. 이번 비식별 원문 모순 검토 Gemini receipt dcde9829-efbd-4fa1-a22c-75f57ba87d1c는 원문 보존·현재 마스터·PARTIAL 범위·개별 소비 대사를 채택했다. PC3 로컬 Gemini CLI 설치 확인과 PC1 gateway 실제 응답은 별개다. 새 AI 세션/중복 스케줄/독립 writer를 만들지 않는다.
+- next_start_here: 원117 owner는 기존 ai-ops 연락실 #268 및 PC1 operator gateway로 old writer drain/같은 native task 전환을 확인한다. 연식 전달은 이 delta의 독립 검토·정확 CI 후 RP018 같은 검토된 기존 spec 공급사 허용 목록으로만 활성화하고, 실제 계획/제품 빈 연식/ERP5 상세·F01와 다음 무인 회차를 되읽는다. source head 성공과 원117 업무 완료를 구분한다. 아직 운영 연식 쓰기·원117 최종 완료는 미검증이다.
