@@ -131,6 +131,7 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const digest = stableDigest(masters);
     const eligibleTrims = new Set(records.map(r => r.trimId));
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      sourceYearEvidence: { records, snapshotDigest: snapshot.digest, readAt: snapshot.readAt },
       allowsYear: (id, year) => Number.isInteger(year) && masters.some(m => m.id === id && m.yearFrom !== null &&
         year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)) &&
         (year <= new Date(now()).getUTCFullYear() || snapshot.trims.some(t => eligibleTrims.has(t.id) &&

@@ -62,7 +62,7 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
-  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear'>): CycleCapture {
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence'>): CycleCapture {
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
