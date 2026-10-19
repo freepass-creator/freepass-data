@@ -12,6 +12,28 @@ import { selectStoredProducts, FirestoreCatalogCompatibilityReader } from '../sr
 import { readStoredConsumerProducts } from '../src/application/kakao-catalog-reference.js';
 import { evidenceByTermForProduct } from '../src/application/vehicle-value-evidence.js';
 
+describe('reference contract keeps existing deposit evidence codes readable',()=>{
+  const schema=JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json',import.meta.url),'utf8'));
+  const validate=new Ajv2020({strict:false,validateFormats:false}).compile(schema);
+  it.each([
+    ['AUTOPLUS_RENT_X2_DOMESTIC',1540000],
+    ['AUTOPLUS_RENT_X3_IMPORT',2310000],
+    ['SOURCE_RAW_AMOUNT',1000000],
+  ] as const)('accepts domain-produced %s without hiding the product', (code,amount)=>{
+    const product={listable:true,car_number:'000가0000',maker:'현대',model:'시험',sub_model:'시험',trim_name:'기본형',
+      provider_company_code:code==='SOURCE_RAW_AMOUNT'?'RP004':'RP023',product_type:'중고렌트',
+      ...(code==='SOURCE_RAW_AMOUNT'?{원문:{전체:{단기보증:'1,000,000'}}}:{deposit_source:'CALCULATED',deposit_rule:code,source_cycle_write:{by:'source-engine',status:'출고가능',at:'2026-10-19T00:00:00Z'}}),
+      price:{'12':{rent:770000,deposit:code==='SOURCE_RAW_AMOUNT'?0:amount}}};
+    const body=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:'2026-10-19T00:00:01Z',products:{synthetic:product}});
+    const term=body.data[0]!.offers[0]!.priceTerms[0]!;
+    expect(term.depositRule?.code).toBe(code);
+    expect(term.deposit?.amount).toBe(amount);
+    expect(validate(body),JSON.stringify(validate.errors)).toBe(true);
+    (term.depositRule as {code:string}).code='UNREGISTERED_RULE';
+    expect(validate(body)).toBe(false);
+  });
+});
+
 describe('stored consumer product selection', () => {
   const products = {
     'TEST-PRODUCT-1': { provider_company_code: 'TEST-SUPPLIER', maker: '기아', model: '레이', price: { '12_2만': { rent: 0, deposit: null } }, policy_code: 'TEST-POLICY', customer: 'DO_NOT_RETURN' },
