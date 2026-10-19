@@ -1,5 +1,11 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-19 PC3 original117 — shared-sheet deposit evidence repair pending activation
+
+- Five public products have explicit current shared-sheet `무보증` terms and stored zero, while readers use stale legacy RAW amounts or lack waiver evidence. Four other mismatches are contract locks and must remain preserved.
+- Existing deposit helper now accepts shared-sheet term evidence only with matching source-engine mark/time, supplier/UID/plate, available product, unambiguous period, rent and stored zero, plus literal period-specific `무보증`. RP012/RP031 are excluded. Original RAW remains immutable; numeric zero alone is insufficient.
+- Default-off `SOURCE_CYCLE_PROVENANCE_UIDS` selects exact reviewed missing-mark products for the existing fresh-source plan/CAS/backup/readback writer, under the existing rewrite cap and contract lock rules. This is not permission to run arbitrary UID repairs. Operational flags, source writes and ERP5 consumer deployment remain pending exact-head review and real readback. Original117 is not complete.
+
 ## 2026-10-11 15분 수집·정제·변경분 갱신 실행
 
 - 2026-10-12 후속 수집 수수료 연결: 기존 승인 엔진 출력을 SourceIngestionStore lineage에 저장하고 소비처는 검증된 저장값만 읽도록 기존 application/job/schema/test를 확장했다. identity HOLD, 원문·후보와 정산 사람 입력은 보존한다. 계산값 권위는 APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT이며 정책/입력 digest와 출처를 보존한다. 중복·변조·정책 변경은 UNKNOWN/null, 조회 재계산은 0이다.
