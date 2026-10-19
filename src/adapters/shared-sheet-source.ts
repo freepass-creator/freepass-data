@@ -49,11 +49,13 @@ const configuredTabs = [...spec.changeControl.activeSupplierTabs, ...spec.change
 if (stableDigest(registeredTabs) !== stableDigest(configuredTabs)) throw new Error('SHARED_SHEET_SCOPE_CONTRACT_INVALID');
 export const sharedSheetChannels = sharedSheetRegisteredChannels.filter(channel =>
   (spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
-/** 탭·시트의 회사명 칸 → 공급사 채널. 등록 회사명 또는 규격이 승인한 별칭(aliases)만 매핑하고, 다른 이름은 추론하지 않는다. */
+/** A populated exclusive supplier tab has one registered owner even if its company cell is blank.
+ * Shared tabs still require the registered company/alias; an unknown nonblank name is never replaced. */
 export function sharedSheetChannelOf(tab: string, company: unknown) {
   const name = String(company ?? '').trim();
-  return sharedSheetChannels.find(c => c.tab === tab &&
-    (c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name)));
+  const registered = sharedSheetChannels.filter(c => c.tab === tab);
+  return registered.find(c => c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name))
+    ?? (!name && registered.length === 1 ? registered[0] : undefined);
 }
 export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
   !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
@@ -122,6 +124,8 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
       payload: { values: structuredClone(r.values), tab: r.tab.title, row: r.index + 1, readTime: r.tab.readTime,
         spreadsheetId: c.spreadsheetId, revision: c.revision ?? null, captureDigest: digest, rowDigest,
         supplierCode: r.supplierCode, quarantine,
+        ...(r.supplierCode && !String(r.values[0] ?? '').trim()
+          ? { supplierCodeBasis: 'REGISTERED_EXCLUSIVE_TAB_OWNER' } : {}),
         // Evidence beside the row, outside rowDigest/fingerprint: the sheet values themselves stay the RAW of record.
         ...(rowKey && entered.has(rowKey) ? { supplierEntered: entered.get(rowKey)![0] } : {}),
         ...(rowKey && corrections.has(rowKey) ? { corrections: corrections.get(rowKey) } : {}) } };

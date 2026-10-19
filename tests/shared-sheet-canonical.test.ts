@@ -119,6 +119,19 @@ describe('same F05 producer source observations without physical Canonical comma
     const replay=await ingestSharedSheetObservedRows(source,input);expect(replay.runId).toBe(result.runId);
     expect(await source.listRaw(replay.runId)).toHaveLength(1);
   });
+  it('stores registered exclusive-tab supplier provenance without filling its blank source cell or releasing identity HOLD',async()=>{
+    const source=new MemorySourceStore(),input=fresh({회사명:'',제조사:'',모델:'',세부모델:'',세부트림:''});
+    const before=structuredClone(input.capture);
+    const result=await ingestSharedSheetObservedRows(source,input);
+    const [raw]=await source.listRaw(result.runId),[candidate]=await source.listCandidates(result.runId);
+    expect(raw!.payload).toMatchObject({supplierCode:'RP013',supplierCodeBasis:'REGISTERED_EXCLUSIVE_TAB_OWNER'});
+    expect((raw!.payload.values as unknown[])[0]).toBe('');
+    expect(candidate!.candidate.providerCompanyCode).toBe('RP013');
+    expect(candidate!.candidate.priceTerms).toHaveLength(3);
+    expect(candidate!.status).toBe('REJECTED');
+    expect(result.publicationDecision).toBe('HOLD_PRESERVED');
+    expect(input.capture).toEqual(before);
+  });
   it('rejects source drift and stale evidence before starting a durable run',async()=>{
     const source=new MemorySourceStore(),begin=vi.spyOn(source,'beginRun');
     const changed=fresh();changed.liveCapture.tabs.find(t=>t.title==='웰릭스')!.values[1]![0]='변경';changed.liveCapture.digest=sharedSheetCaptureDigest(changed.liveCapture);
