@@ -14,6 +14,7 @@ import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refre
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { ingestSharedSheetObservedRows } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
+import { emptyCycleState } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 const time = '2026-10-13T00:00:00.000Z', now = Date.parse(time), source = 'SYNTHETIC';
@@ -320,6 +321,7 @@ function sheet(rows: Array<Record<string, SheetCell>>) {
 
 describe('existing unattended F05 producer source-head stage',()=>{
   const env={SOURCE_CYCLE_UNATTENDED:'1',SOURCE_CYCLE_F05_SOURCE_ROWS:'1',SOURCE_CYCLE_SOURCES:'F05',SOURCE_CYCLE_F05_SHEET_ID:'synthetic-only'};
+  const memoryControl=()=>{let state=emptyCycleState();return{load:async()=>structuredClone(state),save:async(_key:string,next:typeof state)=>{state=structuredClone(next);}};};
   it('stays off by default and refuses partial or mixed-source producers before acquiring the lease',async()=>{
     const acquire=vi.fn();expect(await refreshF05SourceObservations({},undefined,{acquire})).toBeNull();
     await expect(refreshF05SourceObservations({...env,SOURCE_CYCLE_SOURCES:'F05,IRON'},undefined,{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
@@ -333,17 +335,28 @@ describe('existing unattended F05 producer source-head stage',()=>{
       const store=new MemorySourceStore(),release=vi.fn(async()=>{}),acquire=vi.fn(async()=>release);let captures=0;
       const capture=vi.fn(async()=>{const c=sheet([{차량번호:'신차'}]).capture;c.readTime=new Date(Date.now()-1000+(++captures)*100).toISOString();for(const t of c.tabs){t.readTime=c.readTime;t.values=t.values.map(r=>r.slice(0,74));}return c;});
       const persist=vi.fn(input=>ingestSharedSheetObservedRows(store,{target:'memory',...input}));
-      const result=await refreshF05SourceObservations(env,undefined,{acquire,observedCapture:capture,capture,persist,master:async()=>{throw Error('MASTER_UNAVAILABLE');}});
+      const control=memoryControl();
+      const result=await refreshF05SourceObservations(env,undefined,{acquire,observedCapture:capture,control,capture,persist,master:async()=>{throw Error('MASTER_UNAVAILABLE');}});
       expect(acquire).toHaveBeenCalledWith('F05_SOURCE_ROWS');expect(capture).toHaveBeenCalledTimes(2);expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledOnce();
       expect(result).toMatchObject({status:'SOURCE_HEAD_VERIFIED',rawRows:1,candidateRows:1,heldCandidateRows:1,canonicalWrites:0});
       expect((await store.getSourceHead(result!.sourceId))!.runId).toBe(result!.runId);
+      expect(await control.load()).toMatchObject({stopped:false,error:null,readCount:1});
     }finally{if(previous===undefined)delete process.env.FREEPASS_SHEET_F04_ID;else process.env.FREEPASS_SHEET_F04_ID=previous;}
   });
   it('does not persist on capture failure and always releases its existing producer lease',async()=>{
     const release=vi.fn(async()=>{}),persist=vi.fn(),capture=vi.fn(async()=>{throw Error('READ_FAILED');});
-    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,persist})).rejects.toThrow('READ_FAILED');
+    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,control:memoryControl(),capture,persist})).rejects.toThrow('READ_FAILED');
     expect(release).toHaveBeenCalledOnce();expect(persist).not.toHaveBeenCalled();
-    capture.mockClear();await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>null,observedCapture:capture,capture,persist})).rejects.toThrow('F05_SOURCE_ROWS_LOCKED');expect(capture).not.toHaveBeenCalled();
+    capture.mockClear();await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>null,observedCapture:capture,control:memoryControl(),capture,persist})).rejects.toThrow('F05_SOURCE_ROWS_LOCKED');expect(capture).not.toHaveBeenCalled();
+  });
+  it('journals uncertainty before durable effects and blocks the next unattended retry',async()=>{
+    const control=memoryControl(),release=vi.fn(async()=>{}),capture=async()=>sheet([{}]).capture;
+    const persist=vi.fn(async({claimEffect}:{claimEffect:NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']>})=>{await claimEffect({sourceId:'synthetic',runId:'intent-run',sourceDigest:'synthetic-digest',observedAt:time});throw Error('SHARED_SOURCE_READBACK_MISMATCH');});
+    const ports={control,acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,persist};
+    await expect(refreshF05SourceObservations(env,undefined,ports)).rejects.toThrow('READBACK_MISMATCH');
+    expect(await control.load()).toMatchObject({stopped:true,error:'APPLY_UNCERTAIN',sourceObservationIntent:{runId:'intent-run'}});
+    await expect(refreshF05SourceObservations(env,undefined,ports)).rejects.toThrow('UNCERTAIN_REQUIRES_READBACK');
+    expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledTimes(2);
   });
 });
 describe('native mappings and UID', () => {
