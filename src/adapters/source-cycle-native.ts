@@ -62,7 +62,7 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
-  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match'>): CycleCapture {
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear'>): CycleCapture {
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
@@ -155,7 +155,8 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
         ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
-        ...(record.raw.spec ? { spec: record.raw.spec, spec_master_digest: record.raw.spec_master_digest } : {}),
+        ...(record.raw.spec ? { spec: record.raw.spec, spec_master_digest: record.raw.spec_master_digest,
+          spec_master_id: record.raw.spec_master_id } : {}),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */

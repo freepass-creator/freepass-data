@@ -12,7 +12,7 @@ import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
  * An extra UID header may occur anywhere; legacy captures remain readable but UID-HOLD.
  */
 export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>, now = () => new Date().toISOString(),
-  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match'>): SourceEngine<SharedSheetCapture> {
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear'>): SourceEngine<SharedSheetCapture> {
   return {
     async read() {
       const attemptedAt = now();
@@ -45,7 +45,7 @@ export function legacyCapture(capture: SharedSheetCapture) {
   legacy.digest = sharedSheetCaptureDigest(legacy);
   return { legacy, batch: buildSharedSheetBatch(legacy) };
 }
-export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match'>) {
+export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear'>) {
   const held: SourceRowHold[] = [], records: SourceProductRecord[] = [];
   if (!read.raw) return { records, held };
   const capture = read.raw;
@@ -84,10 +84,13 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
     // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.
     const sourceYear = normalized.record.candidate.vehicleFacts?.fields.modelYear;
     if (sourceYearMaster?.digest && sourceYear?.state === 'KNOWN' && typeof sourceYear.value === 'number' &&
-        !normalized.record.candidate.issues.includes('YEAR_REGISTRATION_MISMATCH') &&
-        sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) })) {
-      r.raw.spec = { year: String(sourceYear.value) };
-      r.raw.spec_master_digest = sourceYearMaster.digest;
+        !normalized.record.candidate.issues.includes('YEAR_REGISTRATION_MISMATCH')) {
+      const matched = sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) });
+      if (matched && sourceYearMaster.allowsYear?.(matched.master_id, sourceYear.value) === true) {
+        r.raw.spec = { year: String(sourceYear.value) };
+        r.raw.spec_master_digest = sourceYearMaster.digest;
+        r.raw.spec_master_id = matched.master_id;
+      }
     }
     // An invalid supplied period must not disappear from an otherwise apparently valid bundle.
     if (normalized.suppliedTerms !== r.terms.length) r.terms.push({ months: 0, monthlyRent: { state: 'UNKNOWN', value: null },
