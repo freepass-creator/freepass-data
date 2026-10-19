@@ -1,5 +1,12 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-19 PC3 original117 — reviewed archived physical facts, default off
+
+- `SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS` accepts only explicit UID/supplier/current whole-correction digest/physical field allowlists (max 100). The current correction must remain verbatim in existing history and match its original reviewed binding. Nothing is inferred from names or registration dates.
+- Existing source-cycle SOURCE_SPEC selection/cap, backup, fresh-source plan, CAS and readback fill only blank year/registration/fuel/displacement. Original RAW, correction/history, existing physical values, names, prices and contract locks remain preserved. A correction digest marker records adoption; no second writer or scheduler is added.
+- Reviewed scope and live activation are pending. 4709 year conflict remains excluded; G80 missing model year remains unknown. Metadata persistence alone is not physical adoption or original117 completion.
+- Validation: 451 tests PASS / 1 existing conditional SKIP across nine source/consumer-evidence suites; build PASS after fixing one test fixture type error. Exact-head review/CI and actual fresh-plan/readback remain pending.
+
 ## 2026-10-19 PC3 original117 — shared-sheet deposit evidence repair pending activation
 
 - Five public products have explicit current shared-sheet `무보증` terms and stored zero, while readers use stale legacy RAW amounts or lack waiver evidence. Four other mismatches are contract locks and must remain preserved.

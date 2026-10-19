@@ -1,3 +1,4 @@
+import { plannedReviewedSpec } from '../domain/reviewed-spec-correction.js';
 import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, comparableRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
@@ -72,7 +73,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
-    delete after.specRefillKeys; delete after.specMasterFuel;
+    delete after.specRefillKeys; delete after.specMasterFuel; delete after.reviewedSpec;
     if (observed) after.record = structuredClone(observed);
     after.record.status.saleAvailable = false;
     after.listable = false;
@@ -216,9 +217,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
     const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
     if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
+    const reviewed = plannedReviewedSpec(before?.reviewedSpec, r.raw?.spec, r.vehicleText);
+    if (reviewed && after.listable) after.reviewedSpec = reviewed; else delete after.reviewedSpec;
     const refillDue = !!before?.specRefillKeys?.length && after.listable &&
       (Object.keys(refillableSpecValues(r.raw?.spec, before.specRefillKeys, r.vehicleText)).length > 0
-        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel));
+        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel) || !!after.reviewedSpec);
     if (refillDue) specRefill.add(key);
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
@@ -392,10 +395,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, reviewedSpec: _planReviewed, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, reviewedSpec: _readReviewed, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, reviewedSpec: _reviewed, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;

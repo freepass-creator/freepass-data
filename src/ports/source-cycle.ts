@@ -40,6 +40,8 @@ export type CycleProduct = {
   /** 정체성이 확정되고 연료가 빈 노출 문서의 마스터 연료(vehicle_trim_master, 하나로 모일 때만 — 읽기 경로가 계산). 계획 digest·백업 대조에 고정되고,
    * 계획이 검증·압축 전 원문에 연료 원문이 없을 때만(domain/spec-refill masterFuelFallback) after 에 남기고, 쓰기는 after 의 이 값만 쓴다. */
   specMasterFuel?: string;
+  /** Exact reviewed archived physical facts; plan/CAS bound, never original RAW. */
+  reviewedSpec?: import('../domain/reviewed-spec-correction.js').ReviewedSpec;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
