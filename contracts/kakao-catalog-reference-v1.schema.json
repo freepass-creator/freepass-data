@@ -91,7 +91,7 @@
       "required": ["ruleAmount", "ruleCode", "differs"],
       "properties": {
         "ruleAmount": { "type": "integer", "minimum": 0 },
-        "ruleCode": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6"] },
+        "ruleCode": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "SOURCE_RAW_AMOUNT"] },
         "differs": { "const": true }
       }
     },
@@ -171,7 +171,7 @@
               "additionalProperties": false,
               "required": ["code", "multiplier", "label"],
               "properties": {
-                "code": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "ZERO_DEPOSIT", "SOURCE_AMOUNT", "IANCAR_ENGINE_SOURCE_EVIDENCE"] },
+                "code": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "ZERO_DEPOSIT", "SOURCE_AMOUNT", "IANCAR_ENGINE_SOURCE_EVIDENCE", "AUTOPLUS_RENT_X2_DOMESTIC", "AUTOPLUS_RENT_X3_IMPORT", "SOURCE_RAW_AMOUNT"] },
                 "multiplier": { "type": ["integer", "null"], "minimum": 0 },
                 "label": { "type": "string", "minLength": 1 },
                 "depositEvidenceBasis": {
