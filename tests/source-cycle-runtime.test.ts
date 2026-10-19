@@ -10,7 +10,9 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type Sha
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations } from '../src/runtime/source-cycle-runtime.js';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import { ingestSharedSheetObservedRows } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -315,6 +317,35 @@ function sheet(rows: Array<Record<string, SheetCell>>) {
     data: [{ startRow: 0, rowMetadata: t.values.map(() => ({} as { hiddenByUser?: boolean; hiddenByFilter?: boolean })) }] })) };
   return { capture, visibility, source: channel.code };
 }
+
+describe('existing unattended F05 producer source-head stage',()=>{
+  const env={SOURCE_CYCLE_UNATTENDED:'1',SOURCE_CYCLE_F05_SOURCE_ROWS:'1',SOURCE_CYCLE_SOURCES:'F05',SOURCE_CYCLE_F05_SHEET_ID:'synthetic-only'};
+  it('stays off by default and refuses partial or mixed-source producers before acquiring the lease',async()=>{
+    const acquire=vi.fn();expect(await refreshF05SourceObservations({},undefined,{acquire})).toBeNull();
+    await expect(refreshF05SourceObservations({...env,SOURCE_CYCLE_SOURCES:'F05,IRON'},undefined,{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    await expect(refreshF05SourceObservations(env,'RP013',{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    await expect(refreshF05SourceObservations({...env,SOURCE_CYCLE_UNATTENDED:'0'},undefined,{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    expect(acquire).not.toHaveBeenCalled();
+  });
+  it('calls the existing intake from the producer lease and keeps missing-master names held',async()=>{
+    const previous=process.env.FREEPASS_SHEET_F04_ID;process.env.FREEPASS_SHEET_F04_ID='test-sheet-f04';
+    try{
+      const store=new MemorySourceStore(),release=vi.fn(async()=>{}),acquire=vi.fn(async()=>release);let captures=0;
+      const capture=vi.fn(async()=>{const c=sheet([{차량번호:'신차'}]).capture;c.readTime=new Date(Date.now()-1000+(++captures)*100).toISOString();for(const t of c.tabs){t.readTime=c.readTime;t.values=t.values.map(r=>r.slice(0,74));}return c;});
+      const persist=vi.fn(input=>ingestSharedSheetObservedRows(store,{target:'memory',...input}));
+      const result=await refreshF05SourceObservations(env,undefined,{acquire,observedCapture:capture,capture,persist,master:async()=>{throw Error('MASTER_UNAVAILABLE');}});
+      expect(acquire).toHaveBeenCalledWith('F05_SOURCE_ROWS');expect(capture).toHaveBeenCalledTimes(2);expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({status:'SOURCE_HEAD_VERIFIED',rawRows:1,candidateRows:1,heldCandidateRows:1,canonicalWrites:0});
+      expect((await store.getSourceHead(result!.sourceId))!.runId).toBe(result!.runId);
+    }finally{if(previous===undefined)delete process.env.FREEPASS_SHEET_F04_ID;else process.env.FREEPASS_SHEET_F04_ID=previous;}
+  });
+  it('does not persist on capture failure and always releases its existing producer lease',async()=>{
+    const release=vi.fn(async()=>{}),persist=vi.fn(),capture=vi.fn(async()=>{throw Error('READ_FAILED');});
+    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,persist})).rejects.toThrow('READ_FAILED');
+    expect(release).toHaveBeenCalledOnce();expect(persist).not.toHaveBeenCalled();
+    capture.mockClear();await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>null,observedCapture:capture,capture,persist})).rejects.toThrow('F05_SOURCE_ROWS_LOCKED');expect(capture).not.toHaveBeenCalled();
+  });
+});
 describe('native mappings and UID', () => {
   it('plate wins, placeholder needs explicit UID, never row fallback', () => {
     expect(sourceUid(' TEST 1001 ', 'sheet')).toBe('TEST1001'); expect(sourceUid('신차', 'new-one')).toBe('new-one'); expect(sourceUid('미정')).toBeNull();

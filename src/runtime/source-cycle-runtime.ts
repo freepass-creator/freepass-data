@@ -9,7 +9,8 @@ import { judgeSheetCount, parseSheetCountState, SHEET_SHRINK_RATIO } from '../ad
 import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
-import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
+import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
+import { ingestSharedSheetObservedRows } from '../jobs/ingest-shared-sheet-canonical.js';
 import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin, type CycleCapture } from '../adapters/source-cycle-plugins.js';
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
@@ -26,7 +27,7 @@ import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../ada
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan, VehicleIdentityRefiner } from '../ports/source-cycle.js';
-import { captureVehicleMasterSnapshotReadOnly } from '../jobs/data-access-runtime.js';
+import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -254,30 +255,40 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   };
   const plugins: CyclePlugin<any>[] = [];
   const enabled = required('SOURCE_CYCLE_SOURCES').split(',').map(x => x.trim());
+  let f05Capture: Promise<{ capture: SharedSheetCapture; observedCapture: SharedSheetCapture; visibility: Visibility }> | null = null;
+  const readF05 = async () => {
+    const id = required('SOURCE_CYCLE_F05_SHEET_ID'); assertCurrentSharedSheetSource(id);
+    const fullUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet`);
+    for (const title of new Set(sharedSheetChannels.map(c => c.tab))) fullUrl.searchParams.append('ranges', `'${title.replace(/'/g, "''")}'`);
+    const before = await visibility(id), rawBefore = await (await get(fullUrl, true)).json();
+    const capture = await captureSharedSheetReadOnly(id), rawAfter = await (await get(fullUrl, true)).json(), after = await visibility(id);
+    if (stableDigest(before) !== stableDigest(after)) throw new Error('SOURCE_VISIBILITY_CHANGED');
+    if (stableDigest(rawBefore) !== stableDigest(rawAfter) || rawAfter.valueRanges?.length !== capture.tabs.length) throw new Error('SOURCE_CAPTURE_CHANGED');
+    const observedCapture = structuredClone(capture);
+    for (const [i, tab] of capture.tabs.entries()) {
+      const values = rawAfter.valueRanges[i].values ?? [], headers: unknown[] = values[0] ?? [];
+      const indexes = headers.flatMap((h, n) => h === 'UID' ? [n] : []);
+      if (indexes.length > 1) throw new Error('UID_COLUMN_AMBIGUOUS');
+      if (indexes.length === 1) {
+        if (indexes[0]! < tab.values[0]!.length) throw new Error('UID_COLUMN_SCHEMA_CHANGED');
+        tab.values[0]!.push('UID');
+        for (let row = 1; row < tab.values.length; row++) tab.values[row]!.push(values[row]?.[indexes[0]!] ?? '');
+      }
+    }
+    capture.digest = sharedSheetCaptureDigest(capture);
+    return { capture, observedCapture, visibility: after };
+  };
+  const f05ObservedCapture = async () => {
+    if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') throw new Error('F05_SOURCE_ROWS_DISABLED');
+    return structuredClone((await (f05Capture ??= readF05())).observedCapture);
+  };
   for (const kind of enabled) {
     if (kind === 'F05') {
       for (const code of new Set(sharedSheetChannels.map(c => c.code))) {
         const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === code).map(c => c.tab))];
         plugins.push(sourceCyclePlugin({ sourceId: code, kind: 'F05', scopes, maxDowngradeRatio: ratio }, async () => {
-          const id = required('SOURCE_CYCLE_F05_SHEET_ID'); assertCurrentSharedSheetSource(id);
-          const fullUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet`);
-          for (const title of new Set(sharedSheetChannels.map(c => c.tab))) fullUrl.searchParams.append('ranges', `'${title.replace(/'/g, "''")}'`);
-          const before = await visibility(id), rawBefore = await (await get(fullUrl, true)).json();
-          const capture = await captureSharedSheetReadOnly(id), rawAfter = await (await get(fullUrl, true)).json(), after = await visibility(id);
-          if (stableDigest(before) !== stableDigest(after)) throw new Error('SOURCE_VISIBILITY_CHANGED');
-          if (stableDigest(rawBefore) !== stableDigest(rawAfter) || rawAfter.valueRanges?.length !== capture.tabs.length) throw new Error('SOURCE_CAPTURE_CHANGED');
-          for (const [i, tab] of capture.tabs.entries()) {
-            const values = rawAfter.valueRanges[i].values ?? [], headers: unknown[] = values[0] ?? [];
-            const indexes = headers.flatMap((h, n) => h === 'UID' ? [n] : []);
-            if (indexes.length > 1) throw new Error('UID_COLUMN_AMBIGUOUS');
-            if (indexes.length === 1) {
-              if (indexes[0]! < tab.values[0]!.length) throw new Error('UID_COLUMN_SCHEMA_CHANGED');
-              tab.values[0]!.push('UID');
-              for (let row = 1; row < tab.values.length; row++) tab.values[row]!.push(values[row]?.[indexes[0]!] ?? '');
-            }
-          }
-          capture.digest = sharedSheetCaptureDigest(capture);
-          return sheetCountGuard(code, f05NativeCapture(code, capture, after));
+          const read = env.SOURCE_CYCLE_F05_SOURCE_ROWS === '1' ? await (f05Capture ??= readF05()) : await readF05();
+          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility));
         }));
       }
     } else if (kind === 'AICA') {
@@ -579,7 +590,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const floor = Number(env.SOURCE_CYCLE_DOWNGRADE_FLOOR ?? '3');
   if (!Number.isSafeInteger(floor) || floor < 0 || floor > 50) throw new Error('CYCLE_CONFIG_INVALID');
   for (const plugin of plugins) plugin.downgradeFloor = floor;
-  return { plugins, commands, control, directory, identityStatus: () => identityStatus };
+  return { plugins, commands, control, directory, identityStatus: () => identityStatus, f05ObservedCapture };
 }
 
 // No authentication or network on import. A reviewed runtime needs explicit environment configuration.
@@ -632,6 +643,39 @@ export function unattendedExitCode(input: { statuses: readonly string[]; freshne
   return { exit: 0, freshnessSkipped: onlyLocked && input.freshnessStatus !== 'HEALTHY' };
 }
 
+type F05SourceObservationReport = Awaited<ReturnType<typeof ingestSharedSheetObservedRows>>;
+/** Called only by the existing full F05 unattended producer. Activation follows
+ * the single-owner cutover; manual plans and all other collectors stay unchanged.
+ */
+export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selectedSource: string | undefined, ports: {
+  acquire: (source: string) => Promise<null | (() => Promise<void>)>;
+  observedCapture?: () => Promise<SharedSheetCapture>;
+  capture?: (id: string) => Promise<SharedSheetCapture>;
+  master?: () => Promise<unknown>;
+  persist?: (input: { capture: SharedSheetCapture; liveCapture: SharedSheetCapture }) => Promise<F05SourceObservationReport>;
+}) {
+  if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') return null;
+  const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(k => k.trim()).filter(Boolean);
+  if (env.SOURCE_CYCLE_UNATTENDED !== '1' || selectedSource || kinds.length !== 1 || kinds[0] !== 'F05') throw new Error('F05_SOURCE_ROWS_REQUIRE_EXCLUSIVE_FULL_PRODUCER');
+  const id = env.SOURCE_CYCLE_F05_SHEET_ID?.trim();
+  if (!id) throw new Error('F05_SOURCE_ROWS_SHEET_REQUIRED');
+  if (!ports.observedCapture) throw new Error('F05_SOURCE_ROWS_PRODUCER_CAPTURE_REQUIRED');
+  const release = await ports.acquire('F05_SOURCE_ROWS');
+  if (!release) throw new Error('F05_SOURCE_ROWS_LOCKED');
+  try {
+    const capture = ports.capture ?? (async (sheetId: string) => { assertCurrentSharedSheetSource(sheetId); return captureSharedSheetReadOnly(sheetId); });
+    const first = await ports.observedCapture();
+    const master = await (ports.master ?? captureVehicleMasterSnapshotReadOnly)().catch(() => undefined);
+    const live = await capture(id);
+    if (master) { first.vehicleMasterSnapshot = master; live.vehicleMasterSnapshot = master; }
+    first.digest = sharedSheetCaptureDigest(first); live.digest = sharedSheetCaptureDigest(live);
+    const persist = ports.persist ?? (input => withSharedSheetCatalogAccess(true,
+      stableDigest({ operation: 'F05_SOURCE_OBSERVATIONS_ONLY', capture: input.capture.digest, live: input.liveCapture.digest }),
+      async (_catalog, source) => ingestSharedSheetObservedRows(source, { target: 'freepasserp5', ...input })));
+    return await persist({ capture: first, liveCapture: live });
+  } finally { await release(); }
+}
+
 export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
@@ -646,7 +690,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     /** 신선도 판정을 종료 코드에 쓰지 않은 사유 코드(SKIPPED_ALL_LOCKED = 모든 원천이 다른 회차의 잠금으로 건너뜀). */
     freshnessNote?: string;
     /** 정체성 정제 상태: ENABLED:<마스터 digest 앞 12> · SKIPPED:<사유 코드>(정제 안 함 = 지금 동작) · DISABLED · NOT_LOADED(목록을 읽지 않음). */
-    identityRefine?: string } = { started: new Date().toISOString(), finished: '', exit: 0 };
+    identityRefine?: string; sourceObservations?: F05SourceObservationReport } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
   await mkdir(directory, { recursive: true });
@@ -665,6 +709,10 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
       const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
+      const sourceObservations = await refreshF05SourceObservations(env, source, {
+        acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture,
+      });
+      if (sourceObservations) record.sourceObservations = sourceObservations;
       record.reports = [];
       // 직전 회차 기록의 원천별 «적용 뒤 노출 수» — 이번 회차 시작 노출 수와 비교해 회차 밖 증감(다른 쓰기 주체·수동 작업)을 표시한다.
       const priorAfter = new Map<string, number>();

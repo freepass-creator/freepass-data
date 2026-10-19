@@ -30,6 +30,44 @@ describe('raw-first source intake', () => {
     expect(await store.listRaw(replay.runId)).toHaveLength(2);
   });
 
+  it('bounded row writes finish before the existing lifecycle can promote the head',async()=>{
+    const store=new MemorySourceStore(),old=await ingestRawSourceBatch(store,retryBatch());
+    const append=store.appendRaw.bind(store);let active=0,maximum=0;
+    let release!:()=>void,started!:()=>void;
+    const gate=new Promise<void>(r=>release=r),bothStarted=new Promise<void>(r=>started=r);
+    vi.spyOn(store,'appendRaw').mockImplementation(async row=>{
+      active++;maximum=Math.max(maximum,active);
+      if(row.sourceRecordId==='two'){started();await gate;}else await bothStarted;
+      try{await append(row);}finally{active--;}
+    });
+    const complete=vi.spyOn(store,'completeRun');
+    const pending=ingestRawSourceBatch(store,retryBatch('2026-10-09T00:01:00.000Z'),undefined,undefined,undefined,{writeConcurrency:2});
+    await bothStarted;expect(complete).not.toHaveBeenCalled();expect((await store.getSourceHead('synthetic/retry'))!.runId).toBe(old.runId);
+    release();const result=await pending;expect(maximum).toBe(2);expect(active).toBe(0);
+    expect(result).toMatchObject({status:'COMPLETED',headStatus:'CURRENT',rawCount:2});
+  });
+
+  it('waits for in-flight row writes before failing and preserves the old accepted head',async()=>{
+    const store=new MemorySourceStore(),old=await ingestRawSourceBatch(store,retryBatch());
+    const append=store.appendRaw.bind(store);let active=0;
+    let release!:()=>void,started!:()=>void;
+    const gate=new Promise<void>(r=>release=r),inFlight=new Promise<void>(r=>started=r);
+    vi.spyOn(store,'appendRaw').mockImplementation(async row=>{
+      if(row.sourceRecordId==='one'){await inFlight;throw Error('ROW_WRITE_FAILED');}
+      active++;started();await gate;try{await append(row);}finally{active--;}
+    });
+    const fail=vi.spyOn(store,'failRun').mockImplementation(async input=>{
+      expect(active).toBe(0);return MemorySourceStore.prototype.failRun.call(store,input);
+    });
+    const complete=vi.spyOn(store,'completeRun');
+    const pending=ingestRawSourceBatch(store,retryBatch('2026-10-09T00:01:00.000Z'),undefined,undefined,undefined,{writeConcurrency:2});
+    const rejection=expect(pending).rejects.toThrow('ROW_WRITE_FAILED');
+    await inFlight;expect(fail).not.toHaveBeenCalled();release();await rejection;
+    expect(fail).toHaveBeenCalledOnce();expect(complete).not.toHaveBeenCalled();
+    expect((await store.getSourceHead('synthetic/retry'))!.runId).toBe(old.runId);
+    for(const writeConcurrency of [0,9,1.5])await expect(ingestRawSourceBatch(store,retryBatch(),undefined,undefined,undefined,{writeConcurrency})).rejects.toThrow('SOURCE_WRITE_CONCURRENCY_INVALID');
+  });
+
   it('keeps partial RAW immutable and the old head usable, then accepts a fresh capture', async () => {
     const store = new MemorySourceStore();
     const good = await ingestRawSourceBatch(store, retryBatch());
