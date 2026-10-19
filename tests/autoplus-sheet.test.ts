@@ -32,7 +32,13 @@ describe('오토플러스 시트 어댑터', () => {
     expect(blocked.held).toEqual([]);
     expect(blocked.records[0]!.status).toEqual({ raw: '출고불가', saleAvailable: false });
     expect(by['4216']!.terms.map(t => [t.months, t.mileage, t.monthlyRent.value])).toEqual([[12, '20000km/year', 770000], [24, '20000km/year', 730000], [36, '30000km/year', 700000]]);
-    expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: 'EV', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
+    expect(by['4216']!.raw.spec).toMatchObject({ ext_color: '검정', fuel_type: '전기', first_registration_date: '2023-06', year: '2023', mileage: '15419' });
+    expect(by['4216']!.raw.source_fuel_text).toBe('EV');
+    const unknownFuelRow = car(1, '09버1111', '판매중');
+    unknownFuelRow[5] = '확인 중';
+    const unknownFuel = readAutoplusSheet([{ title: 't', values: [header, unknownFuelRow] }], NOW).records[0]!;
+    expect(unknownFuel.raw.source_fuel_text).toBe('확인 중');
+    expect(unknownFuel.raw.spec).not.toHaveProperty('fuel_type');
     expect(by['4216']!.vehicleText).toBe('디 올뉴니로EV 에어');   // 모델명이 차종을 이미 포함하면 앞에 붙이지 않는다
   });
   it('보증금은 시트 계산 규칙(대표 2026-10-14): 국산 대여료×2, 수입 ×3, 판정 불가는 미상 — 계산값임을 raw.deposit_rule 에 남긴다', () => {

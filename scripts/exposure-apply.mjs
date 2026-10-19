@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+// Run with node scripts/exposure-apply.mjs (also imported by the pure-function tests).
 // 노출 하향·재노출 적용 — 원천 기준(대표 상시 승인 2026-10-12: «무조건 원천 기준, ERP 는 바뀌어야 될 데이터»).
 //   node scripts/exposure-apply.mjs --plan <판매가능대수 --plan-out 파일> --supplier RP004 [--apply] [--max-ratio 0.5] [--max-age-min 15]
 //   node scripts/exposure-apply.mjs --approved-unsellable-supplier PT-0023 --approval-ref "대표 10-13 …" [--plan-out 파일] [--apply]

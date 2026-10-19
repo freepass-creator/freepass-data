@@ -237,6 +237,10 @@
         "mileage": { "$ref": "#/$defs/nonNegativeNumber" },
         "battery_capacity": { "$ref": "#/$defs/nonNegativeNumber" },
         "annual_mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "origin": {
+          "description": "원산지(선택 필드, 제조사 기준 읽기 전용 파생): 국산·수입, null = 확인 필요. 알려진 혼재 모델은 확정하지 않음.",
+          "enum": ["국산", "수입", null]
+        },
         "first_registration_date": {
           "type": [
             "string",

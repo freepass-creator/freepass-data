@@ -1,5 +1,6 @@
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
 import { approvedPhotoCount, parsePhotoCopySuppliers, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
+import { originOfMaker } from '../domain/maker-origin.js';
 
 type Rec = Record<string, unknown>;
 
@@ -51,6 +52,8 @@ export type PublicProduct = {
   battery_capacity: number | null;
   annual_mileage: number | null;
   first_registration_date: string | null;
+  /** 원산지(제조사 단위 파생, 대표 2026-10-16): 국산 | 수입 | null(제조사가 구분표에 없거나 비어 있어 «확인 필요»). 문서에 쓰지 않는다. FREEPASS_DATA_PUBLIC_ORIGIN=0 이면 나가지 않는다. */
+  origin?: '국산' | '수입' | null;
   note: string | null;
   options: string | null;
   deposit_note: string | null;
@@ -433,6 +436,7 @@ const buildPublicProduct = (product: Rec, policies: Record<string, Rec>, listMod
   for (const field of PUBLIC_NUMBER_FIELDS) {
     result[field] = cleanNumber(product[field], field);
   }
+  if (process.env.FREEPASS_DATA_PUBLIC_ORIGIN !== '0') result.origin = originOfMaker(result.maker, result.model);
   const registration = cleanText(product.first_registration_date, 10, 'first_registration_date');
   result.first_registration_date = registration && DATE.test(registration) ? registration : null;
   const sourceRawOn = process.env.FREEPASS_DATA_PUBLIC_SOURCE_RAW === '1';

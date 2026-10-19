@@ -3,6 +3,8 @@ import { parseIronListingPage, parseIronDetail, readIronHomepage, parseIronSitem
   IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY } from '../src/adapters/iron-homepage.js';
 import { sourceCyclePlugin } from '../src/adapters/source-cycle-plugins.js';
 import { judgeSonogongApiRead } from '../src/adapters/sonogong-api-guards.js';
+import { validateSourceRecord } from '../src/domain/source-engine.js';
+import { planSourceCycle } from '../src/application/source-cycle.js';
 
 // 값은 전부 가짜(합성). 구조만 실제 홈페이지의 클래스 이름을 따른다.
 const BASE = IRON_HOMEPAGE_POLICY.baseUrl;
@@ -24,6 +26,8 @@ describe('아이언 홈페이지 어댑터', () => {
     const parsed = parseIronListingPage(listPage(card('a1') + card('a2', true), '/vehicles?condition=new&page=2'), `${BASE}/vehicles?condition=new`, 'new');
     expect(parsed.listings.map(l => [l.id, l.sold])).toEqual([['a1', false], ['a2', true]]);
     expect(parsed.nextUrl).toBe(`${BASE}/vehicles?condition=new&page=2`);
+    expect(parseIronListingPage(listPage(card('a1'), '/vehicles?condition=new&amp;page=2'), `${BASE}/vehicles?condition=new`, 'new').nextUrl)
+      .toBe(`${BASE}/vehicles?condition=new&page=2`);
     expect(parseIronListingPage(listPage(card('a1'), 'https://evil.example/vehicles?page=2'), `${BASE}/vehicles`, 'new').nextUrl).toBeNull();
   });
 
@@ -57,7 +61,7 @@ describe('아이언 홈페이지 어댑터', () => {
   it('reads both conditions with pagination and every detail, serially, and flags failures as incomplete', async () => {
     const sleeps: number[] = [];
     const pages: Record<string, string> = {
-      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&page=2'),
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&amp;page=2'),
       [`${BASE}/vehicles?condition=new&page=2`]: listPage(card('n3')),
       [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
       [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/n2`]: detail('12가1002'),
@@ -98,6 +102,49 @@ describe('아이언 홈페이지 어댑터', () => {
     expect(ironDeposit('보증금 150만원')).toEqual({ state: 'KNOWN', value: 1_500_000 });
     expect(ironDeposit('')).toEqual({ state: 'UNKNOWN', value: null });
     expect(ironDeposit('보증금 문의')).toEqual({ state: 'UNKNOWN', value: null });
+  });
+
+  it('normalizes explicit won/thousand/ten-thousand units without guessing bare numbers or rounding', () => {
+    for (const label of ['보증금 2만원', '보증금 20,000원']) expect(ironDeposit(label)).toEqual({state:'KNOWN',value:20_000});
+    expect(ironDeposit('보증금 2,000천원')).toEqual({state:'KNOWN',value:2_000_000});
+    expect(ironDeposit('보증금 2,000원')).toEqual({state:'KNOWN',value:2_000});
+    for (const label of ['보증금 2000', '보증금 2만', '보증금 -2만원', '보증금 1~2만원', '보증금 1만원 또는 2만원', '보증금 1.2원', '보증금 2%', '보증금 1억2만원', '보증금 .5만원', '무보증 또는 2만원', '50만원대', '50만원 이상', '월 39만원부터', '－50,000원', '(5,000원)', '1～2만원', '1〜2만원']) {
+      expect(ironDeposit(label), label).toEqual({state:'UNKNOWN',value:null});
+    }
+    const record = parseIronDetail(detail('12가3456', {rent:[[72,'월 700천원']],deposit:'2,000천원'}), listing(), '2026-10-17T00:00:00Z');
+    expect(record.terms[0]).toMatchObject({months:72,monthlyRent:{state:'KNOWN',value:700_000},deposit:{state:'KNOWN',value:2_000_000},raw:{rent_text:'월 700천원',deposit_text:'보증금 2,000천원',normalized_amount_unit:'KRW'}});
+    expect(record.raw.price_rows).toEqual([{period:'72개월',rent:'월 700천원',rent_html:'월 700천원'}]);
+    const unknown = parseIronDetail(detail('12가3456', {rent:[[72,'월 2000']]}), listing(), 't');
+    expect(unknown.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+    expect(unknown.raw.price_rows).toEqual([{period:'72개월',rent:'월 2000',rent_html:'월 2000'}]);
+    expect(ironDeposit('무보증 36개월')).toEqual({state:'ZERO',value:0});
+    expect(ironDeposit('보증금 1천만원')).toEqual({state:'KNOWN',value:10_000_000});
+    expect(ironDeposit('보증금 1억원')).toEqual({state:'KNOWN',value:100_000_000});
+    expect(ironDeposit('보증금 1.200만원')).toEqual({state:'UNKNOWN',value:null});
+  });
+
+  it('excludes an explicit no-offer period only, keeping valid periods sellable and updateable', () => {
+    const at='2026-10-17T00:00:00Z';
+    for(const noOffer of ['문의','-','협의']) {
+      const prior=parseIronDetail(detail('12가3456'),listing(),at);
+      const next=parseIronDetail(detail('12가3456',{rent:[[12,noOffer],[36,'월 80만원'],[72,'월 1천만원']]}),listing(),at);
+      expect(next.terms.map(t=>[t.months,t.monthlyRent.value])).toEqual([[36,800000],[72,10_000_000]]);
+      expect(next.raw.price_rows).toHaveLength(3);
+      expect(validateSourceRecord(next)).toEqual([]);
+      const result=planSourceCycle({sourceId:'RP006',family:'OTHER',maxDowngradeRatio:1},
+        {records:[next],complete:true,observedAt:at,heldCount:0},
+        {products:[{record:prior,listable:true,locked_by_contract:false,publication_withdrawal:null,publication_withdrawal_prior:null}],complete:true},Date.parse(at));
+      expect(result.plan.entries[0]).toMatchObject({kind:'UPDATE',after:{listable:true}});
+      expect(result.plan.entries[0]!.after.record.terms[0]!.monthlyRent.value).toBe(800000);
+    }
+  });
+
+  it('holds implausible monthly amounts instead of accepting unit errors or tiny values', () => {
+    for(const value of ['월 39원','월 39,000,000만원','월 007원']) {
+      const r=parseIronDetail(detail('12가3456',{rent:[[12,value]]}),listing(),'2026-10-17T00:00:00Z');
+      expect(r.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+      expect(validateSourceRecord(r)).toContain('TERMS_HOLD');
+    }
   });
 
   it('status: 계약 synonyms → 계약중(sellable, provider spelling kept), sold words → not sellable, unknown/mixed badges hold', () => {

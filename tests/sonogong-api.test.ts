@@ -214,7 +214,7 @@ describe('손오공 공식 API 어댑터', () => {
       : json(detail(1, '100하1111', { prices }))).client);
     expect(read.complete).toBe(true);
     expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([
-      [12, 512345, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
+      [12, 512000, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
     expect(read.notes).toContain('AMOUNT_UNPARSEABLE:2');   // 36개월 월 대여료 '문의' + 48개월 보증금 -5 (소수 금액은 Codex #643 ① 테스트가 본다)
     expect(read.notes).toContain('DEPOSIT_PLACEHOLDER_ZERO:1');
   });
@@ -322,16 +322,17 @@ describe('손오공 공식 API 어댑터', () => {
   it('최초등록일은 상세의 실제 칸이 있을 때만, 연료는 공통 별칭으로 바꾸고 모르면 비운다(원문은 raw 에 보존)', async () => {
     const read = await readSonogongApi(world(u => {
       if (u.pathname.endsWith('/vehicles')) return json(u.searchParams.get('tab') === 'sub'
-        ? [row(1, '100하1111', { fuel: 'HEV' }), row(2, '100하2222', { fuel: '가솔린+전기' }), row(3, '100하3333', { fuel: '휘발유' })] : []);
+        ? [row(1, '100하1111', { fuel: 'HEV' }), row(2, '100하2222', { fuel: '가솔린+전기' }), row(3, '100하3333', { fuel: '휘발유' }), row(4, '100하4444', { fuel: 'GSL' })] : []);
       const id = Number(u.pathname.split('/').at(-1));
       return json(detail(id, `100하${String(id).repeat(4)}`, id === 1 ? { firstRegistrationDate: '2023-07-15' } : id === 2 ? { firstRegistrationDate: '2023-02-30' } : {}));
     }).client);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.raw.spec as Record<string, string>]));
     expect(by['1111']).toMatchObject({ fuel_type: '하이브리드', first_registration_date: '2023-07-15', manufacture_year_month: '2023-05', year: '2023' });
-    expect(by['2222']).not.toHaveProperty('fuel_type');                  // 하이브리드/플러그인 구분 불가 → 추정하지 않음
+    expect(by['2222']).toMatchObject({ fuel_type: '하이브리드' });       // 대표 2026-10-19 연료 별칭 표: «가솔린+전기» → 하이브리드(차명에 플러그인/PHEV 가 있으면 보류)
     expect(by['2222']).not.toHaveProperty('first_registration_date');    // 없는 날짜는 거른다
     expect((read.records.find(r => r.plate!.endsWith('2222'))!.raw.list as Record<string, unknown>).fuel).toBe('가솔린+전기');
     expect(by['3333']).toMatchObject({ fuel_type: '가솔린' });
+    expect(by['4444']).not.toHaveProperty('fuel_type');                  // 표에 없는 표기는 추정하지 않는다
     expect(read.notes).toContain('FUEL_UNRESOLVED:1');
   });
   it('보류된 행(상태 미상·ID 없음)은 다른 탭의 같은 번호 정상 행을 가리지 않는다, 정상 행끼리는 rent > sub > pick', async () => {
@@ -356,5 +357,20 @@ describe('손오공 공식 API 어댑터', () => {
     expect(sonogongApiRowFloor(10, 200)).toBe(160);
     expect(SONOGONG_API_POLICY.pageSize).toBeLessThanOrEqual(50);
     expect(SONOGONG_API_POLICY.minIntervalMs).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+describe('손오공 공식 API 대여료 천원 미만 절사(대표 2026-10-19)', () => {
+  it('정리값만 절사, 원문은 record.raw.prices 와 term.raw.source_monthly_rent 에 보존, 보증금 산출식도 절사 대여료로', async () => {
+    const sub = { SUBSCRIBE_RETURN: { monthly: { 12: 929381, 24: 1000999, 36: 929000 }, deposit: { 12: 0, 24: 0, 36: 0 } } };
+    const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
+      ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111', { prices: sub })] : [])
+      : json(detail(1, '100하1111', { prices: sub }))).client);
+    const r = read.records[0]!;
+    expect(r.terms.map(t => [t.months, t.monthlyRent.value, t.raw.source_monthly_rent, t.raw.rent_rule, t.deposit.value])).toEqual([
+      [12, 929000, 929381, 'SONOGONG_RENT_TRUNCATE_1000', 929000],
+      [24, 1000000, 1000999, 'SONOGONG_RENT_TRUNCATE_1000', 2000000],
+      [36, 929000, undefined, undefined, 2787000]]);
+    expect((r.raw.prices as { SUBSCRIBE_RETURN: { monthly: Record<string, number> } }).SUBSCRIBE_RETURN.monthly).toEqual({ 12: 929381, 24: 1000999, 36: 929000 });
   });
 });
