@@ -1,5 +1,7 @@
 import { computeSupplierRuleDeposit, contractYearsMultiplierMax3, supplierDepositRuleFor, SUPPLIER_DEPOSIT_RULES, type SupplierDepositRuleCode } from './supplier-deposit-policy.js';
 import { representativeTerms, type SourceAmount } from './source-engine.js';
+import sharedSheetSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+const SHARED_SHEET_SUPPLIERS: ReadonlySet<string> = new Set(sharedSheetSpec.supplierChannels.sharedInputSheet.map(c => c.code));
 
 /** 원천 엔진 작성 표식(source_cycle_write.by). infra 의 SOURCE_CYCLE_WRITER 와 같은 값. */
 export const SOURCE_ENGINE_WRITER = 'source-engine';
@@ -44,7 +46,7 @@ export function assessDepositEvidence(input: {
   if (explicitZero && (!supplierId || !productType || (!missing && !valid))) {
     return unknown('INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE');
   }
-  if (explicitZero && (forbidden || (valid && amount > 0) || input.hasPositivePaidDeposit || (note && note !== '무보증'))) {
+  if (explicitZero && (forbidden || (valid && amount > 0) || (input.hasPositivePaidDeposit && sourceWaiverBasis?.field !== 'source_cycle_record.terms') || (note && note !== '무보증'))) {
     return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
   }
   if ((depositFreeFlag || note === '무보증' || input.depositFreeConfirmation !== undefined) && !explicitZero && (missing || (valid && amount === 0))) {
@@ -83,7 +85,7 @@ export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, s
   const mark = product.source_cycle_write, record = product.source_cycle_record;
   if (!depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER || !depositRecord(record)
     || !depositRecord(record.raw) || record.raw.source !== 'shared-sheet'
-    || !/^RP\d{3}$/.test(String(record.sourceId)) || ['RP012', 'RP031'].includes(String(record.sourceId))
+    || !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId)) || ['RP012', 'RP031'].includes(String(record.sourceId))
     || record.sourceId !== product.provider_company_code || typeof record.uid !== 'string' || !record.uid
     || (record.plate ?? null) !== (product.car_number ?? null)
     || product._deleted || product.deletedAt || product.publication_withdrawal || product.listable !== true

@@ -47,6 +47,20 @@ describe('verified shared-sheet waiver supersedes stale legacy RAW only for its 
     expect(resolve({ ...fixture(), deposit_note: '보증금 1개월' }).state).toBe('UNKNOWN');
     expect(resolve({ ...fixture(), deposit_free: false }).state).toBe('UNKNOWN');
   });
+  it('uses the registered partner code for unassigned FP products and keeps different periods independent', () => {
+    const p: any = fixture();
+    p.provider_company_code = p.source_cycle_record.sourceId = 'PT-0001';
+    p.car_number = p.source_cycle_record.plate = null;
+    p._key = p.source_cycle_record.uid = 'FP-SYNTHETIC-1';
+    p.price['12'] = { rent: 600000, deposit: 800000 };
+    p.source_cycle_record.terms.push({ months: 12, monthlyRent: { state: 'KNOWN', value: 600000 }, deposit: { state: 'KNOWN', value: 800000 }, mileage: null, raw: { shortDeposit: '800,000' } });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(p, 0, { termMonths: 24, monthlyRent: 500000, hasPositivePaidDeposit: true })))
+      .toMatchObject({ state: 'ZERO', amount: 0 });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(p, 800000, { termMonths: 12, monthlyRent: 600000, hasPositivePaidDeposit: true })))
+      .toMatchObject({ state: 'KNOWN', amount: 800000 });
+    p.provider_company_code = p.source_cycle_record.sourceId = 'RP999';
+    expect(resolve(p).state).not.toBe('ZERO');
+  });
 });
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
