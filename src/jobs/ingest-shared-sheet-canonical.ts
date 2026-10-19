@@ -140,7 +140,7 @@ export async function ingestSharedSheetObservedRows(source: SourceIngestionStore
   // prices or other atomic facts. Physical Canonical apply keeps its strict fence.
   assertLiveSharedSheetMatches({ capture: input.capture }, input.liveCapture, now, false);
   const p = prepared(input.capture, undefined, true, false, true);
-  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize);
+  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize, undefined, { writeConcurrency: 8 });
   const head = await source.getSourceHead(p.sourceId);
   if (run.headStatus !== 'CURRENT' || head?.runId !== run.runId) throw new Error('SHARED_SOURCE_HEAD_NOT_CURRENT');
   const [raw, candidates, lineage] = await Promise.all([
@@ -157,12 +157,14 @@ export async function ingestSharedSheetObservedRows(source: SourceIngestionStore
     throw new Error('SHARED_SOURCE_READBACK_MISMATCH');
   }
   if (stableDigest(await source.getSourceHead(p.sourceId)) !== stableDigest(head)) throw new Error('SHARED_SOURCE_HEAD_DRIFT');
-  return { mode: 'SOURCE_OBSERVATIONS_ONLY' as const, status: 'SOURCE_HEAD_VERIFIED' as const,
+  return { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1' as const,
+    mode: 'SOURCE_OBSERVATIONS_ONLY' as const, status: 'SOURCE_HEAD_VERIFIED' as const,
     sourceId: p.sourceId, runId: run.runId, observedAt: run.observedAt, rawRows: raw.length,
     candidateRows: candidates.length, heldCandidateRows: candidates.filter(c => c.status !== 'VALID').length,
     priceConditions: candidates.reduce((n, c) => n + c.candidate.priceTerms.length, 0),
     lineageRows: lineage.length, coverage: run.coverage, canonicalWrites: 0,
-    publicationDecision: 'HOLD_PRESERVED' as const, sourceDigest: p.sourceChecksum, masterEvidenceState: p.masterEvidenceState };
+    publicationDecision: 'HOLD_PRESERVED' as const, sourceDigest: p.sourceChecksum, masterEvidenceState: p.masterEvidenceState,
+    verifiedAt: new Date().toISOString(), readback: { rawRows: raw.length, candidateRows: candidates.length, lineageRows: lineage.length, mismatches: 0 } };
 }
 function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogStore {
   // Read-only prospective evidence. No transaction or SourceIngestionStore write in planning.
