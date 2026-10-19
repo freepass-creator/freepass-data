@@ -371,6 +371,20 @@ describe('existing unattended F05 producer source-head stage',()=>{
   });
 });
 describe('native mappings and UID', () => {
+  it('keeps an exclusive registered supplier row when its company cell is blank, preserving RAW and identity HOLD', () => {
+    const s = sheet([{ 회사명: '' }]);
+    expect(sharedSheetChannels.filter(c => c.tab === s.capture.tabs.find(t => t.rowCount > 1)!.title)).toHaveLength(1);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows).toHaveLength(1);
+    expect(c.rows[0]!.record.sourceId).toBe(s.source);
+    expect((c.rows[0]!.record.raw.cells as unknown[])[0]).toBe('');
+    expect(c.rows[0]!.record.vehicleHold).toContain('VEHICLE_MASTER_REVIEW_REQUIRED');
+    expect(c.heldReasons).not.toContain('COMPANY_UNMAPPED');
+    expect(c.rows[0]!.record.terms[0]!.monthlyRent.value).toBe(500000);
+    for (const tab of ['스타', '빌린카', '경진']) expect(sharedSheetChannelOf(tab, '')).toBeUndefined();
+    expect(sharedSheetChannelOf('웰릭스', 'unregistered-company')).toBeUndefined();
+    expect(sharedSheetChannelOf('unregistered-tab', '')).toBeUndefined();
+  });
   it('plate wins, placeholder needs explicit UID, never row fallback', () => {
     expect(sourceUid(' TEST 1001 ', 'sheet')).toBe('TEST1001'); expect(sourceUid('신차', 'new-one')).toBe('new-one'); expect(sourceUid('미정')).toBeNull();
   });

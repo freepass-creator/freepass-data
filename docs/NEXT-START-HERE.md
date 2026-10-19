@@ -3370,3 +3370,9 @@ This file exists so another session can continue without re-discovering or re-cr
 - 기존 deploy-read-runtime run39215873092 SUCCESS. freepass-data-read-00055-hjd Ready/100% traffic, image sha256:8f5be5e12efa3e01e8bd10eb6d9f8fbef8cfd09e808d4727e247b2c9e5a65286. 이전 00054-s6b/source950053/image1cc383 baseline을 검증한 단일 배포다. IAM denial 및 authenticated compatibility readback도 통과했다.
 - 실제 인가된 photos-only manifest 표본133호6494는 HTTP200/count10, 같은 ERP5 API도10, 상류 photos/50은400이었다. 51/201개 fixture는 공개 API에서 정상50 반환하고 원본 불변을 검증했다. 별도 승인되지 않은 원본을 공개하는 근거가 아니다.
 - ERP5 PR189/main8f7acaf4aacbf735a90d9cda4f6bc5f13e472316 운영 배포(dpl_DCrWB4qzjnqZ4s7YP5GcEmgAEmyD)와 호환된다. ERP5 전체924 PASS/216 build smoke PASS. 실차104허3046은 원본25=API25=앨범 마지막25/25 실제 사진 표시를 확인했다. 업무 원본 수정·삭제 및 수집 프로세스 변경은 없다. 기존 source/정산/사진 검증 HOLD는 이 표시 정책으로 해제하지 않는다.
+
+## 2026-10-19 원117 공급사 해석 — 등록된 단일 소유 탭
+
+- 현재 등록된 공급사 코드가 정확히 하나인 입력 탭에서 회사명 셀만 비어 있으면 그 탭의 등록 소유자를 공급사 근거로 사용한다. RAW의 빈 회사명은 바꾸지 않고 `supplierCodeBasis=REGISTERED_EXCLUSIVE_TAB_OWNER`를 함께 보존한다. 회사 이름을 만들거나 과거 개별 시트로 fallback하지 않는다.
+- 두 공급사가 쓰는 스타·빌린카·경진 같은 공용 탭의 빈 회사명, 알 수 없는 값이 들어 있는 회사명, 미등록/부재 탭은 계속 미확정이다. 기존 공급사+차량번호 중복·다중 공급사 격리, 상태·대여료·차종 마스터·공개 판단을 완화하지 않는다. 공급사를 알아도 물리 차량/차종 검증 HOLD는 그대로다.
+- 원117의 한 행이 단독 공급사 탭에서 회사명 하나가 비어 원문 가격까지 기존 native 경로에서 빠지는 원인을 대상으로 한다. 관련267 PASS/1 기존 조건부 SKIP 및 build 검증은 코드 근거이며, 다음 source 회차의 해당 원키→새 안정 키→기존 상품 writer→ERP5/F01 되읽기 전에는 실제 해결로 세지 않는다. 원본 셀 쓰기·새 writer·새 스케줄은 없다.
