@@ -1,4 +1,5 @@
 import type { SourceFamily, SourceProductRecord, SourceRead } from '../domain/source-engine.js';
+import type { VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 
 /** Bounded operating evidence only; never business payloads, vehicle IDs or credentials. */
 export type SourceClockReason = 'INVALID_SYNC' | 'NOT_FRESH_FLAG' | 'EXPIRED' | 'FUTURE' | 'BEHIND_LIST';
@@ -55,6 +56,8 @@ export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrol
 export type VehicleIdentityRefinement = { maker: string; model: string; sub_model: string; trim_name: string | null; master_id: string };
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
 export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
+  /** Verified same-snapshot records for the existing structured shared-sheet normalizer; never a second name authority. */
+  sourceYearEvidence?: { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
   /** Explicit source-year admission against the matched active master's recorded range.
    * Identity matching alone may accept a sole candidate outside its years; that is not year evidence. */
   allowsYear?: (masterId: string, year: number) => boolean;
