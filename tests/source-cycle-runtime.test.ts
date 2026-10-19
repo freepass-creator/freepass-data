@@ -377,7 +377,7 @@ describe('native mappings and UID', () => {
     const c = f05NativeCapture(s.source, s.capture, s.visibility);
     expect(c.rows).toHaveLength(1);
     expect(c.rows[0]!.record.sourceId).toBe(s.source);
-    expect(c.rows[0]!.record.raw.cells[0]).toBe('');
+    expect((c.rows[0]!.record.raw.cells as unknown[])[0]).toBe('');
     expect(c.rows[0]!.record.vehicleHold).toContain('VEHICLE_MASTER_REVIEW_REQUIRED');
     expect(c.heldReasons).not.toContain('COMPANY_UNMAPPED');
     expect(c.rows[0]!.record.terms[0]!.monthlyRent.value).toBe(500000);
