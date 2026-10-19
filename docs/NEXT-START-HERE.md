@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-19 PC3 F:I strict 소스 정리 · 117건 복구 진행 중
+
+- 대표 최신 지시: F:I 네 칸만 목록 밖 입력 거부, Y/Z 원문 자유 입력. `strictDropdownHeaders`와 경량 계획기를 수정했다. 기존 `_입력선택`은 전체 게시 캡처로 보존하고 새 RAW 값 자동 편입·과거 목록 대체를 막는다. legacy 전체 마스터/렌더러의 비활성 관문은 유지한다.
+- 검증: `npm run check:sheets` 107 PASS/0 FAIL. 온라인 재적용·시트/업무 DB 쓰기·감시자 등록 0. 기존 API writer의 RAW 우회 방어는 미연결이며, UI 규칙을 API 전체 강제 완료로 확대하지 않는다. 실제 PC1 공식 당직은 기존 `pc1-f05-claude`가 소유한다.
+- 동일 `C1019-fdb7fa3f` 복구는 미완료다. PC3가 기존 비공개 ZIP 9 JSON의 크기/해시를 검증했고, 초기 HOLD116의 현재 ERP5/F01 노출은 각각62다. 최종117의 추가1은 기존 apply 집계만 확인했으며 개별 영수증 대조가 남는다. 원천 상태 때문에 비노출인52건을 판매 누락으로 올리지 않는다.
+- PC3 기존 읽기 gateway의 동일 트랜잭션으로 products/policy/partner 증거를 확보했다. 등록일 칸 URL·확인 필요 월료·공급사명 누락·차종/제원 충돌은 근거별 검토 중이며 추정 정정 0이다. 에스에이는 `withdrawn-suppliers.v1.json`의 대표10-13 출고불가 지시를 보존한다. F01 두 주소 각686행/셀차이0 관측은 최신 ERP5 전체와의 일치 완료가 아니다.
+- next_start_here: PC1 정상 PT5M 경로를 유지한 채 PC3 무인 Sheets 인증·시험·단일 실행권 인수를 완료한다. 기존 writer로 최신 계획/백업/원문 보존/적용/되읽기를 검증한다. historical sealed master·정정 검토 후보를 새 apply 승인으로 쓰지 않는다. 원문 증거는 Git 밖 PC3 `C:/dev/ai-ops-runtime/Evidence/C1019-fdb7fa3f/` 및 기존 private source capture에 보존했다.
+
 ## 2026-10-11 15분 수집·정제·변경분 갱신 실행
 
 - 2026-10-12 후속 수집 수수료 연결: 기존 승인 엔진 출력을 SourceIngestionStore lineage에 저장하고 소비처는 검증된 저장값만 읽도록 기존 application/job/schema/test를 확장했다. identity HOLD, 원문·후보와 정산 사람 입력은 보존한다. 계산값 권위는 APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT이며 정책/입력 digest와 출처를 보존한다. 중복·변조·정책 변경은 UNKNOWN/null, 조회 재계산은 0이다.

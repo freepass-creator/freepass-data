@@ -19,7 +19,7 @@ test('bounded presentation moves overflow before shrink, preserves filtered rows
   const index=p.requests.findIndex(r=>r.copyPaste);assert.ok(index<p.requests.findIndex(r=>r.updateSheetProperties?.properties.sheetId===2));
   assert.equal(p.requests[index+1].updateCells.rows[0].values[0].userEnteredValue.stringValue,'preserve hidden status row');
   const validations=p.requests.filter(r=>r.setDataValidation?.rule).map(r=>r.setDataValidation);
-  assert.equal(validations.length,7);assert.ok(validations.every(v=>v.filteredRowsIncluded&&v.range.endRowIndex===100&&v.range.endColumnIndex<=16&&!v.rule.strict));
+  assert.equal(validations.length,7);assert.ok(validations.every(v=>v.filteredRowsIncluded&&v.range.endRowIndex===100&&v.range.endColumnIndex<=16&&(v.rule.strict===inputSpec.strictDropdownHeaders.includes(inputSpec.inputHeaders[v.range.startColumnIndex]))));
   assert.ok(validations.filter(v=>v.rule.condition.type==='ONE_OF_RANGE').every(v=>v.rule.condition.values[0].userEnteredValue.endsWith('$942')));
   assert.ok(p.requests.filter(r=>r.addConditionalFormatRule).every(r=>r.addConditionalFormatRule.rule.booleanRule.condition.type==='TEXT_EQ'));
   assert.ok(!p.requests.some(r=>r.addSheet||r.repeatCell));
@@ -31,6 +31,26 @@ test('shrinking refuses formulas and excessive occupied rows before any executio
   assert.throws(()=>planLightweightPresentation(g.metadata,g.captures,inputSpec),/capacity/);
 });
 
-test("existing labels and confirmation placeholder become valid UI choices without promoting master facts",()=>{const f=fixture();const cell=f.captures.sheets[1].data[0].rowData[1];cell.values[5]={userEnteredValue:{stringValue:"확인 필요"},userEnteredFormat:{backgroundColor:{red:1,green:1}}};const master={sheets:[{properties:f.metadata.sheets[2].properties,data:[{rowData:[{values:[{userEnteredValue:{stringValue:"제조사"}}]},{values:[{userEnteredValue:{stringValue:"현대"}},{userEnteredValue:{stringValue:"캐스퍼"}},{userEnteredValue:{stringValue:"캐스퍼 AX1"}},{userEnteredValue:{stringValue:"스마트"}}]}]}]}]};const before=JSON.stringify(f);const p=planInputWarningCleanup(f.metadata,f.captures,master,{...currentSpec,changeControl:undefined});assert.equal(JSON.stringify(f),before);assert.ok(p.options.제조사.includes("확인 필요"));assert.equal(p.yellowCells,1);assert.ok(p.requests.filter(r=>r.updateCells?.fields==='userEnteredValue').every(r=>r.updateCells.range.sheetId===9400));assert.ok(p.requests.filter(r=>r.repeatCell).every(r=>!r.repeatCell.fields.includes("foreground")));assert.ok(!p.requests.some(r=>r.addConditionalFormatRule));});
+test("existing labels and confirmation placeholder become valid UI choices without promoting master facts",()=>{const f=fixture();const cell=f.captures.sheets[1].data[0].rowData[1];cell.values[5]={userEnteredValue:{stringValue:"확인 필요"},userEnteredFormat:{backgroundColor:{red:1,green:1}}};const master={sheets:[{properties:f.metadata.sheets[2].properties,data:[{rowData:[{values:[{userEnteredValue:{stringValue:"제조사"}}]},{values:[{userEnteredValue:{stringValue:"현대"}},{userEnteredValue:{stringValue:"캐스퍼"}},{userEnteredValue:{stringValue:"캐스퍼 AX1"}},{userEnteredValue:{stringValue:"스마트"}}]}]}]}]};const before=JSON.stringify(f);const p=planInputWarningCleanup(f.metadata,f.captures,master,{...currentSpec,changeControl:undefined});assert.equal(JSON.stringify(f),before);assert.ok(!p.options.제조사.includes("확인 필요"));assert.equal(p.yellowCells,1);assert.ok(p.requests.filter(r=>r.updateCells?.fields==='userEnteredValue').every(r=>r.updateCells.range.sheetId===9400));assert.ok(p.requests.filter(r=>r.repeatCell).every(r=>!r.repeatCell.fields.includes("foreground")));assert.ok(!p.requests.some(r=>r.addConditionalFormatRule));});
 
 test("locked inventory refuses unrecorded tab additions and missing tabs before writes",()=>{const metadata={sheets:[currentSpec.summaryTitle,...currentSpec.changeControl.activeSupplierTabs].map(title=>({properties:{title}}))};assert.doesNotThrow(()=>verifyLockedTabInventory(metadata));assert.throws(()=>verifyLockedTabInventory({sheets:metadata.sheets.slice(1)}),/inventory drift/);assert.throws(()=>verifyLockedTabInventory({sheets:[...metadata.sheets,{properties:{title:"옛 탭 복원"}}]}),/inventory drift/);});
+
+test('strict cleanup preserves published choices and rejects missing or partial choice snapshots',()=>{
+  const f=fixture(),spec={...currentSpec,changeControl:undefined};
+  const headers=[...spec.dropdownPolicy.lightweight.listHeaders,...spec.dropdownPolicy.lightweight.masterHeaders];
+  const cell=stringValue=>({userEnteredValue:{stringValue}});
+  const helper={properties:{sheetId:9400,title:'_입력선택',hidden:true,gridProperties:{rowCount:2,columnCount:7}}};
+  f.metadata.sheets.push(helper);
+  const master={sheets:[{properties:f.metadata.sheets[2].properties,data:[{rowData:[{values:['제조사','모델','세부모델','세부트림'].map(cell)},{values:['현대','과거 모델','과거 세부모델','과거 트림'].map(cell)}]}]}]};
+  assert.throws(()=>planInputWarningCleanup(f.metadata,f.captures,master,spec),/existing strict input choices capture required/);
+  master.sheets.push({...helper,data:[{rowData:[{values:headers.map(cell)},{values:['출고가능','중고렌트','가솔린','제네시스','G80','G80 RG3','기본형'].map(cell)}]}]});
+  f.captures.sheets[1].data[0].rowData[1].values[5]=cell('새 RAW 임의 제조사');
+  const p=planInputWarningCleanup(f.metadata,f.captures,master,spec);
+  assert.deepEqual(p.options.제조사,['제네시스']);
+  assert.deepEqual(p.options.세부모델,['G80 RG3']);
+  const rules=p.requests.filter(r=>r.setDataValidation?.rule.strict).map(r=>r.setDataValidation.rule);
+  assert.equal(rules.length,4);
+  assert.equal(rules[0].condition.values[0].userEnteredValue,"='_입력선택'!$D$2:$D$2");
+  master.sheets[1].data[0].rowData.pop();
+  assert.throws(()=>planInputWarningCleanup(f.metadata,f.captures,master,spec),/complete existing input choices capture required/);
+});

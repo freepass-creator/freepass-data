@@ -1,4 +1,4 @@
-import {inputSpec} from './supplier-input-sheet.mjs';
+import {inputSpec,inputValidationStrict} from './supplier-input-sheet.mjs';
 
 export function verifyLockedTabInventory(metadata,spec=inputSpec){
   const lock=spec.changeControl;
@@ -9,8 +9,8 @@ export function verifyLockedTabInventory(metadata,spec=inputSpec){
   if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('HOLD: locked tab inventory drift; update specification from user decision before writing');
 }
 
-// UI choices are not a vehicle master: published labels plus exact values
-// already entered on this workbook. Nothing is renamed or promoted here.
+// UI choices are not a vehicle master. Strict fields preserve their published
+// choices; arbitrary RAW input must not silently extend an allowlist.
 export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inputSpec){
   verifyLockedTabInventory(metadata,spec);
   const policy=spec.dropdownPolicy.lightweight,helper=policy.validationChoices;
@@ -22,7 +22,23 @@ export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inp
   };
   const blocks=masterCapture.sheets.find(s=>s.properties.title===spec.vehicleMaster.tab)?.data;
   if(!blocks)throw new Error('HOLD: published choice capture required');
+  const existing=metadata.sheets.find(s=>s.properties.title===helper.tab||s.properties.sheetId===helper.sheetId);
+  if(existing&&(existing.properties.title!==helper.tab||existing.properties.sheetId!==helper.sheetId||!existing.properties.hidden))throw new Error('HOLD: choice tab binding collision');
+  const published=existing?masterCapture.sheets.find(s=>s.properties.title===helper.tab&&s.properties.sheetId===helper.sheetId):null;
+  const publishedRows=new Map();
+  if(existing&&headers.some(h=>inputValidationStrict(spec,h))){
+    if(!published?.data)throw new Error('HOLD: existing strict input choices capture required');
+    for(const b of published.data)for(const[i,r]of(b.rowData??[]).entries())publishedRows.set((b.startRow??0)+i,r.values??[]);
+    if(JSON.stringify((publishedRows.get(0)??[]).map(read))!==JSON.stringify(headers))throw new Error('HOLD: input choice header mismatch');
+    if(publishedRows.size!==existing.properties.gridProperties.rowCount||[...publishedRows.keys()].some(r=>r<0||r>=existing.properties.gridProperties.rowCount))throw new Error('HOLD: complete existing input choices capture required');
+  }
   const options=headers.map(h=>{
+    if(existing&&inputValidationStrict(spec,h)){
+      const values=[...publishedRows].sort((a,b)=>a[0]-b[0]).filter(([r])=>r>0).map(([,cells])=>read(cells[headers.indexOf(h)]));
+      const options=[...new Set(values.filter(v=>v!=='').map(String))];
+      if(!options.length)throw new Error('HOLD: empty strict input choices');
+      return options;
+    }
     const column=spec.vehicleMaster.columns[h];
     const values=column?blocks.flatMap(b=>(b.rowData??[]).flatMap((r,i)=>(b.startRow??0)+i>0?[read(r.values?.[column.charCodeAt(0)-65])]:[])):spec.dropdowns[h];
     return [...new Set(values.filter(v=>v!=='').map(String))];
@@ -34,10 +50,9 @@ export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inp
     const rows=new Map();for(const b of capture.data??[])for(const[i,r]of(b.rowData??[]).entries())rows.set((b.startRow??0)+i,r.values??[]);
     if(JSON.stringify((rows.get(0)??[]).map(read))!==JSON.stringify(spec.inputHeaders))throw new Error('HOLD: header mismatch');
     rowsById.set(s.properties.sheetId,rows);
-    for(const[row,cells]of rows)if(row>0)headers.forEach((h,i)=>{const v=read(cells[spec.inputHeaders.indexOf(h)]);if(v!==''&&!options[i].includes(String(v)))options[i].push(String(v));});
+    for(const[row,cells]of rows)if(row>0)headers.forEach((h,i)=>{const v=read(cells[spec.inputHeaders.indexOf(h)]);if(!inputValidationStrict(spec,h)&&v!==''&&!options[i].includes(String(v)))options[i].push(String(v));});
   }
-  const existing=metadata.sheets.find(s=>s.properties.title===helper.tab||s.properties.sheetId===helper.sheetId),height=Math.max(...options.map(v=>v.length))+1,requests=[];
-  if(existing&&(existing.properties.title!==helper.tab||existing.properties.sheetId!==helper.sheetId||!existing.properties.hidden))throw new Error('HOLD: choice tab binding collision');
+  const height=Math.max(...options.map(v=>v.length))+1,requests=[];
   if(!existing)requests.push({addSheet:{properties:{sheetId:helper.sheetId,title:helper.tab,hidden:true,gridProperties:{rowCount:height,columnCount:headers.length}}}});
   else requests.push({updateSheetProperties:{properties:{sheetId:helper.sheetId,gridProperties:{rowCount:Math.max(height,existing.properties.gridProperties.rowCount),columnCount:headers.length}},fields:'gridProperties.rowCount,gridProperties.columnCount'}});
   const rows=Array.from({length:height},(_,r)=>({values:headers.map((h,i)=>r===0?{userEnteredValue:{stringValue:h}}:options[i][r-1]!==undefined?{userEnteredValue:{stringValue:options[i][r-1]}}:{})}));
@@ -45,7 +60,7 @@ export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inp
   let yellowCells=0;
   for(const s of targets){
     const p=s.properties,end=p.gridProperties.rowCount;
-    if(p.title!==spec.summaryTitle)headers.forEach((h,i)=>requests.push({setDataValidation:{range:{sheetId:p.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:spec.inputHeaders.indexOf(h),endColumnIndex:spec.inputHeaders.indexOf(h)+1},filteredRowsIncluded:true,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${helper.tab}'!$${String.fromCharCode(65+i)}$2:$${String.fromCharCode(65+i)}$${options[i].length+1}`}]},strict:false,showCustomUi:true}}}));
+    if(p.title!==spec.summaryTitle)headers.forEach((h,i)=>requests.push({setDataValidation:{range:{sheetId:p.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:spec.inputHeaders.indexOf(h),endColumnIndex:spec.inputHeaders.indexOf(h)+1},filteredRowsIncluded:true,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${helper.tab}'!$${String.fromCharCode(65+i)}$2:$${String.fromCharCode(65+i)}$${options[i].length+1}`}]},strict:inputValidationStrict(spec,h),showCustomUi:true}}}));
     const cells=rowsById.get(p.sheetId);
     for(let column=0;column<spec.inputHeaders.length;column++){
       let start=null;
@@ -107,7 +122,7 @@ export function planLightweightPresentation(metadata, captures, spec=inputSpec) 
       if(helper?.enabled&&!choiceSheet)hold('Run planInputWarningCleanup to publish input choices first');
       const choiceColumn=String.fromCharCode(65+[...policy.listHeaders,...policy.masterHeaders].indexOf(h));
       const condition=choiceSheet?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${helper.tab}'!$${choiceColumn}$2:$${choiceColumn}$${choiceSheet.properties.gridProperties.rowCount}`}]}:masterColumn?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!$${masterColumn}$2:$${masterColumn}$${policy.masterRangeEnd}`}]}:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))};
-      requests.push({setDataValidation:{range:{sheetId:p.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:column,endColumnIndex:column+1},filteredRowsIncluded:true,rule:{condition,strict:false,showCustomUi:true}}});
+      requests.push({setDataValidation:{range:{sheetId:p.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:column,endColumnIndex:column+1},filteredRowsIncluded:true,rule:{condition,strict:inputValidationStrict(spec,h),showCustomUi:true}}});
     }
     for(const h of policy.colorHeaders){
       const column=spec.inputHeaders.indexOf(h);

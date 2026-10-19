@@ -4,11 +4,11 @@ import {createHash} from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula} from '../scripts/supplier-input-sheet.mjs';
+import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula,inputValidationStrict} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
 // Earlier-policy fixtures keep historical planner coverage; current policy has its own regression below.
 // Historical layout deletion fixtures explicitly exclude today's no-deletion lock.
-const inputSpec=structuredClone(currentSpec);delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
+const inputSpec=structuredClone(currentSpec);delete inputSpec.strictDropdownHeaders;delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
 const now=Date.parse('2026-10-03T12:00:00Z');
 delete inputSpec.changeControl;
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
@@ -227,10 +227,10 @@ test('vehicle master: original layout, freshness and inventory gates run first',
   const f=masterFixture();f.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();delete f.master;assert.throws(()=>planVehicleMasterDropdowns(f,unitMasterSpec,now),/LAYOUT_MISMATCH/);
   for(const mutate of [f=>f.capturedAt='2000-01-01',f=>f.sheetInventory.pop()]){const f=masterFixture();mutate(f);assert.throws(()=>planVehicleMasterDropdowns(f,unitMasterSpec,now),/HOLD/);}
 });
-test('vehicle master CLI: latest disabled policy refuses regeneration',()=>{
+test('vehicle master CLI: strict vehicle fields still require a fresh active Data snapshot',()=>{
   const f=masterFixture();f.capturedAt=new Date().toISOString();f.master.source=inputSpec.vehicleMaster.source.split(' / 탭 ')[0];
   const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--vehicle-master=-','--change-layout=unused'],{input:JSON.stringify(f),encoding:'utf8'});
-  assert.equal(r.status,2);assert.match(r.stderr,/disabled/);assert.equal(r.stdout,'');
+  assert.equal(r.status,2);assert.match(r.stderr,/Dropdowns disabled by latest user decision/);assert.equal(r.stdout,'');
 });
 
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+tabTitles.indexOf(r.tab),title:r.tab,code:r.code}))},sheetInventory:[1,2,...tabTitles.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...tabTitles.map((title,i)=>sheet(3+i,title,inputSpec.inputHeaders))]}});
@@ -539,4 +539,10 @@ test('summary formula keeps every row except 출고불가 and drops blank rows; 
   for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:bad}),/summaryExcludeStatuses invalid/);
 });
 
-test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const removalSpec=structuredClone(currentSpec);delete removalSpec.dropdownPolicy.lightweight;const p=planSupplierDropdowns(fixture(),removalSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(removalSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});
+test('latest policy keeps only F:I strict and preserves free-text raw columns',()=>{
+ assert.throws(()=>planSupplierDropdowns(fixture(),currentSpec,now),/Use planLightweightPresentation/);
+ assert.throws(()=>planVehicleMasterDropdowns(fixture(),currentSpec,now),/Dropdowns disabled/);
+ for(const h of currentSpec.inputHeaders)assert.equal(inputValidationStrict(currentSpec,h),currentSpec.strictDropdownHeaders.includes(h));
+ assert.deepEqual(currentSpec.strictDropdownHeaders,['제조사','모델','세부모델','세부트림']);
+ assert.ok(currentSpec.dropdownPolicy.freeText.includes('차명 원문'));assert.ok(currentSpec.dropdownPolicy.freeText.includes('옵션 원문'));
+});

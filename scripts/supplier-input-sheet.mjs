@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { specification, resolveSpreadsheetId } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const hold = message => { throw new Error(`HOLD: ${message}`); };
+export const inputValidationStrict = (spec,h) => Array.isArray(spec.strictDropdownHeaders) ? spec.strictDropdownHeaders.includes(h) : spec.dropdownStrict===true;
 const inputDropdown = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.dropdowns?.[h];
 const inputMasterColumn = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.vehicleMaster?.columns?.[h];
 // Only suppliers registered for the shared sheet may be bound, with the exact
@@ -95,7 +96,7 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
         return;
       }
       const range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:rows,startColumnIndex:i,endColumnIndex:i+1};
-      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}});
+      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:inputValidationStrict(spec,h),showCustomUi:true}}});
     });
   }
   return {status:'PLANNED',scope:'SUPPLIER_TAB_DATA_VALIDATION_ONLY',layoutVersion:verified.layoutVersion,spreadsheetId:verified.spreadsheetId,drift:verified.drift,requests};
@@ -163,7 +164,7 @@ export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
     names.forEach((h,i)=>{
       const at=headers.indexOf(h);if(at<0)hold(`Vehicle master target column missing: ${h}`);
       const col=rule.columns[h],range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:at,endColumnIndex:at+1};
-      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${rule.tab}'!$${col}$2:$${col}$${lists[i].length+1}`}]},strict:spec.dropdownStrict===true,showCustomUi:true}}});
+      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${rule.tab}'!$${col}$2:$${col}$${lists[i].length+1}`}]},strict:inputValidationStrict(spec,h),showCustomUi:true}}});
     });
   }
   return {status:snapshot.holds.length?'PLANNED_WITH_HOLD':'PLANNED',snapshotDigest:snapshot.snapshotDigest,holds:snapshot.holds,eligibleTrimIds:snapshot.eligibleTrimIds,scope:'VEHICLE_MASTER_RANGE_DROPDOWNS',counts:Object.fromEntries(names.map((h,i)=>[h,lists[i].length])),requests};
@@ -247,7 +248,7 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
       requests.push({updateDimensionProperties:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},properties:{pixelSize:spec.columnWidths[p]??spec.defaultColumnWidth},fields:'pixelSize'}});
       // Inserted columns inherit the left column's validation; replace it with this column's own list (or clear it).
       const list=spec.dropdowns?.[p],range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:s.properties.gridProperties.rowCount,startColumnIndex:at,endColumnIndex:at+1};
-      requests.push({setDataValidation:list?{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}:{range}});
+      requests.push({setDataValidation:list?{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:inputValidationStrict(spec,p),showCustomUi:true}}:{range}});
     });
     rowsRead+=Math.max(0,block.length-1);
   }
@@ -323,7 +324,7 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
       // Inherited from the anchor column (#,##0): numeric columns get plain numbers, the rest plain text.
       const numberFormat=spec.numberHeaders.includes(h)?{type:'NUMBER',pattern:'0.############'}:{type:'TEXT'};
       requests.push({repeatCell:{range,cell:{userEnteredFormat:{numberFormat,horizontalAlignment:'CENTER'}},fields:'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment'}});
-      requests.push({setDataValidation:list?{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}:{range}});});
+      requests.push({setDataValidation:list?{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:inputValidationStrict(spec,h),showCustomUi:true}}:{range}});});
     const seen=new Set();
     for(const {row,values} of fill[String(sup.sheetId)]??[]){
       if(!Number.isInteger(row)||row<1||row>=rc)hold(`${sup.title}: fill row ${row} out of range`);
@@ -737,8 +738,8 @@ function canonTabAudit(snapshot,spec){
       }
       if(t.title!==spec.summaryTitle){
         let rule=null;
-        if(inputDropdown(spec,h))rule={condition:{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true};
-        else if(inputMasterColumn(spec,h))rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:spec.dropdownStrict===true,showCustomUi:true};
+        if(inputDropdown(spec,h))rule={condition:{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))},strict:inputValidationStrict(spec,h),showCustomUi:true};
+        else if(inputMasterColumn(spec,h))rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:inputValidationStrict(spec,h),showCustomUi:true};
         for(const r of t.rows.keys()){if(!r)continue;const actual=canonCell(t,r,i).dataValidation??null;
           const canonicalActual=actual?{...actual,strict:actual.strict??false,showCustomUi:actual.showCustomUi??false}:null;
           add(t,'dropdown',`${h}:${r+1}`,rule,canonicalActual);
@@ -799,7 +800,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
     for(const [startIndex,endIndex,pixelSize] of [[0,1,spec.headerRowHeight],[1,t.g.rowCount,spec.rowHeight]])requests.push({updateDimensionProperties:{range:{sheetId:t.id,dimension:'ROWS',startIndex,endIndex},properties:{pixelSize},fields:'pixelSize'}});
     if(t.title!==spec.summaryTitle)runs(spec.inputHeaders.map(h=>{
       const condition=inputDropdown(spec,h)?{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))}:inputMasterColumn(spec,h)?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]}:null;
-      return condition?{condition,strict:spec.dropdownStrict===true,showCustomUi:true}:null;
+      return condition?{condition,strict:inputValidationStrict(spec,h),showCustomUi:true}:null;
     }),(rule,start,end)=>requests.push({setDataValidation:{range:range(start,end),filteredRowsIncluded:true,...(rule?{rule}:{})}}));
     if(!canonEqual(baseRules,canonRule(t.sheet.conditionalFormats??[],t))){
       for(let index=(t.sheet.conditionalFormats??[]).length-1;index>=0;index--)requests.push({deleteConditionalFormatRule:{sheetId:t.id,index}});
