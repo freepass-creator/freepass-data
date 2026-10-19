@@ -412,6 +412,9 @@ describe('native mappings and UID', () => {
     expect(r.raw.spec_master_digest).toBe('verified-snapshot');
     expect(r.vehicleHold).toEqual(['VEHICLE_MASTER_REVIEW_REQUIRED']);
     expect(match).not.toHaveBeenCalled();
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set() }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set(['OTHER']) }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set([r.uid]) }).rows[0]!.record.raw.spec).toEqual({ year: '2023' });
     const bad = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '다른세대', 세부트림: '확인필요', 연식: 2023 }]);
     expect(f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw).not.toHaveProperty('spec');
   });
