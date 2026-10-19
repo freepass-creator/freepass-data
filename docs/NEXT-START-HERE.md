@@ -231,6 +231,18 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-19 공통시트 F05 5분 수집·반영 복구 — C1019-135753cf
+
+- 목적: 대표 직접 오더의 공통시트 최신화를 실제 운영에서 복구한다. 117행 정체성/누락 탭/F01 복구는 기존 `C1019-fdb7fa3f` owner를 유지하며 이 작업에서 인수하지 않는다.
+- 경로: PC1의 기존 `C:/dev/fd-cycle` native source-cycle을 재사용했다. checkout HEAD는 `54bbe09669755451d658395180f47f7570c5bf1f`, 실제 dist runtime entry SHA-256은 `3c9e6bac820cf984b18abbe263c3fbd71ac27928fdf4aaf5cd778b0c0deeaa50`이다. 기존 Firestore adapter·writer·원천별 잠금·백업·revision/readback을 유지한다. GitHub 15분 예약은 실제로 수 시간 지연돼 이 경로의 신선도 근거로 사용하지 않는다. canonical 검토 workflow와 native consumer 갱신의 완료 범위는 별개다.
+- 운영 변경: 기존 `scripts/register-source-cycle.ps1`로 `FreePass-F05-Realtime`를 5분 간격(`PT5M`, `IgnoreNew`)으로 등록했다. 비공개 F05 환경은 기존 공용 환경을 불러온 뒤 `SOURCE_CYCLE_SOURCES=F05`, `SOURCE_CYCLE_TAKEOVER=0`만 좁힌다. 기존 시간당 환경의 소스 목록에서는 F05만 제거해 두 예약의 중복 수집을 방지했다. 나머지 원천·키·IAM·화면·Claude는 변경하지 않았다.
+- 인증 복구: 최초 실행은 기본 gws 프로필에 자격이 없어 `READ_FAILED_SHARED_SHEET_GWS_EXIT_2`, exit1이었다. 이를 성공으로 세지 않는다. F05 전용 환경에서 PC1에 이미 존재하는 `gws-collab` 프로필을 명시해 대화형 로그온 예약 안에서 재사용했다. SSH 프로세스의 DPAPI 복호화 실패를 자격 파일 복사·재발급으로 우회하지 않았다.
+- 확인된 첫 회차: 16:58:42~17:00:59 KST, 원천 16개 처리, APPLIED3/변경없음13, exit0. RP013 6건·PT-0001 1건·RP021 1건을 실제 저장하고 각각 6/6·1/1·1/1 되읽기했다. 차종·조건·계약 잠금 등 행별 HOLD는 기존 가드대로 보존했다. `DRY_RUN`은 이 무인 실행의 plan.entries=0인 변경없음이며 별도 저장 성공 건수로 세지 않는다.
+- 소비처 검증: 17:04 ERP5 공개 `/api/catalog`는 HTTP200/701행, 첫 회차의 실제 쓰기 백업 8건을 정확 UID로 새 저장값과 대조했다. 판매 노출/비노출 8/8, 노출된 6건의 알려진 기간별 대여료 17/17 일치. 비노출 2건의 가격은 공개 목록에서 비교하지 않는다. API cache fetchedAt `08:01:31.846Z`는 첫 회차 종료 뒤다. F01 전체나 미해결 행의 정체성 완료로 확대하지 않는다.
+- 정시 재실행 검증: 별도 수동 호출 없이 17:04:01 KST 예약이 시작했고, 회차 17:04:03~17:06:12에서 16개 원천 모두 변경없음·exit0이었다. 앞선 실제 쓰기 8건을 중복 적용하지 않았다. 작업 스케줄러 새 조회는 `Ready`, 마지막 결과0, 다음 실행17:09, 반복 `PT5M`이다. 첫 성공 회차 약137초·정시 재실행 약129초이므로 5분은 시작 간격이며 즉시 반영/5분 이내 최대 지연 보장이 아니다.
+- 증거: 설정 파일·원본 환경/예약 XML 백업·두 회차 검증·8건 소비처 대조는 PC1 기존 private source-cycle의 `f05-realtime-20261019` 아래 보존한다. 비밀·원문 행·차량번호는 Git에 넣지 않는다. 문서 변경은 diff-check로 확인하며 코드/단위시험 성공을 운영 증거로 대신하지 않는다.
+- 복구/후속: F05 전용 예약을 먼저 비활성화하고 실행 중 회차의 종료/효과를 확인한 뒤 기존 private backup과 현재 환경 hash를 대조해 시간당 F05 목록만 복구한다. live pid 잠금 삭제·무검토 재실행·차종/보증금 HOLD 우회는 하지 않는다. F01와 빠진 탭의 완결 증거는 위 별도 담당 작업의 실제 readback을 확인한다.
+
 ### 2026-10-18 확정값 정정 전용 경로 — 로컬 구현, 운영 미적용
 
 - 목적 / 대상 revision: `f286e4036c10a7df32f59dfe5b189c7a23504bbb`, `work/vehicle-identity-correction`. 기존 수리기·비공개 백업·감사 컬렉션을 확장했다. Academy READY. 원격 조회·커밋·푸시 없이 PC1 Claude 검토용 작업 트리로 남긴다.
