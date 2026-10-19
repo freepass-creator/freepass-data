@@ -10,7 +10,7 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type Sha
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations, runUnattended } from '../src/runtime/source-cycle-runtime.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { ingestSharedSheetObservedRows } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
@@ -357,6 +357,17 @@ describe('existing unattended F05 producer source-head stage',()=>{
     expect(await control.load()).toMatchObject({stopped:true,error:'APPLY_UNCERTAIN',sourceObservationIntent:{runId:'intent-run'}});
     await expect(refreshF05SourceObservations(env,undefined,ports)).rejects.toThrow('UNCERTAIN_REQUIRES_READBACK');
     expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledTimes(2);
+  });
+  it('keeps legacy product writes running while an uncertain source head stays non-green',async()=>{
+    const {commands,fake,dir}=await setup();
+    const control=fileCycleControl(dir,async(source,state)=>{await appendFile(join(dir,'heartbeats.jsonl'),JSON.stringify({source,...state})+'\n');});
+    await control.save('F05_SOURCE_ROWS',{...emptyCycleState(),stopped:true,error:'APPLY_UNCERTAIN'});
+    const at=new Date().toISOString(),record={...product().record,observedAt:at};
+    const plugin=sourceCyclePlugin({sourceId:source,kind:'IRON',scopes:['inventory'],maxDowngradeRatio:1},async()=>({observedAt:at,complete:true,completedScopes:['inventory'],visibilityComplete:true,heldCount:0,rows:[{scope:'inventory',record}]}));
+    const result=await runUnattended([],{...env,SHEETS_TRANSPORT:'adc',SOURCE_CYCLE_PRIVATE_DIR:dir},[],{gwsBin:()=>null,gcloudToken:async()=>'synthetic'},()=>({plugins:[plugin],commands,control,directory:dir,identityStatus:()=> 'DISABLED',f05ObservedCapture:async()=>{throw Error('MUST_NOT_RETRY_UNKNOWN_HEAD');}}));
+    expect(result.sourceObservations).toMatchObject({status:'APPLY_UNCERTAIN',reasonCode:'F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK'});
+    expect(result.reports![0]!.status).toBe('APPLIED');expect(fake.calls.some(c=>c.method==='PATCH')).toBe(true);
+    expect(result.exit).toBe(1);expect((await control.load('F05_SOURCE_ROWS')).error).toBe('APPLY_UNCERTAIN');
   });
 });
 describe('native mappings and UID', () => {
