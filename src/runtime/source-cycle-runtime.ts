@@ -129,9 +129,13 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
+    const eligibleTrims = new Set(records.map(r => r.trimId));
     return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
       allowsYear: (id, year) => Number.isInteger(year) && masters.some(m => m.id === id && m.yearFrom !== null &&
-        year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)),
+        year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)) &&
+        (year <= new Date(now()).getUTCFullYear() || snapshot.trims.some(t => eligibleTrims.has(t.id) &&
+          t.data.master_id === id && /^(?:19|20)\d{2}$/.test(String(t.data.model_year_start ?? '')) &&
+          Number(t.data.model_year_start) === year)),
       ...modelTablesFromMasters(masters),
       // 확정 정체성 → vehicle_trim_master 연료(하나로 모일 때만, 대표 2026-10-19): 제원 채움이 원천에 연료가 없을 때만 쓴다.
       trimFuel: masterTrimFuelLookup(records) } };
@@ -201,7 +205,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, specFillSources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
+      sourceIdentitySources, specFillSources,
+      provenanceUids: (env.SOURCE_CYCLE_PROVENANCE_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

@@ -200,6 +200,7 @@ describe('차종 마스터 스냅샷 → 대조기 (회차당 한 번, 실패 �
     expect(ok.refiner?.match({ rawName: '아이오닉5 프레스티지', year: '2019' })).not.toBeNull();   // 후보가 하나면 연식으로 거르지 않는다(기존 규칙 그대로)
     expect(ok.refiner?.allowsYear?.('vm1', 2019)).toBe(false);
     expect(ok.refiner?.allowsYear?.('vm1', 2023)).toBe(true);
+    expect(ok.refiner?.allowsYear?.('vm1', 2029)).toBe(false);
     expect(ok.refiner?.allowsYear?.('unknown-master', 2023)).toBe(false);
     expect(await loadIdentityRefiner(async () => { throw new Error('PERMISSION_DENIED'); })).toEqual({ status: 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null });
     expect(await loadIdentityRefiner(async () => snapshot(), () => Date.parse(readAt) + 3_600_000)).toEqual({ status: 'SKIPPED:VEHICLE_MASTER_INVALID', refiner: null });
@@ -229,5 +230,17 @@ describe('차종 마스터 스냅샷 → 대조기 (회차당 한 번, 실패 �
       await vi.advanceTimersByTimeAsync(1401);
       expect((await frozen).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
     } finally { vi.useRealTimers(); }
+  });
+  it('requires an explicit eligible trim model-year declaration before accepting a future source year', async () => {
+    const s = snapshot();
+    Object.assign(s.trims[0]!.data, { model_year_start: '2027' });
+    s.digest = createHash('sha256').update(JSON.stringify({ readAt: s.readAt, masters: s.masters, trims: s.trims })).digest('hex');
+    const r = await loadIdentityRefiner(async () => s, () => Date.parse(readAt) + 1000);
+    expect(r.refiner?.allowsYear?.('vm1', 2027)).toBe(true);
+    expect(r.refiner?.allowsYear?.('vm1', 2029)).toBe(false);
+    Object.assign(s.trims[0]!.data, { retired: true });
+    s.digest = createHash('sha256').update(JSON.stringify({ readAt: s.readAt, masters: s.masters, trims: s.trims })).digest('hex');
+    const retired = await loadIdentityRefiner(async () => s, () => Date.parse(readAt) + 1000);
+    expect(retired.refiner?.allowsYear?.('vm1', 2027)).toBe(false);
   });
 });
