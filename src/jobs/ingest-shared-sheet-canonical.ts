@@ -2,7 +2,7 @@ import { sourceFeeLineage } from '../application/kakao-catalog-reference.js';
 import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, SHARED_SHEET_COLOR_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
 import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentityInputs, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
@@ -64,7 +64,7 @@ export function assertReviewedPlanGeneration(expected: string, before: string, a
     throw new Error('REVIEWED_PLAN_GENERATION_CHANGED');
 }
 /** Capture observation times/digests are not supplier facts. Correction times and supplier provenance identities remain significant. */
-export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: SharedSheetCapture, now = Date.now()) {
+export function assertLiveSharedSheetMatches(plan: Pick<SharedSheetPlan, 'capture'>, live: SharedSheetCapture, now = Date.now(), requireMaster = true) {
   buildSharedSheetBatch(plan.capture); buildSharedSheetBatch(live);
   if (Date.parse(live.readTime) <= Date.parse(plan.capture.readTime)) throw new Error('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
   if ([live.readTime, ...live.tabs.map(t => t.readTime)].some(at => Date.parse(at) > now || now - Date.parse(at) > 120_000))
@@ -77,8 +77,10 @@ export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: Shared
   if (stableDigest(semantic(plan.capture)) !== stableDigest(semantic(live)))
     throw new Error('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
   const master = live.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined;
-  if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
-  verifiedMasterRecords(master, now);
+  if (requireMaster) {
+    if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+    verifiedMasterRecords(master, now);
+  }
 }
 /**
  * The sealed master snapshot must be fresh at the entry fence (CLI start). After that fence an apply may legitimately run for
@@ -95,14 +97,19 @@ export function identityResolver(inputs: VehicleIdentityInputs | undefined, inFl
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear, ...(row.specs ? { specs: row.specs } : {}) });
 }
-function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false) {
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false, sourceObservationsOnly = false) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
   const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
-  const master = snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, { includeSupplierColors });
+  const master = (() => {
+    try { return snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined; }
+    catch (error) { if (!sourceObservationsOnly) throw error; return undefined; }
+  })();
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, {
+    includeSupplierColors, ...(sourceObservationsOnly ? { sourceEngineRentRules: true } : {}),
+  });
   const normalize: typeof normalizeBase = raw => {
     const normalized = normalizeBase(raw);
     return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};
@@ -114,7 +121,54 @@ function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityI
     rawCount: p.rawRecords.length, candidateCount: normalized.length,
     lineageCount: normalized.reduce((n, x) => n + x.lineage.length, 0), warningCount: normalized.filter(x => x.record.status !== 'VALID').length };
   const head: SourceHead = { sourceId: p.sourceId, runId: p.runId, observedAt: batch.observedAt, acceptedAt: batch.observedAt, checkpoint, coverage: batch.coverage };
-  return { ...p, batch, normalized, run, head, normalize };
+  return { ...p, batch, normalized, run, head, normalize, masterEvidenceState: master ? 'VERIFIED' as const : 'UNAVAILABLE_OR_UNVERIFIED' as const };
+}
+
+/** Existing F05 producer may persist every observed row without running physical
+ * Canonical commands. The caller retains the single collector lease and audited
+ * SourceIngestionStore gateway; this function creates no transport or writer.
+ */
+export async function ingestSharedSheetObservedRows(source: SourceIngestionStore, input: {
+  target: 'freepasserp5' | 'memory'; capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
+  claimEffect?: (intent: { sourceId: string; runId: string; sourceDigest: string; observedAt: string }) => Promise<void>;
+}) {
+  if (!['freepasserp5', 'memory'].includes(input.target)) throw new Error('SHARED_SOURCE_TARGET_INVALID');
+  if (input.target === 'freepasserp5') assertCurrentSharedSheetSource(input.capture.spreadsheetId);
+  const now = Date.now();
+  if ([input.capture.readTime, ...input.capture.tabs.map(t => t.readTime)].some(at =>
+    !Number.isFinite(Date.parse(at)) || Date.parse(at) > now || now - Date.parse(at) > 120_000)) {
+    throw new Error('SHARED_SOURCE_CAPTURE_STALE');
+  }
+  // Missing identity authority HOLDs names, not the independently observed rows,
+  // prices or other atomic facts. Physical Canonical apply keeps its strict fence.
+  assertLiveSharedSheetMatches({ capture: input.capture }, input.liveCapture, now, false);
+  const p = prepared(input.capture, undefined, true, false, true);
+  await input.claimEffect?.({ sourceId: p.sourceId, runId: p.runId, sourceDigest: p.sourceChecksum, observedAt: input.capture.readTime });
+  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize, undefined, { writeConcurrency: 8 });
+  const head = await source.getSourceHead(p.sourceId);
+  if (run.headStatus !== 'CURRENT' || head?.runId !== run.runId) throw new Error('SHARED_SOURCE_HEAD_NOT_CURRENT');
+  const [raw, candidates, lineage] = await Promise.all([
+    source.listRaw(run.runId), source.listCandidates(run.runId), source.listLineage(run.runId),
+  ]);
+  const rawKey = (r: typeof raw[number]) => [r.rawRecordId, r.sourceRecordId, r.sourceFingerprint, r.payload];
+  const ordered = (rows: unknown[]) => rows.map(r => stableDigest(r)).sort();
+  const normalized = raw.map(r => p.normalize(r));
+  if (raw.length !== p.rawRecords.length || candidates.length !== raw.length ||
+      lineage.length !== run.lineageCount ||
+      stableDigest(ordered(raw.map(rawKey))) !== stableDigest(ordered(p.rawRecords.map(rawKey))) ||
+      stableDigest(ordered(candidates)) !== stableDigest(ordered(normalized.map(n => n.record))) ||
+      stableDigest(ordered(lineage)) !== stableDigest(ordered(normalized.flatMap(n => n.lineage)))) {
+    throw new Error('SHARED_SOURCE_READBACK_MISMATCH');
+  }
+  if (stableDigest(await source.getSourceHead(p.sourceId)) !== stableDigest(head)) throw new Error('SHARED_SOURCE_HEAD_DRIFT');
+  return { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1' as const,
+    mode: 'SOURCE_OBSERVATIONS_ONLY' as const, status: 'SOURCE_HEAD_VERIFIED' as const,
+    sourceId: p.sourceId, runId: run.runId, observedAt: run.observedAt, rawRows: raw.length,
+    candidateRows: candidates.length, heldCandidateRows: candidates.filter(c => c.status !== 'VALID').length,
+    priceConditions: candidates.reduce((n, c) => n + c.candidate.priceTerms.length, 0),
+    lineageRows: lineage.length, coverage: run.coverage, canonicalWrites: 0,
+    publicationDecision: 'HOLD_PRESERVED' as const, sourceDigest: p.sourceChecksum, masterEvidenceState: p.masterEvidenceState,
+    verifiedAt: new Date().toISOString(), readback: { rawRows: raw.length, candidateRows: candidates.length, lineageRows: lineage.length, mismatches: 0 } };
 }
 function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogStore {
   // Read-only prospective evidence. No transaction or SourceIngestionStore write in planning.

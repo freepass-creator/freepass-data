@@ -56,8 +56,11 @@ export async function ingestRawSourceBatch(
   input: SourceIntakeBatch,
   now = new Date().toISOString(),
   normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] } | null,
-  evidenceLineage?: (raw: RawRecord) => FieldLineageRecord[]
+  evidenceLineage?: (raw: RawRecord) => FieldLineageRecord[],
+  options: { writeConcurrency?: number } = {}
 ): Promise<SourceRun> {
+  const writeConcurrency = options.writeConcurrency ?? 1;
+  if (!Number.isInteger(writeConcurrency) || writeConcurrency < 1 || writeConcurrency > 8) throw new Error('SOURCE_WRITE_CONCURRENCY_INVALID');
   if (!Number.isFinite(Date.parse(now))) {
     throw new Error('INVALID_SOURCE_INTAKE_COMPLETED_AT');
   }
@@ -130,7 +133,7 @@ export async function ingestRawSourceBatch(
 
   try {
     let candidateCount = 0, lineageCount = 0, warningCount = 0;
-    for (const raw of rawRecords) {
+    const persistRow = async (raw: RawRecord) => {
       if (normalize) {
         const prior = firstSeen.get(raw.sourceRecordId);
         raw.firstObservedAt = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? prior : raw.observedAt;
@@ -147,13 +150,28 @@ export async function ingestRawSourceBatch(
       }
       if (normalize) {
         const normalized = normalize(structuredClone(raw));
-        if (!normalized) continue;
+        if (!normalized) return;
         await store.appendCandidate(normalized.record);
         for (const item of normalized.lineage) await store.appendLineage(item);
         candidateCount++;
         lineageCount += normalized.lineage.length;
         if (normalized.record.status !== 'VALID') warningCount++;
       }
+    };
+    if (writeConcurrency === 1) {
+      for (const raw of rawRecords) await persistRow(raw);
+    } else {
+      let next = 0, failed = false;
+      let writeFailure: unknown;
+      await Promise.all(Array.from({ length: Math.min(writeConcurrency, rawRecords.length) }, async () => {
+        while (!failed && next < rawRecords.length) {
+          const raw = rawRecords[next++]!;
+          try { await persistRow(raw); }
+          catch (error) { if (!failed) writeFailure = error; failed = true; }
+        }
+      }));
+      // No head promotion/failRun while another row write remains in flight.
+      if (failed) throw writeFailure;
     }
 
     await store.completeRun({

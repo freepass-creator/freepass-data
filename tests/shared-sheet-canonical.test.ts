@@ -7,7 +7,7 @@ import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetCaptureDigest, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
-import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact, assertSharedSheetPlan, assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertLiveSharedSheetMatches, main as ingestMain } from '../src/jobs/ingest-shared-sheet-canonical.js';
+import { ingestSharedSheetObservedRows, planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact, assertSharedSheetPlan, assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertLiveSharedSheetMatches, main as ingestMain } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -98,6 +98,73 @@ function later(c: SharedSheetCapture) {
   for (const t of c.tabs) t.readTime = c.readTime;
   return c;
 }
+
+describe('same F05 producer source observations without physical Canonical commands',()=>{
+  const fresh=(overrides:Record<string,SheetCell>={})=>{
+    const c=capture({'1개월':300000,'12개월':400000,'24개월':500000,...overrides});delete c.revision;
+    c.readTime=new Date(Date.now()-2000).toISOString();for(const t of c.tabs)t.readTime=c.readTime;
+    c.digest=sharedSheetCaptureDigest(c);
+    const live=structuredClone(c);live.readTime=new Date(Date.now()-1000).toISOString();for(const t of live.tabs)t.readTime=live.readTime;
+    live.digest=sharedSheetCaptureDigest(live);return {target:'memory' as const,capture:c,liveCapture:live};
+  };
+  it('keeps unnumbered rejected rows, known prices and facts in the accepted head',async()=>{
+    const source=new MemorySourceStore();const input=fresh({차량번호:'신차',세부트림:''});
+    const result=await ingestSharedSheetObservedRows(source,input);
+    expect(result).toMatchObject({status:'SOURCE_HEAD_VERIFIED',rawRows:1,candidateRows:1,heldCandidateRows:1,canonicalWrites:0,publicationDecision:'HOLD_PRESERVED'});
+    const raw=await source.listRaw(result.runId),candidates=await source.listCandidates(result.runId);
+    expect(raw[0]!.payload.values).toEqual(input.capture.tabs.find(t=>t.title==='웰릭스')!.values[1]);
+    expect(candidates[0]!.status).toBe('REJECTED');expect(candidates[0]!.candidate.priceTerms).toHaveLength(3);
+    expect(candidates[0]!.candidate.vehicleFacts!.fields.fuel).toMatchObject({value:'하이브리드',state:'KNOWN'});
+    expect(await source.getSourceHead(result.sourceId)).toMatchObject({runId:result.runId,observedAt:input.capture.readTime});
+    const replay=await ingestSharedSheetObservedRows(source,input);expect(replay.runId).toBe(result.runId);
+    expect(await source.listRaw(replay.runId)).toHaveLength(1);
+  });
+  it('rejects source drift and stale evidence before starting a durable run',async()=>{
+    const source=new MemorySourceStore(),begin=vi.spyOn(source,'beginRun');
+    const changed=fresh();changed.liveCapture.tabs.find(t=>t.title==='웰릭스')!.values[1]![0]='변경';changed.liveCapture.digest=sharedSheetCaptureDigest(changed.liveCapture);
+    await expect(ingestSharedSheetObservedRows(source,changed)).rejects.toThrow('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
+    const stale=fresh();stale.liveCapture.readTime=new Date(Date.now()-130000).toISOString();for(const t of stale.liveCapture.tabs)t.readTime=stale.liveCapture.readTime;stale.liveCapture.digest=sharedSheetCaptureDigest(stale.liveCapture);
+    await expect(ingestSharedSheetObservedRows(source,stale)).rejects.toThrow();expect(begin).not.toHaveBeenCalled();
+    const old=fresh();old.capture.readTime=new Date(Date.now()-130000).toISOString();for(const t of old.capture.tabs)t.readTime=old.capture.readTime;old.capture.digest=sharedSheetCaptureDigest(old.capture);
+    await expect(ingestSharedSheetObservedRows(source,old)).rejects.toThrow('SHARED_SOURCE_CAPTURE_STALE');expect(begin).not.toHaveBeenCalled();
+  });
+  it('fails readback instead of claiming that dropped source rows are fresh',async()=>{
+    class BrokenReadback extends MemorySourceStore { override async listCandidates(){return [];} }
+    await expect(ingestSharedSheetObservedRows(new BrokenReadback(),fresh())).rejects.toThrow('SHARED_SOURCE_READBACK_MISMATCH');
+  });
+  it('stores known row facts while missing master authority keeps identity on HOLD',async()=>{
+    const source=new MemorySourceStore(),input=fresh();
+    delete input.capture.vehicleMasterSnapshot;delete input.liveCapture.vehicleMasterSnapshot;
+    input.capture.digest=sharedSheetCaptureDigest(input.capture);input.liveCapture.digest=sharedSheetCaptureDigest(input.liveCapture);
+    const result=await ingestSharedSheetObservedRows(source,input);
+    expect(result).toMatchObject({status:'SOURCE_HEAD_VERIFIED',heldCandidateRows:1,masterEvidenceState:'UNAVAILABLE_OR_UNVERIFIED',canonicalWrites:0});
+    const candidate=(await source.listCandidates(result.runId))[0]!;
+    expect(candidate.candidate.priceTerms).toHaveLength(3);
+    expect(candidate.candidate.vehicleFacts!.fields.maker!.value).toBeNull();
+    expect(candidate.candidate.issues).toContain('VEHICLE_MASTER_SNAPSHOT_REQUIRED');
+  });
+  it('advances the existing head for a newer observation and preserves the old RAW history',async()=>{
+    const source=new MemorySourceStore(),first=await ingestSharedSheetObservedRows(source,fresh({차량번호:'123가4567'}));
+    const next=fresh({차량번호:'123가4567','12개월':606000});
+    next.capture.readTime=new Date(Date.now()-500).toISOString();for(const t of next.capture.tabs)t.readTime=next.capture.readTime;
+    next.liveCapture.readTime=new Date(Date.now()-100).toISOString();for(const t of next.liveCapture.tabs)t.readTime=next.liveCapture.readTime;
+    next.capture.digest=sharedSheetCaptureDigest(next.capture);next.liveCapture.digest=sharedSheetCaptureDigest(next.liveCapture);
+    const second=await ingestSharedSheetObservedRows(source,next);
+    expect(second.runId).not.toBe(first.runId);
+    expect(await source.getSourceHead(second.sourceId)).toMatchObject({runId:second.runId,observedAt:next.capture.readTime});
+    expect(await source.listRaw(first.runId)).toHaveLength(1);
+    const raw=(await source.listRaw(second.runId))[0]!;expect(raw.firstObservedAt).toBe(first.observedAt);
+    expect((await source.listCandidates(second.runId))[0]!.candidate.priceTerms.find(t=>t.termMonths===12)!.monthlyRent.amount).toBe(606000);
+  });
+  it('uses the same native rent guard and preserves suspicious amounts only in RAW',async()=>{
+    const source=new MemorySourceStore(),input=fresh({'12개월':48000});
+    const result=await ingestSharedSheetObservedRows(source,input);
+    const candidate=(await source.listCandidates(result.runId))[0]!.candidate;
+    expect(candidate.priceTerms.some(t=>t.termMonths===12)).toBe(false);
+    expect(candidate.issues).toContain('RENT_REVIEW_REQUIRED');
+    expect(((await source.listRaw(result.runId))[0]!.payload.values as unknown[])[sharedSheetHeaders.indexOf('12개월')]).toBe(48000);
+  });
+});
 describe('shared sheet local source to Canonical', () => {
   it('searches products by supplier and name without requiring a vehicle number and preserves every stored fact', async () => {
     const s = await stores(); await apply(s);
