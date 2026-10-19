@@ -644,6 +644,9 @@ export function unattendedExitCode(input: { statuses: readonly string[]; freshne
 }
 
 type F05SourceObservationReport = Awaited<ReturnType<typeof ingestSharedSheetObservedRows>>;
+type F05SourceObservationFailure = { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1';
+  mode: 'SOURCE_OBSERVATIONS_ONLY'; status: 'HOLD' | 'APPLY_UNCERTAIN'; reasonCode: string;
+  intent?: Awaited<ReturnType<CycleControl['load']>>['sourceObservationIntent'] };
 /** Called only by the existing full F05 unattended producer. Activation follows
  * the single-owner cutover; manual plans and all other collectors stay unchanged.
  */
@@ -692,7 +695,8 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
   } finally { await release(); }
 }
 
-export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
+export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes,
+  runtimeFactory: typeof createSourceCycleRuntime = createSourceCycleRuntime) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
   const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string; configNotices?: string[];
@@ -706,7 +710,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     /** 신선도 판정을 종료 코드에 쓰지 않은 사유 코드(SKIPPED_ALL_LOCKED = 모든 원천이 다른 회차의 잠금으로 건너뜀). */
     freshnessNote?: string;
     /** 정체성 정제 상태: ENABLED:<마스터 digest 앞 12> · SKIPPED:<사유 코드>(정제 안 함 = 지금 동작) · DISABLED · NOT_LOADED(목록을 읽지 않음). */
-    identityRefine?: string; sourceObservations?: F05SourceObservationReport } = { started: new Date().toISOString(), finished: '', exit: 0 };
+    identityRefine?: string; sourceObservations?: F05SourceObservationReport | F05SourceObservationFailure } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
   await mkdir(directory, { recursive: true });
@@ -722,13 +726,24 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     record.preflight = await unattendedPreflight(env, kinds, probes);
     if (record.preflight.length) { record.exit = 1; await alert(record.preflight.join(',')); }
     else {
-      const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
+      const runtime = runtimeFactory(env, fetch, acceptDrift);
       const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
-      const sourceObservations = await refreshF05SourceObservations(env, source, {
-        acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture, control: runtime.control,
-      });
-      if (sourceObservations) record.sourceObservations = sourceObservations;
+      try {
+        const sourceObservations = await refreshF05SourceObservations(env, source, {
+          acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture, control: runtime.control,
+        });
+        if (sourceObservations) record.sourceObservations = sourceObservations;
+      } catch (error) {
+        const reasonCode = error instanceof Error && /^[A-Z0-9_]{1,100}$/.test(error.message) ? error.message : 'F05_SOURCE_ROWS_FAILED';
+        const state = await runtime.control.load('F05_SOURCE_ROWS').catch(() => null);
+        record.sourceObservations = { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1',
+          mode: 'SOURCE_OBSERVATIONS_ONLY', status: state?.error === 'APPLY_UNCERTAIN' ? 'APPLY_UNCERTAIN' : 'HOLD',
+          reasonCode, ...(state?.sourceObservationIntent ? { intent: state.sourceObservationIntent } : {}) };
+        record.exit = 1; await alert(`F05_SOURCE_ROWS:${reasonCode}`);
+        // Preserve the existing product collector; failed source storage is
+        // independently non-green and its uncertain effect remains fenced.
+      }
       record.reports = [];
       // 직전 회차 기록의 원천별 «적용 뒤 노출 수» — 이번 회차 시작 노출 수와 비교해 회차 밖 증감(다른 쓰기 주체·수동 작업)을 표시한다.
       const priorAfter = new Map<string, number>();
@@ -782,7 +797,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           sourceThresholds: env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS !== undefined ? parseFreshnessThresholds(env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS)
             : sonogongApiEnabled(env) ? parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT') : [] });
       const decided = unattendedExitCode({ statuses: record.reports.map(r => r.status), freshnessStatus: record.freshness.status, requestRun: env.SOURCE_CYCLE_REQUEST_RUN === '1' });
-      record.exit = decided.exit;
+      record.exit = record.sourceObservations && record.sourceObservations.status !== 'SOURCE_HEAD_VERIFIED' ? 1 : decided.exit;
       if (decided.freshnessSkipped) record.freshnessNote = 'SKIPPED_ALL_LOCKED';
     }
   } catch (e) {
