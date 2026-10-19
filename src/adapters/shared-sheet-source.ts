@@ -55,7 +55,7 @@ export function sharedSheetChannelOf(tab: string, company: unknown) {
   const name = String(company ?? '').trim();
   const registered = sharedSheetChannels.filter(c => c.tab === tab);
   return registered.find(c => c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name))
-    ?? (!name && registered.length === 1 ? registered[0] : undefined);
+    ?? (!name && registered.length === 1 && sharedSheetRegisteredChannels.filter(c => c.tab === tab).length === 1 ? registered[0] : undefined);
 }
 export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
   !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
@@ -125,7 +125,7 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
         spreadsheetId: c.spreadsheetId, revision: c.revision ?? null, captureDigest: digest, rowDigest,
         supplierCode: r.supplierCode, quarantine,
         ...(r.supplierCode && !String(r.values[0] ?? '').trim()
-          ? { supplierCodeBasis: 'REGISTERED_EXCLUSIVE_TAB_OWNER' } : {}),
+          ? { supplierCodeBasis: 'REGISTERED_EXCLUSIVE_TAB_OWNER', supplierRegistryDigest: SHARED_SHEET_SPEC_DIGEST } : {}),
         // Evidence beside the row, outside rowDigest/fingerprint: the sheet values themselves stay the RAW of record.
         ...(rowKey && entered.has(rowKey) ? { supplierEntered: entered.get(rowKey)![0] } : {}),
         ...(rowKey && corrections.has(rowKey) ? { corrections: corrections.get(rowKey) } : {}) } };

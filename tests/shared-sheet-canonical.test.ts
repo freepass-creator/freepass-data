@@ -4,7 +4,7 @@ import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../src/adapte
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
-import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetCaptureDigest, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
+import { buildSharedSheetBatch, SHARED_SHEET_SPEC_DIGEST, sharedSheetChannels, sharedSheetHeaders, sharedSheetCaptureDigest, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { ingestSharedSheetObservedRows, planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact, assertSharedSheetPlan, assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertLiveSharedSheetMatches, main as ingestMain } from '../src/jobs/ingest-shared-sheet-canonical.js';
@@ -124,7 +124,7 @@ describe('same F05 producer source observations without physical Canonical comma
     const before=structuredClone(input.capture);
     const result=await ingestSharedSheetObservedRows(source,input);
     const [raw]=await source.listRaw(result.runId),[candidate]=await source.listCandidates(result.runId);
-    expect(raw!.payload).toMatchObject({supplierCode:'RP013',supplierCodeBasis:'REGISTERED_EXCLUSIVE_TAB_OWNER'});
+    expect(raw!.payload).toMatchObject({supplierCode:'RP013',supplierCodeBasis:'REGISTERED_EXCLUSIVE_TAB_OWNER',supplierRegistryDigest:SHARED_SHEET_SPEC_DIGEST});
     expect((raw!.payload.values as unknown[])[0]).toBe('');
     expect(candidate!.candidate.providerCompanyCode).toBe('RP013');
     expect(candidate!.candidate.priceTerms).toHaveLength(3);
