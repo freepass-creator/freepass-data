@@ -58,6 +58,8 @@ export type VehicleIdentityRefinement = { maker: string; model: string; sub_mode
 export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
   /** Verified same-snapshot records for the existing structured shared-sheet normalizer; never a second name authority. */
   sourceYearEvidence?: { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
+  /** Reviewed exact UID scope for F05 year carry-through. Runtime always supplies it; empty means no year writes. */
+  sourceYearUids?: ReadonlySet<string>;
   /** Explicit source-year admission against the matched active master's recorded range.
    * Identity matching alone may accept a sole candidate outside its years; that is not year evidence. */
   allowsYear?: (masterId: string, year: number) => boolean;
