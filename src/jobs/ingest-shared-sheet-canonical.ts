@@ -128,6 +128,7 @@ function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityI
  */
 export async function ingestSharedSheetObservedRows(source: SourceIngestionStore, input: {
   target: 'freepasserp5' | 'memory'; capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
+  claimEffect?: (intent: { sourceId: string; runId: string; sourceDigest: string; observedAt: string }) => Promise<void>;
 }) {
   if (!['freepasserp5', 'memory'].includes(input.target)) throw new Error('SHARED_SOURCE_TARGET_INVALID');
   if (input.target === 'freepasserp5') assertCurrentSharedSheetSource(input.capture.spreadsheetId);
@@ -140,6 +141,7 @@ export async function ingestSharedSheetObservedRows(source: SourceIngestionStore
   // prices or other atomic facts. Physical Canonical apply keeps its strict fence.
   assertLiveSharedSheetMatches({ capture: input.capture }, input.liveCapture, now, false);
   const p = prepared(input.capture, undefined, true, false, true);
+  await input.claimEffect?.({ sourceId: p.sourceId, runId: p.runId, sourceDigest: p.sourceChecksum, observedAt: input.capture.readTime });
   const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize, undefined, { writeConcurrency: 8 });
   const head = await source.getSourceHead(p.sourceId);
   if (run.headStatus !== 'CURRENT' || head?.runId !== run.runId) throw new Error('SHARED_SOURCE_HEAD_NOT_CURRENT');

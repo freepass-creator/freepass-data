@@ -26,7 +26,7 @@ import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-a
 import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
-import type { CyclePlan, VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
 import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
@@ -650,9 +650,11 @@ type F05SourceObservationReport = Awaited<ReturnType<typeof ingestSharedSheetObs
 export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selectedSource: string | undefined, ports: {
   acquire: (source: string) => Promise<null | (() => Promise<void>)>;
   observedCapture?: () => Promise<SharedSheetCapture>;
+  control?: Pick<CycleControl, 'load' | 'save'>;
   capture?: (id: string) => Promise<SharedSheetCapture>;
   master?: () => Promise<unknown>;
-  persist?: (input: { capture: SharedSheetCapture; liveCapture: SharedSheetCapture }) => Promise<F05SourceObservationReport>;
+  persist?: (input: { capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
+    claimEffect: NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']> }) => Promise<F05SourceObservationReport>;
 }) {
   if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') return null;
   const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(k => k.trim()).filter(Boolean);
@@ -660,9 +662,12 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
   const id = env.SOURCE_CYCLE_F05_SHEET_ID?.trim();
   if (!id) throw new Error('F05_SOURCE_ROWS_SHEET_REQUIRED');
   if (!ports.observedCapture) throw new Error('F05_SOURCE_ROWS_PRODUCER_CAPTURE_REQUIRED');
+  if (!ports.control) throw new Error('F05_SOURCE_ROWS_CONTROL_REQUIRED');
   const release = await ports.acquire('F05_SOURCE_ROWS');
   if (!release) throw new Error('F05_SOURCE_ROWS_LOCKED');
   try {
+    const state = await ports.control.load('F05_SOURCE_ROWS');
+    if (state.error === 'APPLY_UNCERTAIN') throw new Error('F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK');
     const capture = ports.capture ?? (async (sheetId: string) => { assertCurrentSharedSheetSource(sheetId); return captureSharedSheetReadOnly(sheetId); });
     const first = await ports.observedCapture();
     const master = await (ports.master ?? captureVehicleMasterSnapshotReadOnly)().catch(() => undefined);
@@ -672,7 +677,18 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
     const persist = ports.persist ?? (input => withSharedSheetCatalogAccess(true,
       stableDigest({ operation: 'F05_SOURCE_OBSERVATIONS_ONLY', capture: input.capture.digest, live: input.liveCapture.digest }),
       async (_catalog, source) => ingestSharedSheetObservedRows(source, { target: 'freepasserp5', ...input })));
-    return await persist({ capture: first, liveCapture: live });
+    let claimed = false;
+    const claimEffect: NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']> = async intent => {
+      state.stopped = true; state.error = 'APPLY_UNCERTAIN'; state.lastAttemptAt = new Date().toISOString();
+      state.sourceObservationIntent = intent;
+      await ports.control!.save('F05_SOURCE_ROWS', state); claimed = true;
+    };
+    const report = await persist({ capture: first, liveCapture: live, claimEffect });
+    if (!claimed) throw new Error('F05_SOURCE_ROWS_EFFECT_JOURNAL_REQUIRED');
+    state.stopped = false; state.error = null; state.lastCompleteAt = report.verifiedAt;
+    state.readCount = report.rawRows; state.heldCount = report.heldCandidateRows;
+    await ports.control.save('F05_SOURCE_ROWS', state);
+    return report;
   } finally { await release(); }
 }
 
@@ -710,7 +726,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
       const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
       const sourceObservations = await refreshF05SourceObservations(env, source, {
-        acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture,
+        acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture, control: runtime.control,
       });
       if (sourceObservations) record.sourceObservations = sourceObservations;
       record.reports = [];

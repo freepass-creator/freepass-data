@@ -100,6 +100,8 @@ export type CyclePlan = {
   warnings: string[]; unassignedPlateCount: number;
 };
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
+  /** Existing F05 producer's write-ahead reconciliation pointer; never source values or credentials. */
+  sourceObservationIntent?: { sourceId: string; runId: string; sourceDigest: string; observedAt: string };
   /** Most recent clock diagnosis, retained on success. checkedAt is history, never the current health status. */
   lastReadClockDiagnostic?: SourceClockDiagnostic;
   observationOnlyCount?: number;
