@@ -392,7 +392,8 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
 }
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
   identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null,
-  specSources: ReadonlySet<string> | null = sourceIdentitySources, trimFuel: VehicleIdentityRefiner['trimFuel'] | null = null): CycleProduct {
+  specSources: ReadonlySet<string> | null = sourceIdentitySources, trimFuel: VehicleIdentityRefiner['trimFuel'] | null = null,
+  provenanceUids: ReadonlySet<string> = new Set()): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -438,6 +439,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 제원 채움 공급사(specSources): 입구 매핑 공급사 + 제원 채움만 켠 공급사(SOURCE_CYCLE_SPEC_FILL_SOURCES).
   const specAllowed = !!specSources && specSources.has(String(f.provider_company_code)) && engineOwned;
   const lockedNow = isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record));
+  // Opt-in exact UID repair through the existing fresh-source plan/CAS/backup writer. No record alone proves current provenance.
+  if (provenanceUids.has(uid) && engineOwned && !lockedNow && record.raw.source === 'shared-sheet'
+    && f.source_cycle_write == null && !f.publication_withdrawal && !f._deleted && !f.deletedAt
+    && !['RP012', 'RP031'].includes(record.sourceId)) rewriteReasons.push('SOURCE_PROVENANCE');
   let specRefillKeys: string[] = [];
   if (specAllowed
     && (f.vehicle_spec_source_checked === undefined || f.vehicle_spec_source_checked === null)
@@ -581,6 +586,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
   /** 제원 채움만 켤 공급사(입구 매핑 없이 빈 제원 칸 채움·다시 채움, 대표 2026-10-19). 입구 매핑 공급사는 이 목록과 상관없이 제원도 채운다. */
   specFillSources?: readonly string[];
+  /** Default off. Exact reviewed shared-sheet UID scope for missing writer provenance. */
+  provenanceUids?: readonly string[];
   /** 정체성 정제(마스터 이름 채움)를 켤 공급사 코드 목록(IDENTITY-SAME-CYCLE-DESIGN 2단계). 값이 있으면 그 공급사만, 없으면(undefined) identityRefine 이 전체를 정한다. */
   identityRefineSources?: readonly string[];
   /** 회차마다 한 번 읽은 활성 차종 마스터 대조기(같은 Promise 를 돌려준다). 없거나 실패(null)면 정체성 정제를 하지 않는다(지금 동작, fail-closed). */
@@ -600,7 +607,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const refineFor = (source: unknown) => (options.identityRefine === false ? null : refineSources && !refineSources.has(String(source ?? '')) ? null : refiner);
   const docSource = (d: Doc) => { const v = (d.fields as Record<string, { stringValue?: string }> | undefined)?.provider_company_code; return v?.stringValue ?? ''; };
   const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null);
+  const provenanceUids = new Set(options.provenanceUids ?? []);
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids);
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
     sourceIdentitySources: srcIdentity, specFillSources: specSrc, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
@@ -717,7 +725,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');

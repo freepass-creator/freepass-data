@@ -206,7 +206,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, specFillSources, identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
+      sourceIdentitySources, specFillSources,
+      provenanceUids: (env.SOURCE_CYCLE_PROVENANCE_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });

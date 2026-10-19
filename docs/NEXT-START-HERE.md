@@ -1,5 +1,11 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-19 PC3 original117 — shared-sheet deposit evidence repair pending activation
+
+- Five public products have explicit current shared-sheet `무보증` terms and stored zero, while readers use stale legacy RAW amounts or lack waiver evidence. Four other mismatches are contract locks and must remain preserved.
+- Existing deposit helper now accepts shared-sheet term evidence only with matching source-engine mark/time, supplier/UID/plate, available product, unambiguous period, rent and stored zero, plus literal period-specific `무보증`. RP012/RP031 are excluded. Original RAW remains immutable; numeric zero alone is insufficient.
+- Default-off `SOURCE_CYCLE_PROVENANCE_UIDS` selects exact reviewed missing-mark products for the existing fresh-source plan/CAS/backup/readback writer, under the existing rewrite cap and contract lock rules. This is not permission to run arbitrary UID repairs. Operational flags, source writes and ERP5 consumer deployment remain pending exact-head review and real readback. Original117 is not complete.
+
 ## 2026-10-11 15분 수집·정제·변경분 갱신 실행
 
 - 2026-10-12 후속 수집 수수료 연결: 기존 승인 엔진 출력을 SourceIngestionStore lineage에 저장하고 소비처는 검증된 저장값만 읽도록 기존 application/job/schema/test를 확장했다. identity HOLD, 원문·후보와 정산 사람 입력은 보존한다. 계산값 권위는 APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT이며 정책/입력 digest와 출처를 보존한다. 중복·변조·정책 변경은 UNKNOWN/null, 조회 재계산은 0이다.
@@ -3380,3 +3386,9 @@ This file exists so another session can continue without re-discovering or re-cr
 - 현재 source-head 복구 PR755/main50ba1fc와 운영 활성화는 별개다. 기존 GitHub DAILY는 off, 수동 apply gate는 environment/repository 모두 미등록이지만 이미 시작된 회차의 완료를 기다린 뒤 같은 PC1 F05 task 한 개만 전환한다. 기존 RP031 실행·다른 PC·공급사 입력 원문을 덮지 않는다. 원16칸 입력 덮어쓰기 계획은 미적용이며 정제 대조 후보로만 보존했다.
 - 검토 분담: 기존 PC3 Claude는 구현·운영 신선도와 실제 화면/소비를 검토하고, 모순·위험이 있는 사실 판정은 기존 PC1 gateway의 Gemini를 사용한다. 같은 자료는 기존 ANSWERED 영수증을 재사용한다. 이번 비식별 원문 모순 검토 Gemini receipt dcde9829-efbd-4fa1-a22c-75f57ba87d1c는 원문 보존·현재 마스터·PARTIAL 범위·개별 소비 대사를 채택했다. PC3 로컬 Gemini CLI 설치 확인과 PC1 gateway 실제 응답은 별개다. 새 AI 세션/중복 스케줄/독립 writer를 만들지 않는다.
 - next_start_here: 원117 owner는 기존 ai-ops 연락실 #268 및 PC1 operator gateway로 old writer drain/같은 native task 전환을 확인한다. 연식 전달은 이 delta의 독립 검토·정확 CI 후 RP018 같은 검토된 기존 spec 공급사 허용 목록으로만 활성화하고, 실제 계획/제품 빈 연식/ERP5 상세·F01와 다음 무인 회차를 되읽는다. source head 성공과 원117 업무 완료를 구분한다. 아직 운영 연식 쓰기·원117 최종 완료는 미검증이다.
+
+## 2026-10-19 원117 공급사 해석 — 등록된 단일 소유 탭
+
+- 현재 등록된 공급사 코드가 정확히 하나인 입력 탭에서 회사명 셀만 비어 있으면 그 탭의 등록 소유자를 공급사 근거로 사용한다. RAW의 빈 회사명은 바꾸지 않고 `supplierCodeBasis=REGISTERED_EXCLUSIVE_TAB_OWNER`를 함께 보존한다. 회사 이름을 만들거나 과거 개별 시트로 fallback하지 않는다.
+- 두 공급사가 쓰는 스타·빌린카·경진 같은 공용 탭의 빈 회사명, 알 수 없는 값이 들어 있는 회사명, 미등록/부재 탭은 계속 미확정이다. 기존 공급사+차량번호 중복·다중 공급사 격리, 상태·대여료·차종 마스터·공개 판단을 완화하지 않는다. 공급사를 알아도 물리 차량/차종 검증 HOLD는 그대로다.
+- 원117의 한 행이 단독 공급사 탭에서 회사명 하나가 비어 원문 가격까지 기존 native 경로에서 빠지는 원인을 대상으로 한다. 관련267 PASS/1 기존 조건부 SKIP 및 build 검증은 코드 근거이며, 다음 source 회차의 해당 원키→새 안정 키→기존 상품 writer→ERP5/F01 되읽기 전에는 실제 해결로 세지 않는다. 원본 셀 쓰기·새 writer·새 스케줄은 없다.
