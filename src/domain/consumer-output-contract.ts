@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+// Published album count only; source evidence and approval checks retain their authority.
+export const PUBLIC_VEHICLE_PHOTO_LIMIT = 50;
 import type { CommercialType, PriceTerm } from './catalog.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 import sheetSpecification from '../../contracts/f01-f86-sheet-spec.v1.json' with { type: 'json' };
@@ -280,7 +282,7 @@ export function isIancarCopyPhotoProduct(product: Rec | undefined): boolean {
 }
 /** 공개 응답용 «승인 사본 수»(이안카 한정, 종전 이름). 공급사 불문은 approvedPhotoCount. */
 export function approvedIancarPhotoCount(product: Rec | undefined): number {
-  return isIancarCopyPhotoProduct(product) ? (product!.photo_original_refs as unknown[]).length : 0;
+  return isIancarCopyPhotoProduct(product) ? Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, (product!.photo_original_refs as unknown[]).length) : 0;
 }
 
 /** 공급사 공통 사본 서빙(2026-10-15 설계 승인): 사본 서빙을 허용하는 공급사 목록(허용표). 표에 없는 공급사는 종전 동작 그대로다(fail-closed).
@@ -312,7 +314,7 @@ export function isSupplierCopyPhotoProduct(product: Rec | undefined, suppliers: 
 }
 /** 공개 응답용 «승인 사본 수»(공급사 불문): 사본 서빙이 보장될 때(= isSupplierCopyPhotoProduct)만 refs 수, 아니면 0. 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
 export function approvedPhotoCount(product: Rec | undefined, suppliers: ReadonlySet<string> = DEFAULT_PHOTO_COPY_SUPPLIERS): number {
-  return isSupplierCopyPhotoProduct(product, suppliers) ? (product!.photo_original_refs as unknown[]).length : 0;
+  return isSupplierCopyPhotoProduct(product, suppliers) ? Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, (product!.photo_original_refs as unknown[]).length) : 0;
 }
 
 /** ID 기반 서빙 게이트용: 상품 문서에 등록된 ONE 사진 ID 목록(중복·빈 값 없음, 1~200개). 없으면 게이트 대상 아님. */
