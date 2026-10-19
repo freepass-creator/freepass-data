@@ -107,7 +107,9 @@ function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityI
     try { return snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined; }
     catch (error) { if (!sourceObservationsOnly) throw error; return undefined; }
   })();
-  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, { includeSupplierColors });
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, {
+    includeSupplierColors, ...(sourceObservationsOnly ? { sourceEngineRentRules: true } : {}),
+  });
   const normalize: typeof normalizeBase = raw => {
     const normalized = normalizeBase(raw);
     return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};

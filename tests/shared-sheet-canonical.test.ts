@@ -101,7 +101,7 @@ function later(c: SharedSheetCapture) {
 
 describe('same F05 producer source observations without physical Canonical commands',()=>{
   const fresh=(overrides:Record<string,SheetCell>={})=>{
-    const c=capture(overrides);delete c.revision;
+    const c=capture({'1개월':300000,'12개월':400000,'24개월':500000,...overrides});delete c.revision;
     c.readTime=new Date(Date.now()-2000).toISOString();for(const t of c.tabs)t.readTime=c.readTime;
     c.digest=sharedSheetCaptureDigest(c);
     const live=structuredClone(c);live.readTime=new Date(Date.now()-1000).toISOString();for(const t of live.tabs)t.readTime=live.readTime;
@@ -145,7 +145,7 @@ describe('same F05 producer source observations without physical Canonical comma
   });
   it('advances the existing head for a newer observation and preserves the old RAW history',async()=>{
     const source=new MemorySourceStore(),first=await ingestSharedSheetObservedRows(source,fresh({차량번호:'123가4567'}));
-    const next=fresh({차량번호:'123가4567','12개월':606});
+    const next=fresh({차량번호:'123가4567','12개월':606000});
     next.capture.readTime=new Date(Date.now()-500).toISOString();for(const t of next.capture.tabs)t.readTime=next.capture.readTime;
     next.liveCapture.readTime=new Date(Date.now()-100).toISOString();for(const t of next.liveCapture.tabs)t.readTime=next.liveCapture.readTime;
     next.capture.digest=sharedSheetCaptureDigest(next.capture);next.liveCapture.digest=sharedSheetCaptureDigest(next.liveCapture);
@@ -154,7 +154,15 @@ describe('same F05 producer source observations without physical Canonical comma
     expect(await source.getSourceHead(second.sourceId)).toMatchObject({runId:second.runId,observedAt:next.capture.readTime});
     expect(await source.listRaw(first.runId)).toHaveLength(1);
     const raw=(await source.listRaw(second.runId))[0]!;expect(raw.firstObservedAt).toBe(first.observedAt);
-    expect((await source.listCandidates(second.runId))[0]!.candidate.priceTerms.find(t=>t.termMonths===12)!.monthlyRent.amount).toBe(606);
+    expect((await source.listCandidates(second.runId))[0]!.candidate.priceTerms.find(t=>t.termMonths===12)!.monthlyRent.amount).toBe(606000);
+  });
+  it('uses the same native rent guard and preserves suspicious amounts only in RAW',async()=>{
+    const source=new MemorySourceStore(),input=fresh({'12개월':48000});
+    const result=await ingestSharedSheetObservedRows(source,input);
+    const candidate=(await source.listCandidates(result.runId))[0]!.candidate;
+    expect(candidate.priceTerms.some(t=>t.termMonths===12)).toBe(false);
+    expect(candidate.issues).toContain('RENT_REVIEW_REQUIRED');
+    expect(((await source.listRaw(result.runId))[0]!.payload.values as unknown[])[sharedSheetHeaders.indexOf('12개월')]).toBe(48000);
   });
 });
 describe('shared sheet local source to Canonical', () => {
