@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 3,
-      "CHANGED": 51,
+      "ADDED": 9,
+      "CHANGED": 320,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 2190
+      "UNCHANGED": 1930
     },
     "current": {
-      "count": 2244,
-      "digest": "9c5371e46acfe15d12b442260e5333f7c21939856486eb7c538f1f9c3e9b31ee",
-      "readTime": "2026-10-20T01:14:48.511637Z"
+      "count": 2259,
+      "digest": "8bff1aec996536aaa155764d335ec30f4f08391b275582648a6d8af8c06495c9",
+      "readTime": "2026-10-20T06:31:43.680312Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "72f0211fefc1d077fd5d575f3c9cc7bea616858371239657ec561947a0b4dffe",
-    "inventoryTransitionCount": 13,
+    "digest": "6fdf256c13e60ff415329013480c624da68348f02f9459b844d3797788d83f10",
+    "inventoryTransitionCount": 10,
     "previous": {
-      "count": 2241,
-      "digest": "001711b869368ef1691656a942c6bcd72a42793dd977e40cfca5ddaab6902beb",
-      "readTime": "2026-10-19T22:36:18.095588Z"
+      "count": 2250,
+      "digest": "d1f2989d8d6342ab5a49ba7806094e8cb823b95969eaeab9e83a4010afc3b89d",
+      "readTime": "2026-10-20T04:37:35.847700Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 13,
+    "inventoryTransitionCount": 10,
     "mappedForReview": 147,
-    "mappingHold": 2097,
+    "mappingHold": 2112,
     "productFieldPathCount": 1170
   },
-  "runId": "39352294580-1",
+  "runId": "39380815958-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 2244
+      "products": 2259
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "9c5371e46acfe15d12b442260e5333f7c21939856486eb7c538f1f9c3e9b31ee",
+    "digest": "8bff1aec996536aaa155764d335ec30f4f08391b275582648a6d8af8c06495c9",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-20T01:14:48.511637Z"
+    "readTime": "2026-10-20T06:31:43.680312Z"
   },
   "version": "erp5-source-inventory/1"
 }
