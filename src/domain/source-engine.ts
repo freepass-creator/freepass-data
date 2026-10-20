@@ -80,7 +80,7 @@ const specDigest = (spec: unknown) => ({ __digest: stableDigest(spec).slice(0, 3
  * spec 과 같은 방식이다: 저장은 실제 주소(새 문서·사진 없는 문서의 image_urls 쓰기가 읽는다), 변경 판정은 comparableRecord 가 compactRaw 와 같은
  * digest 로 바꿔 비교한다 — 옛 문서(digest 저장)와 목록이 같으면 «변경 없음»(일괄 UPDATE 없음). */
 export const PHOTO_URL_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
-const PHOTO_URL_LIST_MAX = 20, PHOTO_URL_MAX_LENGTH = 1000;
+const PHOTO_URL_LIST_MAX = 50, PHOTO_URL_MAX_LENGTH = 1000;
 export const isPhotoUrlList = (v: unknown): v is string[] => Array.isArray(v) && v.length <= PHOTO_URL_LIST_MAX &&
   v.every(x => typeof x === 'string' && x.length <= PHOTO_URL_MAX_LENGTH && /^https:\/\/[^\s]+$/.test(x));
 const photoListKept = (record: SourceProductRecord, v: unknown): v is string[] => PHOTO_URL_LIST_SOURCES.has(record.sourceId) && isPhotoUrlList(v);

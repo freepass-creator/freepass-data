@@ -63,15 +63,26 @@ const legacyDoc = (r: SourceProductRecord, extra: Record<string, unknown> = {}) 
 };
 
 describe('손오공 API 사진 주소 목록(어댑터)', () => {
-  it('detail images first (source order, deduped, https only), list thumbnail only as fallback, max 20', () => {
+  it('detail images first (source order, deduped, https only), list thumbnail only as fallback, max 50', () => {
     const detail = { images: [{ url: A }, { url: 'http://img.example.invalid/x.jpg' }, { url: B }, { url: A }, { url: 'https://u:p@img.example.invalid/y.jpg' }, { url: 'nope' }] };
     expect(sonogongPhotoUrls(detail, { thumbnailUrl: C })).toEqual([A, B]);
     expect(sonogongPhotoUrls(null, { images: [{ url: B }], thumbnailUrl: C })).toEqual([B]);   // 상세가 없으면 목록 images
     expect(sonogongPhotoUrls({ images: [] }, { thumbnailUrl: C })).toEqual([C]);              // 사진이 없으면 목록 썸네일
     expect(sonogongPhotoUrls({ images: [] }, { thumbnailUrl: null })).toEqual([]);
-    const many = Array.from({ length: 30 }, (_, i) => ({ url: `https://img.example.invalid/car/${i}.jpg` }));
+    const many = Array.from({ length: 51 }, (_, i) => ({ url: `https://img.example.invalid/car/${i}.jpg` }));
     expect(sonogongPhotoUrls({ images: many }, {})).toHaveLength(SONOGONG_PHOTO_POLICY.maxPhotos);
-    expect(SONOGONG_PHOTO_POLICY.maxPhotos).toBe(20);
+    expect(SONOGONG_PHOTO_POLICY.maxPhotos).toBe(50);
+  });
+});
+
+describe('photos beyond the former 20-photo source limit', () => {
+  it.each([21, 36, 50])('preserves all %i ordered photos through adapter, RAW and projection fields', count => {
+    const urls = Array.from({ length: count }, (_, i) => `https://img.example.invalid/car/${i}.jpg`);
+    const adapted = sonogongPhotoUrls({ images: urls.map(url => ({ url })) }, {});
+    expect(adapted).toEqual(urls);
+    const record = rec('12ga1001', adapted);
+    expect(compactRecord(record).raw.images).toEqual(urls);
+    expect(apiPhotoFields(compactRecord(record), {})).toEqual({ image_urls: urls, image_url: urls[0] });
   });
 });
 
@@ -95,6 +106,22 @@ describe('손오공 API 사진 → image_urls(원천 엔진 쓰기)', () => {
     const before = f2.patches();
     expect((await run(c2, [rec('12가1003', [A, B])])).kinds).toEqual([]);
     expect(f2.patches()).toBe(before);
+  });
+
+  it('repairs a formerly truncated 20-photo record through the existing writer without changing terms', async () => {
+    const { commands, fake } = await setup();
+    const urls = Array.from({ length: 36 }, (_, i) => `https://img.example.invalid/car/${i}.jpg`);
+    await run(commands, [rec('12가1036', urls.slice(0, 20))]);
+    const before = decodeFields(fake.docs.get('12가1036').fields);
+    const result = await run(commands, [rec('12가1036', urls)]);
+    expect(result.kinds).toEqual(['UPDATE']);
+    expect(result.applied).toMatchObject({ status: 'APPLIED' });
+    const after = decodeFields(fake.docs.get('12가1036').fields);
+    expect(after.image_urls).toEqual(urls);
+    expect(after.image_url).toBe(before.image_url);
+    expect(after.price).toEqual(before.price);
+    expect(after.status).toEqual(before.status);
+    expect((await run(commands, [rec('12가1036', urls)])).kinds).toEqual([]);
   });
 
   it('a changed photo list → UPDATE writes the new image_urls', async () => {
