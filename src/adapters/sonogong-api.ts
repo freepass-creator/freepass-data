@@ -367,7 +367,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
 
 /** 손오공 사진 주소 목록(원천 순서 그대로): 상세 images[].url(상세가 없거나 images 가 배열이 아니면 목록 images[].url), 그것이 비면 목록 thumbnailUrl.
  * https·사용자정보 없음·길이 ≤ SONOGONG_PHOTO_POLICY.maxUrlLength 만, 중복 제거, 최대 maxPhotos 장. 없으면 빈 배열(사진 없음 — 기존 사진을 지우는 근거가 아니다). */
-export const SONOGONG_PHOTO_POLICY = Object.freeze({ maxPhotos: 20, maxUrlLength: 1000 });
+export const SONOGONG_PHOTO_POLICY = Object.freeze({ maxPhotos: 50, maxUrlLength: 1000 });
 export function sonogongPhotoUrls(detail: Record<string, unknown> | null | undefined, row: Record<string, unknown>): string[] {
   const clean = (v: unknown): string | null => {
     if (typeof v !== 'string') return null;
