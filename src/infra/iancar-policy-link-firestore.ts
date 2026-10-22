@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, isPolicyEmpty, type PolicyLinkScope, type VehicleTerms } from '../domain/iancar-policy-link.js';
+import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, IANCAR_S_CODES, isPolicyEmpty, type PolicyLinkScope, type VehicleTerms } from '../domain/iancar-policy-link.js';
 import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-backup-value.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -20,7 +20,8 @@ async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: Fetch
   const products = productsSnap.docs.map(doc => ({ id: doc.id, updateTimeMs: doc.updateTime.toMillis(), data: doc.data() }));
   const vehicleTerms: Record<string, VehicleTerms | undefined> = {}, vehicleTermsErrors: Record<string, string> = {};
   // 원천 요금 조회는 동시 3개까지(ONE 429 방지) — 결과는 상품 순서와 무관하게 상품 ID 로 모은다.
-  const listed = products.filter(product => product.data.listable === true && (scope === 'ALL' || isPolicyEmpty(product.data)));   // 범위 밖(이미 정책 있음) 상품은 원천을 조회하지도 않는다
+  const isSCoded = (data: Record<string, unknown>) => typeof data.policy_code === 'string' && IANCAR_S_CODES.includes(data.policy_code);
+  const listed = products.filter(product => product.data.listable === true && (scope === 'ALL' || (scope === 'S_RELINK' ? isSCoded(product.data) : isPolicyEmpty(product.data))));   // 범위 밖(이미 정책 있음) 상품은 원천을 조회하지도 않는다
   for (const product of listed) if (typeof product.data.iancar_one_vehicle_id !== 'string' || !product.data.iancar_one_vehicle_id.trim()) vehicleTermsErrors[product.id] = 'ID_MISSING';   // 조회 못 한 노출 차량은 침묵하지 않고 오류로 남긴다
   const queue = listed.filter(product => !(product.id in vehicleTermsErrors));
   let cursor = 0;
@@ -31,7 +32,12 @@ async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: Fetch
       if (result.terms) vehicleTerms[product.id] = result.terms; else vehicleTermsErrors[product.id] = result.error ?? 'UNKNOWN';
     }
   }));
-  return { policy: { exists: policySnap.exists, updateTimeMs: policySnap.updateTime?.toMillis() ?? null, data: policySnap.data() ?? {} }, products, vehicleTerms, vehicleTermsErrors };
+  const sPolicies: Record<string, { exists: boolean; updateTimeMs: number | null; dataDigest: string | null }> = {};
+  if (scope === 'S_FROM_NULL' || scope === 'S_RELINK') for (const code of IANCAR_S_CODES) {
+    const snap = await db.collection('policy').doc(code).get();
+    sPolicies[code] = { exists: snap.exists, updateTimeMs: snap.updateTime?.toMillis() ?? null, dataDigest: snap.exists ? stableDigest(encodeIancarBackupValue(snap.data() ?? {})) : null };
+  }
+  return { policy: { exists: policySnap.exists, updateTimeMs: policySnap.updateTime?.toMillis() ?? null, data: policySnap.data() ?? {} }, products, vehicleTerms, vehicleTermsErrors, sPolicies };
 }
 
 /** 읽기 전용 계획. 쓰기 없음. */
@@ -80,13 +86,20 @@ export async function applyIancarPolicyLink(options: { expectedPlanDigest: strin
 
   await db.runTransaction(async tx => {
     const refs = [policyRef, ...plan.productPatches.map(row => db.collection('products').doc(row.id))];
+    const sRefs = Object.keys(inputs.sPolicies ?? {}).map(code => db.collection('policy').doc(code));
     const current = await tx.getAll(...refs);
+    const sCurrent = sRefs.length ? await tx.getAll(...sRefs) : [];
+    sCurrent.forEach((snap, i) => { if (snap.updateTime?.toMillis() !== (inputs.sPolicies ?? {})[sRefs[i]!.id]?.updateTimeMs) throw new Error('IANCAR_POLICY_LINK_REVISION_CHANGED'); });
     if (current[0]!.updateTime?.toMillis() !== inputs.policy.updateTimeMs) throw new Error('IANCAR_POLICY_LINK_REVISION_CHANGED');
     plan.productPatches.forEach((row, i) => { if (current[i + 1]!.updateTime?.toMillis() !== row.updateTimeMs) throw new Error('IANCAR_POLICY_LINK_REVISION_CHANGED'); });
     if (policyKeys.length) tx.update(policyRef, plan.policyPatch);
     plan.productPatches.forEach((row, i) => tx.update(refs[i + 1]!, row.patch));
   });
-  // 되읽기: 계획한 칸이 정확히 반영됐는지 + 계획 밖 칸이 바뀌지 않았는지
+  // 되읽기: 계획한 칸이 정확히 반영됐는지 + 계획 밖 칸이 바뀌지 않았는지 (S 연결은 S 정책 문서가 한 글자도 안 바뀐 것도 증명)
+  for (const [code, before] of Object.entries(inputs.sPolicies ?? {})) {
+    const snap = await db.collection('policy').doc(code).get();
+    if (stableDigest(encodeIancarBackupValue(snap.data() ?? {})) !== before.dataDigest || snap.updateTime?.toMillis() !== before.updateTimeMs) throw Object.assign(new Error('IANCAR_POLICY_LINK_S_POLICY_CHANGED'), { runId, backupPath });
+  }
   const afterPolicy = (await policyRef.get()).data() ?? {};
   for (const [k, v] of Object.entries(plan.policyPatch)) if (stableDigest(afterPolicy[k]) !== stableDigest(v)) throw Object.assign(new Error('IANCAR_POLICY_LINK_READBACK_FAILED'), { runId, backupPath });
   for (const [k, v] of Object.entries(policyBeforeData)) if (!(k in plan.policyPatch) && stableDigest(afterPolicy[k]) !== stableDigest(v)) throw Object.assign(new Error('IANCAR_POLICY_LINK_UNEXPECTED_FIELD_CHANGE'), { runId, backupPath });
