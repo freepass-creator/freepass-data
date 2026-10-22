@@ -32,4 +32,26 @@ if ($AcceptDrift) {
   $cliArgs += @('--accept-drift', $AcceptDrift)
 }
 & $node @cliArgs
-exit $LASTEXITCODE
+$cycleExit = $LASTEXITCODE
+# 사진 폴더 연결 «계획만» 단계(2026-10-22 PC1 커맨드 승인): SOURCE_CYCLE_PHOTO_PLAN_CODES(쉼표 공급사 코드)가 있을 때만, 회차가 끝난 뒤 공급사별로 계획(쓰기 0, --apply 를 넘기지 않는다)을 돌려
+# 비공개 디렉터리 photo-plan.log 에 요약만 남긴다. 단계 전체가 예외·시간 초과(공급사당 3분, 전체 10분)와 격리돼 회차 종료 코드·결과에 영향을 주지 않는다.
+try {
+  if ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -and $env:SOURCE_CYCLE_PRIVATE_DIR) {
+    $ErrorActionPreference = 'Continue'
+    $photoScript = Join-Path $repo 'scripts\ops\photo-cache-from-folder.mjs'
+    $photoLog = Join-Path $env:SOURCE_CYCLE_PRIVATE_DIR 'photo-plan.log'
+    $photoDeadline = (Get-Date).AddMinutes(10)
+    foreach ($photoCode in ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(RP|PT-)\d{3,4}$' })) {
+      if ((Get-Date) -gt $photoDeadline) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] 전체 시간 초과로 {1} 이후 생략' -f (Get-Date -Format o), $photoCode); break }
+      $photoText = ''
+      try {
+        $photoJob = Start-Job -ScriptBlock { param($n, $s, $c) & $n $s "--code=$c" 2>&1 | Out-String } -ArgumentList $node, $photoScript, $photoCode
+        if (Wait-Job -Job $photoJob -Timeout 180) { $photoText = [string](Receive-Job -Job $photoJob) } else { $photoText = '시간 초과(3분)'; Stop-Job -Job $photoJob }
+        Remove-Job -Job $photoJob -Force
+      } catch { $photoText = '실행 실패' }
+      $photoLines = @($photoText -split "`r?`n" | Where-Object { $_ -match '^(PLAN|\d{4} |시간 초과|실행 실패)' } | Select-Object -First 40)
+      try { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] {1}' -f (Get-Date -Format o), $photoCode); if ($photoLines.Count) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ($photoLines -join [Environment]::NewLine) } } catch { }
+    }
+  }
+} catch { }
+exit $cycleExit
