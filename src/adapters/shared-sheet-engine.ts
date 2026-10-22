@@ -9,6 +9,7 @@ import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
 import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
+import { sheetPhotoLinksOf } from '../domain/sheet-photo-link.js';
 
 /** 시트 제원 전달 옵션(기본 꺼짐): sheetSpec=true 인 공급사만 정규화기가 이미 읽은 차 한 대 사실을 raw.spec 으로 넘긴다(켜기는 운영 env). */
 export type SharedSheetSpecOptions = { sheetSpec?: boolean };
@@ -37,6 +38,15 @@ export function sharedSheetSpecFacts(facts: SourceVehicleFacts['fields'] | undef
     if (!SHEET_COLOR_UNRESOLVED.test(value)) put(key, value);
   }
   return out;
+}
+
+/** 수집본의 차량번호 칸 링크 → «탭|행» 별 표준 드라이브 폴더 링크(domain/sheet-photo-link 규칙: 폴더만·한 칸 한 링크·같은 폴더가 다른 번호에 붙으면 거절).
+ * 번호는 수집본 그 행의 차량번호 칸에서 읽는다(행 번호 = 시트 행, 머리글 = 1). */
+export function sharedSheetPhotoLinks(capture: SharedSheetCapture) {
+  const plateColumn = sharedSheetHeaders.indexOf('차량번호');
+  const entries = Array.isArray(capture.plateLinks) ? capture.plateLinks.filter(x => !!x && typeof x.tab === 'string'
+    && Number.isSafeInteger(x.row) && x.row >= 2 && Array.isArray(x.links)) : [];
+  return sheetPhotoLinksOf(entries, (tab, row) => capture.tabs.find(t => t.title === tab)?.values[row - 1]?.[plateColumn]);
 }
 
 /** Capture transport is injected from capture-shared-sheet; no second Sheets client.
@@ -84,6 +94,7 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
   if (!read.raw) return { records, held };
   const capture = read.raw;
   const { batch } = legacyCapture(capture);
+  const photoLinks = sharedSheetPhotoLinks(capture).links;
   for (const [i, item] of batch.records.entries()) {
     const p = item.payload, row = Number(p.row);
     const tab = capture.tabs.find(t => t.title === p.tab)!;
@@ -117,6 +128,9 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
     const sheetSpec = options?.sheetSpec === true ? sharedSheetSpecFacts(normalized.record.candidate.vehicleFacts?.fields,
       normalized.record.candidate.issues, text, r.vehicleText) : {};
     if (Object.keys(sheetSpec).length) r.raw.spec = sheetSpec;
+    // 차량번호 칸 사진 폴더 링크(검증된 표준 폴더 링크만). 문서 photo_link 쓰기는 빈 칸에만(infra 쓰기 경로).
+    const photoLink = photoLinks.get(`${p.tab}|${row}`);
+    if (photoLink) r.raw.sheet_photo_link = photoLink;
     // Preserve the supplied year through the existing spec writer only after the active master
     // admits that exact source name/year. Names and publication HOLD remain independent.
     // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.

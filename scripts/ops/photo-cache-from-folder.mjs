@@ -76,6 +76,35 @@ for (const d of docs) {
   if ((f.photo_cache?.urls?.length ?? 0) > 0) continue;
   const m = FOLDER.exec(String(f.photo_link ?? '')); if (!m) { nolink++; continue; }
   n++;
+  // 엔진이 F05 차량번호 칸 링크로 채운 photo_link(photo_link_source.kind SHARED_SHEET_PLATE_LINK, 2026-10-22): CSV 모드와 같은 계획 함수로 검증한다 —
+  // 폴더 이름 번호 일치(불일치 거절)·사용X/서류 폴더 거절·서류 비율 보류·폴더 전체 최대 40장. 사람·옛 도구가 넣은 링크는 아래 옛 방식 그대로.
+  if (f.photo_link_source?.kind === 'SHARED_SHEET_PLATE_LINK') {
+    const l4 = String(f.car_number).slice(-4);
+    const { planPhotoCacheFromFolder } = await import('../../dist/src/application/photo-cache-folder-plan.js');
+    let folderName = ''; try { folderName = run(['drive', 'files', 'get'], { fileId: m[1], fields: 'name', supportsAllDrives: true }).name || ''; } catch { empty++; console.log(l4, '폴더 이름 조회 실패'); continue; }
+    const listed = []; let page = null, pages = 0;
+    try {
+      do {
+        const p = run(['drive', 'files', 'list'], { q: `'${m[1]}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'`,
+          fields: 'nextPageToken,files(id,name,mimeType,size,sha256Checksum)', pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true, ...(page ? { pageToken: page } : {}) });
+        listed.push(...(p.files ?? [])); page = p.nextPageToken; pages++;
+      } while (page && pages < 20);
+    } catch { empty++; console.log(l4, '폴더 목록 조회 실패'); continue; }
+    const at = new Date().toISOString();
+    const plan = planPhotoCacheFromFolder({ plate: String(f.car_number ?? ''), expectedProvider: only, doc: f, folder: { id: m[1], name: folderName }, now: at,
+      files: listed.map(y => ({ id: y.id, name: String(y.name ?? ''), mimeType: y.mimeType ?? null, size: Number(y.size) || null, sha256: y.sha256Checksum ?? null })) });
+    if (plan.status !== 'WRITE' || plan.setLink) { empty++; console.log(l4, '건너뜀', plan.status === 'WRITE' ? 'LINK_STATE' : plan.reason); continue; }
+    if (!apply) { ok++; console.log(l4, '계획', plan.count + '장', '(시트 링크, 시험)'); continue; }
+    writeFileSync(`${dir}/backups-docfolder/${only}-${l4}-sheet-${Date.now()}.json`, JSON.stringify(d), 'utf8');
+    const q = new URLSearchParams(); for (const p of ['photo_cache.src', 'photo_cache.urls', 'photo_cache.at']) q.append('updateMask.fieldPaths', p);
+    q.set('currentDocument.updateTime', d.updateTime);
+    const str = v => ({ stringValue: v });
+    const w = await fetch('https://firestore.googleapis.com/v1/' + d.name + '?' + q, { method: 'PATCH', headers: H,
+      body: JSON.stringify({ fields: { photo_cache: { mapValue: { fields: { src: str(plan.cache.src), urls: { arrayValue: { values: plan.cache.urls.map(str) } }, at: str(plan.cache.at) } } } } }) });
+    if (!w.ok) { console.log(l4, '쓰기 실패', w.status); continue; }
+    ok++; appendFileSync(dir + '/audit-docfolder.jsonl', JSON.stringify({ at, code: only, l4, n: plan.count, mode: 'sheet-link' }) + '\n');
+    continue;
+  }
   let files = []; try { files = run(['drive', 'files', 'list'], { q: `'${m[1]}' in parents and trashed=false and mimeType contains 'image/'`, fields: 'files(id,name)', pageSize: 40 }).files ?? []; } catch { files = []; }
   files.sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { numeric: true }));
   const urls = files.slice(0, 10).map(x => `https://drive.google.com/thumbnail?id=${x.id}&sz=w640`);

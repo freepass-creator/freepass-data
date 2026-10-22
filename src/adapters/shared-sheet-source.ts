@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type { SheetPlateLink } from '../domain/sheet-photo-link.js';
 
 export type SheetCell = string | number | boolean | null;
 export type SharedSheetCapture = {
@@ -15,6 +16,9 @@ export type SharedSheetCapture = {
   supplierEntered?: SupplierEnteredRecord[];
   /** Cell edits made on the shared sheet by people/AI sessions (who·when·before→after). */
   corrections?: SheetCorrection[];
+  /** «차량번호» 칸에 붙은 링크 원문(공급사 사진 폴더 링크) — 칸 값(values)과 따로, 링크가 있는 행만. row 는 시트 행 번호(머리글 = 1).
+   * 같은 읽기 묶음(앞뒤 실제 값 동일) 안에서 읽었고, 링크 칸의 표시 글자가 그 행 차량번호와 같은 것만 남는다. 판정(폴더만·중복 거절)은 엔진이 한다. */
+  plateLinks?: SheetPlateLink[];
 };
 export type SupplierEnteredRecord = { supplierCode: string; plate: string; source: 'ERP5_PRODUCTS_SOURCE_TEXT' | 'SHEET_BACKUP'; sourceRef: string;
   observedAt: string; values: Record<string, unknown> };

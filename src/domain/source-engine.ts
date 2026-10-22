@@ -108,6 +108,9 @@ export function comparableRecord(record: SourceProductRecord): SourceProductReco
   delete compact.raw.api_options;   // 변경 판정에서 제외(상세 digest 가 이미 옵션 변화를 담는다)
   delete compact.raw.source_maker;  // 원천 제조사·모델: 목록 digest 가 이미 변화를 담는다(옛 저장 기록에는 이 칸이 없다)
   delete compact.raw.source_model;
+  // 차량번호 칸 사진 폴더 링크(F05): 변경 판정에서 뺀다 — 처음 켤 때 링크 있는 모든 문서가 «사실 변경»으로 일괄 UPDATE 되지 않게(옛 저장 기록에는 이 칸이 없다).
+  // 빈 photo_link 채움은 읽기 경로 표식(photoLinkFill)과 계획의 PHOTO_LINK 사유(회차 상한)가 맡고, 이미 값이 있는 photo_link 는 링크가 바뀌어도 덮지 않는다.
+  delete compact.raw.sheet_photo_link;
   return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,

@@ -1,4 +1,4 @@
-import { sharedSheetEngine, type SharedSheetSpecOptions } from './shared-sheet-engine.js';
+import { sharedSheetEngine, sharedSheetPhotoLinks, type SharedSheetSpecOptions } from './shared-sheet-engine.js';
 import { sharedSheetFactNumber, sharedSheetFactRegistration } from '../domain/shared-sheet-fact-parsing.js';
 import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
@@ -67,6 +67,7 @@ export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidde
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
   sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>,
   options?: SharedSheetSpecOptions): CycleCapture {
+  const photoLinks = sharedSheetPhotoLinks(capture).links;
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
@@ -162,7 +163,9 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
         // 연식 게이트를 통과하지 않은 시트 제원에는 마스터 근거 칸이 없다 — 없는 칸은 싣지 않는다.
         ...(record.raw.spec ? { spec: record.raw.spec, ...(record.raw.spec_master_digest !== undefined ? {
           spec_master_digest: record.raw.spec_master_digest, spec_master_id: record.raw.spec_master_id } : {}) } : {}),
-        ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
+        ...(pos.fp ? { row_fingerprint: pos.fp } : {}),
+        // 차량번호 칸 사진 폴더 링크: 원본 수집본 전체(모든 공급사 행)로 판정한다 — 다른 공급사 행에 같은 폴더가 붙은 경우도 거절하려면 행을 비운 사본으로는 안 된다.
+        ...(photoLinks.get(`${pos.scope}|${pos.row}`) ? { sheet_photo_link: photoLinks.get(`${pos.scope}|${pos.row}`) } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
 const PRODUCT_TYPE_VOCABULARY = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);

@@ -140,7 +140,8 @@ const cellPlate = (cell: SupplierGridCell | undefined): string => {
   const value = cell?.effectiveValue?.stringValue ?? cell?.userEnteredValue?.stringValue ?? cell?.formattedValue;
   return typeof value === 'string' ? value : '';
 };
-const cellLinks = (cell: SupplierGridCell | undefined): string[] => [cell?.hyperlink,
+/** 칸 하나의 링크 전부(칸 링크·서식 링크·글자 구간 링크). 아이카·웰릭스 옛 수집과 F05 공통시트 차량번호 칸 사진 링크가 함께 쓴다. */
+export const cellLinks = (cell: SupplierGridCell | undefined): string[] => [cell?.hyperlink,
   cell?.userEnteredFormat?.textFormat?.link?.uri,
   ...(cell?.textFormatRuns ?? []).map(run => run.format?.link?.uri)]
   .filter((value): value is string => typeof value === 'string' && value.length > 0);
