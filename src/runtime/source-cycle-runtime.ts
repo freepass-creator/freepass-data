@@ -23,7 +23,7 @@ import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
 import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { parseDetailCache, waitForUpstreamRefresh, type DetailCache } from '../adapters/sonogong-detail-cache.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
-import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
+import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
@@ -364,8 +364,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const fetchHtml = async (url: string) => {
           const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
-          if (!response.ok) throw new Error(`IRON_HTTP_${response.status}`);
-          if (new URL(response.url || url).hostname !== IRON_HOMEPAGE_POLICY.host) throw new Error('IRON_HOST_REJECTED');
+          // 최종 호스트 검사가 HTTP 상태보다 먼저(외부 호스트의 404 를 사이트맵 잔재로 오인하지 않게) — 판정은 ironFetchFailure 한 곳.
+          const failure = ironFetchFailure(response, url);
+          if (failure) throw new Error(failure);
           const html = await response.text();
           // 사이트맵(완전성 대조)만 XML 을 받는다. 그 밖은 HTML 이어야 한다.
           const sitemap = new URL(url).pathname === '/sitemap.xml';

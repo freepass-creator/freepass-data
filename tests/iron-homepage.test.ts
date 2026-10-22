@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseIronListingPage, parseIronDetail, readIronHomepage, parseIronSitemapIds, ironDeposit, ironMileage, ironOdometer, ironStatusFromBadges, ironFloorRecords,
-  IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY } from '../src/adapters/iron-homepage.js';
+  IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY, IRON_SITEMAP_PROBE_MAX, ironFetchFailure } from '../src/adapters/iron-homepage.js';
 import { sourceCyclePlugin } from '../src/adapters/source-cycle-plugins.js';
 import { judgeSonogongApiRead } from '../src/adapters/sonogong-api-guards.js';
 import { validateSourceRecord } from '../src/domain/source-engine.js';
@@ -196,10 +196,75 @@ describe('아이언 홈페이지 어댑터', () => {
       [`${BASE}/vehicles?condition=new`]: listPage(card('n1')), [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
       [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/u1`]: detail('12가1004'),
     };
-    const run = (map: string) => readIronHomepage(async url => { const p = url.endsWith('/sitemap.xml') ? map : pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; },
-      { sleep: async () => undefined });
-    expect(await run(sitemap(['n1', 'u1']))).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:2:missing0'] });
-    expect(await run(sitemap(['n1', 'u1', 'n9']))).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP' });
+    const calls: string[] = [];
+    const run = (map: string, extra: Record<string, string | Error> = {}) => readIronHomepage(async url => {
+      calls.push(url);
+      const p = url.endsWith('/sitemap.xml') ? map : pages[url] ?? extra[url];
+      if (p instanceof Error) throw p;
+      if (!p) throw new Error('IRON_HTTP_404'); return p;
+    }, { sleep: async () => undefined });
+    expect(await run(sitemap(['n1', 'u1']))).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:2:missing0:stale0'] });
+    // 사이트맵에만 있는 id 의 상세가 열리면(2xx) 목록이 덜 읽힌 것 → 불완전
+    expect(await run(sitemap(['n1', 'u1', 'n9']), { [`${BASE}/vehicles/n9`]: detail('12가1009') }))
+      .toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:3:missing1:stale0'] });
+  });
+
+  it('completeness: a sitemap-only id whose detail is 404 is a stale entry, not a short listing; anything else stays incomplete', async () => {
+    const sitemap = (ids: string[]) => `<?xml version="1.0"?><urlset>${ids.map(id => `<url><loc>${BASE}/vehicles/${id}</loc></url>`).join('')}</urlset>`;
+    const pages: Record<string, string> = {
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1')), [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
+      [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/u1`]: detail('12가1004'),
+    };
+    const run = async (map: string, extra: Record<string, string | Error> = {}) => {
+      const calls: string[] = [];
+      const read = await readIronHomepage(async url => {
+        calls.push(url);
+        const p = url.endsWith('/sitemap.xml') ? map : pages[url] ?? extra[url];
+        if (p instanceof Error) throw p;
+        if (!p) throw new Error('IRON_HTTP_404'); return p;
+      }, { sleep: async () => undefined });
+      return { read, calls };
+    };
+    // 404 → 잔재(stale): 완전, 상세 확인 요청은 그 id 에 한 번만
+    const stale = await run(sitemap(['n1', 'u1', 'gone']));
+    expect(stale.read).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:3:missing0:stale1'] });
+    expect(stale.calls.filter(u => u === `${BASE}/vehicles/gone`)).toHaveLength(1);
+    expect(stale.read.records.map(r => r.plate)).toEqual(['12가1001', '12가1004']);
+    // 확인 요청도 get() 을 거친다: 호스트 검사 + 500ms 간격(첫 요청 뒤 모든 요청)
+    const sleeps: number[] = [];
+    const spaced = await readIronHomepage(async url => { const p = url.endsWith('/sitemap.xml') ? sitemap(['n1', 'u1', 'gone']) : pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; },
+      { sleep: async ms => { sleeps.push(ms); } });
+    expect(spaced.complete).toBe(true);
+    expect(sleeps).toHaveLength(2 + 1 + 1 + 2 - 1);                              // 목록 2 + 사이트맵 1 + 확인 1 + 상세 2 − 첫 요청 1
+    expect(sleeps.every(ms => ms === IRON_HOMEPAGE_POLICY.minIntervalMs)).toBe(true);
+    // 5xx·시간 초과·HTML 아님·호스트 거부 → 확인 못 함 = 불완전 그대로(가드 약화 없음)
+    for (const err of ['IRON_HTTP_500', 'IRON_HTTP_503', 'IRON_NOT_HTML', 'IRON_HOST_REJECTED', 'The operation was aborted due to timeout']) {
+      const { read } = await run(sitemap(['n1', 'u1', 'x1']), { [`${BASE}/vehicles/x1`]: new Error(err) });
+      expect(read, err).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:3:missing1:stale0'] });
+    }
+    // 섞임: 404 하나 + 열리는 상세 하나 → 불완전(missing1·stale1)
+    const mixed = await run(sitemap(['n1', 'u1', 'gone', 'n9']), { [`${BASE}/vehicles/n9`]: detail('12가1009') });
+    expect(mixed.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:4:missing1:stale1'] });
+    // 정확히 상한(IRON_SITEMAP_PROBE_MAX)까지는 전수 확인 — 전부 404 면 완전
+    const atCap = Array.from({ length: IRON_SITEMAP_PROBE_MAX }, (_, i) => `g${i}`);
+    const full = await run(sitemap(['n1', 'u1', ...atCap]));
+    expect(full.read).toMatchObject({ complete: true, notes: [`IRON_SITEMAP:${atCap.length + 2}:missing0:stale${atCap.length}`] });
+    expect(full.calls.filter(u => /\/vehicles\/g\d+$/.test(u))).toHaveLength(atCap.length);
+    // 상한을 넘게 빠지면 확인 요청 없이 불완전
+    const many = Array.from({ length: IRON_SITEMAP_PROBE_MAX + 1 }, (_, i) => `m${i}`);
+    const capped = await run(sitemap(['n1', 'u1', ...many]));
+    expect(capped.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: [`IRON_SITEMAP:${many.length + 2}:missing${many.length}:stale0`] });
+    expect(capped.calls.some(u => /\/vehicles\/m\d+$/.test(u))).toBe(false);
+  });
+
+  it('runtime fetch contract: final host is judged before HTTP status, so an external-host 404 is never a stale-sitemap 404', () => {
+    const iron = `${BASE}/vehicles/x`;
+    expect(ironFetchFailure({ ok: false, status: 404, url: iron }, iron)).toBe('IRON_HTTP_404');
+    expect(ironFetchFailure({ ok: false, status: 404, url: 'https://evil.example/vehicles/x' }, iron)).toBe('IRON_HOST_REJECTED');   // 리다이렉트 뒤 외부 404
+    expect(ironFetchFailure({ ok: true, status: 200, url: 'https://evil.example/' }, iron)).toBe('IRON_HOST_REJECTED');
+    expect(ironFetchFailure({ ok: false, status: 500, url: iron }, iron)).toBe('IRON_HTTP_500');
+    expect(ironFetchFailure({ ok: true, status: 200, url: '' }, iron)).toBeNull();                                                // url 비면 요청 주소로 판정
+    expect(ironFetchFailure({ ok: true, status: 200, url: 'not a url' }, iron)).toBe('IRON_HOST_REJECTED');
   });
 
   it('the IRON plugin keeps a held (null) homepage status as null and keeps 계약중 sellable', async () => {
