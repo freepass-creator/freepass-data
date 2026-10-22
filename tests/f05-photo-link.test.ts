@@ -242,3 +242,19 @@ describe('원천 엔진 쓰기(합성 Firestore)', () => {
     expect(nativeCycleFields(plan.entries[0]!.after, { car_number: plan.entries[0]!.after.record.plate })).toHaveProperty('photo_link');
   });
 });
+
+describe('길이 초과 링크가 «링크 둘 이상» 판정에서 빠지지 않는다(Codex 검토)', () => {
+  it('정상 폴더 링크 + 한도 초과 링크가 한 칸에 있으면 단일 링크로 통과하지 않고 거절된다', async () => {
+    const { plateLinksFromGrid } = await import('../src/adapters/shared-sheet-capture.js');
+    const tab = sharedSheetTabs()[0]!, col = sharedSheetHeaders.indexOf('차량번호');
+    const row = (plate: string) => Object.assign(Array(col + 1).fill(''), { [col]: plate });
+    const shown = { valueRanges: sharedSheetTabs().map((t, i) => ({ values: i === 0 ? [row('차량번호'), row('12가3456')] : [] })) };
+    const grid = { spreadsheetId: 'sid', sheets: sharedSheetTabs().map(t => ({ properties: { title: t }, data: [{ startRow: 0, startColumn: col, rowData: t === tab
+      ? [{ values: [{ formattedValue: '차량번호' }] }, { values: [{ formattedValue: '12가3456', textFormatRuns: [
+        { format: { link: { uri: FOLDER_A } } }, { format: { link: { uri: 'https://drive.google.com/drive/folders/' + 'D'.repeat(2100) } } }] }] }] : [] }] })) };
+    const links = plateLinksFromGrid('sid', shown as never, grid as never);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.links).toHaveLength(2);
+    expect(sheetPhotoLinksOf(links, () => '12가3456').links.size).toBe(0);
+  });
+});

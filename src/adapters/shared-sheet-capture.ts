@@ -43,7 +43,8 @@ export function plateLinksFromGrid(spreadsheetId: string, shown: SheetsBatchGet,
     (data.rowData ?? []).forEach((rowData, r) => {
       if (r === 0) return;   // 머리글
       const cell = Array.isArray(rowData?.values) ? rowData.values[0] : undefined;
-      const links = [...new Set(cellLinks(cell).filter(x => x.length <= SHEET_LINK_MAX_LENGTH))];
+      // 길이 초과 링크도 «링크가 하나 더 있다»는 사실은 남긴다(버리면 정상 링크 + 초과 링크 칸이 단일 링크로 통과한다) — 내용은 한도 바로 위에서 잘라 보존 크기를 제한하고, 도메인이 어차피 거절한다.
+      const links = [...new Set(cellLinks(cell).map(x => x.length <= SHEET_LINK_MAX_LENGTH ? x : x.slice(0, SHEET_LINK_MAX_LENGTH + 1)))];
       if (!links.length) return;
       const shownPlate = String((rows[r] as unknown[] | undefined)?.[PLATE_COLUMN] ?? '').trim();
       if (!shownPlate || String(cell?.formattedValue ?? '').trim() !== shownPlate) { if (stats) stats.plateLinksDropped = (stats.plateLinksDropped ?? 0) + 1; return; }
