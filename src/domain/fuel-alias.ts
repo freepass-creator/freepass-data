@@ -62,21 +62,22 @@ export function uniqueMasterFuel(fuels: ReadonlyArray<unknown>): string | null {
   return seen.size === 1 ? [...seen][0]! : null;
 }
 
-type TrimFuelRow = { names: readonly string[]; aliases?: ReadonlyArray<readonly string[]>; specs?: { fuel?: string | null; displacementCc?: number | null } | null;
+export type TrimFuelRow = { masterId?: string; names: readonly string[]; aliases?: ReadonlyArray<readonly string[]>;
+  specs?: { fuel?: string | null; displacementCc?: number | null; drive?: string | null; seats?: number | null } | null;
   modelYearStart?: number | null; modelYearEnd?: number | null };
+export type TrimIdentity = { maker: string; model: string; sub_model: string; trim_name: string; year?: string; engine_cc?: string };
 const nameKey = (v: unknown): string => (typeof v === 'string' ? v.normalize('NFKC').replace(/\s+/g, ' ').trim() : '');
-/** 검증된 차종 마스터 기록(verifiedMasterRecords — vehicle_trim_master.fuel 포함)으로 «확정된 정체성 → 마스터 연료» 조회 함수를 만든다(순수).
- * 제조사·모델·세부모델은 정식 이름, 세부트림은 정식 이름 또는 등록 별칭으로 맞춘다. 연식·배기량이 있으면 그것과 어긋나는 행을 빼고(남는 행이 없으면 null),
- * 남은 행의 연료가 표준 이름으로 하나일 때만 값(uniqueMasterFuel). */
-export function masterTrimFuelLookup(records: ReadonlyArray<TrimFuelRow>) {
-  const byKey = new Map<string, TrimFuelRow[]>();
+/** 확정된 정체성(제조사·모델·세부모델·세부트림/별칭)에 맞는 마스터 행 조회 함수(순수). 연식·배기량이 있으면 그것과 어긋나는 행을 뺀다(행에 그 값이 없으면 남긴다).
+ * 마스터 연료(masterTrimFuelLookup)와 마스터 제원(spec-refill masterTrimSpecLookup)이 같은 행 선택을 쓴다. */
+export function masterTrimRowsLookup<T extends TrimFuelRow>(records: ReadonlyArray<T>) {
+  const byKey = new Map<string, T[]>();
   for (const r of records) {
     const [maker, model, sub, trim] = [0, 1, 2, 3].map(i => nameKey(r.names[i]));
     if (!maker || !model || !sub || !trim) continue;
     const trims = new Set([trim, ...((r.aliases?.[3] ?? []).map(nameKey).filter(Boolean))]);
     for (const t of trims) { const k = [maker, model, sub, t].join('|'); (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(r); }
   }
-  return (identity: { maker: string; model: string; sub_model: string; trim_name: string; year?: string; engine_cc?: string }): string | null => {
+  return (identity: TrimIdentity): T[] => {
     let rows = byKey.get([identity.maker, identity.model, identity.sub_model, identity.trim_name].map(nameKey).join('|')) ?? [];
     rows = [...new Set(rows)];
     const year = /^(19|20)\d{2}$/.test(String(identity.year ?? '').trim()) ? Number(String(identity.year).trim()) : null;
@@ -84,6 +85,13 @@ export function masterTrimFuelLookup(records: ReadonlyArray<TrimFuelRow>) {
     if (year !== null) rows = rows.filter(r => (r.modelYearStart == null || r.modelYearStart <= year) && (r.modelYearEnd == null || r.modelYearEnd >= year));
     const cc = /^\d{3,5}$/.test(String(identity.engine_cc ?? '').trim()) ? Number(String(identity.engine_cc).trim()) : null;
     if (cc !== null) rows = rows.filter(r => r.specs?.displacementCc == null || r.specs.displacementCc === cc);
-    return uniqueMasterFuel(rows.map(r => r.specs?.fuel ?? null));
+    return rows;
   };
+}
+/** 검증된 차종 마스터 기록(verifiedMasterRecords — vehicle_trim_master.fuel 포함)으로 «확정된 정체성 → 마스터 연료» 조회 함수를 만든다(순수).
+ * 제조사·모델·세부모델은 정식 이름, 세부트림은 정식 이름 또는 등록 별칭으로 맞춘다. 연식·배기량이 있으면 그것과 어긋나는 행을 빼고(남는 행이 없으면 null),
+ * 남은 행의 연료가 표준 이름으로 하나일 때만 값(uniqueMasterFuel). */
+export function masterTrimFuelLookup(records: ReadonlyArray<TrimFuelRow>) {
+  const rowsOf = masterTrimRowsLookup(records);
+  return (identity: TrimIdentity): string | null => uniqueMasterFuel(rowsOf(identity).map(r => r.specs?.fuel ?? null));
 }

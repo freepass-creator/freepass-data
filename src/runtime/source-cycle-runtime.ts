@@ -32,6 +32,7 @@ import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/v
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { masterTrimFuelLookup } from '../domain/fuel-alias.js';
+import { masterTrimSpecLookup } from '../domain/spec-refill.js';
 import { createHash } from 'node:crypto';
 import { readXlsx } from '../adapters/xlsx-reader.js';
 import { convertMaumcarWorkbook, MAUMCAR_SOURCE_ID, type MaumcarConversion } from '../adapters/maumcar-file.js';
@@ -139,7 +140,9 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
           Number(t.data.model_year_start) === year)),
       ...modelTablesFromMasters(masters),
       // 확정 정체성 → vehicle_trim_master 연료(하나로 모일 때만, 대표 2026-10-19): 제원 채움이 원천에 연료가 없을 때만 쓴다.
-      trimFuel: masterTrimFuelLookup(records) } };
+      trimFuel: masterTrimFuelLookup(records),
+      // 확정 정체성 + 마스터 연결 → 인승·구동방식·배기량(트림 행이 하나로 모이는 칸만, 대표 2026-10-22): 원천에 그 칸 원문이 없을 때만 빈 칸에 쓴다.
+      trimSpecs: masterTrimSpecLookup(records) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }

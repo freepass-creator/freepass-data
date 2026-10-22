@@ -43,6 +43,9 @@ export type CycleProduct = {
   /** 정체성이 확정되고 연료가 빈 노출 문서의 마스터 연료(vehicle_trim_master, 하나로 모일 때만 — 읽기 경로가 계산). 계획 digest·백업 대조에 고정되고,
    * 계획이 검증·압축 전 원문에 연료 원문이 없을 때만(domain/spec-refill masterFuelFallback) after 에 남기고, 쓰기는 after 의 이 값만 쓴다. */
   specMasterFuel?: string;
+  /** 정체성이 확정되고 마스터에 연결된(vehicle_master_id) 노출 문서의 빈 인승·구동방식·배기량에 쓸 마스터 제원(트림 행이 하나로 모이는 칸만 — 읽기 경로가 계산, 대표 2026-10-22).
+   * specMasterFuel 과 같이 계획 digest·백업 대조에 고정되고, 계획이 원천에 그 칸 원문이 없을 때만(domain/spec-refill masterSpecFallback) after 에 남기며, 쓰기는 after 의 이 값만 쓴다. */
+  specMasterSpecs?: import('../domain/spec-refill.js').MasterSpecValues;
   /** Exact reviewed archived physical facts; plan/CAS bound, never original RAW. */
   reviewedSpec?: import('../domain/reviewed-spec-correction.js').ReviewedSpec;
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
@@ -76,7 +79,9 @@ export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: s
   modelAliases?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   /** 정체성이 마스터로 확정된 차(제조사·모델·세부모델·세부트림)의 vehicle_trim_master 연료가 표준 이름으로 «하나로» 모일 때만 그 값(대표 2026-10-19 요령 «마스터» 열).
    * 연식·배기량이 있으면 그것과 어긋나는 행을 뺀다(남는 행이 없으면 null). 없거나 갈리면 null. */
-  trimFuel?: (identity: { maker: string; model: string; sub_model: string; trim_name: string; year?: string; engine_cc?: string }) => string | null };
+  trimFuel?: (identity: { maker: string; model: string; sub_model: string; trim_name: string; year?: string; engine_cc?: string }) => string | null;
+  /** 정체성이 확정되고 vehicle_master_id 로 마스터에 연결된 차의 vehicle_trim_master 인승·구동방식·배기량 중 «하나로» 모이는 칸만(domain/spec-refill masterTrimSpecLookup, 대표 2026-10-22). */
+  trimSpecs?: (identity: import('../domain/spec-refill.js').MasterSpecIdentity) => import('../domain/spec-refill.js').MasterSpecValues };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

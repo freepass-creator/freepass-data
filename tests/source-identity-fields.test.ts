@@ -591,6 +591,63 @@ describe('대표 2026-10-19 연료 빈칸: 별칭 표 + 빈 칸 다시 채움 + 
     expect(doc.vehicle_maker_model_source).toBeUndefined();
   });
 
+  describe('대표 2026-10-22 마스터 제원 보완(인승·구동방식·배기량)', () => {
+    const confirmed = { sub_model: '더 뉴 아반떼 CN7', trim_name: '모던', vehicle_review_required: false, vehicle_master_id: 'M1', fuel_type: '가솔린' };
+    const trimSpecs: VehicleIdentityRefiner['trimSpecs'] = id => id.master_id === 'M1' && id.trim_name === '모던' ? { seats: '5', drive_type: '2WD', engine_cc: '1598' } : {};
+
+    it('마스터에 연결된 확정 문서의 빈 칸만 채우고, 기존 값은 두며, 되풀이하지 않는다', async () => {
+      const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimSpecs });
+      const blank = specRec('73다1001', null), partial = specRec('73다1002', null), unlinked = specRec('73다1003', null);
+      fake.put('73다1001', checkedDoc(blank, { ...confirmed, seats: '', engine_cc: '' }));
+      fake.put('73다1002', checkedDoc(partial, { ...confirmed, seats: '7', engine_cc: '1591', drive_type: '' }));
+      fake.put('73다1003', checkedDoc(unlinked, { ...confirmed, vehicle_master_id: '', seats: '', engine_cc: '' }));   // 마스터 연결 없음
+      const first = await run(commands, [blank, partial, unlinked]);
+      expect(first.kinds).toEqual(['UPDATE', 'UPDATE']);
+      expect(first.applied?.status).toBe('APPLIED');
+      expect(decodeFields(fake.docs.get('73다1001').fields)).toMatchObject({ seats: '5', drive_type: '2WD', engine_cc: '1598', ext_color: '흰색' });
+      expect(decodeFields(fake.docs.get('73다1002').fields)).toMatchObject({ seats: '7', engine_cc: '1591', drive_type: '2WD' });
+      const other = decodeFields(fake.docs.get('73다1003').fields);
+      expect(other.drive_type).toBeUndefined(); expect(other.seats).toBe('');
+      expect((await run(commands, [blank, partial, unlinked])).kinds).toEqual([]);
+    });
+
+    it('원천에 그 칸 원문이 있으면 원천이 이기고 마스터로 채우지 않는다', async () => {
+      const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimSpecs });
+      const r = specRec('73다1004', { engine_cc: '1591', seats: 'x' });
+      fake.put('73다1004', checkedDoc(r, { ...confirmed, seats: '', engine_cc: '' }));
+      await run(commands, [r]);
+      const doc = decodeFields(fake.docs.get('73다1004').fields);
+      expect(doc).toMatchObject({ engine_cc: '1591', drive_type: '2WD', seats: '' });   // 형식 틀린 원천 인승도 «있음» → 마스터로 안 채움
+      expect((await run(commands, [r])).kinds).toEqual([]);
+    });
+
+    it('전기차는 배기량을 채우지 않고(구동·인승만), 계약 잠금 문서는 건드리지 않는다', async () => {
+      const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimSpecs });
+      const ev = specRec('73다1005', null), locked = specRec('73다1006', null);
+      fake.put('73다1005', checkedDoc(ev, { ...confirmed, fuel_type: '전기', seats: '', engine_cc: '' }));
+      fake.put('73다1006', checkedDoc(locked, { ...confirmed, seats: '', locked_by_contract: true }));
+      await run(commands, [ev, locked]);
+      const evDoc = decodeFields(fake.docs.get('73다1005').fields);
+      expect(evDoc).toMatchObject({ seats: '5', drive_type: '2WD', engine_cc: '' });
+      expect(decodeFields(fake.docs.get('73다1006').fields).drive_type).toBeUndefined();
+      expect((await run(commands, [ev, locked])).kinds).toEqual([]);
+    });
+
+    it('계획 뒤 마스터 제원이 바뀌면 같은 승인 계획으로 쓰지 않는다(계획에 고정)', async () => {
+      let seats = '5';
+      const { commands, fake } = await setup(['RP012'], { ...knownMakers, trimSpecs: () => ({ seats }) });
+      const r = specRec('73다1007', null);
+      fake.put('73다1007', checkedDoc(r, { ...confirmed, seats: '' }));
+      const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 }, { records: [r], observedAt: time, heldCount: 0, complete: true },
+        await commands.list(source), now);
+      expect(built.plan.entries[0]?.after.specMasterSpecs).toEqual({ seats: '5' });
+      seats = '7';
+      const applied = await applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now }).catch((e: Error) => ({ status: e.message }));
+      expect(applied.status).not.toBe('APPLIED');
+      expect(decodeFields(fake.docs.get('73다1007').fields).seats).toBe('');
+    });
+  });
+
   it('다시 채움도 채움 상한(기본 100)에 들어가고 남은 차는 다음 회차에 이어 채운다', async () => {
     const { commands, fake } = await setup();
     const records = Array.from({ length: 120 }, (_, i) => specRec(`72나${String(7000 + i)}`, { fuel_type: '가솔린+전기' }, '현대_아반떼_하이브리드'));

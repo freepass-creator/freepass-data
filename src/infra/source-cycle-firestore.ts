@@ -14,7 +14,7 @@ import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '..
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from '../domain/reviewed-spec-correction.js';
-import { refillableSpecValues } from '../domain/spec-refill.js';
+import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFillValues, type MasterSpecValues } from '../domain/spec-refill.js';
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 
 type Fields = Record<string, unknown>;
@@ -274,7 +274,7 @@ export function intColorOnlyFields(spec: unknown, original: Fields): Fields {
   if (specBlank(original.int_color) && typeof v === 'string' && SPEC_VALID.int_color(v.trim())) out.int_color = v.trim();
   return out;
 }
-export function sourceSpecFillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null): Fields {
+export function sourceSpecFillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null, masterSpecs: MasterSpecValues | null = null): Fields {
   if (original.vehicle_spec_source_checked === true) return {};   // 이미 확인한 문서는 다른 변경으로 갱신돼도 여기서는 다시 채우지 않는다(Codex #688 ④) — 빈 칸 다시 채움은 sourceSpecRefillFields
   const out: Fields = {};
   if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
@@ -289,6 +289,8 @@ export function sourceSpecFillFields(spec: unknown, original: Fields, vehicleTex
   }
   // 원천에 연료 원문이 없고 정체성이 마스터로 확정된 차: 계획이 고정한 마스터 연료(masterFuelFallback 를 거친 값)만 빈 연료 칸에 쓴다.
   if (specBlank(original.fuel_type) && out.fuel_type === undefined && masterFuel && SPEC_VALID.fuel_type(masterFuel)) out.fuel_type = masterFuel;
+  // 원천에 그 칸 원문이 없고 마스터에 연결된 차: 계획이 고정한 마스터 제원(인승·구동방식·배기량, masterSpecFallback 를 거친 값)만 빈 칸에(원천 값이 이긴다).
+  Object.assign(out, masterSpecFillValues(original, out, masterSpecs));
   // 전기·수소 차(문서 연료 또는 이번에 채울 연료)에는 배기량을 채우지 않는다 — 의미 충돌(Codex #688 ②).
   const fuel = typeof original.fuel_type === 'string' && original.fuel_type.trim() ? original.fuel_type.trim() : typeof out.fuel_type === 'string' ? out.fuel_type : '';
   if (ELECTRIC_FUELS.has(fuel)) delete out.engine_cc;
@@ -307,14 +309,32 @@ export function masterFuelOf(f: Fields, trimFuel: VehicleIdentityRefiner['trimFu
 }
 /** 빈 칸 다시 채움(대표 2026-10-19 «한 번만 채움» 표식 재검토): 확인 표식이 있는 문서라도 «문서 칸이 비어 있고 지금 원천에 형식 맞는 값이 있으면» 그 칸만 채운다.
  * 값이 있는 칸은 덮지 않는다. 원천에 연료가 없으면 마스터 연료(masterFuel)로. 판정은 계획과 같은 순수 함수(domain/spec-refill)를 쓴다. 표식은 바꾸지 않는다. */
-export function sourceSpecRefillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null): Fields {
+export function sourceSpecRefillFields(spec: unknown, original: Fields, vehicleText?: unknown, masterFuel: string | null = null, masterSpecs: MasterSpecValues | null = null): Fields {
   if (original.vehicle_spec_source_checked !== true) return {};
   const out: Fields = { ...refillableSpecValues(spec, specRefillKeysOf(original), vehicleText, original.fuel_type) };
   if (specBlank(original.fuel_type) && out.fuel_type === undefined && masterFuel && SPEC_VALID.fuel_type(masterFuel)) {
     out.fuel_type = masterFuel;
     if (ELECTRIC_FUELS.has(masterFuel)) delete out.engine_cc;
   }
-  return out;
+  // 마스터 제원(인승·구동방식·배기량): 원천 값으로 채우지 않은 빈 칸만, 최종 연료가 전기·수소면 배기량 제외(같은 순수 함수).
+  return { ...out, ...masterSpecFillValues(original, out, masterSpecs) };
+}
+/** 확정 정체성(검토 끝남·제조사·모델·세부모델·세부트림)이고 마스터에 연결된(vehicle_master_id) 문서의 빈 인승·구동방식·배기량에 쓸 마스터 제원(트림 행이 하나로 모이는 칸만).
+ * 전기·수소 문서의 배기량은 넣지 않는다. 채울 칸이 없으면 null. masterFuelOf 와 같은 자리에서 읽기 경로가 계산한다(대표 2026-10-22). */
+export function masterSpecsOf(f: Fields, trimSpecs: VehicleIdentityRefiner['trimSpecs'] | null | undefined): MasterSpecValues | null {
+  if (!trimSpecs || f.vehicle_review_required !== false) return null;
+  const [maker, model, sub_model, trim_name, master_id] = [f.maker, f.model, f.sub_model, f.trim_name, f.vehicle_master_id].map(textOf);
+  if (!maker || !model || !sub_model || !trim_name || !master_id) return null;
+  const fuel = textOf(f.fuel_type);
+  const blank = MASTER_SPEC_KEYS.filter(k => specBlank(f[k]) && !(k === 'engine_cc' && ELECTRIC_FUELS.has(fuel)));
+  if (!blank.length) return null;
+  const str = (v: unknown) => (v === undefined || v === null ? '' : String(v).trim());
+  const year = yearOf(f.year), cc = str(f.engine_cc), drive = str(f.drive_type), seats = str(f.seats);
+  const found = trimSpecs({ maker, model, sub_model, trim_name, master_id, ...(year ? { year } : {}), ...(cc ? { engine_cc: cc } : {}),
+    ...(fuel ? { fuel_type: fuel } : {}), ...(drive ? { drive_type: drive } : {}), ...(seats ? { seats } : {}) });
+  const out: MasterSpecValues = {};
+  for (const k of blank) if (masterSpecValid(k, found?.[k])) out[k] = found[k];
+  return Object.keys(out).length ? out : null;
 }
 /** 입구 매핑(대표 2026-10-16 «제조사·모델이 안 옮겨진다»): 원천이 준 제조사·모델을 «빈 maker·model 에만» 채운다. 기존 값·사람 입력은 비접촉, 세부모델·트림은 건드리지 않는다.
  * 이번 회차에 마스터로 확정되면(identity) 마스터 이름이 이긴다. 원천에 값이 없으면 표식(ABSENT)만 남겨 되풀이를 막는다. 기본 꺼짐(운영 변수로 공급사별). */
@@ -395,7 +415,8 @@ function identityFields(id: VehicleIdentityRefinement, original: Fields, r: Sour
 function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[], heldDrift?: string[], writeMonthlyProductType = false,
   identity: VehicleIdentityRefiner | null = null, writeApiOptions = false, sourceIdentitySources: ReadonlySet<string> | null = null, sourceModels: SourceModels | null = null,
   specSources: ReadonlySet<string> | null = sourceIdentitySources, trimFuel: VehicleIdentityRefiner['trimFuel'] | null = null,
-  provenanceUids: ReadonlySet<string> = new Set(), reviewedApprovals: ReadonlyMap<string, ReviewedSpecApproval> = new Map()): CycleProduct {
+  provenanceUids: ReadonlySet<string> = new Set(), reviewedApprovals: ReadonlyMap<string, ReviewedSpecApproval> = new Map(),
+  trimSpecs: VehicleIdentityRefiner['trimSpecs'] | null = null): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, legacyObservedAt(f, d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
@@ -461,6 +482,8 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 정체성이 확정된 연료 빈 문서의 마스터 연료(하나로 모일 때만). 값을 읽기 경로에 실어 계획 digest·백업 대조에 고정한다 — 계획 뒤 마스터 연료가 바뀌면 백업 대조가 멈춘다(Codex 검토).
   // 쓸지 말지는 계획이 이번 관측 원천에 연료 원문이 «없을 때만» 정한다(masterFuelFallback).
   const specMasterFuel = specAllowed && !lockedNow ? masterFuelOf(f, trimFuel) : null;
+  // 마스터 제원(인승·구동방식·배기량, 대표 2026-10-22): 같은 자리·같은 고정 방식. 쓸지 말지는 계획이 원천에 그 칸 원문이 «없을 때만» 정한다(masterSpecFallback).
+  const specMasterSpecs = specAllowed && !lockedNow ? masterSpecsOf(f, trimSpecs) : null;
   if (writeApiOptions && engineOwned && f.provider_company_code === 'RP012' && (f.api_options_state === undefined || f.api_options_state === null)) rewriteReasons.push('API_OPTIONS');
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
@@ -473,7 +496,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
     identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
-  return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}), ...(policyLinkCode ? { policyLinkCode } : {}),
+  return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}), ...(specMasterSpecs ? { specMasterSpecs } : {}), ...(policyLinkCode ? { policyLinkCode } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
@@ -536,6 +559,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const specFill = !!specSources?.has(r.sourceId) && p.fillSourceIdentity === true;
   // 마스터 연료는 계획이 검증·압축 전 원문으로 판정해 고정한 값(after.specMasterFuel)만 쓴다 — 쓰기 시점에 다시 계산·판정하지 않는다(Codex 검토).
   const masterFuel = specFill && !isNew && typeof p.specMasterFuel === 'string' && p.specMasterFuel ? p.specMasterFuel : null;
+  // 마스터 제원도 같다: 계획이 고정한 after.specMasterSpecs 만 쓴다(쓰기 시점에 다시 조회·판정하지 않는다).
+  const masterSpecs = specFill && !isNew && p.specMasterSpecs && typeof p.specMasterSpecs === 'object' ? p.specMasterSpecs : null;
   // 정체성 정제: 새 문서이거나 엔진 정체성 보류 문서일 때만, 차종 마스터로 하나로 특정되면 마스터 이름을 쓴다. 아니면 지금처럼 원문 차명·검토 필요.
   // 기존 문서의 하향·철회(after 가 노출 안 함·철회 표식)에는 정체성 정제를 섞지 않는다(Codex #704 (c)): 철회 작업이 이름까지 바꾸지 않게.
   const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
@@ -579,10 +604,10 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model), opts.sourceModels ?? null) : {}),
     // 제원 입구 매핑: 계획이 양성 표식을 준 항목에서만, 확인 표식은 채울 값이 없어도 남겨 되풀이를 막는다(이미 확인한 문서는 다시 채우지 않음).
     ...(specFill && original.vehicle_spec_source_checked !== true
-      ? { ...sourceSpecFillFields(r.raw?.spec, original, r.vehicleText, masterFuel), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
+      ? { ...sourceSpecFillFields(r.raw?.spec, original, r.vehicleText, masterFuel, masterSpecs), vehicle_spec_source_checked: true, [INT_COLOR_MARK]: true } : {}),
     // 이미 제원 채움을 마친 문서: 내장색 보완(표식으로 한 번) + 빈 칸 다시 채움(빈 칸 + 원천 값 있음, 대표 2026-10-19). 값이 있는 칸은 덮지 않는다.
     ...(specFill && original.vehicle_spec_source_checked === true
-      ? { ...intColorOnlyFields(r.raw?.spec, original), ...sourceSpecRefillFields(r.raw?.spec, original, r.vehicleText, masterFuel) } : {}),
+      ? { ...intColorOnlyFields(r.raw?.spec, original), ...sourceSpecRefillFields(r.raw?.spec, original, r.vehicleText, masterFuel, masterSpecs) } : {}),
     ...(p.fillSourceIdentity === true && p.reviewedSpec && !withdrawing
       && stableDigest(original.원문_정정 ?? null) === p.reviewedSpec.correctionDigest
       ? { ...refillableSpecValues(p.reviewedSpec.values, Object.keys(p.reviewedSpec.values).filter(k => specBlank(original[k])), r.vehicleText, original.fuel_type),
@@ -625,7 +650,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
   const provenanceUids = new Set(options.provenanceUids ?? []);
   const reviewedApprovals = reviewedSpecApprovals(options.env?.SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals);
+  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null);
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
     sourceIdentitySources: srcIdentity, specFillSources: specSrc, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
@@ -728,7 +753,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 손오공 API 옵션 확인 표식(API_OPTIONS 사유 판정) — 옵션 목록 자체는 목록 조회에 싣지 않는다.
           'api_options_state', 'vehicle_maker_model_source', 'vehicle_maker_model_filled',
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
-          'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked', 'vehicle_int_color_source_checked']) query.append('mask.fieldPaths', fieldPath(field));
+          'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked', 'vehicle_int_color_source_checked',
+          // 마스터 제원 보완 판정(masterSpecsOf)이 읽는 칸 — 목록과 전체 문서 envelope 가 같아야 백업 대조가 맞는다(대표 2026-10-22).
+          'drive_type', 'vehicle_master_id']) query.append('mask.fieldPaths', fieldPath(field));
         if (reviewedApprovals.size) for (const field of ['원문_정정', '원문_정정_이력']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
@@ -743,7 +770,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
