@@ -162,7 +162,17 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (!plan.warnings.includes('PLATE_OWNED_BY_OTHER_SUPPLIER')) plan.warnings.push('PLATE_OWNED_BY_OTHER_SUPPLIER');
       continue;
     }
-    if (before && locked(before)) { hold('CONTRACT_LOCKED'); continue; }
+    if (before && locked(before)) {
+      hold('CONTRACT_LOCKED');
+      // 계약 잠금 문서도 차종 마스터로 «하나로 특정될 때만» 이름 4칸만 정제한다(읽기 경로가 VEHICLE_IDENTITY 사유를 준 노출 문서). 기록·가격·상태·잠금은 before 그대로(identityOnly).
+      if (before.listable && before.rewriteReasons?.includes('VEHICLE_IDENTITY') && !before.publication_withdrawal && !driftHeld.has(before.record.uid)) {
+        const lockedAfter: CycleProduct = { ...structuredClone(before), identityOnly: true };
+        delete lockedAfter.rewriteReasons; delete lockedAfter.specRefillKeys; delete lockedAfter.specMasterFuel; delete lockedAfter.specMasterSpecs;
+        delete lockedAfter.reviewedSpec; delete lockedAfter.policyLinkCode; delete lockedAfter.photoLinkFill;
+        plan.entries.push({ kind: 'UPDATE', before: structuredClone(before), after: lockedAfter });
+      }
+      continue;
+    }
     if (before && driftHeld.has(before.record.uid)) {
       // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
       if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
@@ -383,6 +393,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
     .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
+  // 상한을 못 받은 잠금 문서 이름 항목은 계획에서 뺀다(양성 표식 없는 identityOnly 는 쓸 칸이 없어 적용이 중단되므로). 다음 회차에 사유가 남아 순서대로 처리된다.
+  plan.entries = plan.entries.filter(e => !(e.after.identityOnly === true && e.after.refineIdentity !== true));
   if (refineEntries.length > optionsCap) plan.warnings.push(`VEHICLE_IDENTITY_DEFERRED:${refineEntries.length - optionsCap}:cap${optionsCap}`);
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
@@ -434,10 +446,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, photoLinkFill: _planPhoto, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, photoLinkFill: _readPhoto, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, identityOnly: _planIdOnly, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, photoLinkFill: _planPhoto, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, identityOnly: _readIdOnly, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, photoLinkFill: _readPhoto, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, photoLinkFill: _photo, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, identityOnly: _io, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, photoLinkFill: _photo, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
