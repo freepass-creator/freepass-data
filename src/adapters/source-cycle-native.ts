@@ -1,4 +1,7 @@
-import { sharedSheetEngine } from './shared-sheet-engine.js';
+import { sharedSheetEngine, type SharedSheetSpecOptions } from './shared-sheet-engine.js';
+import { sharedSheetFactNumber, sharedSheetFactRegistration } from '../domain/shared-sheet-fact-parsing.js';
+import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, isValidSheetPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
@@ -62,7 +65,8 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
 export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
-  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>): CycleCapture {
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>,
+  options?: SharedSheetSpecOptions): CycleCapture {
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
@@ -145,7 +149,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     }
   }
   copy.digest = sharedSheetCaptureDigest(copy);
-  const engine = sharedSheetEngine(async () => copy, () => capture.readTime, sourceYearMaster);
+  const engine = sharedSheetEngine(async () => copy, () => capture.readTime, sourceYearMaster, options);
   const converted = engine.toRecords({ raw: copy, observedAt: copy.readTime, attemptedAt: copy.readTime, complete, error: null });
   const zeroRent = converted.records.reduce((n, r) => n + (typeof r.raw.rent_zero_terms === 'number' ? r.raw.rent_zero_terms : 0), 0);
   return { observedAt: capture.readTime, complete, completedScopes: complete ? scopes : [], visibilityComplete: complete,
@@ -155,8 +159,9 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
         ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
-        ...(record.raw.spec ? { spec: record.raw.spec, spec_master_digest: record.raw.spec_master_digest,
-          spec_master_id: record.raw.spec_master_id } : {}),
+        // 연식 게이트를 통과하지 않은 시트 제원에는 마스터 근거 칸이 없다 — 없는 칸은 싣지 않는다.
+        ...(record.raw.spec ? { spec: record.raw.spec, ...(record.raw.spec_master_digest !== undefined ? {
+          spec_master_digest: record.raw.spec_master_digest, spec_master_id: record.raw.spec_master_id } : {}) } : {}),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
@@ -171,8 +176,31 @@ export function productTypeFromCell(headers: readonly unknown[], cells: readonly
   return PRODUCT_TYPE_VOCABULARY.has(mapped) ? { product_type: mapped } : {};
 }
 export type AicaTable = { title: string; values: unknown[][] };
-/** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
-export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
+const AICA_UNRESOLVED = /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/;
+/** 아이카 장기 행의 차 한 대 사실(연료·외장·내장·Km·최초등록·배기량) → 기존 제원 키(raw.spec). 연식은 만들지 않는다(최초등록에서 연식 추정 금지).
+ * 형식 규칙(SPEC_FORMAT_RULES)·연료 별칭(canonicalFuel)을 통과한 값만, 전기·수소는 배기량 제외. 빈 칸에만 쓰는 것은 기존 쓰기 경로가 맡는다. */
+export function aicaSpecFacts(get: (header: string) => unknown, vehicleText: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const put = (key: string, value: string | null) => { if (value && SPEC_FORMAT_RULES[key]?.(value)) out[key] = value; };
+  const str = (v: unknown) => typeof v === 'string' ? v.trim() : '';
+  // UNFORMATTED 읽기라 숫자 칸은 숫자로 온다(정수만). 글자 칸은 공통 시트와 같은 숫자 파서(쉼표·단위 허용)로 읽는다.
+  const integer = (v: unknown, unit: string) => typeof v === 'number' ? (Number.isSafeInteger(v) && v >= 0 ? String(v) : null)
+    : typeof v === 'string' && v.trim() ? (n => n === null ? null : String(n))(sharedSheetFactNumber(v.trim(), unit)) : null;
+  put('fuel_type', canonicalFuel(get('연료'), vehicleText));
+  for (const [key, header] of [['ext_color', '외장'], ['int_color', '내장']] as const) {
+    const value = str(get(header));
+    if (!AICA_UNRESOLVED.test(value)) put(key, value);
+  }
+  put('mileage', integer(get('Km'), 'km'));
+  const registration = get('최초등록');
+  put('first_registration_date', typeof registration === 'number' || typeof registration === 'string'
+    ? sharedSheetFactRegistration(String(registration).trim(), registration) : null);
+  if (!['전기', '수소'].includes(out.fuel_type ?? '')) put('engine_cc', integer(get('배기량'), 'cc'));
+  return out;
+}
+/** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference.
+ * options.sheetSpec(기본 꺼짐): 켜면 장기 행의 제원 사실을 raw.spec 으로 넘긴다(aicaSpecFacts). 월렌트 모델 줄은 차 한 대가 아니라 넘기지 않는다. */
+export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility, options?: { sheetSpec?: boolean }): CycleCapture {
   const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0, zeroRent = 0;
   const notes: string[] = [];
@@ -271,12 +299,14 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
       if (!plate && isAssignedPlate(plateCell)) { monthlyHolds.push('PLATE_INVALID'); continue; }
       // 대여료 해석 불가·범위 밖: 행은 그대로 내보내(TERMS_HOLD) 기존 문서를 지키고, 사유를 보류로 드러낸다.
       if (rentReview) rentReviewHolds.push('RENT_REVIEW_REQUIRED');
+      const spec = options?.sheetSpec === true ? aicaSpecFacts(get, vehicleText) : {};
       rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
         vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
           source_row: index + 2, product_group: 'LONG_TERM', ...productTypeFromCell(headers, cells, '구분'),
-          original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])) },
+          original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])),
+          ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }
