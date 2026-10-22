@@ -28,6 +28,18 @@ const withoutObservationClocks = (value: unknown): unknown => {
 // 변경 판정은 압축 형태로 한다: 문서에는 압축 레코드만 저장하므로 저장된 값과 새 원천 값을 같은 기준으로 비교한다(원문이 바뀌면 digest 가 바뀐다).
 // spec 은 문서에 실제 값으로 남지만(새 문서 사실 칸), 비교는 digest 로 한다 — 옛 문서(digest 저장)와 값이 같으면 변경 없음.
 const facts = (r: SourceProductRecord) => withoutObservationClocks(comparableRecord(r));
+/** 변경 판정(저장된 기록 vs 새 기록). 저장된 기록에 raw.spec 이 «아직 없을» 때 새 기록의 spec 은 변경이 아니다 — 시트 제원 전달을 처음 켜면 모든 문서의 기록이 spec 한 칸 때문에
+ * 사실 변경(UPDATE)으로 판정돼 회차 상한(optionsCap)을 우회하던 것을 막는다(2026-10-22 Codex 검토 P1, 합성 101건 → 101 UPDATE). 빈 칸을 채우는 쓰기는 읽기 경로의 빈 칸 판정(SOURCE_SPEC 사유, 상한 적용)이 맡고,
+ * 그 쓰기가 일어날 때 새 기록(spec 포함)이 함께 저장된다. 저장된 기록에 spec 이 있으면 spec 변화는 종전처럼 변경이다. */
+const sameFacts = (before: SourceProductRecord, after: SourceProductRecord): boolean => {
+  const fb = facts(before) as SourceProductRecord;
+  const fa = facts(after) as SourceProductRecord;
+  if (before.raw?.spec === undefined || before.raw.spec === null) {
+    if (fb.raw) delete (fb.raw as Record<string, unknown>).spec;
+    if (fa.raw) delete (fa.raw as Record<string, unknown>).spec;
+  }
+  return deepEqual(fb, fa);
+};
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
@@ -232,7 +244,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       // 마스터 제원은 그 자체가 채울 근거다(쓰면 칸이 채워져 읽기 경로가 다시 계산하지 않는다 — 되풀이 없음).
       || (!!before && after.listable && !!after.specMasterSpecs);
     if (refillDue) specRefill.add(key);
-    if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
+    if (before && sameFacts(before.record, after.record) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
         !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable) && !refillDue) continue;
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다
@@ -326,7 +338,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     if (census.size) reasonCensus = `REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`;
   }
   const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before && reasonsOf(e).length > 0 && reasonsOf(e).every(r => CAPPED_REASONS.has(r)) &&
-    e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
+    e.before.listable === e.after.listable && sameFacts(e.before.record, e.after.record));
   const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
   const optionsAllowed = Math.max(0, optionsCap - (plan.entries.length - optionsOnly.length));
   if (optionsOnly.length > optionsAllowed) {
