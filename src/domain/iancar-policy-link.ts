@@ -65,6 +65,8 @@ export type PolicyLinkInput = {
   vehicleTerms: Record<string, VehicleTerms | undefined>;
   /** 원천 조회 실패 사유(차량별, 계획에 표시) */
   vehicleTermsErrors?: Record<string, string>;
+  /** S01~S04 정책 문서의 존재·revision·내용 digest(S 연결 계획이 문서가 없으면 막고, 문서가 바뀌면 digest 가 달라진다). */
+  sPolicies?: Record<string, { exists: boolean; updateTimeMs: number | null; dataDigest: string | null }>;
 };
 
 const won10k = (value: number) => (value % 10000 === 0 ? `${value / 10000}만원` : `${value}원`);
@@ -85,11 +87,17 @@ const uniform = <T>(values: T[]): { same: true; value: T } | { same: false; dist
 
 /** 계획 범위. ALL = 노출 이안카 전부를 공통 정책에 연결하고 공통 정책 문서도 원천 값으로 맞춘다(#565 원래 동작). NULL_POLICY_ONLY = policy_code 가 «비어 있는» 노출 상품만 공통 정책에 연결하고
  * 이미 정책(S01~S04 등)이 있는 상품과 정책 문서는 건드리지 않는다(대표 2026-10-22: 고객 안내 조건 변경은 따로 결정) — 차량별 iancar_policy_terms 기록은 그대로 함께 한다. */
-export type PolicyLinkScope = 'ALL' | 'NULL_POLICY_ONLY';
+export type PolicyLinkScope = 'ALL' | 'NULL_POLICY_ONLY' | 'S_FROM_NULL' | 'S_RELINK';
+/** 이안카 S 문서 연결(대표 2026-10-23 승인 «원천이 정하는 연결»): 원천 초과 주행 요금(원/km) ↔ 가격표 «연 2만→3만km 12개월 월 차액» ↔ S 문서(1만km 추가 요금)가 차량별 1:1 로 맞는다(100→5만 S01·200→10만 S02·300→15만 S03·500→25만 S04). */
+export const IANCAR_S_BY_FEE: Readonly<Record<number, string>> = Object.freeze({ 100: 'RP031_S01', 200: 'RP031_S02', 300: 'RP031_S03', 500: 'RP031_S04' });
+/** 가격표 월 차액(원) 허용 범위 — 원천 등급과 가격표가 서로를 받쳐 줄 때만 연결한다(실측: S01 46~47천·S02 92~96천·S03 135~139천·S04 232천; 표시 요금과 소폭 달라 범위로 본다). */
+const S_MONTHLY_DIFF_WON: Readonly<Record<string, readonly [number, number]>> = Object.freeze({ RP031_S01: [40000, 55000], RP031_S02: [88000, 105000], RP031_S03: [130000, 150000], RP031_S04: [220000, 245000] });
+export const IANCAR_S_CODES = Object.values(IANCAR_S_BY_FEE);
 export const isPolicyEmpty = (data: Rec): boolean => data.policy_code === null || data.policy_code === undefined || (typeof data.policy_code === 'string' && data.policy_code.trim() === '');
 
 export function buildPolicyLinkPlan(input: PolicyLinkInput, options: { scope?: PolicyLinkScope } = {}) {
   const scope: PolicyLinkScope = options.scope ?? 'ALL';
+  if (scope === 'S_FROM_NULL' || scope === 'S_RELINK') return buildSLinkPlan(input, scope);
   const writesPolicyDocument = scope === 'ALL';
   const blockers: string[] = [];
   if (!input.policy.exists) blockers.push('COMMON_POLICY_MISSING');
@@ -175,5 +183,68 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput, options: { scope?: P
     },
     productPatches,
     planDigest: stableDigest(planBody),
+  };
+}
+
+/** 12개월 월 대여료의 연 3만km − 연 2만km 차액(원). 가격표가 없거나 한쪽이 없거나 유한한 양수가 아니면 null. */
+const monthlyMileageDiffWon = (price: unknown): number | null => {
+  if (!isRec(price)) return null;
+  const rent = (key: string) => (isRec(price[key]) && typeof (price[key] as Rec).rent === 'number' && Number.isFinite((price[key] as Rec).rent) && ((price[key] as Rec).rent as number) > 0 ? (price[key] as Rec).rent as number : null);
+  const low = rent('12_연20000km'), high = rent('12_연30000km');
+  return low !== null && high !== null ? high - low : null;
+};
+
+/** 원천 조건이 S01~S04 가 말하는 범위 안인지(S 문서에는 연령·면허 칸이 없어 원천 값을 그대로 둔다): 연 2만km 기준 · 만 26~65세 · 면허 1년 · 대인/대물 50만 · 자차 50~100만. */
+const coveredByS = (t: VehicleTerms): boolean => t.ownDamageIncluded === true && t.minimumDriverAge === 26 && t.maximumDriverAge === 65 && t.minimumLicenseMonths === 12
+  && t.personalInjuryDeductible === 500000 && t.propertyDamageDeductible === 500000 && (t.ownDamageDeductible === 500000 || t.ownDamageDeductible === 1000000);
+
+/** S 문서 연결 계획(순수). S_FROM_NULL = 정책이 비어 있는 노출 이안카를 원천 등급 S 로, S_RELINK = 이미 S 코드가 붙은 노출 이안카 중 원천 등급과 다른 것을 올바른 S 로.
+ * 정책 문서(공통·S)는 한 글자도 바꾸지 않는다. 원천 등급이 안 정해지거나 조건·가격표가 서로 어긋나면 비우고 사유를 남긴다(추정 금지). */
+export function buildSLinkPlan(input: PolicyLinkInput, scope: 'S_FROM_NULL' | 'S_RELINK') {
+  const blockers: string[] = [];
+  for (const code of IANCAR_S_CODES) if (!(input.sPolicies?.[code]?.exists)) blockers.push(`S_POLICY_MISSING(${code})`);
+  const targets = input.products.filter(p => p.data.provider_company_code === 'RP031' && p.data.listable === true &&
+    (scope === 'S_FROM_NULL' ? isPolicyEmpty(p.data) : typeof p.data.policy_code === 'string' && IANCAR_S_CODES.includes(p.data.policy_code)));
+  const lookupFailures = targets.filter(p => !input.vehicleTerms[p.id] && (input.vehicleTermsErrors?.[p.id] ?? 'NOT_LOOKED_UP') !== 'NOT_IN_SOURCE');
+  if (lookupFailures.length) blockers.push(`SOURCE_LOOKUP_FAILED(${lookupFailures.length})`);
+  const skipped: { id: string; reason: string }[] = [], held: { id: string; reason: string }[] = [];
+  const productPatches: { id: string; updateTimeMs: number; patch: Rec }[] = [];
+  const table: { id: string; fee: number | null; from: string | null; to: string | null; monthlyDiffMan: number | null }[] = [];
+  const alreadyCorrect: string[] = [];
+  for (const product of targets) {
+    const d = product.data;
+    if (d.locked_by_contract || d._deleted || d.deletedAt) { skipped.push({ id: product.id, reason: 'LOCKED_OR_DELETED' }); continue; }
+    const vehicle = input.vehicleTerms[product.id];
+    const from = typeof d.policy_code === 'string' && d.policy_code.trim() ? d.policy_code : null;
+    if (!vehicle) { held.push({ id: product.id, reason: input.vehicleTermsErrors?.[product.id] ?? 'NOT_LOOKED_UP' }); continue; }
+    const to = IANCAR_S_BY_FEE[vehicle.excessMileageFeePerKm] ?? null;
+    const diff = monthlyMileageDiffWon(d.price);
+    table.push({ id: product.id.slice(-4), fee: vehicle.excessMileageFeePerKm, from, to, monthlyDiffMan: diff === null ? null : Math.round(diff / 1000) / 10 });
+    if (!to) { held.push({ id: product.id, reason: 'FEE_NOT_MAPPED' }); continue; }
+    if (!coveredByS(vehicle)) { held.push({ id: product.id, reason: 'CONDITION_NOT_COVERED_BY_S' }); continue; }
+    const range = S_MONTHLY_DIFF_WON[to]!;
+    if (diff === null || diff < range[0] || diff > range[1]) { held.push({ id: product.id, reason: 'PRICE_DIFF_CONFLICT' }); continue; }
+    if (from === to && d.policy_reference_state === 'LINKED') { alreadyCorrect.push(product.id); continue; }
+    const patch: Rec = { policy_code: to, policy_reference_state: 'LINKED',
+      policy_code_linked_reason: `이안카 S 연결 — 원천 초과 주행 요금 ${vehicle.excessMileageFeePerKm}원/km · 가격표 월 차액 ${Math.round(diff / 1000) / 10}만원 → ${to}${from ? ` (이전 ${from})` : ''} (대표 2026-10-23 승인)` };
+    if (!Object.hasOwn(d, 'policy_code_source_original')) patch.policy_code_source_original = d.policy_code ?? null;
+    if (stableDigest(d.iancar_policy_terms ?? null) !== stableDigest(vehicle)) patch.iancar_policy_terms = vehicle;
+    productPatches.push({ id: product.id, updateTimeMs: product.updateTimeMs, patch });
+  }
+  const before: Record<string, number> = {};
+  for (const p of targets) { const k = String(p.data.policy_code ?? 'null'); before[k] = (before[k] ?? 0) + 1; }
+  const byCode: Record<string, number> = {};
+  for (const row of productPatches) byCode[String(row.patch.policy_code)] = (byCode[String(row.patch.policy_code)] ?? 0) + 1;
+  const heldReasons: Record<string, number> = {};
+  for (const h of held) heldReasons[h.reason] = (heldReasons[h.reason] ?? 0) + 1;
+  return {
+    schema: 'iancar-policy-link-plan/2' as const, scope, blockers,
+    counts: { listableTargets: targets.length, toLink: productPatches.length, termsFromSource: targets.filter(p => input.vehicleTerms[p.id]).length, withoutSourceTerms: held.filter(h => !(h.reason === 'FEE_NOT_MAPPED' || h.reason === 'CONDITION_NOT_COVERED_BY_S' || h.reason === 'PRICE_DIFF_CONFLICT')).length,
+      skipped: skipped.length, policyFieldsChanged: 0, policyDocumentChanges: 0, deletes: 0 },
+    policyCodeBefore: before, skipped, withoutSourceTerms: held, policyPatch: {} as Rec,
+    evidence: { rule: 'excess_mileage_fee(원/km) 100/200/300/500 ↔ S01/S02/S03/S04 ↔ 가격표 월 차액 5/10/15/25만원(범위)', byCode, heldReasons, alreadyCorrect: alreadyCorrect.length, table },
+    productPatches,
+    // 전체 판정을 고정한다: 연결 패치뿐 아니라 보류·건너뜀·이미 맞음, S 정책 문서의 revision·내용 digest 가 바뀌면 digest 도 바뀐다.
+    planDigest: stableDigest({ scope, products: productPatches, held, skipped, alreadyCorrect, sPolicies: input.sPolicies ?? null }),
   };
 }
