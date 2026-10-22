@@ -18,6 +18,7 @@ import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFill
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 import { photoLinkFillState, sheetPhotoLinkFields } from '../domain/sheet-photo-link.js';
 import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
+import { sheetFactFields, sheetFactState, isBlankFact, SHEET_FACT_KEYS, type SheetFactKey } from '../domain/sheet-facts.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -563,6 +564,7 @@ const sheetOf = (r: SourceProductRecord): { sheet?: SheetIdentity } => { const s
 /** 계약 잠금 문서에 쓸 수 있는 칸의 고정 허용 목록(대표 2026-10-22): 이름 4칸 + 검토 필요 표식. 계약·금액·상태·잠금·원천 기록은 여기 없다. */
 export const IDENTITY_ONLY_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'vehicle_review_required'] as const;
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null;
+  /** 시트 사실 빈 칸 채움(구동방식·원산지): 켠 공급사 코드와 켠 칸. 둘 다 있을 때만 쓴다(기본 꺼짐). */ sheetFactSources?: ReadonlySet<string> | null; sheetFactKeys?: readonly SheetFactKey[];
   /** 제원 채움 공급사(입구 매핑 공급사 + 제원만 켠 공급사). 없으면 sourceIdentitySources 와 같다. */ specFillSources?: ReadonlySet<string> | null;
   } = {}): Fields {
   const r = p.record;
@@ -620,6 +622,8 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
     ...apiPhotoFields(r, original),
     // F05 차량번호 칸 사진 폴더 링크: 빈 photo_link 에만(값 있는 칸·다른 폴더 캐시는 덮지 않음). 원천 기록에 검증된 폴더 링크가 있을 때만.
     ...sheetPhotoLinkFields(r.raw, original, r.observedAt),
+    // 시트 사실(구동방식·원산지): 켠 공급사·켠 칸만, 문서가 «지금도 비어 있을 때만»(쓰기 시점 재확인), 기존 문서만.
+    ...(!isNew && opts.sheetFactSources?.has(r.sourceId) && opts.sheetFactKeys?.length ? sheetFactFields(r.raw?.sheet_facts, original, opts.sheetFactKeys, (p.sheetFactFill ?? []) as SheetFactKey[]) : {}),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),
     ...(opts.sourceIdentitySources?.has(r.sourceId) && p.fillSourceIdentity === true && engineOwnedIdentity(original, isNew, r)
       ? sourceIdentityFields(r, original, !!identity, opts.sourceMakers ?? null, isNew ? textOf(r.vehicleText) : textOf(original.sub_model), opts.sourceModels ?? null) : {}),
@@ -648,6 +652,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
   /** 제원 채움만 켤 공급사(입구 매핑 없이 빈 제원 칸 채움·다시 채움, 대표 2026-10-19). 입구 매핑 공급사는 이 목록과 상관없이 제원도 채운다. */
   specFillSources?: readonly string[];
+  /** 시트 사실 빈 칸 채움(구동방식·원산지)을 켤 공급사 코드와 칸(기본 꺼짐, 대표 2026-10-23 승인 순서대로 단계마다 켠다). */
+  sheetFactSources?: readonly string[]; sheetFactKeys?: readonly string[];
   /** Default off. Exact reviewed shared-sheet UID scope for missing writer provenance. */
   provenanceUids?: readonly string[];
   /** 정체성 정제(마스터 이름 채움)를 켤 공급사 코드 목록(IDENTITY-SAME-CYCLE-DESIGN 2단계). 값이 있으면 그 공급사만, 없으면(undefined) identityRefine 이 전체를 정한다. */
@@ -671,8 +677,17 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const srcModels = () => sourceModelsOf(refiner?.models, refiner?.modelAliases);
   const provenanceUids = new Set(options.provenanceUids ?? []);
   const reviewedApprovals = reviewedSpecApprovals(options.env?.SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS);
-  const env = (d: Doc) => envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null);
+  const factKeys: SheetFactKey[] = (options.sheetFactKeys ?? []).filter((k): k is SheetFactKey => (SHEET_FACT_KEYS as readonly string[]).includes(k));
+  const factSources: ReadonlySet<string> | null = options.sheetFactSources?.length && factKeys.length ? new Set(options.sheetFactSources) : null;
+  const withFacts = (p: CycleProduct, d: Doc): CycleProduct => {
+    if (!factSources?.has(p.record.sourceId) || !p.listable || p.publication_withdrawal || p.locked_by_contract) return p;
+    const f = decodeFields(d.fields);
+    if (f.source_cycle_record === undefined) return p;
+    return { ...p, sheetFactState: sheetFactState(f, factKeys) };
+  };
+  const env = (d: Doc) => withFacts(envelope(d, accept, undefined, undefined, monthly, refineFor(docSource(d)), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null), d);
   const native = (after: CycleProduct, original: Fields) => nativeCycleFields(after, original, { writeMonthlyProductType: monthly, identity: refineFor(after.record.sourceId), writeApiOptions: apiOptions,
+    sheetFactSources: factSources, sheetFactKeys: factKeys,
     sourceIdentitySources: srcIdentity, specFillSources: specSrc, sourceMakers: refiner?.makers?.length ? new Set(refiner.makers) : null, sourceModels: sourceModelsOf(refiner?.models, refiner?.modelAliases) });
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
@@ -776,7 +791,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           // 제원 입구 매핑 판정이 읽는 칸(빈 칸에만 채움)
           'ext_color', 'int_color', 'fuel_type', 'mileage', 'engine_cc', 'seats', 'vehicle_spec_source_checked', 'vehicle_int_color_source_checked',
           // 마스터 제원 보완 판정(masterSpecsOf)이 읽는 칸 — 목록과 전체 문서 envelope 가 같아야 백업 대조가 맞는다(대표 2026-10-22).
-          'drive_type', 'vehicle_master_id']) query.append('mask.fieldPaths', fieldPath(field));
+          'drive_type', 'vehicle_master_id', ...factKeys]) query.append('mask.fieldPaths', fieldPath(field));
         if (reviewedApprovals.size) for (const field of ['원문_정정', '원문_정정_이력']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
@@ -791,7 +806,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
             continue;
           }
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const base = envelope(d, accept, drifted, heldDrift, monthly, refineFor(source), apiOptions, srcIdentity, srcModels(), specSrc, refiner?.trimFuel ?? null, provenanceUids, reviewedApprovals, refiner?.trimSpecs ?? null); const p = withFacts(base, d); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
@@ -849,6 +864,8 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
         throw new Error('SUPPLIER_NAME_REQUIRED');
       const fields = native(after, current ? decodeFields(current.fields) : {});
+      // 계획이 고른 시트 사실 칸은 «지금도 비어 있는데 안 쓰였다면» 실패다(채움 누락을 성공으로 오인하지 않는다). 그 사이 사람이 채웠으면 건너뛴 것이라 정상.
+      for (const key of after.sheetFactFill ?? []) if (!(key in fields) && current && isBlankFact(decodeFields(current.fields)[key])) throw new Error('SHEET_FACT_NOT_WRITTEN');
       if (after.identityOnly === true && (!Object.keys(fields).length || Object.keys(fields).some(k => !(IDENTITY_ONLY_FIELDS as readonly string[]).includes(k)))) throw new Error('IDENTITY_ONLY_FIELDS_INVALID');
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
