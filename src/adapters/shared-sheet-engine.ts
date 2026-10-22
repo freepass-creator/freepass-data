@@ -10,6 +10,7 @@ import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 import { sheetPhotoLinksOf } from '../domain/sheet-photo-link.js';
+import { sheetIdentityOf } from '../domain/sheet-identity.js';
 
 /** 시트 제원 전달 옵션(기본 꺼짐): sheetSpec=true 인 공급사만 정규화기가 이미 읽은 차 한 대 사실을 raw.spec 으로 넘긴다(켜기는 운영 env). */
 export type SharedSheetSpecOptions = { sheetSpec?: boolean };
@@ -131,6 +132,9 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
     // 차량번호 칸 사진 폴더 링크(검증된 표준 폴더 링크만). 문서 photo_link 쓰기는 빈 칸에만(infra 쓰기 경로).
     const photoLink = photoLinks.get(`${p.tab}|${row}`);
     if (photoLink) r.raw.sheet_photo_link = photoLink;
+    // 시트의 차종 4칸 후보(마스터 행과 정확히 일치할 때만 정제기가 쓴다).
+    const sheetIdentity = sheetIdentityOf(tab.values[0], tab.values[row - 1]);
+    if (sheetIdentity) r.raw.sheet_identity = sheetIdentity;
     // Preserve the supplied year through the existing spec writer only after the active master
     // admits that exact source name/year. Names and publication HOLD remain independent.
     // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.

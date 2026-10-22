@@ -17,6 +17,7 @@ import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from
 import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFillValues, type MasterSpecValues } from '../domain/spec-refill.js';
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 import { photoLinkFillState, sheetPhotoLinkFields } from '../domain/sheet-photo-link.js';
+import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -499,8 +500,10 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
     identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
+  // 정체성 보류 노출 문서 표시(계획이 시트 차종 후보 정제 대상을 고를 때 쓴다).
+  const identityHold = engineOwned && !f.publication_withdrawal && engineIdentityHold(f) ? { year: identityYear(f, record) } : null;
   return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}), ...(specMasterSpecs ? { specMasterSpecs } : {}), ...(policyLinkCode ? { policyLinkCode } : {}),
-    ...(photoLinkFill ? { photoLinkFill } : {}),
+    ...(photoLinkFill ? { photoLinkFill } : {}), ...(identityHold ? { identityHold } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
@@ -556,6 +559,7 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
+const sheetOf = (r: SourceProductRecord): { sheet?: SheetIdentity } => { const s = validSheetIdentity(r.raw?.sheet_identity); return s ? { sheet: s } : {}; };
 /** 계약 잠금 문서에 쓸 수 있는 칸의 고정 허용 목록(대표 2026-10-22): 이름 4칸 + 검토 필요 표식. 계약·금액·상태·잠금·원천 기록은 여기 없다. */
 export const IDENTITY_ONLY_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'vehicle_review_required'] as const;
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null;
@@ -564,7 +568,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const r = p.record;
   if (p.identityOnly === true) {
     const match = opts.identity && p.refineIdentity === true && engineIdentityHold(original)
-      ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
+      ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...(p.sheetIdentity ? { sheet: p.sheetIdentity } : sheetOf(r)) }) : null;
     if (!match) return {};
     const all = identityFields(match, original, r, false);
     return Object.fromEntries(IDENTITY_ONLY_FIELDS.filter(k => k in all).map(k => [k, all[k]]));
@@ -581,7 +585,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
   // 기존 문서는 계획이 양성 표식(refineIdentity)을 준 항목만 정제한다 — 이미 쓰는 문서(가격 변경·재노출)가 회차 상한을 우회하지 못한다(Codex #704 잔여). 신규 편입은 편입 상한이 건다.
   const identity = opts.identity && !withdrawing && (isNew || (p.refineIdentity === true && engineIdentityHold(original)))
-    ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
+    ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...sheetOf(r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
   // fail-closed(독립 검토 BLOCK): 검토된 어휘에 없는 상태는 «가용» 으로 추정해 노출하지 않는다. 플러그인이 먼저 보류하므로 여기 오는 일은 드물다.
@@ -793,7 +797,9 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
+      const sheetRefiner = refineFor(source);
       return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(refiner ? { identityMasterDigest: refiner.digest } : {}),
+        ...(sheetRefiner ? { sheetIdentityMatch: (record: SourceProductRecord, year: string) => !!validSheetIdentity(record.raw?.sheet_identity) && !!sheetRefiner.match({ rawName: textOf(record.vehicleText), year, ...sheetOf(record) }) } : {}),
         ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}),
         ...(heldDrift.length ? { driftHeld: heldDrift.sort() } : {}), ...(foreign.length ? { foreignUids: foreign.sort() } : {}) };
     },

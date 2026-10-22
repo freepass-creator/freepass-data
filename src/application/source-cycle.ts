@@ -8,6 +8,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
 import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
 import { photoLinkFillDue } from '../domain/sheet-photo-link.js';
+import { validSheetIdentity } from '../domain/sheet-identity.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
 export * from '../ports/source-cycle.js';
@@ -102,6 +103,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const specRefill = new Set<string>();
   // 빈 photo_link 를 시트 사진 폴더 링크로 채우는 항목 키(PHOTO_LINK 사유 — reasonsOf).
   const photoLinkFill = new Set<string>();
+  // 시트 차종 4칸 후보로 정제할 항목 키(VEHICLE_IDENTITY 사유 — reasonsOf, 회차 상한 대상).
+  const sheetIdentity = new Set<string>();
   // 문서 ID 가 다른 같은 차량(옛 ID 체계로 만든 문서): 같은 공급사 안에서 차량번호가 같은 문서가 정확히 하나이고 어떤 원천 행과도 직접
   // 대응하지 않으면 그 문서를 갱신 대상으로 잇는다. 새 문서를 만들고 옛 문서를 내리면 문서에 붙은 사진·정책 등이 새 문서에 없어
   // 화면이 퇴보한다(2026-10-13 이안카: 옛 iancar_* ID 문서 21건 하향 + 번호판 ID 23건 편입 계획). 문서 ID 는 옮기지 않는다.
@@ -165,10 +168,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     if (before && locked(before)) {
       hold('CONTRACT_LOCKED');
       // 계약 잠금 문서도 차종 마스터로 «하나로 특정될 때만» 이름 4칸만 정제한다(읽기 경로가 VEHICLE_IDENTITY 사유를 준 노출 문서). 기록·가격·상태·잠금은 before 그대로(identityOnly).
-      if (before.listable && before.rewriteReasons?.includes('VEHICLE_IDENTITY') && !before.publication_withdrawal && !driftHeld.has(before.record.uid)) {
-        const lockedAfter: CycleProduct = { ...structuredClone(before), identityOnly: true };
+      const lockedSheetDue = !!before.identityHold && !before.rewriteReasons?.includes('VEHICLE_IDENTITY') && snapshot.sheetIdentityMatch?.(r, before.identityHold.year) === true;
+      if (before.listable && (before.rewriteReasons?.includes('VEHICLE_IDENTITY') || lockedSheetDue) && !before.publication_withdrawal && !driftHeld.has(before.record.uid)) {
+        if (lockedSheetDue) sheetIdentity.add(key);
+        const lockedAfter: CycleProduct = { ...structuredClone(before), identityOnly: true, ...(lockedSheetDue && validSheetIdentity(r.raw?.sheet_identity) ? { sheetIdentity: validSheetIdentity(r.raw?.sheet_identity)! } : {}) };
         delete lockedAfter.rewriteReasons; delete lockedAfter.specRefillKeys; delete lockedAfter.specMasterFuel; delete lockedAfter.specMasterSpecs;
-        delete lockedAfter.reviewedSpec; delete lockedAfter.policyLinkCode; delete lockedAfter.photoLinkFill;
+        delete lockedAfter.reviewedSpec; delete lockedAfter.policyLinkCode; delete lockedAfter.photoLinkFill; delete lockedAfter.identityHold;
         plan.entries.push({ kind: 'UPDATE', before: structuredClone(before), after: lockedAfter });
       }
       continue;
@@ -267,13 +272,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 빈 photo_link 채움(F05 차량번호 칸 사진 폴더 링크, 대표 2026-10-22): 읽기 경로가 «비어 있음»(photoLinkFill)을 표시한 노출 문서에, 이번 관측 원천에
     // 검증된 폴더 링크가 있을 때만 쓴다. 사유는 PHOTO_LINK(회차 상한 대상). 쓰면 photo_link 가 채워져 표시가 사라진다(되풀이 없음).
     const photoLinkDue = after.listable && !after.publication_withdrawal && photoLinkFillDue(before?.photoLinkFill, r.raw?.sheet_photo_link);
+    // 시트 차종 4칸 후보 정제(대표 2026-10-22 승인): 이름 대조는 못 정했지만(VEHICLE_IDENTITY 사유 없음) 정체성 보류 노출 문서에, 이번 관측의 시트 4칸이 마스터 한 행과 정확히 일치하고 원문과 모순되지 않을 때만.
+    const sheetIdentityDue = !!before && !!before.identityHold && !before.rewriteReasons?.includes('VEHICLE_IDENTITY') && after.listable && !after.publication_withdrawal && snapshot.sheetIdentityMatch?.(r, before.identityHold.year) === true;
+    if (sheetIdentityDue) sheetIdentity.add(key);
     if (photoLinkDue) photoLinkFill.add(key);
     if (before && sameFacts(before.record, after.record) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
-        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable) && !refillDue && !photoLinkDue) continue;
+        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable) && !refillDue && !photoLinkDue && !sheetIdentityDue) continue;
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다
     delete after.specRefillKeys;
-    delete after.photoLinkFill;
+    delete after.photoLinkFill; delete after.identityHold;
     plan.entries.push({ kind: !before ? 'ENROLL' : before.listable && !after.listable ? 'DOWNGRADE' :
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }
@@ -356,7 +364,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 항목의 사유 = 읽기 경로 사유 + 계획이 정한 빈 칸 다시 채움(SOURCE_SPEC). 상한·이월·채움 표식은 모두 이 합친 사유로 정한다.
   type PlanEntry = (typeof plan.entries)[number];
   const reasonsOf = (e: PlanEntry): string[] => [...(e.before?.rewriteReasons ?? []), ...(specRefill.has(sourceProductKey(e.after.record)) ? ['SOURCE_SPEC'] : []),
-    ...(photoLinkFill.has(sourceProductKey(e.after.record)) ? ['PHOTO_LINK'] : [])];
+    ...(photoLinkFill.has(sourceProductKey(e.after.record)) ? ['PHOTO_LINK'] : []),
+    ...(sheetIdentity.has(sourceProductKey(e.after.record)) && !(e.before?.rewriteReasons ?? []).includes('VEHICLE_IDENTITY') ? ['VEHICLE_IDENTITY'] : [])];
   let reasonCensus: string | null = null;
   {
     const census = new Map<string, number>();
@@ -390,7 +399,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 상한을 우회하지 못한다. 옵션 전용 쓰기는 위 합산 예산이 먼저 이월한다. 정제 대상은 다음 회차에 사유가 그대로 남아 순서대로 처리된다(되풀이 아님: 정제되면 사유가 사라진다).
   // 선정 전에 «실제 정제될 수 있는 공개 문서»로 제한한다(Codex #704 잔여): 하향·비노출·철회 문서는 쓰기에서 정제를 건너뛰므로 상한을 소모해 뒤쪽 정상 문서를 굶기면 안 된다.
   const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.after.listable && (e.after.publication_withdrawal === null || e.after.publication_withdrawal === undefined)
-    && e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY'))
+    && reasonsOf(e).includes('VEHICLE_IDENTITY'))
     .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
   // 상한을 못 받은 잠금 문서 이름 항목은 계획에서 뺀다(양성 표식 없는 identityOnly 는 쓸 칸이 없어 적용이 중단되므로). 다음 회차에 사유가 남아 순서대로 처리된다.
@@ -407,7 +416,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const sourceIdentityRewrite = fillEntries.length - overFill.length;
   if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);
-  const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
+  const identityRefine = plan.entries.filter(e => reasonsOf(e).includes('VEHICLE_IDENTITY')).length;
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
@@ -446,10 +455,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, identityOnly: _planIdOnly, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, photoLinkFill: _planPhoto, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, identityOnly: _readIdOnly, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, photoLinkFill: _readPhoto, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, identityOnly: _planIdOnly, identityHold: _planIdHold, sheetIdentity: _planSheetId, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, photoLinkFill: _planPhoto, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, identityOnly: _readIdOnly, identityHold: _readIdHold, sheetIdentity: _readSheetId, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, photoLinkFill: _readPhoto, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, identityOnly: _io, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, photoLinkFill: _photo, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, identityOnly: _io, identityHold: _ih, sheetIdentity: _sid, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, photoLinkFill: _photo, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
