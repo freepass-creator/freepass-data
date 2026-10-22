@@ -15,6 +15,7 @@ import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supp
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from '../domain/reviewed-spec-correction.js';
 import { refillableSpecValues } from '../domain/spec-refill.js';
+import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -464,11 +465,15 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 이안카(RP031) 노출 문서에 공급사 차량 ID(iancar_one_vehicle_id)가 없으면 사진·정책 연결이 그 문서를 못 쓴다. 한 번 다시 써서 채운다(되풀이되지 않음).
   if (engineOwned && f.provider_company_code === 'RP031' && !(typeof f.iancar_one_vehicle_id === 'string' && f.iancar_one_vehicle_id.trim())
     && typeof record.raw?.vehicle_id === 'string' && record.raw.vehicle_id.trim()) rewriteReasons.push('IANCAR_VEHICLE_ID');
+  // 공급사 기본 정책 연결(대표 2026-10-22): 정책이 비어 있는 엔진 노출 문서에만, 규칙 표(단일 근거)에 있는 공급사의 기본 정책 코드를 연결한다.
+  // 쓰면 policy_code 가 채워져 사유가 사라진다(되풀이되지 않음). 계약 잠금 문서·이미 정책이 있는 문서·월렌트 모델 줄(MONTHLY_RENT, 장기 정책과 다를 수 있다)은 대상이 아니다. 신규 편입은 공급사 기본값 그대로 들어오고 다음 회차에 연결된다.
+  const policyLinkCode = engineOwned && !lockedNow && f.product_group !== 'MONTHLY_RENT' ? policyLinkCodeFor(f.provider_company_code, f.policy_code) : null;
+  if (policyLinkCode) rewriteReasons.push('POLICY_LINK');
   // 정체성 보류 문서(엔진 편입, 제조사·모델 빈칸, 검토 필요)가 이번 회차 차종 마스터로 «하나로» 특정되면 한 번 다시 써서 이름을 채운다.
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
     identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
-  return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}),
+  return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}), ...(policyLinkCode ? { policyLinkCode } : {}),
     ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
@@ -564,6 +569,9 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
       && !(typeof original.product_type === 'string' && original.product_type.trim()) && !(opts.writeMonthlyProductType === true && r.raw.product_group === 'MONTHLY_RENT')
       ? { product_type: r.raw.product_type } : {}),
     ...iancarVehicleIdFields(r, original),
+    // 공급사 기본 정책 연결: 계획이 정한 코드를, 문서의 policy_code 가 «지금도 비어 있을 때만» 쓴다(차 줄 값 우선 — 쓰기 시점에 한 번 더 확인).
+    ...(typeof p.policyLinkCode === 'string' && r.raw?.product_group !== 'MONTHLY_RENT' && policyLinkCodeFor(r.sourceId, original.policy_code) === p.policyLinkCode
+      ? { policy_code: p.policyLinkCode, policy_code_linked_reason: policyLinkReason(p.policyLinkCode) } : {}),
     source_cycle_write: { by: SOURCE_CYCLE_WRITER, status: listable ? display : '출고불가', at: r.observedAt },
     ...apiPhotoFields(r, original),
     ...(opts.writeApiOptions === true ? apiOptionFields(r, original) : {}),

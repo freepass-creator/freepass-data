@@ -28,7 +28,10 @@ export type CycleProduct = {
    * PHOTO_URLS 사진 없는 문서에 원천 API 사진 주소가 있음(손오공).
    * IANCAR_VEHICLE_ID 이안카 노출 문서의 공급사 차량 ID(iancar_one_vehicle_id) 누락.
    * VEHICLE_IDENTITY 엔진 편입 후 정체성 보류(제조사·모델 빈칸·검토 필요) 문서가 이번 회차 차종 마스터로 «하나로» 특정됨(쓰면 보류가 풀려 되풀이되지 않는다). */
-  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY' | 'API_OPTIONS' | 'SOURCE_IDENTITY' | 'SOURCE_SPEC' | 'SOURCE_PROVENANCE'>;
+  rewriteReasons?: Array<'PRICE_LAYOUT' | 'STATUS_KIND' | 'PRODUCT_TYPE' | 'PHOTO_URLS' | 'IANCAR_VEHICLE_ID' | 'VEHICLE_IDENTITY' | 'API_OPTIONS' | 'SOURCE_IDENTITY' | 'SOURCE_SPEC' | 'SOURCE_PROVENANCE' | 'POLICY_LINK'>;
+  /** 정책(policy_code)이 비어 있는 노출 엔진 문서에 연결할 공급사 기본 정책 코드(domain/supplier-default-policy-link — 읽기 경로가 계산, 규칙 표에 있는 공급사만).
+   * 계획 digest·백업 대조에 고정되고, 쓰기는 문서의 policy_code 가 «여전히 비어 있을 때만» 이 코드를 쓴다(차 줄 값 우선). 노출하지 않는 항목에는 남기지 않는다. */
+  policyLinkCode?: string;
   /** 계획이 정한 «이 회차에 입구 매핑(제조사·모델·제원 채움)을 한다»(회차 상한 안, 사유가 있거나 신규 편입인 항목만). 이 표식이 없으면 쓰기가 일어나도 채움은 없다 —
    * 사유 없는 UPDATE·재노출 등에서 채움이 상한을 우회하지 못하게 하는 «양성» 표식이다(Codex #685 ③). */
   fillSourceIdentity?: boolean;

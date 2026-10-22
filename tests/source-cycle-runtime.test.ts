@@ -670,6 +670,11 @@ describe('native mappings and UID', () => {
     expect(decodeFields(fake.docs.get('RP004:MONTHLY:MODELB').fields)).toMatchObject({
       product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: expect.any(String), trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       price: { '1': { rent: 500000, deposit: null, mileage: '월렌트' } }, provider_name: '아이카' });
+    // 신규 편입은 공급사 기본값(정책 없음)으로 들어오고, 다음 회차에 공급사 기본 정책 연결 규칙(장기 2건만, 월렌트 모델 줄 제외)이 한 번 연결한다 — 그 뒤 되풀이 없음.
+    const linkPlan = planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now);
+    expect(linkPlan.plan.entries.map(e => e.before?.rewriteReasons)).toEqual([['POLICY_LINK'], ['POLICY_LINK']]);
+    expect(linkPlan.plan.entries.every(e => e.after.record.raw.product_group !== 'MONTHLY_RENT')).toBe(true);
+    expect(await apply(commands, linkPlan)).toMatchObject({ status: 'APPLIED', verified: 2 });
     expect(planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now).plan.entries).toEqual([]);
     const ctrl = fileCycleControl(await directory(), async () => {});
     const result = await runSourceCycle(out.plugin, commands, ctrl, { now: () => now });
