@@ -23,8 +23,10 @@ export function sharedSheetSpecFacts(facts: SourceVehicleFacts['fields'] | undef
   const known = (key: string) => facts?.[key]?.state === 'KNOWN' ? facts[key]!.value : null;
   const put = (key: string, value: string | null) => { if (value && SPEC_FORMAT_RULES[key]?.(value)) out[key] = value; };
   const integer = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? String(v) : null;
+  // 정규화기가 연료를 KNOWN 으로 읽지 못해도(예: FCEV·전기차 같은 공통 별칭표의 표기) 시트 연료 칸 원문을 공통 별칭표(canonicalFuel)로 한 번 더 판정한다 — 아이카 경로와 같은 결과.
   const fuel = known('fuel');
-  put('fuel_type', typeof fuel === 'string' ? canonicalFuel(fuel, vehicleText) : null);
+  const fuelText = typeof fuel === 'string' ? fuel : (text('연료') || null);
+  put('fuel_type', fuelText ? canonicalFuel(fuelText, vehicleText) : null);
   put('mileage', integer(known('mileageKm')));
   put('seats', integer(known('seats')));
   if (!ELECTRIC_FUELS.has(out.fuel_type ?? '')) put('engine_cc', integer(known('displacementCc')));

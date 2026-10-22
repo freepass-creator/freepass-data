@@ -126,3 +126,38 @@ describe('B) 아이카 시트 제원 → raw.spec', () => {
     expect(spec({ 트림: '1.6 하이브리드' }).spec).not.toHaveProperty('fuel_type');
   });
 });
+
+import { planSourceCycle } from '../src/application/source-cycle.js';
+import type { SourceProductRecord } from '../src/domain/source-engine.js';
+describe('C) 제원 전달을 처음 켜도 일괄 UPDATE 가 생기지 않는다(회차 상한 우회 방지, Codex 검토 P1)', () => {
+  const rec = (uid: string, spec?: Record<string, string>): SourceProductRecord => ({ sourceId: 'RP999', uid, plate: uid, vehicleText: '합성', status: { raw: '출고가능', saleAvailable: true },
+    observedAt: time, raw: { ...(spec ? { spec } : {}) }, vehicleHold: [],
+    terms: [{ months: 12, monthlyRent: { state: 'KNOWN', value: 500000 }, deposit: { state: 'KNOWN', value: 700000 }, mileage: '20000km/year', raw: {} }] });
+  const cycleProduct = (record: SourceProductRecord): CycleProduct => ({ record, listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null });
+  const run = (n: number, withSpecAfter: boolean, withSpecBefore: boolean, specAfter = { fuel_type: '가솔린' }) => {
+    const ids = Array.from({ length: n }, (_, i) => `${String(i).padStart(3, '0')}가1000`);
+    const products = ids.map(id => cycleProduct(rec(id, withSpecBefore ? { fuel_type: '가솔린' } : undefined)));
+    const records = ids.map(id => rec(id, withSpecAfter ? specAfter : undefined));
+    return planSourceCycle({ sourceId: 'RP999', family: 'OTHER', maxDowngradeRatio: 1 }, { records, observedAt: time, heldCount: 0, complete: true }, { products, complete: true }, Date.parse(time) + 60_000);
+  };
+  it('저장된 기록에 spec 이 아직 없고 새 기록에만 spec 이 있어도(101건) 변경 없음 — UPDATE 0', () => {
+    expect(run(101, true, false).plan.entries).toEqual([]);
+    expect(run(101, false, false).plan.entries).toEqual([]);
+    const nullBefore = Array.from({ length: 101 }, (_, i) => `${String(i).padStart(3, '0')}가2000`);
+    const nb = planSourceCycle({ sourceId: 'RP999', family: 'OTHER', maxDowngradeRatio: 1 }, { records: nullBefore.map(id => rec(id, { fuel_type: '가솔린' })), observedAt: time, heldCount: 0, complete: true }, { products: nullBefore.map(id => cycleProduct({ ...rec(id), raw: { spec: null } as never })), complete: true }, Date.parse(time) + 60_000);
+    expect(nb.plan.entries).toEqual([]);   // 저장 기록 spec 이 null 이어도 같다
+  });
+  it('저장된 기록에 spec 이 이미 있으면 spec 값이 바뀐 것은 종전처럼 변경이다', () => {
+    expect(run(3, true, true, { fuel_type: '디젤' }).plan.entries.map(e => e.kind)).toEqual(['UPDATE', 'UPDATE', 'UPDATE']);
+    expect(run(3, true, true).plan.entries).toEqual([]);   // 같은 값은 변경 없음
+  });
+});
+
+describe('D) F05 연료: 정규화기가 KNOWN 으로 읽지 못해도 시트 연료 칸 원문을 공통 별칭표로 판정(Codex 검토 P2)', () => {
+  it('«전기차»·«FCEV» 같은 공통 별칭 표기를 아이카 경로와 같은 결과로 넘긴다(전기·수소는 배기량 제외)', () => {
+    expect(f05({ ...goodRow, 연료: '전기차', 배기량: '1000' }).raw.spec).toMatchObject({ fuel_type: '전기' });
+    expect(f05({ ...goodRow, 연료: '전기차', 배기량: '1000' }).raw.spec).not.toHaveProperty('engine_cc');
+    expect(f05({ ...goodRow, 연료: 'FCEV', 배기량: '1000' }).raw.spec).toMatchObject({ fuel_type: '수소' });
+    expect(f05({ ...goodRow, 연료: '합성연료' }).raw.spec).not.toHaveProperty('fuel_type');   // 모르는 표기는 넣지 않는다
+  });
+});
