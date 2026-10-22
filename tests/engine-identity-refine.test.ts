@@ -220,8 +220,16 @@ describe('차종 마스터 스냅샷 → 대조기 (회차당 한 번, 실패 �
       await vi.advanceTimersByTimeAsync(1);
       expect((await pending).status).toMatch(/^ENABLED:/);
       expect(sealed).toEqual(before);
+      // 5초를 넘고 60초 이내의 «미래» 스냅숏은 기다리지 않고 허용하며 어긋난 초를 돌려준다(대표 2026-10-22). 60초를 넘으면 보류.
       vi.setSystemTime(Date.parse(readAt) - 6000);
+      const skewed = await loadIdentityRefiner(async () => sealed);
+      expect(skewed.status).toMatch(/^ENABLED:/);
+      expect(skewed.clockSkewSeconds).toBe(6);
+      expect(sealed).toEqual(before);
+      vi.setSystemTime(Date.parse(readAt) - 61_000);
       expect((await loadIdentityRefiner(async () => sealed)).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');
+      vi.setSystemTime(Date.parse(readAt) - 30_000);
+      expect((await loadIdentityRefiner(async () => ({ ...sealed, digest: '0'.repeat(64) }))).status).toBe('SKIPPED:VEHICLE_MASTER_INVALID');   // 무결성 검증은 그대로
       vi.setSystemTime(Date.parse(readAt) - 1400);
       const tampered = loadIdentityRefiner(async () => ({ ...sealed, digest: '0'.repeat(64) }));
       await vi.advanceTimersByTimeAsync(1401);

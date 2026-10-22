@@ -113,7 +113,7 @@ export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<Son
  * (captureVehicleMasterSnapshotReadOnly — 데이터 접근 게이트웨이·원자 읽기)로 활성 마스터를 읽고, 기존 검증기(verifiedMasterRecords: 최신성·digest·완전성·이름 일치)를
  * 통과할 때만 대조기를 만든다. 못 읽거나 검증에 실패하면 null(정제 안 함 = 지금 동작)이고 상태 코드만 남긴다. 값·번호는 남기지 않는다. */
 export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () => number = Date.now, timeoutMs = 120_000):
-  Promise<{ status: string; refiner: VehicleIdentityRefiner | null }> {
+  Promise<{ status: string; refiner: VehicleIdentityRefiner | null; clockSkewSeconds?: number }> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const snapshot = await Promise.race([load(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('VEHICLE_MASTER_READ_TIMEOUT')), timeoutMs); })]) as VehicleMasterSnapshot;
@@ -124,14 +124,18 @@ export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () 
     if (futureMs > 1000 && futureMs <= Math.min(5000, timeoutMs)) {
       await new Promise(resolve => setTimeout(resolve, futureMs + 1));
     }
+    // 대표 2026-10-22 «6~7초 어긋남 때문에 정제가 매번 멈추는 건 오작동»: 5초를 넘고 60초 이내로 마스터 스냅숏 시각이 «미래»이면 기다리지 않고
+    // 스냅숏 자신의 시각을 평가 시각으로 검증한다(봉인된 시각·digest·건수·스키마 검증은 그대로). 60초를 넘으면 지금처럼 보류. 어긋난 초는 회차 기록에 남긴다.
+    const leadMs = Date.parse(snapshot?.readAt) - now();
+    const skewed = leadMs > 5000 && leadMs <= 60_000;
     let records;
-    try { records = verifiedMasterRecords(snapshot, now()); }
+    try { records = verifiedMasterRecords(snapshot, skewed ? Date.parse(snapshot.readAt) : now()); }
     catch { return { status: 'SKIPPED:VEHICLE_MASTER_INVALID', refiner: null }; }
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
     const eligibleTrims = new Set(records.map(r => r.trimId));
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+    return { status: `ENABLED:${digest.slice(0, 12)}`, ...(skewed ? { clockSkewSeconds: Math.round(leadMs / 1000) } : {}), refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
       sourceYearEvidence: { records, snapshotDigest: snapshot.digest, readAt: snapshot.readAt },
       allowsYear: (id, year) => Number.isInteger(year) && masters.some(m => m.id === id && m.yearFrom !== null &&
         year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)) &&
@@ -200,7 +204,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   let identityStatus = refineOff && !sourceIdentitySources.length && !specFillSources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
-    : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.status; return r.refiner; });
+    : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.clockSkewSeconds ? `${r.status}:CLOCK_SKEW_${r.clockSkewSeconds}S` : r.status; return r.refiner; });
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
