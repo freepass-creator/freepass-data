@@ -73,7 +73,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
-    delete after.specRefillKeys; delete after.specMasterFuel; delete after.reviewedSpec;
+    delete after.specRefillKeys; delete after.specMasterFuel; delete after.reviewedSpec; delete after.policyLinkCode;
     if (observed) after.record = structuredClone(observed);
     after.record.status.saleAvailable = false;
     after.listable = false;
@@ -217,6 +217,10 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
     const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
     if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
+    // 공급사 기본 정책 연결 코드는 노출 유지·재노출 항목에만 남긴다(하향·철회 항목에는 정책을 새로 붙이지 않는다).
+    if (!after.listable || after.publication_withdrawal || r.raw?.product_group === 'MONTHLY_RENT') delete after.policyLinkCode;   // 이번 원천이 월렌트 모델 줄이면 문서의 옛 상품군이 비어 있어도 연결하지 않는다
+    // 쓰고 나면 문서에서 되읽히는 모양(공급사 칸의 policy_code)을 계획 단계에서 미리 맞춘다 — 되읽기 비교가 정확히 같아야 한다.
+    else if (after.policyLinkCode && after.supplierFields) after.supplierFields = { ...after.supplierFields, policy_code: after.policyLinkCode };
     const reviewed = plannedReviewedSpec(before?.reviewedSpec, original.raw, original.vehicleText);
     if (reviewed && after.listable) after.reviewedSpec = reviewed; else delete after.reviewedSpec;
     const refillDue = !!before?.specRefillKeys?.length && after.listable &&
@@ -303,7 +307,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
   // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
-  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC', 'VEHICLE_IDENTITY', 'SOURCE_PROVENANCE']);   // 입구 매핑과 provenance도 같은 상한 안에서 이월한다
+  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC', 'VEHICLE_IDENTITY', 'SOURCE_PROVENANCE', 'POLICY_LINK']);   // 입구 매핑과 provenance도 같은 상한 안에서 이월한다
   // 사유 집계(진단 전용, 상한 이월 «전»): 이월로 계획에서 빠지는 항목은 이후 경고(VEHICLE_IDENTITY_REFINE 등)가 세지 못한다 —
   // 정제 사유가 상한에 밀려 보이지 않는지 가리는 근거(2026-10-16 00:00 회차: 정제 0건이 «사유 없음»인지 «이월»인지 구분 불가). 쓰기·계획 내용은 바꾸지 않는다.
   // 계획(plan.warnings)에 넣지 않는다: 계획 digest·재계획 비교에 들어가면 진단만으로 승인 계획이 달라진다. 계획 밖 보고 필드(reasonCensus)로만 돌려준다.
@@ -395,10 +399,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, reviewedSpec: _planReviewed, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, reviewedSpec: _readReviewed, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, reviewedSpec: _planReviewed, policyLinkCode: _planLink, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, reviewedSpec: _readReviewed, policyLinkCode: _readLink, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, reviewedSpec: _reviewed, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, reviewedSpec: _reviewed, policyLinkCode: _link, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
