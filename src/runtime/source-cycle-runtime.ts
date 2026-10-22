@@ -214,6 +214,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
       sourceIdentitySources, specFillSources,
+      // 시트 사실 빈 칸 채움(구동방식·원산지, 대표 2026-10-23 승인): 둘 다 있을 때만 켜진다(기본 꺼짐).
+      sheetFactSources: (env.SOURCE_CYCLE_SHEET_FACT_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      sheetFactKeys: (env.SOURCE_CYCLE_SHEET_FACT_KEYS ?? '').split(',').map(v => v.trim()).filter(Boolean),
       provenanceUids: (env.SOURCE_CYCLE_PROVENANCE_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean),
       identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {

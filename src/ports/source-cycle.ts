@@ -59,6 +59,10 @@ export type CycleProduct = {
   supplierConfirmedSold?: { recordObservedAt: string };
   /** 계약 잠금 문서의 «이름 칸만» 정제(대표 2026-10-22 승인): 계획이 before 와 같은 기록으로 만들고, 쓰기는 허용 목록(IDENTITY_ONLY_FIELDS)의 칸만 쓴다. 계약·금액·상태·잠금 칸은 쓰지 않는다. */
   identityOnly?: boolean;
+  /** 시트 사실 채움(구동방식·원산지)이 켜진 공급사의 엔진 소유 노출 문서: 켜진 칸마다 현재 값 문자열 또는 null(비어 있음). 읽기 경로 표시이며 쓰기 결과에는 남지 않는다. */
+  sheetFactState?: Record<string, string | null>;
+  /** 계획이 고른 «채울 칸»(SHEET_FACT 사유로 상한 안에 든 항목만). 쓰기는 이 칸만, 문서가 지금도 비어 있을 때만 쓴다. */
+  sheetFactFill?: string[];
   /** 읽기 경로가 계산하는 표시(쓰기 결과에는 남지 않는다): 엔진 소유 노출 문서이고 정체성 보류(제조사·모델 빈칸, 검토 필요)다. 계획이 시트 차종 후보로 정제할 대상을 고를 때 쓴다. */
   identityHold?: { year: string };   // year = 쓰기 때 쓸 연식(문서 연식 우선) — 계획의 시트 후보 판정이 쓰기와 같은 입력을 보게 한다
   /** 계획이 고정한 «검증된 시트 차종 후보»(계약 잠금 문서처럼 after.record 가 옛 기록인 경로가 최신 후보를 쓰기에 넘기는 용도, 쓰기 결과에는 남지 않는다). */
