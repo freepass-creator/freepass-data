@@ -312,5 +312,23 @@ export function identityMastersFromVehicleMaster(input: {
       yearFrom: year(d.year_start), yearTo: year(d.year_end),
       trims: [...trims].sort(([a], [b]) => a.localeCompare(b)).map(([name, aliases]) => ({ name, aliases: [...aliases].sort() })) });
   }
-  return out;
+  return dropVariantAliasCollisions(out);
+}
+
+/** 변형 행(하이브리드·플러그인·EV)이 «같은 제조사·모델의 일반 행 이름과 똑같은» 별칭을 갖고 있으면 그 별칭만 대조에서 뺀다(순수, 마스터 문서는 건드리지 않는다).
+ * 마스터 트림 문서에는 변형 행도 원래 세부모델 이름(예 «아반떼 CN7»)을 별칭으로 들고 있어, 원문 «아반떼 CN7» 이 일반 행(이름)과 변형 행(별칭)에 똑같이 걸려 가장 긴 일치가 동률이 되고
+ * 연식 범위도 같아 매번 AMBIGUOUS_MASTER 로 보류됐다(대표 2026-10-22 «99대 정리»). 변형 낱말이 원문에 있으면 변형 행의 정식 이름(…하이브리드 CN7)이 더 길게 걸려 그대로 변형 행으로 간다.
+ * 세대 쌍(더 뉴 X ↔ X: 연식으로 구분)의 별칭은 일부러 두 행을 가르는 근거라 건드리지 않는다. */
+const VARIANT_NAME = /하이브리드|플러그인|일렉트릭|전기|\bEV\b|PHEV|\bHEV\b|HYBRID|ELECTRIC|E-?TECH/i;
+const rangesOverlap = (a: IdentityMaster, b: IdentityMaster) => (a.yearFrom === null || b.yearTo === null || a.yearFrom <= b.yearTo) && (b.yearFrom === null || a.yearTo === null || b.yearFrom <= a.yearTo);
+export function dropVariantAliasCollisions(masters: IdentityMaster[]): IdentityMaster[] {
+  const byModel = new Map<string, IdentityMaster[]>();
+  for (const m of masters) { const k = `${norm(m.maker)}|${norm(m.model)}`; (byModel.get(k) ?? byModel.set(k, []).get(k)!).push(m); }
+  return masters.map(m => {
+    if (!VARIANT_NAME.test(m.sub_model)) return m;
+    const siblings = byModel.get(`${norm(m.maker)}|${norm(m.model)}`)!.filter(o => o.id !== m.id && !VARIANT_NAME.test(o.sub_model));
+    // 연식 범위가 겹치는 일반 행과만 충돌이다(범위가 갈리면 그 별칭은 연식으로 두 행을 가르는 근거라 남긴다).
+    const kept = m.sub_model_aliases.filter(a => !siblings.some(o => norm(o.sub_model) === norm(a) && rangesOverlap(m, o)));
+    return kept.length === m.sub_model_aliases.length ? m : { ...m, sub_model_aliases: kept };
+  });
 }
