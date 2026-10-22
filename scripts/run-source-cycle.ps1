@@ -41,15 +41,18 @@ try {
     $photoScript = Join-Path $repo 'scripts\ops\photo-cache-from-folder.mjs'
     $photoLog = Join-Path $env:SOURCE_CYCLE_PRIVATE_DIR 'photo-plan.log'
     $photoDeadline = (Get-Date).AddMinutes(10)
-    foreach ($photoCode in ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(RP|PT-)\d{3,4}$' })) {
+    foreach ($photoCode in ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(RP|PT-)\d{3,4}$' } | Select-Object -Unique)) {
       if ((Get-Date) -gt $photoDeadline) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] 전체 시간 초과로 {1} 이후 생략' -f (Get-Date -Format o), $photoCode); break }
       $photoText = ''
+      # 적용 승격(PC1 커맨드 승인 2026-10-22): SOURCE_CYCLE_PHOTO_APPLY_CODES 에 든 공급사만 --apply, 엔진이 시트 링크로 채운 검증된 photo_link 문서만, 회차당 20건 상한.
+      $photoArgs = @("--code=$photoCode")
+      if (($env:SOURCE_CYCLE_PHOTO_APPLY_CODES -split ',' | ForEach-Object { $_.Trim() }) -contains $photoCode) { $photoArgs += @('--apply', '--only-sheet-link', '--max-writes=20') }
       try {
-        $photoJob = Start-Job -ScriptBlock { param($n, $s, $c) & $n $s "--code=$c" 2>&1 | Out-String } -ArgumentList $node, $photoScript, $photoCode
+        $photoJob = Start-Job -ScriptBlock { param($n, $s, $a) & $n $s @a 2>&1 | Out-String } -ArgumentList $node, $photoScript, (, $photoArgs)
         if (Wait-Job -Job $photoJob -Timeout 180) { $photoText = [string](Receive-Job -Job $photoJob) } else { $photoText = '시간 초과(3분)'; Stop-Job -Job $photoJob }
         Remove-Job -Job $photoJob -Force
       } catch { $photoText = '실행 실패' }
-      $photoLines = @($photoText -split "`r?`n" | Where-Object { $_ -match '^(PLAN|\d{4} |시간 초과|실행 실패)' } | Select-Object -First 40)
+      $photoLines = @($photoText -split "`r?`n" | Where-Object { $_ -match '^(PLAN|APPLIED|\d{4} |시간 초과|실행 실패)' } | Select-Object -First 40)
       try { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] {1}' -f (Get-Date -Format o), $photoCode); if ($photoLines.Count) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ($photoLines -join [Environment]::NewLine) } } catch { }
     }
   }

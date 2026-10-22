@@ -3,6 +3,12 @@ import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR; const apply = process.argv.includes('--apply'); const only = process.argv.find(a => a.startsWith('--code='))?.slice(7) ?? 'RP023';
 const gws = process.env.GWS_BIN;
+// 무인 적용용 안전 옵션(PC1 커맨드 승인 2026-10-22): --only-sheet-link 는 엔진이 시트 링크로 채운(검증된) photo_link 문서만, --max-writes=N 은 이번 실행의 쓰기 상한.
+const onlySheetLink = process.argv.includes('--only-sheet-link');
+const maxWritesRaw = process.argv.find(a => a.startsWith('--max-writes='))?.slice(13);
+const maxWritesArg = Number(maxWritesRaw);
+if (maxWritesRaw !== undefined && !(Number.isInteger(maxWritesArg) && maxWritesArg > 0)) throw new Error('MAX_WRITES_INVALID');   // 잘못된 상한은 무제한이 아니라 거절
+const maxWrites = maxWritesRaw !== undefined ? maxWritesArg : Infinity;
 const run = (a, p) => JSON.parse((s => s.slice(s.indexOf('{')))(execFileSync(gws, a.concat(['--params', JSON.stringify(p)]), { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })));
 const FOLDER = new RegExp('/folders/([A-Za-z0-9_-]{20,})');
 const tok = await gcloudUserToken(); const H = { authorization: 'Bearer ' + tok, 'content-type': 'application/json' };
@@ -70,11 +76,13 @@ if (csvArg !== undefined) {
 const r = await fetch('https://firestore.googleapis.com/v1/projects/freepasserp5/databases/(default)/documents:runQuery', { method: 'POST', headers: H, body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'products' }], where: { compositeFilter: { op: 'AND', filters: [{ fieldFilter: { field: { fieldPath: 'provider_company_code' }, op: 'EQUAL', value: { stringValue: only } } }, { fieldFilter: { field: { fieldPath: 'listable' }, op: 'EQUAL', value: { booleanValue: true } } }] } } } }) });
 const docs = (await r.json()).filter(x => x.document).map(x => x.document);
 mkdirSync(dir + '/backups-docfolder', { recursive: true });
-let n = 0, ok = 0, empty = 0, nolink = 0;
+let n = 0, ok = 0, empty = 0, nolink = 0, capped = 0, skippedLegacy = 0;
 for (const d of docs) {
   const f = dec({ mapValue: { fields: d.fields } });
   if ((f.photo_cache?.urls?.length ?? 0) > 0) continue;
   const m = FOLDER.exec(String(f.photo_link ?? '')); if (!m) { nolink++; continue; }
+  if (onlySheetLink && f.photo_link_source?.kind !== 'SHARED_SHEET_PLATE_LINK') { skippedLegacy++; continue; }
+  if (ok >= maxWrites) { capped++; continue; }
   n++;
   // 엔진이 F05 차량번호 칸 링크로 채운 photo_link(photo_link_source.kind SHARED_SHEET_PLATE_LINK, 2026-10-22): CSV 모드와 같은 계획 함수로 검증한다 —
   // 폴더 이름 번호 일치(불일치 거절)·사용X/서류 폴더 거절·서류 비율 보류·폴더 전체 최대 40장. 사람·옛 도구가 넣은 링크는 아래 옛 방식 그대로.
@@ -117,4 +125,4 @@ for (const d of docs) {
   if (!w.ok) { console.log('FAILED', w.status); continue; }
   ok++; appendFileSync(dir + '/audit-docfolder.jsonl', JSON.stringify({ at: new Date().toISOString(), code: only, l4: String(f.car_number).slice(-4), n: urls.length }) + '\n');
 }
-console.log(`${apply ? 'APPLIED' : 'PLAN'} ${only}: 폴더 링크 있고 캐시 없음 ${n} · 채움 ${ok} · 이미지 없음 ${empty} · photo_link 없음 ${nolink}`);
+console.log(`${apply ? 'APPLIED' : 'PLAN'} ${only}: 폴더 링크 있고 캐시 없음 ${n} · 채움 ${ok} · 이미지 없음 ${empty} · photo_link 없음 ${nolink}${onlySheetLink ? ` · 옛 링크 건너뜀 ${skippedLegacy}` : ''}${capped ? ` · 상한으로 이월 ${capped}` : ''}`);
