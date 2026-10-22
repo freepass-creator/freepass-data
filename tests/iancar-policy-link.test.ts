@@ -126,3 +126,48 @@ describe('동기화가 연결된 정책을 다시 비우지 않는다(iancarPoli
     expect(iancarPolicyFields({})).toEqual({ policy_code: null, policy_code_source_original: null, policy_reference_state: 'DEFERRED' });
   });
 });
+
+describe('이안카 정책 연결 계획 — NULL_POLICY_ONLY 범위(대표 2026-10-22)', () => {
+  const mixed = () => input({
+    products: [product('n1'), product('n2', { policy_code: '' }), product('n3', { policy_code: '   ' }), product('s1', { policy_code: 'RP031_S01' }), product('f1', { policy_code: IANCAR_COMMON_POLICY_CODE }), product('x', { listable: false })],
+    vehicleTerms: { n1: terms(), n2: terms({ ownDamageDeductible: 1000000 }), n3: terms(), s1: terms({ excessMileageFeePerKm: 300 }), f1: terms() },
+  });
+  it('정책이 비어 있는(null·빈 문자열·공백) 노출 상품만 연결하고, S01 등 이미 정책이 있는 상품과 정책 문서는 건드리지 않는다', () => {
+    const plan = buildPolicyLinkPlan(mixed(), { scope: 'NULL_POLICY_ONLY' });
+    expect(plan.scope).toBe('NULL_POLICY_ONLY');
+    expect(plan.blockers).toEqual([]);
+    expect(plan.productPatches.map(p => p.id).sort()).toEqual(['n1', 'n2', 'n3']);
+    expect(plan.policyPatch).toEqual({});                                  // 정책 문서 변경 0 (연령 상한·면허·연 주행·근거 칸 포함)
+    expect(plan.counts).toMatchObject({ listableTargets: 3, toLink: 3, policyFieldsChanged: 0, policyDocumentChanges: 0, deletes: 0 });
+    for (const p of plan.productPatches) {
+      expect(p.patch).toMatchObject({ policy_code: IANCAR_COMMON_POLICY_CODE, policy_reference_state: 'LINKED' });
+      expect((p.patch.iancar_policy_terms as VehicleTerms).source).toBe('ONE_RATES');   // 차량별 조건은 함께 기록
+    }
+  });
+  it('범위 밖 상품의 원천 조회 실패는 계획을 막지 않고, 범위 안 상품의 조회 실패는 막는다', () => {
+    const base = mixed();
+    const outOfScopeFails = buildPolicyLinkPlan({ ...base, vehicleTerms: { n1: terms(), n2: terms(), n3: terms() }, vehicleTermsErrors: { s1: 'IANCAR_ONE_API_HTTP_503' } }, { scope: 'NULL_POLICY_ONLY' });
+    expect(outOfScopeFails.blockers).toEqual([]);
+    const inScopeFails = buildPolicyLinkPlan({ ...base, vehicleTerms: { n1: terms(), n3: terms() }, vehicleTermsErrors: { n2: 'IANCAR_ONE_API_HTTP_503' } }, { scope: 'NULL_POLICY_ONLY' });
+    expect(inScopeFails.blockers).toContain('SOURCE_LOOKUP_FAILED(1)');
+  });
+  it('원천 최소 연령이 만 26세가 아니면 이 범위에서도 막는다', () => {
+    const plan = buildPolicyLinkPlan(input({ products: [product('n1')], vehicleTerms: { n1: terms({ minimumDriverAge: 21 }) } }), { scope: 'NULL_POLICY_ONLY' });
+    expect(plan.blockers).toContain('SOURCE_MINIMUM_AGE_NOT_26');
+  });
+  it('범위가 계획 digest 에 묶인다: 같은 상품이라도 ALL 과 NULL_POLICY_ONLY 계획 digest 는 다르고, 기본(생략)은 ALL 과 같다', () => {
+    const only = buildPolicyLinkPlan(input({ products: [product('n1')], vehicleTerms: { n1: terms() } }), { scope: 'NULL_POLICY_ONLY' });
+    const all = buildPolicyLinkPlan(input({ products: [product('n1')], vehicleTerms: { n1: terms() } }));
+    expect(only.planDigest).not.toBe(all.planDigest);
+    expect(all.planDigest).toBe(buildPolicyLinkPlan(input({ products: [product('n1')], vehicleTerms: { n1: terms() } }), { scope: 'ALL' }).planDigest);
+  });
+});
+
+import { restorableRows } from '../src/infra/iancar-policy-link-firestore.js';
+describe('복원 대상 행(NULL_POLICY_ONLY 적용의 빈 정책 문서)', () => {
+  it('되돌릴 이전 값이 없는 행(정책 문서 patch·before 가 {})은 복원에서 제외 — 빈 update 로 트랜잭션이 실패하지 않게', () => {
+    const rows = [{ path: 'policy/FP-RP031-RENT', before: {} as Record<string, unknown> }, { path: 'products/a', before: { policy_code: null } }, { path: 'products/b', before: { policy_code: null, policy_reference_state: 'DEFERRED' } }];
+    expect(restorableRows(rows).map(r => r.path)).toEqual(['products/a', 'products/b']);
+    expect(restorableRows([])).toEqual([]);
+  });
+});
