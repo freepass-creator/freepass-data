@@ -165,6 +165,13 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
       continue;
     }
+    // 공급사 확인 판매완료(대표 2026-10-22): 사람이 공급사 확인으로 노출을 내렸고(표식), 그 뒤 엔진이 이 기록을 다시 쓰지 않았고, 원천 상태가 표식 때와 같은
+    // «판매 가능» 값이면(관측이 낡아 sale 이 거짓이어도 원천 문구가 그대로면 기록을 다시 쓰지 않는다) 철회를 지킨다 — 원천이 아직 갱신되지 않았을 뿐이다. 원천이 다른 값(판매완료·삭제 포함)으로 바뀌면 보통 경로가 처리한다.
+    if (before && !before.listable && r.status.saleAvailable === true && before.supplierConfirmedSold?.recordObservedAt === before.record.observedAt &&
+        r.status.raw === before.record.status.raw) {
+      if (!plan.warnings.includes('SUPPLIER_CONFIRMED_SOLD_HELD')) plan.warnings.push('SUPPLIER_CONFIRMED_SOLD_HELD');
+      continue;
+    }
     // 1차는 무조건 가져온다(대표 2026-10-14): 새 차(문서 없음)는 상태를 몰라도 식별자만 있으면 편입한다(노출 제외). 이미 문서가 있는 차는 이전처럼 보류 —
     // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
     // 노출 중인 문서가 모르는 상태값(예: 취소·진행중)으로 보류되면 노출이 그대로 남는다 — 조용히 두지 않고 회차 경고로 센다.

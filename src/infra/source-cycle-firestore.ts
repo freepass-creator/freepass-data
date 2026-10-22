@@ -501,7 +501,9 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
     locked_by_contract: isContractLockValue(f.locked_by_contract) || ((f.status === '계약중' || f.status_kind === '계약중') && !engineWroteContracted(f, record)),
     publication_withdrawal: (f.publication_withdrawal ?? null) as CycleProduct['publication_withdrawal'],
-    publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'] };
+    publication_withdrawal_prior: (f.publication_withdrawal_prior ?? null) as CycleProduct['publication_withdrawal_prior'],
+    ...(typeof (f.supplier_confirmed_sold as { record_observed_at?: unknown } | undefined)?.record_observed_at === 'string'
+      ? { supplierConfirmedSold: { recordObservedAt: (f.supplier_confirmed_sold as { record_observed_at: string }).record_observed_at } } : {}) };
 }
 /** 표시 상태가 정하는 status_kind (ERP5 재고 계약표). 예전에는 노출이면 무조건 «가용» 이어서 계약중·상품화중 문서가 계약 검사의
  * status_kind 드리프트로 잡혔다(2026-10-13 발행 단계 33건). 검토되지 않은 상태는 «불가»(fail-closed, 독립 검토 2026-10-14): 가용으로 추정해 노출하지 않는다. */
@@ -746,7 +748,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page) query.set('pageToken', page);
         for (const field of ['provider_company_code', 'provider_name', 'policy_code', 'car_number', 'car_name', '원문', 'model', 'price', 'listable', 'status', 'status_kind',
           'source', 'source_tab', 'product_group', 'source_observed_at', 'source_cycle_record', 'source_cycle_price_digest', 'locked_by_contract', 'source_cycle_write',
-          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type',
+          'publication_withdrawal', 'publication_withdrawal_prior', 'vehicle_status', 'product_type', 'supplier_confirmed_sold',
           'image_urls', 'image_url', 'photo_cache', 'photo_original_refs', 'iancar_one_vehicle_id', '_direct_ingest_at',
           // 정체성 정제 판정(engineIdentityHold·identityYear)이 읽는 칸 — 목록과 전체 문서의 envelope 가 같아야 백업 대조가 맞는다.
           'maker', 'sub_model', 'trim_name', 'vehicle_review_required', 'year', 'first_registration_date',
