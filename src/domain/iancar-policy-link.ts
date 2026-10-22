@@ -83,12 +83,19 @@ const uniform = <T>(values: T[]): { same: true; value: T } | { same: false; dist
   return Object.keys(distribution).length === 1 ? { same: true, value: values[0]! } : { same: false, distribution };
 };
 
-export function buildPolicyLinkPlan(input: PolicyLinkInput) {
+/** 계획 범위. ALL = 노출 이안카 전부를 공통 정책에 연결하고 공통 정책 문서도 원천 값으로 맞춘다(#565 원래 동작). NULL_POLICY_ONLY = policy_code 가 «비어 있는» 노출 상품만 공통 정책에 연결하고
+ * 이미 정책(S01~S04 등)이 있는 상품과 정책 문서는 건드리지 않는다(대표 2026-10-22: 고객 안내 조건 변경은 따로 결정) — 차량별 iancar_policy_terms 기록은 그대로 함께 한다. */
+export type PolicyLinkScope = 'ALL' | 'NULL_POLICY_ONLY';
+export const isPolicyEmpty = (data: Rec): boolean => data.policy_code === null || data.policy_code === undefined || (typeof data.policy_code === 'string' && data.policy_code.trim() === '');
+
+export function buildPolicyLinkPlan(input: PolicyLinkInput, options: { scope?: PolicyLinkScope } = {}) {
+  const scope: PolicyLinkScope = options.scope ?? 'ALL';
+  const writesPolicyDocument = scope === 'ALL';
   const blockers: string[] = [];
   if (!input.policy.exists) blockers.push('COMMON_POLICY_MISSING');
   const policyBefore = input.policy.data;
 
-  const targets = input.products.filter(p => p.data.provider_company_code === 'RP031' && p.data.listable === true);
+  const targets = input.products.filter(p => p.data.provider_company_code === 'RP031' && p.data.listable === true && (scope === 'ALL' || isPolicyEmpty(p.data)));
   const withTerms = targets.filter(p => input.vehicleTerms[p.id]);
   const terms = withTerms.map(p => input.vehicleTerms[p.id]!);
   const observedAts = [...new Set(terms.map(t => t.observedAt))].sort();
@@ -96,7 +103,7 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
   // 공통 정책: 모든 차량이 같은 값일 때만 원천 값을 반영한다. 차량마다 다르면 공통에 넣지 않고 varies 로 기록(차량별 보존).
   const derived: Rec = {}, varies: Record<string, Record<string, number>> = {};
   const policyPatch: Rec = {};
-  const setCommon = (policyField: string, value: string) => { derived[policyField] = value; if (text(policyBefore[policyField]) !== value) policyPatch[policyField] = value; };
+  const setCommon = (policyField: string, value: string) => { derived[policyField] = value; if (writesPolicyDocument && text(policyBefore[policyField]) !== value) policyPatch[policyField] = value; };
   if (terms.length) {
     const take = <K extends keyof VehicleTerms>(key: K) => uniform(terms.map(t => t[key]));
     const minAge = take('minimumDriverAge'), maxAge = take('maximumDriverAge'), lic = take('minimumLicenseMonths');
@@ -114,14 +121,15 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
       const u = take(key); if (!u.same) varies[key] = u.distribution;
     }
   }
-  if (text(policyBefore.annual_mileage) !== IANCAR_BASE_ANNUAL_MILEAGE) { policyPatch.annual_mileage = IANCAR_BASE_ANNUAL_MILEAGE; }
+  if (writesPolicyDocument && text(policyBefore.annual_mileage) !== IANCAR_BASE_ANNUAL_MILEAGE) { policyPatch.annual_mileage = IANCAR_BASE_ANNUAL_MILEAGE; }
   derived.annual_mileage = IANCAR_BASE_ANNUAL_MILEAGE;
   // 근거 칸(출처·시각): 공통 정책 문서에 «무엇을 어디서 당겨 왔는지» 남긴다.
   const sourceNote = { source: 'ONE_RATES(insurance·additional_charges·excess_mileage_fee)', observedAt: observedAts.at(-1) ?? null, vehiclesRead: terms.length, derived, variesAcrossVehicles: varies,
     note: '공급사 원천 우선. 차량마다 다른 값(면책금·수리 한도·초과 주행 요금·휴차료)은 상품 문서 iancar_policy_terms 에 차량별 보존' };
-  if (terms.length && stableDigest(policyBefore.iancar_source_terms ?? null) !== stableDigest(sourceNote)) policyPatch.iancar_source_terms = sourceNote;
+  if (writesPolicyDocument && terms.length && stableDigest(policyBefore.iancar_source_terms ?? null) !== stableDigest(sourceNote)) policyPatch.iancar_source_terms = sourceNote;
   if (text(policyBefore.basic_driver_age) !== '만 26세 이상' && !('basic_driver_age' in policyPatch)) blockers.push('BASIC_DRIVER_AGE_NOT_26');
-  if (policyPatch.basic_driver_age && policyPatch.basic_driver_age !== '만 26세 이상') blockers.push('SOURCE_MINIMUM_AGE_NOT_26');   // 원천이 대표 정책(만 26세 이상)과 다르면 계획을 막는다
+  if (policyPatch.basic_driver_age && policyPatch.basic_driver_age !== '만 26세 이상') blockers.push('SOURCE_MINIMUM_AGE_NOT_26');
+  if (!writesPolicyDocument && derived.basic_driver_age !== undefined && derived.basic_driver_age !== '만 26세 이상') blockers.push('SOURCE_MINIMUM_AGE_NOT_26');   // 원천이 대표 정책(만 26세 이상)과 다르면 계획을 막는다
 
   // 원천 조회 실패(401·429·시간 초과·형식 불일치 등)는 «원천에 없음(404)» 과 다르다 — 근거 없이 연결하지 않도록 계획을 막는다.
   const lookupFailures = targets.filter(p => !input.vehicleTerms[p.id] && (input.vehicleTermsErrors?.[p.id] ?? 'NOT_LOOKED_UP') !== 'NOT_IN_SOURCE');
@@ -150,9 +158,10 @@ export function buildPolicyLinkPlan(input: PolicyLinkInput) {
   for (const p of targets) { const k = String(p.data.policy_code ?? 'null'); before[k] = (before[k] ?? 0) + 1; }
   const noTerms = targets.filter(p => !input.vehicleTerms[p.id]).map(p => ({ id: p.id, reason: input.vehicleTermsErrors?.[p.id] ?? 'NOT_LOOKED_UP' }));
 
-  const planBody = { commonPolicy: { code: IANCAR_COMMON_POLICY_CODE, updateTimeMs: input.policy.updateTimeMs, patch: policyPatch }, products: productPatches };
+  const planBody = { ...(scope === 'ALL' ? {} : { scope }), commonPolicy: { code: IANCAR_COMMON_POLICY_CODE, updateTimeMs: input.policy.updateTimeMs, patch: policyPatch }, products: productPatches };
   return {
     schema: 'iancar-policy-link-plan/2',
+    scope,
     blockers,
     counts: { listableTargets: targets.length, toLink: productPatches.length, termsFromSource: withTerms.length, withoutSourceTerms: noTerms.length, skipped: skipped.length,
       policyFieldsChanged: Object.keys(policyPatch).length, policyDocumentChanges: Object.keys(policyPatch).length ? 1 : 0, deletes: 0 },

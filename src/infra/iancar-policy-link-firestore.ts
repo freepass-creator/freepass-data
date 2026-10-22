@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, type VehicleTerms } from '../domain/iancar-policy-link.js';
+import { buildPolicyLinkPlan, IANCAR_COMMON_POLICY_CODE, isPolicyEmpty, type PolicyLinkScope, type VehicleTerms } from '../domain/iancar-policy-link.js';
 import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-backup-value.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -14,13 +14,13 @@ const BACKUP_BUCKET = 'freepasserp5-data-audit-evidence';   // 기존 비공개 
 /** 원천(ONE 요금 원문)에서 차량 한 대의 조건을 읽는 함수. 원천에 없거나(404) 읽지 못하면 terms 없이 사유만 돌려준다. */
 export type FetchVehicleTerms = (vehicleId: string) => Promise<{ terms?: VehicleTerms; error?: string }>;
 
-async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: FetchVehicleTerms) {
+async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: FetchVehicleTerms, scope: PolicyLinkScope = 'ALL') {
   const policySnap = await db.collection('policy').doc(IANCAR_COMMON_POLICY_CODE).get();
   const productsSnap = await db.collection('products').where('provider_company_code', '==', 'RP031').get();
   const products = productsSnap.docs.map(doc => ({ id: doc.id, updateTimeMs: doc.updateTime.toMillis(), data: doc.data() }));
   const vehicleTerms: Record<string, VehicleTerms | undefined> = {}, vehicleTermsErrors: Record<string, string> = {};
   // 원천 요금 조회는 동시 3개까지(ONE 429 방지) — 결과는 상품 순서와 무관하게 상품 ID 로 모은다.
-  const listed = products.filter(product => product.data.listable === true);
+  const listed = products.filter(product => product.data.listable === true && (scope === 'ALL' || isPolicyEmpty(product.data)));   // 범위 밖(이미 정책 있음) 상품은 원천을 조회하지도 않는다
   for (const product of listed) if (typeof product.data.iancar_one_vehicle_id !== 'string' || !product.data.iancar_one_vehicle_id.trim()) vehicleTermsErrors[product.id] = 'ID_MISSING';   // 조회 못 한 노출 차량은 침묵하지 않고 오류로 남긴다
   const queue = listed.filter(product => !(product.id in vehicleTermsErrors));
   let cursor = 0;
@@ -35,18 +35,19 @@ async function readInputs(db: ReturnType<typeof getFirestore>, fetchTerms: Fetch
 }
 
 /** 읽기 전용 계획. 쓰기 없음. */
-export async function planIancarPolicyLinkFromFirestore(options: { fetchTerms: FetchVehicleTerms }) {
+export async function planIancarPolicyLinkFromFirestore(options: { fetchTerms: FetchVehicleTerms; scope?: PolicyLinkScope }) {
   const db = getFirestore(getTargetFirebaseApp());
-  return buildPolicyLinkPlan(await readInputs(db, options.fetchTerms));
+  return buildPolicyLinkPlan(await readInputs(db, options.fetchTerms, options.scope ?? 'ALL'), { scope: options.scope ?? 'ALL' });
 }
 
 /** 승인된 digest 와 같은 계획만 적용한다: 비공개 백업(로컬+버킷) → 조건부 트랜잭션(문서 updateTime 일치) → 되읽기. 삭제 없음. */
-export async function applyIancarPolicyLink(options: { expectedPlanDigest: string; expectedPolicyDocumentChanges: number; fetchTerms: FetchVehicleTerms }) {
+export async function applyIancarPolicyLink(options: { expectedPlanDigest: string; expectedPolicyDocumentChanges: number; fetchTerms: FetchVehicleTerms; scope?: PolicyLinkScope }) {
   const app = getTargetFirebaseApp();
   if (app.options.projectId !== 'freepasserp5') throw new Error('IANCAR_POLICY_LINK_WRONG_PROJECT');
   const db = getFirestore(app);
-  const inputs = await readInputs(db, options.fetchTerms);
-  const plan = buildPolicyLinkPlan(inputs);
+  const scope = options.scope ?? 'ALL';
+  const inputs = await readInputs(db, options.fetchTerms, scope);
+  const plan = buildPolicyLinkPlan(inputs, { scope });
   if (plan.blockers.length) throw Object.assign(new Error('IANCAR_POLICY_LINK_BLOCKED'), { blockers: plan.blockers });
   if (plan.planDigest !== options.expectedPlanDigest) throw new Error('IANCAR_POLICY_LINK_PLAN_CHANGED');
   // 정책 문서 변경 건수 관문: 승인 범위(기대 건수)와 다르면 쓰기 전에 중단한다.
@@ -98,6 +99,9 @@ export async function applyIancarPolicyLink(options: { expectedPlanDigest: strin
   return { status: 'POLICY_LINK_READBACK_VERIFIED', runId, backupPath, privateBackupObject: objectName, planDigest: plan.planDigest, counts: plan.counts, writeExecuted: true };
 }
 
+/** 복원 대상 행만 남긴다: 되돌릴 이전 값(before)이 하나도 없는 행(변경 0 이었던 정책 문서)은 건드리지 않는다. */
+export const restorableRows = <T extends { before: Record<string, unknown> }>(rows: readonly T[]): T[] => rows.filter(r => Object.keys(r.before).length > 0);
+
 /** 적용 뒤 문서가 아직 계획 값 그대로일 때만 되돌린다(그 사이 바뀌었으면 중단). 이전에 없던 칸은 삭제하지 않고 null 로 되돌린다. */
 export async function restoreIancarPolicyLink(options: { backupPath: string; expectedPlanDigest: string; apply: boolean }) {
   const backup = JSON.parse(await readFile(options.backupPath, 'utf8'));
@@ -107,8 +111,10 @@ export async function restoreIancarPolicyLink(options: { backupPath: string; exp
     { path: backup.policy.path, before: backup.policy.before, patch: backup.policy.patch },
     ...backup.documents.map((d: any) => ({ path: d.path, before: d.before, patch: d.patch })),
   ];
-  const decoded = rows.map(r => ({ path: r.path, patch: decodeIancarBackupValue(r.patch, p => db.doc(p)) as Record<string, unknown>,
+  const decodedAll = rows.map(r => ({ path: r.path, patch: decodeIancarBackupValue(r.patch, p => db.doc(p)) as Record<string, unknown>,
     before: Object.fromEntries(Object.entries(r.before).map(([k, v]) => [k, (v as any)?.type === 'absent' ? undefined : decodeIancarBackupValue(v, p => db.doc(p))])) }));
+  // 복원할 칸이 없는 행(NULL_POLICY_ONLY 적용의 정책 문서: patch·before 모두 {})은 제외 — 빈 update 는 Firestore 가 거절해 트랜잭션 전체가 실패한다(Codex 검토 P1).
+  const decoded = restorableRows(decodedAll);
   await db.runTransaction(async tx => {
     const snaps = await tx.getAll(...decoded.map(r => db.doc(r.path)));
     snaps.forEach((snap, i) => {
