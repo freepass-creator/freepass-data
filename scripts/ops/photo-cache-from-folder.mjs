@@ -25,6 +25,8 @@ if (csvArg !== undefined) {
   const seenPlates = new Set();
   for (const x of csvRows) { if (seenPlates.has(x.plate)) throw new Error('CSV_DUPLICATE_PLATE'); seenPlates.add(x.plate); }   // 같은 번호에 폴더 둘 → 사람이 하나로 정한 뒤 다시
   let failures = 0;
+  // 맵 키 순서는 Firestore 가 바꿔 돌려줄 수 있다 — 되읽기 대조는 키를 정렬해 비교한다(2026-10-22 적용 시 9건이 키 순서 때문에 MISMATCH 로 오판).
+  const canon = v => Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon(v[k])])) : v;
   const base ='https://firestore.googleapis.com/v1/projects/freepasserp5/databases/(default)/documents/products/';
   mkdirSync(dir + '/backups-docfolder', { recursive: true });
   for (const x of csvRows) {
@@ -57,7 +59,7 @@ if (csvArg !== undefined) {
     const bd = rb.ok ? await rb.json() : null; const back = bd ? dec({ mapValue: { fields: bd.fields } }) : null;
     const same = !!back && back.photo_cache?.src === plan.cache.src && back.photo_cache?.at === plan.cache.at && String(back.photo_link ?? '').trim() === plan.photoLink
       && JSON.stringify(back.photo_cache?.urls) === JSON.stringify(plan.cache.urls)
-      && Object.keys(f).filter(k => !['photo_cache', 'photo_link'].includes(k)).every(k => JSON.stringify(f[k]) === JSON.stringify(back[k]));   // 다른 칸 불변
+      && Object.keys(f).filter(k => !['photo_cache', 'photo_link'].includes(k)).every(k => JSON.stringify(canon(f[k])) === JSON.stringify(canon(back[k])));   // 다른 칸 불변
     console.log(l4, '되읽기', same ? 'MATCH' : 'MISMATCH', plan.count + '장');
     if (!same) failures++;
     appendFileSync(dir + '/audit-docfolder.jsonl', JSON.stringify({ at: now, code: only, l4, n: plan.count, mode: 'csv', ok: same }) + '\n');
