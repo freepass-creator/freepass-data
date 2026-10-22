@@ -311,7 +311,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             ? await identity() : null;
           return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility,
             yearRefiner ? { ...yearRefiner,
-              sourceYearUids: new Set((env.SOURCE_CYCLE_F05_SOURCE_YEAR_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean)) } : undefined));
+              sourceYearUids: new Set((env.SOURCE_CYCLE_F05_SOURCE_YEAR_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean)) } : undefined,
+            // 시트 제원(연료·주행거리·인승·배기량·최초등록일·색상) 전달: 제원 채움 공급사(SOURCE_CYCLE_SPEC_FILL_SOURCES·입구 매핑 공급사)만. 기본 꺼짐.
+            { sheetSpec: specFillSources.includes(code) || sourceIdentitySources.includes(code) }));
         }));
       }
     } else if (kind === 'AICA') {
@@ -326,7 +328,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         const visibilityAfter = await visibility(id);
         if (stableDigest(visibilityBefore) !== stableDigest(visibilityAfter)) throw new Error('SOURCE_VISIBILITY_CHANGED');
         if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== AICA_SCOPES.length) throw new Error('AICA_CAPTURE_CHANGED');
-        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter));
+        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter,
+          { sheetSpec: specFillSources.includes('RP004') || sourceIdentitySources.includes('RP004') }));
       }, ratio));
     } else if (kind === 'IANCAR') {
       // 상세·가용 캐시(1번 커맨드 오더 2026-10-16, 기본 꺼짐): SOURCE_CYCLE_IANCAR_DETAIL_CACHE=1 일 때만 직전 회차 캐시를 재사용해 차량별 호출 3→1(요금만).

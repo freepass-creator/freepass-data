@@ -6,13 +6,44 @@ import type { SourceAmount, SourceEngine, SourceProductRecord, SourceRead, Sourc
 import { classifyReadError, sourceProductKey, validateSourceRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
+import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
+
+/** 시트 제원 전달 옵션(기본 꺼짐): sheetSpec=true 인 공급사만 정규화기가 이미 읽은 차 한 대 사실을 raw.spec 으로 넘긴다(켜기는 운영 env). */
+export type SharedSheetSpecOptions = { sheetSpec?: boolean };
+const SHEET_COLOR_UNRESOLVED = /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/;
+const ELECTRIC_FUELS: ReadonlySet<string> = new Set(['전기', '수소']);
+/** 정규화기가 KNOWN 으로 읽은 연료·주행거리·인승·배기량·최초등록일과 외장·내장 색상 원문을 기존 제원 키로 낸다.
+ * 연식은 여기서 만들지 않는다(기존 연식 게이트만). 형식 규칙(SPEC_FORMAT_RULES)·연료 별칭(canonicalFuel)을 통과한 값만, 전기·수소는 배기량 제외,
+ * 연식·최초등록 모순 행은 최초등록일을 넘기지 않는다. 빈 칸에만 쓰는 것은 기존 쓰기 경로(sourceSpecFillFields·sourceSpecRefillFields)가 맡는다. */
+export function sharedSheetSpecFacts(facts: SourceVehicleFacts['fields'] | undefined, issues: readonly string[],
+  text: (header: string) => string, vehicleText: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const known = (key: string) => facts?.[key]?.state === 'KNOWN' ? facts[key]!.value : null;
+  const put = (key: string, value: string | null) => { if (value && SPEC_FORMAT_RULES[key]?.(value)) out[key] = value; };
+  const integer = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? String(v) : null;
+  const fuel = known('fuel');
+  put('fuel_type', typeof fuel === 'string' ? canonicalFuel(fuel, vehicleText) : null);
+  put('mileage', integer(known('mileageKm')));
+  put('seats', integer(known('seats')));
+  if (!ELECTRIC_FUELS.has(out.fuel_type ?? '')) put('engine_cc', integer(known('displacementCc')));
+  const registration = known('firstRegistration');
+  if (!issues.includes('YEAR_REGISTRATION_MISMATCH')) put('first_registration_date', typeof registration === 'string' ? registration : null);
+  for (const [key, header] of [['ext_color', '외부색상'], ['int_color', '내부색상']] as const) {
+    const value = text(header);
+    if (!SHEET_COLOR_UNRESOLVED.test(value)) put(key, value);
+  }
+  return out;
+}
 
 /** Capture transport is injected from capture-shared-sheet; no second Sheets client.
  * UID is an actual captured cell. No position/plate-based fallback, no UID sheet writes.
  * An extra UID header may occur anywhere; legacy captures remain readable but UID-HOLD.
  */
 export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>, now = () => new Date().toISOString(),
-  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>): SourceEngine<SharedSheetCapture> {
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>,
+  options?: SharedSheetSpecOptions): SourceEngine<SharedSheetCapture> {
   return {
     async read() {
       const attemptedAt = now();
@@ -30,7 +61,7 @@ export function sharedSheetEngine(readCapture: () => Promise<SharedSheetCapture>
           ...(error === 'READ_FAILED' && classified.detail ? { detail: classified.detail } : {}) };
       }
     },
-    toRecords: read => sharedSheetRecords(read, sourceYearMaster),
+    toRecords: read => sharedSheetRecords(read, sourceYearMaster, options),
   };
 }
 export function legacyCapture(capture: SharedSheetCapture) {
@@ -45,7 +76,8 @@ export function legacyCapture(capture: SharedSheetCapture) {
   legacy.digest = sharedSheetCaptureDigest(legacy);
   return { legacy, batch: buildSharedSheetBatch(legacy) };
 }
-export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>) {
+export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>,
+  options?: SharedSheetSpecOptions) {
   const held: SourceRowHold[] = [], records: SourceProductRecord[] = [];
   if (!read.raw) return { records, held };
   const capture = read.raw;
@@ -79,6 +111,10 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
       observedAt: String(p.readTime), raw: { cells: structuredClone(tab.values[row - 1]), headers: [...tab.values[0]!],
         ...(normalized.zeroRentTerms ? { rent_zero_terms: normalized.zeroRentTerms } : {}) },
       vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] };
+    // 시트 제원(연식 제외): 켠 공급사만. 연식은 아래 기존 게이트를 통과할 때만 더한다.
+    const sheetSpec = options?.sheetSpec === true ? sharedSheetSpecFacts(normalized.record.candidate.vehicleFacts?.fields,
+      normalized.record.candidate.issues, text, r.vehicleText) : {};
+    if (Object.keys(sheetSpec).length) r.raw.spec = sheetSpec;
     // Preserve the supplied year through the existing spec writer only after the active master
     // admits that exact source name/year. Names and publication HOLD remain independent.
     // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.
@@ -97,7 +133,7 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
       const matched = evidence ? ids.size === 1 ? { master_id: [...ids][0]! } : null
         : sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) });
       if (matched && sourceYearMaster.allowsYear?.(matched.master_id, sourceYear.value) === true) {
-        r.raw.spec = { year: String(sourceYear.value) };
+        r.raw.spec = { ...sheetSpec, year: String(sourceYear.value) };
         r.raw.spec_master_digest = evidence?.snapshotDigest ?? sourceYearMaster.digest;
         r.raw.spec_master_id = matched.master_id;
       }
