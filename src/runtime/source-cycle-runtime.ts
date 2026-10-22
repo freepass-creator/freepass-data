@@ -726,6 +726,14 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
   } finally { await release(); }
 }
 
+/** 무인 회차의 대상 원천 선택(순수). --source 가 있으면 그 원천만, 없으면 전체에서 SOURCE_CYCLE_ALL_RUN_EXCLUDE(쉼표 코드)를 뺀다.
+ * 이안카(RP031)는 전용 감시 실행기(:50, --watch-sync)가 상류 갱신을 기다리며 맡고, 시간당 전체 회차가 같은 시각에 읽으면 시간 초과·잠금 겹침으로 ERROR 가 찍혔다(대표 지시 2026-10-22). */
+export function selectUnattendedPlugins<T extends { sourceId: string }>(plugins: readonly T[], source: string | undefined, env: NodeJS.ProcessEnv): T[] {
+  if (source) return plugins.filter(p => p.sourceId === source);
+  const excluded = new Set((env.SOURCE_CYCLE_ALL_RUN_EXCLUDE ?? '').split(',').map(v => v.trim()).filter(Boolean));
+  return plugins.filter(p => !excluded.has(p.sourceId));
+}
+
 export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes,
   runtimeFactory: typeof createSourceCycleRuntime = createSourceCycleRuntime) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
@@ -758,7 +766,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     if (record.preflight.length) { record.exit = 1; await alert(record.preflight.join(',')); }
     else {
       const runtime = runtimeFactory(env, fetch, acceptDrift);
-      const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
+      const selected = selectUnattendedPlugins(runtime.plugins, source, env);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
       try {
         const sourceObservations = await refreshF05SourceObservations(env, source, {

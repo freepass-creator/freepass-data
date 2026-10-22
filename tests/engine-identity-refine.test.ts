@@ -252,3 +252,62 @@ describe('차종 마스터 스냅샷 → 대조기 (회차당 한 번, 실패 �
     expect(retired.refiner?.allowsYear?.('vm1', 2027)).toBe(false);
   });
 });
+
+describe('엔진 회차 정체성 정제 — 계약 잠금 문서는 이름 칸만 (대표 2026-10-22 승인)', () => {
+  const fieldsOf = (fake: Awaited<ReturnType<typeof setup>>['fake'], uid: string) => structuredClone(fake.fields(uid)) as Record<string, any>;
+  it('fills only the name fields on a contract-locked held document and proves every other field is unchanged', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가8001', heldDoc(rec('12가8001', '아이오닉5 프레스티지'), { locked_by_contract: '계약원장', status: '계약중', status_kind: '선점', vehicle_status: '계약중' }));
+    const before = fieldsOf(fake, '12가8001');
+    const r = rec('12가8001', '아이오닉5 프레스티지', { year: '2022' }, 777000, '2026-10-15T01:03:00.000Z');
+    const out = await run(commands, [r]);
+    expect(out.kinds).toEqual(['UPDATE']);
+    expect(out.plan.entries[0]!.after.identityOnly).toBe(true);
+    expect(out.applied).toMatchObject({ status: 'APPLIED', verified: 1 });
+    const after = fieldsOf(fake, '12가8001');
+    expect(after).toMatchObject({ maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE', trim_name: '프레스티지', vehicle_review_required: false });
+    const allowed = new Set(['maker', 'model', 'sub_model', 'trim_name', 'vehicle_review_required']);
+    for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) if (!allowed.has(k)) expect([k, after[k]]).toEqual([k, before[k]]);   // 계약·금액·상태·잠금·원천 기록 불변
+    expect(after.locked_by_contract).toBe('계약원장');
+    expect(after.price).toEqual(before.price);
+    expect(after.source_cycle_record).toEqual(before.source_cycle_record);
+    // 되풀이 없음: 같은 원천으로 다시 돌리면 쓰기 0
+    const patches = fake.patches();
+    const second = await run(commands, [r]);
+    expect(second.kinds).toEqual([]);
+    expect(fake.patches()).toBe(patches);
+  });
+  it('does not touch a locked document when the name cannot be uniquely decided, nor an already-named one', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가8002', heldDoc(rec('12가8002', '카니발 9인승 노블레스'), { locked_by_contract: '계약원장' }));
+    fake.put('12가8003', heldDoc(rec('12가8003', '아이오닉5 프레스티지'), { locked_by_contract: '계약원장', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE', vehicle_review_required: false }));
+    const b2 = fieldsOf(fake, '12가8002'), b3 = fieldsOf(fake, '12가8003');
+    const out = await run(commands, [rec('12가8002', '카니발 9인승 노블레스'), rec('12가8003', '아이오닉5 프레스티지')]);
+    expect(out.kinds).toEqual([]);
+    expect(fieldsOf(fake, '12가8002')).toEqual(b2);
+    expect(fieldsOf(fake, '12가8003')).toEqual(b3);
+  });
+  it('writes nothing outside the fixed allow-list: the native fields for identityOnly are a subset of it', async () => {
+    const { nativeCycleFields: fieldsFn, IDENTITY_ONLY_FIELDS } = await import('../src/infra/source-cycle-firestore.js');
+    const r = rec('12가8004', '아이오닉5 프레스티지', { year: '2022' });
+    const original = heldDoc(r, { locked_by_contract: '계약원장' });
+    const out = fieldsFn({ record: compactRecord(r), listable: true, locked_by_contract: '계약원장' as never, publication_withdrawal: null, publication_withdrawal_prior: null, identityOnly: true, refineIdentity: true },
+      original, { identity: refiner() });
+    expect(Object.keys(out).length).toBeGreaterThan(0);
+    for (const k of Object.keys(out)) expect(IDENTITY_ONLY_FIELDS as readonly string[]).toContain(k);
+    expect(fieldsFn({ record: compactRecord(r), listable: true, locked_by_contract: false, publication_withdrawal: null, publication_withdrawal_prior: null, identityOnly: true }, original, { identity: refiner() })).toEqual({});   // 양성 표식 없으면 쓰지 않음
+  });
+});
+
+describe('잠금 문서 이름 칸 정제 — Codex 반례', () => {
+  it('상한을 못 받은 잠금 문서 이름 항목은 계획에서 빠져 적용이 중단되지 않는다(다음 회차로 이월)', async () => {
+    const { commands, fake } = await setup();
+    const plates = Array.from({ length: 3 }, (_, i) => `12가81${i}0`);
+    for (const p of plates) fake.put(p, heldDoc(rec(p, '아이오닉5 프레스티지'), { locked_by_contract: '계약원장' }));
+    const prev = process.env.SOURCE_CYCLE_OPTIONS_REWRITE_CAP;
+    const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 }, { records: plates.map(p => rec(p, '아이오닉5 프레스티지', { year: '2022' })), observedAt: time, heldCount: 0, complete: true },
+      await commands.list(source), now);
+    expect(built.plan.entries.every(e => e.after.identityOnly !== true || e.after.refineIdentity === true)).toBe(true);
+    void prev;
+  });
+});

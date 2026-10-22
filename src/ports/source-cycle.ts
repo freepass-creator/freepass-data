@@ -57,6 +57,8 @@ export type CycleProduct = {
   /** 공급사가 «판매완료»를 확인해 사람이 노출을 내린 표식(supplier_confirmed_sold). 원천이 그 뒤로 바뀌지 않았을 때만 철회를 지킨다 —
    * recordObservedAt 은 표식을 찍을 때 저장 기록의 관측 시각이고, 엔진이 그 기록을 다시 쓰면 값이 달라져 표식은 저절로 효력을 잃는다(정리 쓰기 불필요). */
   supplierConfirmedSold?: { recordObservedAt: string };
+  /** 계약 잠금 문서의 «이름 칸만» 정제(대표 2026-10-22 승인): 계획이 before 와 같은 기록으로 만들고, 쓰기는 허용 목록(IDENTITY_ONLY_FIELDS)의 칸만 쓴다. 계약·금액·상태·잠금 칸은 쓰지 않는다. */
+  identityOnly?: boolean;
 };
 export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null;
   /** --accept-drift 로 허용된 보정 문서 uid(계획 digest 에 경고로 기록). */ acceptedDrift?: string[];

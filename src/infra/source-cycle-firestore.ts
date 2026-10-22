@@ -556,10 +556,19 @@ export function iancarVehicleIdFields(r: SourceProductRecord, original: Fields):
   if (stored && stored !== incoming) return { iancar_one_vehicle_id_conflict: { observed: incoming, at: r.observedAt } };
   return { iancar_one_vehicle_id: incoming, ...(hadConflict ? { iancar_one_vehicle_id_conflict: null } : {}) };
 }
+/** 계약 잠금 문서에 쓸 수 있는 칸의 고정 허용 목록(대표 2026-10-22): 이름 4칸 + 검토 필요 표식. 계약·금액·상태·잠금·원천 기록은 여기 없다. */
+export const IDENTITY_ONLY_FIELDS = ['maker', 'model', 'sub_model', 'trim_name', 'vehicle_review_required'] as const;
 export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: { writeMonthlyProductType?: boolean; identity?: VehicleIdentityRefiner | null; writeApiOptions?: boolean; sourceIdentitySources?: ReadonlySet<string> | null; sourceMakers?: ReadonlySet<string> | null; sourceModels?: SourceModels | null;
   /** 제원 채움 공급사(입구 매핑 공급사 + 제원만 켠 공급사). 없으면 sourceIdentitySources 와 같다. */ specFillSources?: ReadonlySet<string> | null;
   } = {}): Fields {
   const r = p.record;
+  if (p.identityOnly === true) {
+    const match = opts.identity && p.refineIdentity === true && engineIdentityHold(original)
+      ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r) }) : null;
+    if (!match) return {};
+    const all = identityFields(match, original, r, false);
+    return Object.fromEntries(IDENTITY_ONLY_FIELDS.filter(k => k in all).map(k => [k, all[k]]));
+  }
   const isNew = !Object.keys(original).length;
   const specSources = opts.specFillSources === undefined ? opts.sourceIdentitySources : opts.specFillSources;
   const specFill = !!specSources?.has(r.sourceId) && p.fillSourceIdentity === true;
@@ -827,18 +836,29 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       if (options.observationSources?.includes(after.record.sourceId)) throw new Error('OBSERVATION_ONLY');
       const b = await load(key), current = await getDoc(after.record.uid);
       if (stableDigest(b.before) !== beforeDigest || stableDigest(current) !== stableDigest(b.document) ||
-        (current && env(current).locked_by_contract) || after.locked_by_contract) throw new Error('CAS_CONFLICT');
+        (after.identityOnly !== true && ((current && env(current).locked_by_contract) || after.locked_by_contract))) throw new Error('CAS_CONFLICT');
+      if (after.identityOnly === true && !current) throw new Error('CAS_CONFLICT');
       if (current && env(current).record.sourceId !== after.record.sourceId) throw new Error('UID_OTHER_SUPPLIER');
       if (!current && (!after.supplierFields?.provider_name.trim() ||
         stableDigest(after.supplierFields) !== stableDigest(supplierFields(after.record.sourceId))))
         throw new Error('SUPPLIER_NAME_REQUIRED');
       const fields = native(after, current ? decodeFields(current.fields) : {});
+      if (after.identityOnly === true && (!Object.keys(fields).length || Object.keys(fields).some(k => !(IDENTITY_ONLY_FIELDS as readonly string[]).includes(k)))) throw new Error('IDENTITY_ONLY_FIELDS_INVALID');
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
       const result = await request(docPath(after.record.uid) + '?' + query, 'PATCH', { fields: encodeFields(fields) });
       const reread = await getDoc(after.record.uid);
       if (!reread || reread.updateTime !== result.updateTime || Object.entries(fields).some(([k, v]) =>
         fieldDigest(k, decodeFields(reread.fields)[k]) !== fieldDigest(k, v))) throw new Error('READBACK_UNCERTAIN');
+      // 이름만 쓴 문서는 허용 목록 밖의 모든 칸이 쓰기 전과 같음을 되읽기로 증명한다(계약·금액·상태·잠금 불변).
+      if (after.identityOnly === true && current) {
+        // 원시 Firestore 값(타입 포함)으로 비교한다 — 해독·정규화(null/누락 동일시)를 거치지 않는다.
+        const rawBefore = (current.fields ?? {}) as Record<string, unknown>, rawAfter = (reread.fields ?? {}) as Record<string, unknown>;
+        for (const k of new Set([...Object.keys(rawBefore), ...Object.keys(rawAfter)])) {
+          if ((IDENTITY_ONLY_FIELDS as readonly string[]).includes(k)) continue;
+          if (stableDigest(rawBefore[k] ?? null) !== stableDigest(rawAfter[k] ?? null) || (k in rawBefore) !== (k in rawAfter)) throw new Error('READBACK_UNCERTAIN');
+        }
+      }
       await immutable(join(options.directory, `${stableDigest(key)}.receipt.json`), { project, key, after: reread });
     },
   };
