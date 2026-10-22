@@ -3,7 +3,7 @@ import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdenti
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { validateSourceSpec } from '../domain/source-spec-validation.js';
-import { refillableSpecValues, masterFuelFallback } from '../domain/spec-refill.js';
+import { refillableSpecValues, masterFuelFallback, masterSpecFallback } from '../domain/spec-refill.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
 import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
@@ -73,7 +73,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
-    delete after.specRefillKeys; delete after.specMasterFuel; delete after.reviewedSpec; delete after.policyLinkCode;
+    delete after.specRefillKeys; delete after.specMasterFuel; delete after.specMasterSpecs; delete after.reviewedSpec; delete after.policyLinkCode;
     if (observed) after.record = structuredClone(observed);
     after.record.status.saleAvailable = false;
     after.listable = false;
@@ -217,15 +217,20 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
     const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
     if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
+    // 마스터 제원 보완(인승·구동방식·배기량, 대표 2026-10-22): 마스터 연료와 같은 자리·같은 원칙 — 읽기 경로가 고정한 값 중 원문(original)에 그 칸 원문이 없는 칸만 after 에 고정한다.
+    const plannedMasterSpecs = before?.specMasterSpecs ? masterSpecFallback(original.raw, before.specMasterSpecs) : null;
+    if (plannedMasterSpecs && after.listable) after.specMasterSpecs = plannedMasterSpecs; else delete after.specMasterSpecs;
     // 공급사 기본 정책 연결 코드는 노출 유지·재노출 항목에만 남긴다(하향·철회 항목에는 정책을 새로 붙이지 않는다).
     if (!after.listable || after.publication_withdrawal || r.raw?.product_group === 'MONTHLY_RENT') delete after.policyLinkCode;   // 이번 원천이 월렌트 모델 줄이면 문서의 옛 상품군이 비어 있어도 연결하지 않는다
     // 쓰고 나면 문서에서 되읽히는 모양(공급사 칸의 policy_code)을 계획 단계에서 미리 맞춘다 — 되읽기 비교가 정확히 같아야 한다.
     else if (after.policyLinkCode && after.supplierFields) after.supplierFields = { ...after.supplierFields, policy_code: after.policyLinkCode };
     const reviewed = plannedReviewedSpec(before?.reviewedSpec, original.raw, original.vehicleText);
     if (reviewed && after.listable) after.reviewedSpec = reviewed; else delete after.reviewedSpec;
-    const refillDue = !!before?.specRefillKeys?.length && after.listable &&
+    const refillDue = (!!before?.specRefillKeys?.length && after.listable &&
       (Object.keys(refillableSpecValues(r.raw?.spec, before.specRefillKeys, r.vehicleText)).length > 0
-        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel) || !!after.reviewedSpec);
+        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel) || !!after.reviewedSpec))
+      // 마스터 제원은 그 자체가 채울 근거다(쓰면 칸이 채워져 읽기 경로가 다시 계산하지 않는다 — 되풀이 없음).
+      || (!!before && after.listable && !!after.specMasterSpecs);
     if (refillDue) specRefill.add(key);
     if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
@@ -399,10 +404,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, reviewedSpec: _planReviewed, policyLinkCode: _planLink, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, reviewedSpec: _readReviewed, policyLinkCode: _readLink, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, reviewedSpec: _reviewed, policyLinkCode: _link, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;
