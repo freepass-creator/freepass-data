@@ -40,6 +40,10 @@ export type CycleProduct = {
   /** 제원 확인 표식(vehicle_spec_source_checked)이 이미 찍힌 노출 문서의 «빈 제원 칸» 목록(읽기 경로가 계산하는 표시, 쓰기 결과에는 남지 않는다 — 대표 2026-10-19).
    * 계획이 이번 관측 원천(raw.spec)에 그 칸의 형식 맞는 값이 있을 때만 다시 채움(SOURCE_SPEC)으로 고른다(domain/spec-refill). 값이 있는 칸·계약 잠금 문서는 목록에 없다. */
   specRefillKeys?: string[];
+  /** 엔진 문서(공통시트 원천·계약 잠금 아님)의 photo_link 가 비어 있고 드라이브 캐시와 충돌하지 않는다(읽기 경로가 계산하는 표시, 쓰기 결과에는 남지 않는다).
+   * 계획이 이번 관측 원천에 차량번호 칸 사진 폴더 링크(raw.sheet_photo_link)가 있을 때만 PHOTO_LINK 사유로 고른다(회차 상한). 쓰면 photo_link 가 채워져 되풀이되지 않는다.
+   * cacheFolder: 드라이브 캐시가 이미 있으면 그 폴더 ID — 링크가 같은 폴더일 때만 고른다(다르면 쓰기도 하지 않으므로 고르면 매 회차 헛쓰기가 된다). */
+  photoLinkFill?: { cacheFolder: string | null };
   /** 정체성이 확정되고 연료가 빈 노출 문서의 마스터 연료(vehicle_trim_master, 하나로 모일 때만 — 읽기 경로가 계산). 계획 digest·백업 대조에 고정되고,
    * 계획이 검증·압축 전 원문에 연료 원문이 없을 때만(domain/spec-refill masterFuelFallback) after 에 남기고, 쓰기는 after 의 이 값만 쓴다. */
   specMasterFuel?: string;

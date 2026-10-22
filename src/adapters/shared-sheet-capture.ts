@@ -4,15 +4,55 @@ import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './e
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { cellLinks, type SupplierGridCell } from './supplier-source-capture.js';
+import { SHEET_LINK_MAX_LENGTH, type SheetPlateLink } from '../domain/sheet-photo-link.js';
 
 export type SheetsBatchGet = { spreadsheetId?: string; valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
 /** spreadsheets.get?fields=… — the tab grid sizes that prove each returned range covered the whole tab. */
 export type SheetsGridMeta = { spreadsheetId?: string; sheets?: Array<{ properties?: { title?: string; gridProperties?: { rowCount?: number } } }> };
 export const SHEETS_GRID_META_FIELDS = 'spreadsheetId,sheets.properties(title,gridProperties(rowCount))';
 const WIDTH = sharedSheetHeaders.length;
-const LAST_COLUMN = (n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; })(WIDTH);
+const columnLetter = (n: number) => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+const LAST_COLUMN = columnLetter(WIDTH);
 export const sharedSheetTabs = (): string[] => [...new Set(sharedSheetChannels.map(x => x.tab))];
-export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.replace(/'/g, "''")}'!A1:${LAST_COLUMN}`);
+const quotedTab = (t: string) => `'${t.replace(/'/g, "''")}'`;
+export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `${quotedTab(t)}!A1:${LAST_COLUMN}`);
+
+/** 차량번호 칸 링크(공급사 사진 폴더) 읽기: 탭마다 «차량번호 열 하나»만, 칸마다 표시 글자와 링크 칸만(spreadsheets.get 그리드, 최소 필드).
+ * 값 읽기(values:batchGet)는 링크를 주지 않는다 — 그래서 F05 신규 차의 photo_link 가 비어 있었다(2026-10-22). */
+const PLATE_COLUMN = sharedSheetHeaders.indexOf('차량번호');
+if (PLATE_COLUMN < 0) throw new Error('SHARED_SHEET_PLATE_COLUMN_MISSING');
+const PLATE_LETTER = columnLetter(PLATE_COLUMN + 1);
+export const sharedSheetPlateLinkRanges = () => sharedSheetTabs().map(t => `${quotedTab(t)}!${PLATE_LETTER}1:${PLATE_LETTER}`);
+export const SHEETS_PLATE_LINK_FIELDS = 'spreadsheetId,sheets(properties(title),data(startRow,startColumn,rowData(values(formattedValue,hyperlink,userEnteredFormat(textFormat(link(uri))),textFormatRuns(format(link(uri)))))))';
+export type SheetsPlateLinkGrid = { spreadsheetId?: string; sheets?: Array<{ properties?: { title?: string };
+  data?: Array<{ startRow?: number; startColumn?: number; rowData?: Array<{ values?: SupplierGridCell[] }> }> }> };
+/** 링크 그리드 → 링크가 있는 행 목록. 링크 칸 표시 글자가 같은 읽기 묶음의 그 행 차량번호와 다르면(그 사이 줄이 바뀜 등) 그 행 링크는 버린다.
+ * 모양이 어긋난 탭은 링크 없이 둔다 — 사진 링크는 보조 정보라 가격·상태 수집을 막지 않는다(fail-open, 쓰기는 하지 않음). */
+export function plateLinksFromGrid(spreadsheetId: string, shown: SheetsBatchGet, grid: SheetsPlateLinkGrid, stats?: CaptureDateStats): SheetPlateLink[] {
+  const out: SheetPlateLink[] = [];
+  if (!grid || grid.spreadsheetId !== spreadsheetId || !Array.isArray(grid.sheets)) { if (stats) stats.plateLinksUnavailable = true; return out; }
+  const tabs = sharedSheetTabs();
+  for (const [i, title] of tabs.entries()) {
+    const sheet = grid.sheets.filter(s => s?.properties?.title === title);
+    const data = sheet.length === 1 && Array.isArray(sheet[0]!.data) && sheet[0]!.data.length === 1 ? sheet[0]!.data[0]! : null;
+    if (!data || (data.startColumn ?? 0) !== PLATE_COLUMN || (data.startRow ?? 0) !== 0 || !Array.isArray(data.rowData ?? [])) {
+      if (stats) stats.plateLinksUnavailable = true; continue;
+    }
+    const rows = shown.valueRanges?.[i]?.values ?? [];
+    (data.rowData ?? []).forEach((rowData, r) => {
+      if (r === 0) return;   // 머리글
+      const cell = Array.isArray(rowData?.values) ? rowData.values[0] : undefined;
+      const links = [...new Set(cellLinks(cell).filter(x => x.length <= SHEET_LINK_MAX_LENGTH))];
+      if (!links.length) return;
+      const shownPlate = String((rows[r] as unknown[] | undefined)?.[PLATE_COLUMN] ?? '').trim();
+      if (!shownPlate || String(cell?.formattedValue ?? '').trim() !== shownPlate) { if (stats) stats.plateLinksDropped = (stats.plateLinksDropped ?? 0) + 1; return; }
+      out.push({ tab: title, row: r + 1, links });
+    });
+  }
+  if (stats) stats.plateLinks = out.length;
+  return out;
+}
 
 /** Date columns whose display format may hide the year (입고일자 mm-dd · 최초등록일 yy-mm-dd): the capture keeps their real
  * value as YYYY-MM-DD so the RAW of record never loses information to a display choice. */
@@ -110,14 +150,14 @@ export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
   a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
 
 /** Counts the capture reports on the side (public log: numbers only). */
-export type CaptureDateStats = { datesFromSerial: number };
+export type CaptureDateStats = { datesFromSerial: number; plateLinks?: number; plateLinksDropped?: number; plateLinksUnavailable?: boolean };
 
 /** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
  * serials (optional): the same ranges read as real values (dates as serial numbers) right BEFORE the displayed read, and
  * serialsAfter the same read right AFTER it. Both must be identical, so nothing (row order, a date's year, a number) changed
  * while the displayed values were read; only date cells take the serial value. */
 export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string,
-  serials: SheetsBatchGet, serialsAfter: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
+  serials: SheetsBatchGet, serialsAfter: SheetsBatchGet, stats?: CaptureDateStats, links?: SheetsPlateLinkGrid): SharedSheetCapture {
   const tabs = sharedSheetTabs();
   if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
   if (meta.sheets?.some(x => sharedSheetUnavailableChannels.some(channel => channel.tab === x.properties?.title)))
@@ -180,6 +220,11 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
       });
       return { title: tabs[i]!, readTime, complete: true as const, rowCount: values.length, values };
     }) };
+  // 차량번호 칸 링크: 앞뒤 실제 값 읽기 «사이»에 읽은 것만 받는다(그 사이 줄 배치가 안 바뀌었음은 sameReads 가 보장). 없으면(옛 경로·파일 입력) 칸을 만들지 않는다.
+  if (links !== undefined) {
+    const plateLinks = plateLinksFromGrid(spreadsheetId, raw, links, stats);
+    if (plateLinks.length) capture.plateLinks = plateLinks;
+  }
   capture.digest = sharedSheetCaptureDigest(capture);
   buildSharedSheetBatch(capture); // fail closed: header, tabs, widths, identities
   return capture;
