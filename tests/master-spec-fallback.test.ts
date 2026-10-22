@@ -47,11 +47,31 @@ describe('masterTrimSpecLookup(순수): 트림 행이 하나로 모이는 칸만
   });
 });
 
+describe('masterSpecFallback: 원문 전체(list·detail·시트 줄)와 마스터 후보 충돌 검사(Codex P1)', () => {
+  const planned = { seats: '5', drive_type: '2WD', engine_cc: '1598' };
+  it('손오공 raw.list 의 배기량·시트 머리글 칸 등 정규화에서 빠진 원천값은 «있음»이라 마스터로 덮지 않는다(해석 못 한 값 포함)', () => {
+    expect(masterSpecFallback({ list: { displacementCc: 'unknown' } }, planned)).toEqual({ seats: '5', drive_type: '2WD' });
+    expect(masterSpecFallback({ detail: { data: { seats: '미정' } } }, planned)).toEqual({ drive_type: '2WD', engine_cc: '1598' });
+    expect(masterSpecFallback({ headers: ['차명', '구동방식', '인승'], cells: ['x', '체크', ''] }, planned)).toEqual({ seats: '5', engine_cc: '1598' });   // 빈 칸 셀은 없음
+    expect(masterSpecFallback({ list: { driver_age: '26' } }, planned)).toEqual(planned);   // 이름이 비슷한 다른 칸(운전자 연령)은 제원이 아니다
+  });
+  it('이번 원천이 마스터 후보와 정면으로 다르면(인승·배기량 숫자, 구동) 전부 보류', () => {
+    expect(masterSpecFallback({ spec: { seats: '7', engine_cc: '1998' } }, planned)).toBeNull();                 // 인승만 7·배기량 1998 → 마스터 2WD 를 붙이지 않는다
+    expect(masterSpecFallback({ list: { displacementCc: 1998 } }, planned)).toBeNull();
+    expect(masterSpecFallback({ spec: { drive: 'AWD' } }, planned)).toBeNull();
+    expect(masterSpecFallback({ spec: { engine_cc: '1,598cc' } }, planned)).toEqual({ seats: '5', drive_type: '2WD' });   // 같은 값(쉼표·단위)은 충돌 아님, 이미 있으니 채우지 않음
+    expect(masterSpecFallback({ spec: { engine_cc: '1600' } }, planned)).toEqual({ seats: '5', drive_type: '2WD' });   // 반올림(1600 ↔ 1598)은 같은 차
+    expect(masterSpecFallback({ spec: { engine_cc: '2000' } }, planned)).toBeNull();                                  // 배기량 급이 다르면(1.6 ↔ 2.0) 충돌
+  });
+});
+
 describe('masterSpecFallback(계획): 원천에 그 칸 원문이 있으면 원천 우선', () => {
   const planned = { seats: '5', drive_type: '2WD', engine_cc: '1598' };
   it('원천에 원문이 없는 칸만 남긴다', () => {
     expect(masterSpecFallback({ spec: {} }, planned)).toEqual(planned);
-    expect(masterSpecFallback({ spec: { seats: '7' } }, planned)).toEqual({ drive_type: '2WD', engine_cc: '1598' });
+    // 원천이 마스터 후보와 정면으로 다른 인승(7 ≠ 5)을 주면 그 마스터 후보는 이 차가 아니다 → 전부 보류(2026-10-22 Codex P1)
+    expect(masterSpecFallback({ spec: { seats: '7' } }, planned)).toBeNull();
+    expect(masterSpecFallback({ spec: { seats: '5' } }, planned)).toEqual({ drive_type: '2WD', engine_cc: '1598' });   // 같은 값이면 충돌 아님
     expect(masterSpecFallback({ spec: { engine_cc: 'abc', drivetrain: 'FF' } }, planned)).toEqual({ seats: '5' });   // 형식 틀린 원문도 «있음»
     expect(masterSpecFallback({ spec: { seats: '', engine_cc: null } }, planned)).toEqual(planned);              // 빈 값만 «없음»
     expect(masterSpecFallback({ spec: { seats: '5', engine_cc: '1598', drive_type: '2WD' } }, planned)).toBeNull();

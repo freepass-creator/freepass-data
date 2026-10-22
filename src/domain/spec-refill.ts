@@ -88,19 +88,51 @@ export function masterTrimSpecLookup(records: ReadonlyArray<TrimFuelRow>) {
 
 /** 계획 단계 마스터 제원 보완 판정(masterFuelFallback 과 같은 자리·같은 원칙): 읽기 경로가 고정한 마스터 제원(planned) 중
  * 이번 관측 원천(검증·압축 전 원문)에 그 칸 원문이 «아예 없는» 칸만 남긴다. 원천에 값이 있으면(형식이 틀려도) 원천 우선이라 마스터로 채우지 않는다. 계획·쓰기가 같은 결과를 쓴다. */
+/** 배기량 충돌 판정 허용 오차(상대): 반올림·표기 차이는 같은 차로 보고 배기량 급이 다르면 충돌. */
+const CC_TOLERANCE = 0.05;
 export function masterSpecFallback(raw: unknown, planned: unknown): MasterSpecValues | null {
   const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
   const p = obj(planned), r = obj(raw), spec = obj(r.spec);
   const present = (v: unknown) => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim());
-  const sourceTexts: Record<MasterSpecKey, unknown[]> = {
-    seats: [spec.seats, r.seats],
-    drive_type: [spec.drive_type, spec.drivetrain, spec.drive, r.drive_type, r.drivetrain],
-    engine_cc: [spec.engine_cc, spec.displacement, r.engine_cc],
+  // 원천 원문 «전체»(손오공 list·detail, 시트 headers/cells 포함)에서 칸 이름이 그 제원인 값을 찾는다 — 정규화에서 빠진 원천값(해석 못 한 값 포함)을
+  // «빈 칸»으로 오인해 마스터로 덮지 않게 한다(원천 우선, 2026-10-22 Codex 검토 P1). 칸 이름은 정확 일치(driver_age 같은 이름과 섞이지 않게).
+  const NAME: Record<MasterSpecKey, RegExp> = {
+    seats: /^(seats?|seating\S*|capacity|passengers?|인승\S*|승차정원\S*)$/i,
+    drive_type: /^(drive|drive_?type|drivetrain|driving_?wheel\S*|구동\S*)$/i,
+    engine_cc: /^(engine_?cc|displacement\S*|cc|배기량\S*|engine_?size)$/i,
   };
+  const found: Record<MasterSpecKey, unknown[]> = { seats: [], drive_type: [], engine_cc: [] };
+  const walk = (o: unknown, depth: number) => {
+    if (!o || typeof o !== 'object' || depth > 5) return;
+    if (Array.isArray(o)) { for (const x of o.slice(0, 200)) walk(x, depth + 1); return; }
+    const rec = o as Record<string, unknown>;
+    if (Array.isArray(rec.headers) && Array.isArray(rec.cells)) {   // 시트 줄: 머리글 ↔ 칸 짝
+      rec.headers.forEach((h, i) => { for (const key of MASTER_SPEC_KEYS) if (typeof h === 'string' && NAME[key].test(h.trim()) && present((rec.cells as unknown[])[i])) found[key].push((rec.cells as unknown[])[i]); });
+    }
+    for (const [k, v] of Object.entries(rec)) {
+      for (const key of MASTER_SPEC_KEYS) if (NAME[key].test(k) && present(v) && (typeof v !== 'object' || v === null)) found[key].push(v);
+      walk(v, depth + 1);
+    }
+  };
+  walk(r, 0);
+  // 원천에 그 칸 값이 하나라도 있으면(형식이 틀려도) 마스터로 채우지 않는다. 기존에 보던 자리(spec.*·최상위)도 그대로 포함한다.
+  const legacy: Record<MasterSpecKey, unknown[]> = {
+    seats: [spec.seats, r.seats], drive_type: [spec.drive_type, spec.drivetrain, spec.drive, r.drive_type, r.drivetrain], engine_cc: [spec.engine_cc, spec.displacement, r.engine_cc],
+  };
+  const sourceHas = (key: MasterSpecKey) => found[key].length > 0 || legacy[key].some(present);
+  // 이번 원천이 마스터 후보와 «정면으로» 다른 값을 주면(해석되는 인승·배기량 숫자가 다름, 구동이 다름) 그 마스터 후보는 이 차가 아니다 → 전부 보류(Codex P1).
+  const digits = (v: unknown): number | null => { const m = /\d[\d,]*/.exec(String(v)); const n = m ? Number(m[0].replace(/,/g, '')) : NaN; return Number.isFinite(n) ? n : null; };
+  const conflicts = (key: MasterSpecKey): boolean => {
+    const want = p[key]; if (!masterSpecValid(key, want)) return false;
+    const vals = [...found[key], ...legacy[key].filter(present)];
+    if (key === 'drive_type') return vals.some(v => DRIVE_TYPE_VALUES.has(String(v).trim().toUpperCase()) && String(v).trim().toUpperCase() !== want);
+    return vals.some(v => { const n = digits(v); if (n === null) return false; const w = Number(want); return key === 'engine_cc' ? Math.abs(n - w) / w > CC_TOLERANCE : n !== w; });   // 배기량은 반올림(1,600 ↔ 1,598)·같은 계열 표기 차이를 허용하고 배기량 급(1.6 ↔ 2.0)이 다르면 충돌
+  };
+  if (MASTER_SPEC_KEYS.some(conflicts)) return null;
   const out: MasterSpecValues = {};
   for (const key of MASTER_SPEC_KEYS) {
     const v = p[key];
-    if (!masterSpecValid(key, v) || sourceTexts[key].some(present)) continue;
+    if (!masterSpecValid(key, v) || sourceHas(key)) continue;
     out[key] = v;
   }
   return Object.keys(out).length ? out : null;
