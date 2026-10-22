@@ -126,7 +126,20 @@ const variantCovered = (rawText: string, master: IdentityMaster, masters: readon
   });
 };
 
-export function matchIdentity(input: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
+/** 엔진·파워트레인 이름(스마트스트림·감마·누우·쎄타·람다·카파·T-GDi·e-VGT·VGT·CRDi·MPI)은 차종이 아니라 «차종 기준 한 장»상 마스터에 쓰지 않는 낱말이다.
+ * 원문에 섞여 있으면 마스터 이름의 일부(예 «스마트스트림» 안의 «스트림»)에 걸려 엉뚱한 행으로 연결되므로 대조 전에 뗀다(대표 2026-10-22). 원문 자체는 건드리지 않는다. 마스터 트림 이름에 쓰이는 TCe·dCi·GDi 는 일부러 뺐다(트림 대조가 깨진다). */
+const KO = '가-힣', AL = 'A-Za-z0-9', DASH = '\\s\\-\\u2010-\\u2015';
+const POWERTRAIN_WORDS = new RegExp([
+  '스마트\\s*스트림', 'smart\\s*stream',
+  `(?<![${KO}])(?:감마|누우|쎄타|람다|카파)(?![${KO}])`,
+  `(?<![${AL}])T[${DASH}]?GDI(?![${AL}])`, `(?<![${AL}])e[${DASH}]?VGT(?![${AL}])`, `(?<![${AL}])VGT(?![${AL}])`, `(?<![${AL}])CRDI(?![${AL}])`, `(?<![${AL}])MPI(?![${AL}])`,
+].join('|'), 'gi');
+export const stripPowertrainWords = (text: string): string => text.replace(POWERTRAIN_WORDS, ' ').replace(/\s{2,}/g, ' ').trim();
+
+export function matchIdentity(rawInput: IdentityProduct, masters: readonly IdentityMaster[]): IdentityMatch {
+  const engineShaped = norm(rawInput.sub_model ?? '') === norm(rawInput.rawName ?? '');   // 엔진 임시 문서: 세부모델 칸이 원문 차명 그대로
+  const cleanRaw = stripPowertrainWords(rawInput.rawName ?? '');
+  const input: IdentityProduct = cleanRaw === (rawInput.rawName ?? '') ? rawInput : { ...rawInput, rawName: cleanRaw, ...(engineShaped ? { sub_model: cleanRaw } : {}) };
   const p: IdentityProduct = input.makerModelFromSource ? { ...input, maker: '', model: '' } : input;
   let cands = masterCandidates(p, masters);
   if (!cands.length) {
