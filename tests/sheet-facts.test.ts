@@ -150,3 +150,26 @@ describe('시트 사실 빈 칸 채움 — 계획·쓰기·되읽기', () => {
     expect(fake.fields('12가3001').drive_type).toBeUndefined();
   });
 });
+
+describe("시트 옵션(공개 화면에 그대로 보임) — 대표 2026-10-23 설계안 2단계", () => {
+  const hdr = ["차량번호", "옵션 원문"];
+  it("무정보 값·연락처·URL·보증금·수수료·내부 메모 문구·길이 초과는 후보에서 뺀다", () => {
+    expect(sheetFactsOf(hdr, ["1", "컴포트, 드라이브와이즈, 내비게이션"])).toEqual({ options: "컴포트, 드라이브와이즈, 내비게이션" });
+    for (const bad of ["기본", "-", "", "없음", "문의 010-1234-5678", "https://x.kr 옵션", "보증금 면제 옵션", "수수료 별도", "내부 메모 참고", "a".repeat(1001)]) expect(sheetFactsOf(hdr, ["1", bad])).toBeUndefined();
+    expect(sheetFactsOf(hdr, ["1", 12345])).toBeUndefined();   // 문자열이 아니면 후보 아님
+  });
+  it("API 옵션을 관리하는 문서(api_options_state)는 상태에서 옵션 칸을 뺀다(채움·충돌 모두 없음)", () => {
+    expect(sheetFactState({ options: "", api_options_state: "ENABLED" }, ["options"])).toEqual({});
+    expect(sheetFactState({ options: "" }, ["options"])).toEqual({ options: null });
+  });
+  it("빈 옵션 칸에만 쓴다 — 이미 옵션이 있는 문서와 충돌은 쓰지 않는다", async () => {
+    const { commands, fake } = await setup({ sources: [source], keys: ["options"] });
+    fake.put("12가5001", heldDoc(rec("12가5001"), { options: "" }));
+    fake.put("12가5002", heldDoc(rec("12가5002"), { options: "기존 옵션 목록" }));
+    const out = await run(commands, [rec("12가5001", { sheet_facts: { options: "선루프, 내비게이션" } }), rec("12가5002", { sheet_facts: { options: "선루프, 내비게이션" } })]);
+    expect(out.kinds).toEqual(["UPDATE"]);
+    expect(out.plan.warnings).toEqual(expect.arrayContaining(["SHEET_FACT_FILL:1", "SHEET_FACT_CONFLICT:1"]));
+    expect(fake.fields("12가5001").options).toBe("선루프, 내비게이션");
+    expect(fake.fields("12가5002").options).toBe("기존 옵션 목록");
+  });
+});
