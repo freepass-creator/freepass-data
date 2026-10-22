@@ -1,6 +1,7 @@
 /** 정체성 승격 «계획서 생성기»(순수·읽기 전용) — 커맨드 센터 2026-10-14 확정: 하나로 특정되는 것만 정정 경로(repair:vehicle-name-parity)의 계획서 후보로 낸다.
  * 입력은 운영 문서·차종 마스터의 «스냅샷»(이 PC 는 운영 Firestore 를 읽지 못하므로 B3Q 가 만든 JSON)이고, 출력은 VehicleNameRepairPlan 후보와 보류 목록이다.
  * 규칙(기준 한 장): 지어내지 않는다·별칭은 조건 없이 하나로 이어질 때만·후보가 둘 이상이거나 근거가 비면 보류. 마스터는 읽기만 하고 쓰지 않는다. */
+import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { VehicleIdentityRefinement } from '../ports/source-cycle.js';
 import { aliasCandidates, generationFamilies, generationGuard, type AliasCandidate, type GenerationFamily, type GenerationGuardReason } from './identity-generation-guard.js';
@@ -282,7 +283,40 @@ export function auditConfirmedIdentities(products: ReadonlyArray<IdentityProduct
 /** 엔진 회차의 정체성 정제(대표 2026-10-15 «손오공 새로 API 연동해서 땡겨온 애들은 … 모델명도 정제되어 있지 않고»): 위 matchIdentity 를 그대로 쓴다.
  * 엔진 편입 문서(제조사·모델 빈칸, 원문 차명)를 마스터 하나로 특정할 때만 결과를 내고, 아니면 null(= 지금처럼 원문 차명·검토 필요로 둔다).
  * 세부트림은 하나로 특정될 때만 이름, 아니면 null(빈칸 유지). */
-export function refineEngineIdentity(input: { rawName: string; year: string }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
+export function refineEngineIdentity(input: { rawName: string; year: string; sheet?: SheetIdentity }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
+  const byName = refineByName(input, masters);
+  const sheet = validSheetIdentity(input.sheet);
+  if (!sheet) return byName;
+  const bySheet = matchSheetIdentity({ rawName: input.rawName, year: input.year, sheet }, masters);
+  if (byName) return bySheet && bySheet.master_id !== byName.master_id ? null : byName;   // 이름 대조가 이미 하나로 정했으면 그대로, 시트와 다른 행이면 모순이라 보류
+  return bySheet;
+}
+
+/** F05 시트의 차종 4칸 후보(대표 2026-10-22 승인): 제조사·모델·세부모델이 마스터 한 행과 «정확히» 같고, 원문과 모순되지 않으며(세대 한정어·개발코드 충돌·변형 낱말), 연식이 세대 범위를 1년 넘게 벗어나지 않을 때만(연식이 없거나 형식이 틀리면 연식 점검은 건너뛴다).
+ * 세부트림은 그 행의 트림 이름과 정확히 같을 때만, 아니면 비운다. 세대 근거 부족(EVIDENCE_MISSING)은 허용한다 — 시트의 세부모델이 근거다. */
+export function matchSheetIdentity(input: { rawName: string; year: string; sheet: SheetIdentity }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
+  const s = input.sheet;
+  const exact = masters.filter(m => norm(m.maker) === norm(s.maker) && norm(m.model) === norm(s.model) && norm(m.sub_model) === norm(s.sub_model));
+  if (exact.length !== 1) return null;
+  const master = exact[0]!;
+  const year = /^\d{4}$/.test(input.year) ? Number(input.year) : null;
+  if (year !== null && ((master.yearFrom !== null && year < master.yearFrom - 1) || (master.yearTo !== null && year > master.yearTo + 1))) return null;
+  const raw = stripPowertrainWords(input.rawName ?? '');
+  // 원문이 시트의 모델과 모순되지 않아야 한다: 원문에 그 행의 모델 이름(별칭 포함)이 들어 있어야 한다(없으면 시트 값이 다른 차의 것일 수 있다).
+  const rawN = norm(raw);
+  if (!rawN || ![master.model, ...master.model_aliases].map(norm).filter(n => n.length >= 2).some(n => rawN.includes(n))) return null;
+  if (raw) {
+    const guard = generationGuard({ rawName: raw, year: input.year, master, masters });
+    if (guard === 'GENERATION_QUALIFIER_MISMATCH' || guard === 'GENERATION_CODE_CONFLICT') return null;
+    // 변형 낱말(하이브리드·EV…) 점검은 이름 대조와 같은 규칙: 정확 이름 경로로 한 번 더 통과해야 한다.
+    const checked = matchIdentity({ id: '', plate4: '', maker: master.maker, model: master.model, sub_model: master.sub_model, trim_name: '', rawName: raw, year: input.year, listable: true } as IdentityProduct, masters);
+    if (checked.state !== 'MATCH' || checked.master.id !== master.id) return null;
+  }
+  const trim = master.trims.find(t => norm(t.name) === norm(s.trim_name));
+  return { maker: master.maker, model: master.model, sub_model: master.sub_model, trim_name: trim ? trim.name : null, master_id: master.id };
+}
+
+function refineByName(input: { rawName: string; year: string }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
   const rawName = input.rawName.trim();
   if (!rawName) return null;
   const m = matchIdentity({ id: '', plate4: '', maker: '', model: '', sub_model: rawName, trim_name: '', rawName, year: input.year, listable: false }, masters);

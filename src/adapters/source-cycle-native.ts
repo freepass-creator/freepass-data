@@ -9,6 +9,7 @@ import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-tex
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import { sheetIdentityOf } from '../domain/sheet-identity.js';
 
 const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 } : typeof v === 'number' && Number.isSafeInteger(v) && v > 0
   ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
@@ -165,7 +166,9 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
           spec_master_digest: record.raw.spec_master_digest, spec_master_id: record.raw.spec_master_id } : {}) } : {}),
         ...(pos.fp ? { row_fingerprint: pos.fp } : {}),
         // 차량번호 칸 사진 폴더 링크: 원본 수집본 전체(모든 공급사 행)로 판정한다 — 다른 공급사 행에 같은 폴더가 붙은 경우도 거절하려면 행을 비운 사본으로는 안 된다.
-        ...(photoLinks.get(`${pos.scope}|${pos.row}`) ? { sheet_photo_link: photoLinks.get(`${pos.scope}|${pos.row}`) } : {}) } } }; }) };
+        ...(photoLinks.get(`${pos.scope}|${pos.row}`) ? { sheet_photo_link: photoLinks.get(`${pos.scope}|${pos.row}`) } : {}),
+        // 시트의 차종 4칸 후보(마스터 행과 정확히 일치할 때만 정제기가 쓴다).
+        ...(sheetIdentityOf(pos.headers, pos.cells) ? { sheet_identity: sheetIdentityOf(pos.headers, pos.cells) } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
 const PRODUCT_TYPE_VOCABULARY = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);

@@ -59,8 +59,14 @@ export type CycleProduct = {
   supplierConfirmedSold?: { recordObservedAt: string };
   /** 계약 잠금 문서의 «이름 칸만» 정제(대표 2026-10-22 승인): 계획이 before 와 같은 기록으로 만들고, 쓰기는 허용 목록(IDENTITY_ONLY_FIELDS)의 칸만 쓴다. 계약·금액·상태·잠금 칸은 쓰지 않는다. */
   identityOnly?: boolean;
+  /** 읽기 경로가 계산하는 표시(쓰기 결과에는 남지 않는다): 엔진 소유 노출 문서이고 정체성 보류(제조사·모델 빈칸, 검토 필요)다. 계획이 시트 차종 후보로 정제할 대상을 고를 때 쓴다. */
+  identityHold?: { year: string };   // year = 쓰기 때 쓸 연식(문서 연식 우선) — 계획의 시트 후보 판정이 쓰기와 같은 입력을 보게 한다
+  /** 계획이 고정한 «검증된 시트 차종 후보»(계약 잠금 문서처럼 after.record 가 옛 기록인 경로가 최신 후보를 쓰기에 넘기는 용도, 쓰기 결과에는 남지 않는다). */
+  sheetIdentity?: import('../domain/sheet-identity.js').SheetIdentity;
 };
-export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null;
+export type CycleSnapshot = { products: CycleProduct[]; complete: boolean;
+  /** 이번 관측 기록의 시트 차종 4칸 후보가 «차종 마스터 행과 정확히 일치하고 원문과 모순되지 않아» 정제할 수 있는가(infra 가 정제기로 판정, 순수). */
+  sheetIdentityMatch?: (record: SourceProductRecord, year: string) => boolean; enrollmentSupplier?: SupplierFields | null;
   /** --accept-drift 로 허용된 보정 문서 uid(계획 digest 에 경고로 기록). */ acceptedDrift?: string[];
   /** 가격이 저장 digest 와 달라졌지만 허용되지 않은 문서 uid. 계획이 그 문서를 쓰게 될 때만 막고, 건드리지 않으면 회차를 막지 않는다. */
   driftHeld?: string[];
@@ -72,7 +78,7 @@ export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrol
 /** 엔진 회차 정체성 정제 결과: 차종 마스터 하나로 특정된 이름(세부트림은 하나로 특정될 때만, 아니면 null). */
 export type VehicleIdentityRefinement = { maker: string; model: string; sub_model: string; trim_name: string | null; master_id: string };
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
-export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string }): VehicleIdentityRefinement | null;
+export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string; sheet?: import('../domain/sheet-identity.js').SheetIdentity }): VehicleIdentityRefinement | null;
   /** Verified same-snapshot records for the existing structured shared-sheet normalizer; never a second name authority. */
   sourceYearEvidence?: { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
   /** Reviewed exact UID scope for F05 year carry-through. Runtime always supplies it; empty means no year writes. */

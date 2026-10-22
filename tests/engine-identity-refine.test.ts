@@ -311,3 +311,57 @@ describe('잠금 문서 이름 칸 정제 — Codex 반례', () => {
     void prev;
   });
 });
+
+describe('F05 시트 차종 4칸 후보 (대표 2026-10-22 승인)', () => {
+  const sheet = (over: Record<string, string> = {}) => ({ maker: '현대', model: '아반떼', sub_model: '더 뉴 아반떼 CN7', trim_name: '프리미엄', ...over });
+  const withSheet = (plate: string, name: string, s: unknown, spec: Record<string, string> = {}) => { const r = rec(plate, name, spec); r.raw = { ...r.raw, sheet_identity: s }; return r; };
+  it('이름 대조가 모호해 보류인 문서를 시트 4칸이 마스터 한 행과 정확히 일치하면 채운다(세부트림도 그 행의 이름일 때)', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가9001', heldDoc(rec('12가9001', '아반떼 프리미엄')));
+    const out = await run(commands, [withSheet('12가9001', '아반떼 프리미엄', sheet())]);
+    expect(out.kinds).toEqual(['UPDATE']);
+    expect(out.applied).toMatchObject({ status: 'APPLIED', verified: 1 });
+    expect(fake.fields('12가9001')).toMatchObject({ maker: '현대', model: '아반떼', sub_model: '더 뉴 아반떼 CN7', trim_name: '프리미엄', vehicle_review_required: false, vehicle_master_id: 'm-cn7' });
+    expect(fake.fields('12가9001').원문.차명).toBe('아반떼 프리미엄');   // 원문 보존
+  });
+  it('트림이 마스터 행에 없으면 트림은 비우고, 세부모델이 마스터와 다르면 아무것도 쓰지 않는다', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가9002', heldDoc(rec('12가9002', '아반떼 기본')));
+    fake.put('12가9003', heldDoc(rec('12가9003', '아반떼 기본2')));
+    const b3 = structuredClone(fake.fields('12가9003'));
+    const out = await run(commands, [withSheet('12가9002', '아반떼 기본', sheet({ trim_name: '없는트림' })), withSheet('12가9003', '아반떼 기본2', sheet({ sub_model: '아반떼 XX' }))]);
+    expect(out.kinds).toEqual(['UPDATE']);
+    expect(fake.fields('12가9002')).toMatchObject({ maker: '현대', model: '아반떼', sub_model: '더 뉴 아반떼 CN7', trim_name: '' });
+    expect(fake.fields('12가9003')).toEqual(b3);
+  });
+  it('원문이 시트와 모순되면(이름 대조가 다른 행, 또는 원문에 시트의 모델 이름이 없음) 쓰지 않는다', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가9004', heldDoc(rec('12가9004', '아이오닉5 프레스티지')));
+    fake.put('12가9006', heldDoc(rec('12가9006', '전기 롱레인지 프레스티지')));
+    const b4 = structuredClone(fake.fields('12가9004')), b6 = structuredClone(fake.fields('12가9006'));
+    await run(commands, [withSheet('12가9004', '아이오닉5 프레스티지', sheet()), withSheet('12가9006', '전기 롱레인지 프레스티지', sheet())]);
+    expect(fake.fields('12가9004').model).not.toBe('아반떼');   // 이름은 아이오닉 5 인데 시트는 아반떼 → 시트를 쓰지 않는다
+    expect(fake.fields('12가9006')).toEqual(b6);   // 원문에 모델 이름이 없으면 시트만으로는 쓰지 않는다
+    void b4;
+  });
+  it('시트 후보가 없거나 모양이 틀리면 지금 동작 그대로', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가9005', heldDoc(rec('12가9005', '아반떼 프리미엄')));
+    const before = structuredClone(fake.fields('12가9005'));
+    const out = await run(commands, [withSheet('12가9005', '아반떼 프리미엄', { maker: '현대', model: '아반떼' })]);
+    expect(out.kinds).toEqual([]);
+    expect(fake.fields('12가9005')).toEqual(before);
+  });
+  it('계약 잠금 문서도 최신 시트 후보로 이름 칸만 채운다(옛 저장 기록에 후보가 없어도)', async () => {
+    const { commands, fake } = await setup();
+    fake.put('12가9007', heldDoc(rec('12가9007', '아반떼 프리미엄'), { locked_by_contract: '계약원장', status: '계약중', status_kind: '선점', vehicle_status: '계약중' }));
+    const before = structuredClone(fake.fields('12가9007'));
+    const out = await run(commands, [withSheet('12가9007', '아반떼 프리미엄', sheet())]);
+    expect(out.kinds).toEqual(['UPDATE']);
+    expect(out.plan.entries[0]!.after.identityOnly).toBe(true);
+    const after = structuredClone(fake.fields('12가9007'));
+    expect(after).toMatchObject({ maker: '현대', model: '아반떼', sub_model: '더 뉴 아반떼 CN7' });
+    const allowed = new Set(['maker', 'model', 'sub_model', 'trim_name', 'vehicle_review_required']);
+    for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) if (!allowed.has(k)) expect([k, after[k]]).toEqual([k, before[k]]);
+  });
+});
