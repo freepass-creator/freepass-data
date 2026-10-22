@@ -224,7 +224,8 @@ export function buildSLinkPlan(input: PolicyLinkInput, scope: 'S_FROM_NULL' | 'S
     if (!coveredByS(vehicle)) { held.push({ id: product.id, reason: 'CONDITION_NOT_COVERED_BY_S' }); continue; }
     const range = S_MONTHLY_DIFF_WON[to]!;
     if (diff === null || diff < range[0] || diff > range[1]) { held.push({ id: product.id, reason: 'PRICE_DIFF_CONFLICT' }); continue; }
-    if (from === to && d.policy_reference_state === 'LINKED') { alreadyCorrect.push(product.id); continue; }
+    // 재연결은 «코드가 달라지는 차»만 쓴다(S_RELINK 는 이미 맞는 차를 다시 쓰지 않는다 — 상태·차량별 조건 기록도 건드리지 않음).
+    if (from === to && (scope === 'S_RELINK' || d.policy_reference_state === 'LINKED')) { alreadyCorrect.push(product.id); continue; }
     const patch: Rec = { policy_code: to, policy_reference_state: 'LINKED',
       policy_code_linked_reason: `이안카 S 연결 — 원천 초과 주행 요금 ${vehicle.excessMileageFeePerKm}원/km · 가격표 월 차액 ${Math.round(diff / 1000) / 10}만원 → ${to}${from ? ` (이전 ${from})` : ''} (대표 2026-10-23 승인)` };
     if (!Object.hasOwn(d, 'policy_code_source_original')) patch.policy_code_source_original = d.policy_code ?? null;
