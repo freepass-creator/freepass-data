@@ -55,6 +55,13 @@ describe('source contract policy corrections', () => {
     }
     for (const to of [0, -1, 1.5]) expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'deposit_overdue_rounds', to, evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
   });
+  it('protects retired legacy values from older default writers', () => {
+    const data = { late_fee_rate: null, over_mileage_rate_per_km: null, policy_field_owner: 'policy-corrector',
+      field_evidence: { late_fee_rate: { writer: 'policy-corrector' }, over_mileage_rate_per_km: { writer: 'policy-corrector' } } };
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: 0.12 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { over_mileage_rate_per_km: 10 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: null, over_mileage_rate_per_km: null })).not.toThrow();
+  });
   it('accepts an explicit clear with source evidence and an exact current ratio', () => {
     expect(validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '20%' }) })).toMatchObject({ itemCount: 1 });
     expect(() => validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '50%' }) })).toThrow(/CONFLICT/);
