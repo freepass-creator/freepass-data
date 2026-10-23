@@ -7,6 +7,7 @@ import type { AuditEvent } from '../domain/catalog.js';
 import {
   isPlainObject,
   isPolicyCorrectionClear,
+  assertPolicyCorrectionReplacement,
   assertAllStoredShapes,
   policyCorrectionItemDigest,
   storedPolicyValue,
@@ -80,6 +81,7 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
     assertAllStoredShapes(snapshot.ref.id, data);
     for (const item of grouped[snapshot.ref.id]!) {
       if (data.provider_company_code !== item.supplierCode) throw new Error('SUPPLIER_MISMATCH ' + snapshot.ref.id);
+      assertPolicyCorrectionReplacement(data, item, grouped[snapshot.ref.id]);
     }
     documents[snapshot.ref.id] = { data };
   });

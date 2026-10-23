@@ -63,6 +63,27 @@ beforeEach(() => {
 });
 
 describe('source contract apply and readback', () => {
+  it('clears ambiguous legacy scalar values while preserving stage and vehicle-class conditions', async () => {
+    const replacements = { policy_extra_terms: '송달 전 연 5%, 이후 연 12%\n국산 200원/km, 수입 400원/km',
+      over_mileage_rate_domestic: '200원', over_mileage_rate_imported: '400원' };
+    setDoc('policy/POL-0023', { provider_company_code: 'RP000', updated_at: '2026-10-04', late_fee_rate: 0.12,
+      over_mileage_rate_per_km: 10, deposit_overdue_rounds: 2, ...replacements,
+      field_evidence: Object.fromEntries(Object.entries(replacements).map(([key, value]) => [key, { ...sourceEvidence, value }])) });
+    const correction = plan([
+      { ...clearRatio(), field: 'late_fee_rate', from: 0.12 },
+      { ...clearRatio(), field: 'over_mileage_rate_per_km', from: 10 },
+      { ...baseItem, field: 'deposit_overdue_rounds', from: 2, to: 1, evidence: sourceEvidence },
+    ]);
+    expect(await applyPolicyCorrection(correction)).toMatchObject({ writtenItemCount: 3, readbackCount: 3, auditCount: 3 });
+    expect(store.get('policy/POL-0023')).toMatchObject({ late_fee_rate: null, over_mileage_rate_per_km: null,
+      deposit_overdue_rounds: 1, ...replacements });
+    expect(await applyPolicyCorrection(correction)).toMatchObject({ writtenItemCount: 0, skippedAlreadyApplied: 3 });
+    const changed = store.get('policy/POL-0023')!;
+    store.set('policy/POL-0023', { ...changed, over_mileage_rate_domestic: '10원' });
+    writes.length = 0;
+    await expect(applyPolicyCorrection(correction)).rejects.toThrow(/SOURCE_REPLACEMENT_REQUIRED/);
+    expect(writes).toHaveLength(0);
+  });
   it('marks the ordinary ratio explicitly blank, preserves separate clauses and writes scoped evidence', async () => {
     setDoc('policy/POL-0023', { provider_company_code: 'RP000', updated_at: '2026-10-04', own_damage_repair_ratio: '20%',
       own_damage_min_deductible: '100만원', own_damage_max_deductible: '100만원', unrelated: 'preserve' });

@@ -30,6 +30,38 @@ const clearRatio = (): PolicyCorrectionPlan['items'][number] => {
 };
 
 describe('source contract policy corrections', () => {
+  it('retires legacy scalar shortcuts only when exact-source replacements remain available', () => {
+    const replacements = {
+      policy_extra_terms: '송달 전 연 5%, 송달 다음 날부터 연 12%\n국산 200원, 수입 400원',
+      over_mileage_rate_domestic: '200원', over_mileage_rate_imported: '400원',
+    };
+    const field_evidence = Object.fromEntries(Object.entries(replacements).map(([key, value]) => [key, { ...sourceEvidence, value }]));
+    for (const [field, from] of [['late_fee_rate', 0.12], ['over_mileage_rate_per_km', 10]] as const) {
+      const entry = { ...clearRatio(), field, from };
+      const data = { ...replacements, field_evidence, [field]: from };
+      expect(validatePolicyCorrectionPlan(plan([entry]), { documents: docs(data) }).itemCount).toBe(1);
+      for (const corrupt of [
+        { ...data, policy_extra_terms: '' },
+        { ...data, field_evidence: { ...field_evidence, policy_extra_terms: { ...sourceEvidence, value: replacements.policy_extra_terms, answerSha256: 'b'.repeat(64) } } },
+        { ...data, policy_extra_terms: 'modified without matching evidence' },
+      ]) expect(() => validatePolicyCorrectionPlan(plan([entry]), { documents: docs(corrupt) })).toThrow(/SOURCE_REPLACEMENT_REQUIRED/);
+    }
+  });
+  it('keeps legacy numeric types and requires source evidence for their corrections', () => {
+    for (const [field, to] of [['late_fee_rate', 0.05], ['over_mileage_rate_per_km', 200], ['deposit_overdue_rounds', 1]] as const) {
+      expect(validatePolicyCorrectionPlan(plan([item({ field, from: null, to, evidence: sourceEvidence })])).itemCount).toBe(1);
+      expect(() => validatePolicyCorrectionPlan(plan([item({ field, from: null, to })]))).toThrow(/SOURCE_EVIDENCE_REQUIRED/);
+      expect(() => validatePolicyCorrectionPlan(plan([item({ field, from: null, to: String(to), evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+    }
+    for (const to of [0, -1, 1.5]) expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'deposit_overdue_rounds', to, evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+  });
+  it('protects retired legacy values from older default writers', () => {
+    const data = { late_fee_rate: null, over_mileage_rate_per_km: null, policy_field_owner: 'policy-corrector',
+      field_evidence: { late_fee_rate: { writer: 'policy-corrector' }, over_mileage_rate_per_km: { writer: 'policy-corrector' } } };
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: 0.12 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { over_mileage_rate_per_km: 10 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: null, over_mileage_rate_per_km: null })).not.toThrow();
+  });
   it('accepts an explicit clear with source evidence and an exact current ratio', () => {
     expect(validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '20%' }) })).toMatchObject({ itemCount: 1 });
     expect(() => validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '50%' }) })).toThrow(/CONFLICT/);
