@@ -55,6 +55,12 @@ export function writerLeaseStore(options: { env?: NodeJS.ProcessEnv; fetcher?: t
       const next = await write(decision.next, updateTime);
       return { done: true, status: decision.status, holder: next.holder, epoch: next.epoch, expiresAt: next.expiresAt };
     },
+    /** 한 명령 양방향 전환: 지금 보유자를 읽어 to 에게 넘긴다(보유자·epoch 를 따로 알 필요 없음). 읽은 문서 updateTime 조건부라 그 사이 바뀌면 실패한다. */
+    async handover(lane: string, to: string, ttlMin: number, note?: string, givenNowMs?: number) {
+      const { lease } = await read(lane);
+      if (!lease) return { done: false, status: 'REFUSED', reason: 'NO_LEASE' };
+      return this.transfer(lane, lease.holder, to, lease.epoch, ttlMin, note, givenNowMs);
+    },
     async transfer(lane: string, from: string, to: string, expectedEpoch: number, ttlMin: number, note?: string, givenNowMs?: number) {
       const { lease, updateTime } = await read(lane);
       const decision = decideTransfer(lease, from, to, expectedEpoch, ttlMin, now(givenNowMs), note);

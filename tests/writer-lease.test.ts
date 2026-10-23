@@ -84,6 +84,16 @@ describe('writerLeaseStore', () => {
     expect(await store.check('source-cycle', 'PC1', T0 + min(7))).toMatchObject({ held: false });
     expect(await store.check('source-cycle', 'PC3', T0 + min(7))).toMatchObject({ held: true });
   });
+  it('handover 한 명령으로 양방향 전환, 이전 쪽은 다음 확인부터 not held', async () => {
+    const f = fakeFirestore(); const store = writerLeaseStore({ env, fetcher: f.fetcher, token: async () => 't' });
+    await store.claim('settlement-intake', 'PC1', 180, undefined, T0);
+    expect(await store.handover('settlement-intake', 'PC3', 180, undefined, T0 + min(1))).toMatchObject({ done: true, holder: 'PC3', epoch: 2 });
+    expect(await store.check('settlement-intake', 'PC1', T0 + min(2))).toMatchObject({ held: false, holder: 'PC3' });
+    expect(await store.handover('settlement-intake', 'PC1', 180, undefined, T0 + min(3))).toMatchObject({ done: true, holder: 'PC1', epoch: 3 });
+    expect(await store.check('settlement-intake', 'PC1', T0 + min(4))).toMatchObject({ held: true });
+    const empty = writerLeaseStore({ env, fetcher: fakeFirestore().fetcher, token: async () => 't' });
+    expect(await empty.handover('other-lane', 'PC1', 180, undefined, T0)).toMatchObject({ done: false, reason: 'NO_LEASE' });
+  });
   it('손상 문서는 닫힘(throw)', async () => {
     const f = fakeFirestore(); f.set({ ...lease(), lane: 'other-lane' });
     const store = writerLeaseStore({ env, fetcher: f.fetcher, token: async () => 't' });

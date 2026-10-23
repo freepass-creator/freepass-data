@@ -2,6 +2,7 @@
 //   상태: FIREBASE_PROJECT_ID=freepasserp5 tsx src/jobs/writer-lease.ts status --lane=source-cycle
 //   확인(실행기용, 필요하면 갱신): WRITER_LEASE_PC=PC3 tsx src/jobs/writer-lease.ts check --lane=photo   → 내 임대면 종료 코드 0, 아니면 3(쓰기 금지)
 //   인수(없거나 만료일 때만): WRITER_LEASE_WRITE_APPROVED=true tsx src/jobs/writer-lease.ts claim --lane=source-cycle --pc=PC3 [--ttl-min=180] [--note=…]
+//   한 명령 전환(PC1↔PC3 어느 쪽이든): WRITER_LEASE_WRITE_APPROVED=true tsx src/jobs/writer-lease.ts handover --lane=source-cycle --to=PC1
 //   이전(현재 보유자·에포크 지정): WRITER_LEASE_WRITE_APPROVED=true tsx src/jobs/writer-lease.ts transfer --lane=source-cycle --from=PC1 --to=PC3 --epoch=<현재> [--ttl-min=180]
 import { writerLeaseStore } from '../infra/writer-lease-firestore.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -34,9 +35,12 @@ if (command === 'status') {
 } else if (command === 'claim') {
   needApproval();
   console.log(JSON.stringify({ lane, ...(await writeOp('CLAIM_WRITER_LEASE', { lane, pc: arg('pc') }, () => store.claim(lane, assertPc(arg('pc')), ttlMin, note))) }));
+} else if (command === 'handover') {
+  needApproval();
+  console.log(JSON.stringify({ lane, ...(await writeOp('HANDOVER_WRITER_LEASE', { lane, to: arg('to') }, () => store.handover(lane, assertPc(arg('to')), ttlMin, note))) }));
 } else if (command === 'transfer') {
   needApproval();
   const epoch = Number(arg('epoch'));
   if (!Number.isInteger(epoch) || epoch < 1) throw new Error('EPOCH_REQUIRED');
   console.log(JSON.stringify({ lane, ...(await writeOp('TRANSFER_WRITER_LEASE', { lane, from: arg('from'), to: arg('to'), epoch }, () => store.transfer(lane, assertPc(arg('from')), assertPc(arg('to')), epoch, ttlMin, note))) }));
-} else throw new Error('COMMAND_REQUIRED: status|check|claim|transfer');
+} else throw new Error('COMMAND_REQUIRED: status|check|claim|handover|transfer');

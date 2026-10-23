@@ -31,5 +31,12 @@ WRITER_LEASE_WRITE_APPROVED=true node dist/src/jobs/writer-lease.js transfer --l
 ```
 인수·이전은 커맨드 승인 뒤에만 한다(`WRITER_LEASE_WRITE_APPROVED=true`).
 
+## 양방향 한 명령 전환·다른 실행기
+```
+WRITER_LEASE_WRITE_APPROVED=true node dist/src/jobs/writer-lease.js handover --lane=source-cycle --to=PC1   # PC3→PC1, 반대도 같은 명령
+```
+이전 쪽은 다음 확인(회차·원천 시작)부터 쓰기 0 — 예약을 끄지 않는다. 임대는 만료돼도 자동으로 넘어가지 않고 사람·커맨드의 `claim`/`handover` 로만 넘어간다.
+다른 쓰기 담당(예: 정산 접수 시트, 레인 `settlement-intake`)도 같은 방식: 쓰기 전에 `node dist/src/jobs/writer-lease.js check --lane=settlement-intake`(종료 코드 0 이면 쓰기, 3 이면 쓰지 않음)을 부르거나 `writerLeaseStore().check(lane, pc)` 를 쓴다. 레인 이름은 소문자·숫자·하이픈.
+
 ## 전환 순서
 1. 새 쓰기 PC 에 코드 반영·빌드 → 2. 레인마다 `claim`(처음) → 3. 실행기 env 에 위 네 줄 → 4. 시험: 다른 PC 에서 `check` 가 종료 코드 3, 회차가 `lease-skips.jsonl` 만 남기는지 → 5. 이전할 때는 `transfer` 한 번(예약은 끄지 않는다).
