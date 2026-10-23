@@ -65,8 +65,8 @@ WRITER_LEASE_WRITE_APPROVED=true node dist/src/jobs/writer-lease.js handover --l
 
 ### ③ 닫힘 시험 (PC3 쓰기 0 상태에서 한 번)
 PC3 실행기를 «아직 보유자가 아닌» 상태로 두고 시험한다(쓰기 0 이 보장됨).
-- 임대 없음: 아직 claim 안 한 레인(예: `lease-test`)으로 `WRITER_LEASE_ENFORCE=1 WRITER_LEASE_LANE=lease-test WRITER_LEASE_PC=PC3 SOURCE_CYCLE_UNATTENDED=1 node dist/src/runtime/source-cycle-runtime.js --unattended` → 종료 코드 1, 출력 `lease.error = WRITER_LEASE_MISSING`, `alerts.jsonl` 에 같은 사유, 원천 읽기·쓰기 없음.
-- 읽기 실패: 같은 명령에 `FIREBASE_PROJECT_ID=freepasserp5` 로 두되 `SOURCE_CYCLE_GCLOUD_ACCOUNT=none@invalid` 처럼 잘못된 계정으로 토큰을 실패시킨다 → 종료 코드 1, `WRITER_LEASE_REQUEST_FAILED` 또는 토큰 오류 코드, 쓰기 없음.
+- 임대 없음: 아직 claim 안 한 레인(예: `lease-test`)으로 `WRITER_LEASE_ENFORCE=1 WRITER_LEASE_LANE=lease-test WRITER_LEASE_PC=PC3 SOURCE_CYCLE_UNATTENDED=1 node dist/src/runtime/source-cycle-runtime.js --unattended` → 종료 코드 1, 출력 `lease.error = WRITER_LEASE_MISSING`(10-23 PC1 에서 실제 확인함), `alerts.jsonl` 에 같은 사유, 원천 읽기·쓰기 없음.
+- 읽기 실패: 같은 명령에 `FIREBASE_PROJECT_ID=freepasserp5` 로 두되 `SOURCE_CYCLE_GCLOUD_ACCOUNT=none@invalid` 처럼 잘못된 계정으로 토큰을 실패시킨다(이 방법은 아직 실행해 보지 않음) → 종료 코드 1, `WRITER_LEASE_REQUEST_FAILED` 또는 토큰 오류 코드, 쓰기 없음.
 - 설정 오류: `WRITER_LEASE_ENFORCE=true` → `WRITER_LEASE_ENFORCE_INVALID`, 종료 1.
 확인 뒤 `lease-test` 레인은 쓰지 않으므로 정리할 것이 없다(문서가 만들어지지 않는다).
 
