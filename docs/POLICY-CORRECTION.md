@@ -33,6 +33,16 @@
 - `supplierCondition`은 `policy/<코드>[field]`와 `field_evidence[field]`를 쓴다. `salesPolicy`는 공급사 조건을 건드리지 않고 `sales_policy[field]`만 쓴다.
 - 적용 시 개인 백업을 `~/.codex/private/freepass-data-policy-corrector-backups/<runId>.json`에 만들고, 트랜잭션 안 재확인, 되읽기, `audit_events` 검증을 한다.
 
+## 계약서 원본의 공란과 별도 적용 조건
+
+- 기존 계획은 기본 `set` 동작을 유지한다. `null`이나 빈 `to`로 공란을 표현하지 않는다.
+- 원본에 일반 자차 부담률이 없을 때만 `field: "own_damage_repair_ratio"`, `layer: "supplierCondition"`, `operation: "clear"`를 사용하며 `to` 키는 생략한다. `from`에는 현재 저장된 비어 있지 않은 값을 그대로 넣는다. 다른 필드나 영업정책 층의 삭제는 허용하지 않는다.
+- 이 연산은 필드를 명시적 공란인 `null`로 갱신하고 `field_evidence`에 `operation: "clear", value: null`을 남긴다. 이전 값은 기존 백업과 감사 이력에 보존하며 필드·문서를 물리 삭제하지 않는다. 공란을 0%·없음·면책으로 해석하지 않는다. 필드가 사라지거나 빈 문자열로 저장되면 readback 실패이며, 같은 계획의 재실행은 명시적 공란과 근거가 모두 일치할 때만 쓰기 0건이다.
+- `policy_extra_terms`는 최대 10,000자의 원문을 줄바꿈·앞뒤 공백까지 보존한다. 일반 자차 면책과 중과실 20%의 적용 대상을 합치거나 새 계산식을 만들지 않는다.
+- `own_damage_compensation`은 기존 한도 선택값 외에 최대 500자의 원본 표현도 지원한다. 예를 들어 공제조합·손해보험사 시세 한도와 한도 초과 시 처리 조건을 원문대로 담는다.
+- `clear`와 위 두 필드의 원문 표현에는 기존 `source/location/effectiveDate` 외에 원본 SHA256인 `evidence.answerSha256`와 적용 대상을 적은 `evidence.applicability`가 필수다. `location`에는 원본 파일·시트·셀 등 실제 근거 위치를 적는다. 메타데이터만으로 원본 일치가 자동 입증되는 것은 아니므로 실행 담당자가 원본과 대조한다.
+- 정책코드·공급사·상품/연령/차종/판본별 적용 범위를 먼저 확인한다. 특정 차량의 월료·보증금·기간·주행거리를 공급사 기본정책으로 옮기지 않는다. 실제 적용은 기존 정확한 계획 digest 승인·writer guard·트랜잭션·백업·감사 경로를 그대로 사용한다.
+
 ## 실행
 
 ```powershell

@@ -8,6 +8,7 @@ export type PolicyCorrectionEvidence = {
   location: string;
   effectiveDate: string;
   answerSha256?: string;
+  applicability?: string;
 };
 export type PolicyCorrectionItem = {
   policyCode: string;
@@ -15,7 +16,8 @@ export type PolicyCorrectionItem = {
   field: string;
   layer: PolicyCorrectionLayer;
   from: string | number | null;
-  to: PolicyCorrectionValue;
+  operation?: 'set' | 'clear';
+  to?: PolicyCorrectionValue;
   evidence: PolicyCorrectionEvidence;
 };
 export type PolicyCorrectionPlan = {
@@ -49,6 +51,8 @@ const text = (value: PolicyCorrectionValue) => str(value) && value.trim() === va
 const amount = rule('amount', (v) => matches(MONEY_TEXT)(v) || positiveNumber(v));
 const yn = rule('yes-no-discuss', matches(YES_NO_DISCUSS));
 const textRule = rule('text', text);
+const sourceText = (value: PolicyCorrectionValue, max: number) =>
+  str(value) && value.length <= max && value.trim().length > 0 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 
 export const ALLOWED_FIELDS: Record<string, Rule> = {
   screening_criteria: textRule,
@@ -84,7 +88,8 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
   self_body_deductible: amount,
   uninsured_damage: rule('limit', matches(MONEY_LIMIT)),
   uninsured_deductible: amount,
-  own_damage_compensation: rule('limit', matches(MONEY_LIMIT)),
+  own_damage_compensation: rule('limit-or-source-text', (v) => matches(MONEY_LIMIT)(v) || sourceText(v, 500)),
+  policy_extra_terms: rule('source-terms', (v) => sourceText(v, 10000)),
   own_damage_repair_ratio: rule('ratio', matches(/^\d+%$/)),
   own_damage_min_deductible: amount,
   own_damage_max_deductible: amount,
@@ -100,6 +105,14 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
 for (const field of TEXT_FIELDS) ALLOWED_FIELDS[field] = textRule;
 
 export const policyCorrectionItemDigest = (item: PolicyCorrectionItem) => stableDigest(item);
+export const isPolicyCorrectionClear = (item: PolicyCorrectionItem) => item.operation === 'clear';
+const requireSourceEvidence = (item: PolicyCorrectionItem) => {
+  const scope = item.evidence?.applicability;
+  if (typeof item.evidence?.answerSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(item.evidence.answerSha256)
+    || typeof scope !== 'string' || !scope.trim() || scope.length > 500) {
+    throw new Error('SOURCE_EVIDENCE_REQUIRED ' + item.policyCode + '.' + item.field);
+  }
+};
 const present = (value: unknown) => value !== undefined && value !== null && value !== '';
 const exactSame = (a: unknown, b: unknown) => a === b;
 const isoDate = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
@@ -173,7 +186,7 @@ const toWon = (value: unknown): number | null => {
 };
 const finalLayerValues = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, items: PolicyCorrectionItem[]) => ({
   ...layerMap(data, layer),
-  ...Object.fromEntries(items.filter((item) => item.layer === layer).map((item) => [item.field, item.to])),
+  ...Object.fromEntries(items.filter((item) => item.layer === layer).map((item) => [item.field, isPolicyCorrectionClear(item) ? null : item.to])),
 });
 const requireNoContradictions = (policyCode: string, data: Record<string, unknown>, layer: PolicyCorrectionLayer, items: PolicyCorrectionItem[]) => {
   const touched = new Set(items.filter((item) => item.layer === layer).map((item) => item.field));
@@ -205,13 +218,26 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
   plan.items.forEach((item, index) => {
     if (!item.policyCode?.trim() || !item.supplierCode?.trim()) throw new Error(`item ${index} needs policyCode and supplierCode`);
     if (!ALLOWED_FIELDS[item.field]) throw new Error(`FIELD_NOT_ALLOWED ${item.field}`);
-    if (item.to === null || item.to === undefined || item.to === '') throw new Error(`EMPTY_TO ${item.policyCode}.${item.field}`);
-    if (!ALLOWED_FIELDS[item.field]!.validate(item.to)) throw new Error(`INVALID_VALUE ${item.policyCode}.${item.field}`);
+    if (item.operation !== undefined && item.operation !== 'set' && item.operation !== 'clear') throw new Error('INVALID_OPERATION');
+    if (isPolicyCorrectionClear(item)) {
+      if (item.field !== 'own_damage_repair_ratio' || item.layer !== 'supplierCondition'
+        || Object.hasOwn(item, 'to')) throw new Error('CLEAR_NOT_ALLOWED');
+      if (item.from === null || item.from === '' || item.from === undefined) throw new Error('CLEAR_FROM_REQUIRED');
+      requireSourceEvidence(item);
+    } else {
+      if (item.to === null || item.to === undefined || item.to === '') throw new Error(`EMPTY_TO ${item.policyCode}.${item.field}`);
+      if (!ALLOWED_FIELDS[item.field]!.validate(item.to)) throw new Error(`INVALID_VALUE ${item.policyCode}.${item.field}`);
+      if (item.field === 'policy_extra_terms'
+        || (item.field === 'own_damage_compensation' && !matches(MONEY_LIMIT)(item.to))) requireSourceEvidence(item);
+    }
     if (item.layer !== 'supplierCondition' && item.layer !== 'salesPolicy') throw new Error(`INVALID_LAYER ${item.policyCode}.${item.field}`);
     if (!item.evidence || !EVIDENCE_SOURCES.has(item.evidence.source)) throw new Error(`INVALID_EVIDENCE_SOURCE ${item.policyCode}.${item.field}`);
     if (!item.evidence.location?.trim()) throw new Error(`EVIDENCE_LOCATION_REQUIRED ${item.policyCode}.${item.field}`);
     if (!isoDate(item.evidence.effectiveDate)) throw new Error(`INVALID_EFFECTIVE_DATE ${item.policyCode}.${item.field}`);
     if (item.evidence.answerSha256 !== undefined && !/^[0-9a-f]{64}$/i.test(item.evidence.answerSha256)) throw new Error(`INVALID_ANSWER_SHA256 ${item.policyCode}.${item.field}`);
+    if (item.evidence.applicability !== undefined
+      && (typeof item.evidence.applicability !== 'string' || !item.evidence.applicability.trim()
+        || item.evidence.applicability.length > 500)) throw new Error('INVALID_APPLICABILITY');
     const key = `${item.policyCode}|${item.layer}|${item.field}`;
     if (seen.has(key)) throw new Error(`DUPLICATE_ITEM ${item.policyCode}.${item.layer}.${item.field}`);
     seen.add(key);
