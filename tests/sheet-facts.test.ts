@@ -173,3 +173,27 @@ describe("시트 옵션(공개 화면에 그대로 보임) — 대표 2026-10-23
     expect(fake.fields("12가5002").options).toBe("기존 옵션 목록");
   });
 });
+
+describe("시트 차량가격 → consumer_price (대표 2026-10-23 승인: 정수 원 5백만~3억, 세금 포함 여부는 단정하지 않음)", () => {
+  const hdr = ["차량번호", "차량가격"];
+  it("쉼표·원 표기를 정수로, 범위 밖·비숫자·소수는 후보에서 뺀다", () => {
+    expect(sheetFactsOf(hdr, ["1", "18,650,000"])).toEqual({ consumer_price: 18650000 });
+    expect(sheetFactsOf(hdr, ["1", 29800000])).toEqual({ consumer_price: 29800000 });
+    expect(sheetFactsOf(hdr, ["1", "47,750,000원"])).toEqual({ consumer_price: 47750000 });
+    for (const bad of ["1,500,000", "4,999,999", "300,000,001", "1865만원", "18,650,000.5", "", "미정", "-18,650,000"]) expect(sheetFactsOf(hdr, ["1", bad])).toBeUndefined();
+  });
+  it("빈 칸에만 숫자로 쓰고, 기존 값과 다르면 충돌(쓰지 않음), 같으면 변경 없음", async () => {
+    const { commands, fake } = await setup({ sources: [source], keys: ["consumer_price"] });
+    fake.put("12가6001", heldDoc(rec("12가6001")));
+    fake.put("12가6002", heldDoc(rec("12가6002"), { consumer_price: 30000000 }));
+    fake.put("12가6003", heldDoc(rec("12가6003"), { consumer_price: 18650000 }));
+    const f = { sheet_facts: { consumer_price: 18650000 } };
+    const out = await run(commands, [rec("12가6001", f), rec("12가6002", f), rec("12가6003", f)]);
+    expect(out.kinds).toEqual(["UPDATE"]);
+    expect(out.plan.warnings).toEqual(expect.arrayContaining(["SHEET_FACT_FILL:1", "SHEET_FACT_CONFLICT:1"]));
+    expect(fake.fields("12가6001").consumer_price).toBe(18650000);
+    expect(typeof fake.fields("12가6001").consumer_price).toBe("number");
+    expect(fake.fields("12가6002").consumer_price).toBe(30000000);
+    expect(fake.fields("12가6003").consumer_price).toBe(18650000);
+  });
+});

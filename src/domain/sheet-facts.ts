@@ -1,9 +1,11 @@
 /** 공통 시트(F05형)의 차량 사실 칸 후보 → 프리패스 데이터 «기존 칸»에 빈 칸만 채우는 순수 로직(대표 2026-10-23 설계안 승인, 설계안 docs: 비고 F01 칸).
  *  재사용 칸(ERP5 가 이미 읽는 칸): 구동방식 → drive_type(공개 화면), 원산지 → origin(F01). 검증을 통과한 값만 원천 기록에 «후보»(raw.sheet_facts)로 싣고,
  *  쓰기는 문서의 해당 칸이 «비어 있을 때만». 이미 다른 값이 있으면 쓰지 않고 충돌로 센다. 원문(raw.cells)은 그대로 보존된다. */
-export const SHEET_FACT_KEYS = ['drive_type', 'origin', 'options'] as const;
+export const SHEET_FACT_KEYS = ['drive_type', 'origin', 'options', 'consumer_price'] as const;
 export type SheetFactKey = (typeof SHEET_FACT_KEYS)[number];
-export type SheetFacts = Partial<Record<SheetFactKey, string>>;
+export type SheetFacts = Partial<Record<SheetFactKey, string | number>>;
+/** 차량가격(consumer_price, 대표 2026-10-23 승인): 정수 원, 5,000,000~300,000,000. 세금 포함 여부는 단정하지 않고 시트 원문 값 그대로. */
+export const CONSUMER_PRICE_MIN = 5_000_000, CONSUMER_PRICE_MAX = 300_000_000;
 
 const DRIVE_VALUES = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
 const ORIGIN_VALUES = new Set(['국산', '수입']);
@@ -14,14 +16,20 @@ const OPTIONS_PUBLIC_UNSAFE = /(\d{2,3}-?\d{3,4}-?\d{4})|(https?:\/\/)|(www\.)|@
 const text = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '').normalize('NFKC').replace(/\s+/g, ' ').trim();
 
 /** 키별 검증: 통과한 정규 값 또는 null. */
-export function validSheetFact(key: SheetFactKey, value: unknown): string | null {
+export function validSheetFact(key: SheetFactKey, value: unknown): string | number | null {
   const t = text(value);
   if (!t) return null;
+  if (key === 'consumer_price') {
+    const digits = t.replace(/[,\s원]/g, '');
+    if (!/^\d{1,12}$/.test(digits)) return null;
+    const n = Number(digits);
+    return n >= CONSUMER_PRICE_MIN && n <= CONSUMER_PRICE_MAX ? n : null;
+  }
   if (key === 'drive_type') { const u = t.toUpperCase(); return DRIVE_VALUES.has(u) ? u : null; }
   if (key === 'options') return typeof value === 'string' && t.length <= OPTIONS_MAX && !OPTIONS_NO_INFO.has(t.toUpperCase()) && !OPTIONS_PUBLIC_UNSAFE.test(t) ? t : null;
   return ORIGIN_VALUES.has(t) ? t : null;
 }
-const SHEET_HEADER: Record<SheetFactKey, string> = { drive_type: '구동방식', origin: '원산지', options: '옵션 원문' };
+const SHEET_HEADER: Record<SheetFactKey, string> = { drive_type: '구동방식', origin: '원산지', options: '옵션 원문', consumer_price: '차량가격' };
 
 /** 헤더 «이름»으로 읽는다(열 위치가 아니다). 검증을 통과한 칸만 담고, 하나도 없으면 undefined. */
 export function sheetFactsOf(headers: readonly unknown[] | undefined, cells: readonly unknown[] | undefined): SheetFacts | undefined {
@@ -53,7 +61,8 @@ export function sheetFactState(doc: Record<string, unknown>, enabled: readonly S
   for (const key of enabled) {
     // 손오공 API 옵션을 관리하는 문서(api_options_state 있음)는 시트 옵션 대상이 아니다(대표 10-19: 유상 옵션만 표시).
     if (key === 'options' && !isBlankFact(doc.api_options_state)) continue;
-    out[key] = isBlankFact(doc[key]) ? null : (typeof doc[key] === 'string' ? text(doc[key]) || '(공백 정규화 후 빈 값)' : '(문자열이 아닌 값)');
+    const v = doc[key];
+    out[key] = isBlankFact(v) ? null : (typeof v === 'string' ? text(v) || '(공백 정규화 후 빈 값)' : typeof v === 'number' && Number.isFinite(v) ? String(v) : '(문자열이 아닌 값)');
   }
   return out;
 }
@@ -65,14 +74,14 @@ export function sheetFactPlan(state: Record<string, string | null> | undefined, 
     const candidate = facts[key];
     if (!candidate || !(key in state)) continue;
     if (state[key] === null) fill.push(key);
-    else if (state[key] !== candidate) conflicts.push(key);
+    else if (state[key] !== String(candidate)) conflicts.push(key);
   }
   return { fill, conflicts };
 }
 /** 쓰기 칸: 켜진 칸 중 문서가 지금도 비어 있고 후보가 검증을 통과한 칸만(쓰기 시점에 다시 확인). */
-export function sheetFactFields(rawFacts: unknown, original: Record<string, unknown>, enabled: readonly SheetFactKey[], planned?: readonly SheetFactKey[]): Record<string, string> {
+export function sheetFactFields(rawFacts: unknown, original: Record<string, unknown>, enabled: readonly SheetFactKey[], planned?: readonly SheetFactKey[]): Record<string, string | number> {
   const facts = validSheetFacts(rawFacts);
-  const out: Record<string, string> = {};
+  const out: Record<string, string | number> = {};
   if (!facts) return out;
   // planned(계획이 고른 칸)가 있으면 그 칸만 쓴다 — 계획 밖 채움을 막는다.
   for (const key of enabled) if (facts[key] && isBlankFact(original[key]) && (!planned || planned.includes(key))) out[key] = facts[key]!;
