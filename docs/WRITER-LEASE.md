@@ -45,14 +45,23 @@ WRITER_LEASE_WRITE_APPROVED=true node dist/src/jobs/writer-lease.js handover --l
 
 ### ① 레인 목록 — 어느 실행기를 막나
 레인은 «실행기의 env 파일»이 정한다(`WRITER_LEASE_LANE`). 같은 코드(`runtimeCli --unattended`)를 쓰는 실행기는 레인만 다르게 켠다.
-| 레인 | 막는 실행기 | 켜는 곳 |
-|---|---|---|
-| `source-cycle` | 시간당 전체 회차(FreePass-Source-Cycle) | 그 실행기 env |
-| `f05-realtime` | F05 5분 실행기(FreePass-F05-Realtime) | 그 실행기 env (checkout 이 달라도 같은 레인 이름) |
-| `rp031-watch` | RP031 감시 실행기(:50, `--watch-sync`) | 그 실행기 env |
-| `photo` | 사진 폴더 연결 단계(`run-source-cycle.ps1` 끝, `WRITER_LEASE_PHOTO_LANE` 로 이름 변경 가능) | 시간당 실행기 env (`ENFORCE` 와 함께 자동 확인) |
-| 마음카·정산 접수 등 | `runtimeCli` 를 거치지 않는 쓰기 실행기는 자동으로 막히지 않는다 — 그 실행기가 쓰기 전에 `node dist/src/jobs/writer-lease.js check --lane=<레인>` 을 불러야 한다(종료 0=쓰기, 3=금지) | 해당 담당 |
+| 실행기 | 프리패스 데이터·시트에 쓰는가 | 예약·무인인가 | 레인 | 확인 위치 |
+|---|---|---|---|---|
+| 시간당 전체 회차(FreePass-Source-Cycle) | 예 | 예 | `source-cycle` | 기존 `runtimeCli --unattended` 관문 |
+| F05 5분 실행기(FreePass-F05-Realtime) | 예 | 예 | `f05-realtime` | 기존 `runtimeCli --unattended` 관문 |
+| RP031 감시 실행기(:50, `--watch-sync`) | 예 | 예 | `rp031-watch` | 기존 `runtimeCli --unattended` 관문 |
+| `scripts/process-source-requests.ps1` | 예(요청 상태와 원천 회차) | 예, 5분 | `source-requests` | 상태 변경 전 `writer-lease.js check`; 종료 3·확인 실패면 회차 건너뜀 |
+| `run-source-cycle.ps1` 사진 적용 단계 | 예 | 예 | `photo` | 기존 `writer-lease.js check` |
+| `iancar-photo-daily.ts` | 예(Drive 복사·사진 등록) | 예, 일 1회 | `photo` | 첫 외부 쓰기 직전 공용 `ensureWriterLease` |
+| `photo-cache-from-folder.mjs`, `photo-cache-iron.mjs`, `register-approved-photos.mjs`의 `--apply` | 예 | 예약 호출 가능 | `photo` | 적용 진입 직후 공용 `ensureWriterLease` |
+| `collect-aica.ts --apply-raw` | 예 | 무인 호출 가능 | `aica-raw` | RAW 적재 직전 공용 `ensureWriterLease` |
+| `collect-iron.ts --apply-raw` | 예 | 무인 호출 가능 | `iron-raw` | RAW 적재 직전 공용 `ensureWriterLease` |
+| `collect-sonogong.ts --apply-raw` | 예 | 무인 호출 가능 | `sonogong-raw` | RAW 적재 직전 공용 `ensureWriterLease` |
+| `collect-iancar-one-api.ts`의 `--apply-raw`, 사진 적용·복원 | 예 | 무인 호출 가능 | `iancar-raw` 또는 `photo` | 각 쓰기 직전 공용 `ensureWriterLease` |
+| `convert-maumcar-file.ts`와 읽기 전용 계획·점검 실행기 | 아니오(로컬 결과 파일만) | 호출 가능 | 해당 없음 | 임대 불필요; 마음카 실제 반영은 `runtimeCli` 레인 사용 |
 주의: 레인 이름은 한 번 정하면 PC1·PC3 가 같게 쓴다. 한 실행기는 레인 하나만 가진다.
+
+`ensureWriterLease(env, laneOverride)`는 기존 `leaseConfigFromEnv`와 `writerLeaseStore`만 조합한다. `WRITER_LEASE_ENFORCE`가 없거나 `0`이면 아무 일도 하지 않고, 켜진 상태에서 미보유·임대 읽기 실패·설정 오류는 모두 `WRITER_LEASE_NOT_HELD`로 닫힌다. `CREATE_NEW_JUSTIFIED`: source-cycle 전용 로그·종료 정책인 `writerLeaseGate`를 다른 실행기에 복제하지 않고 쓰기 직전 throw 계약 하나로 재사용하려면 얇은 공용 어댑터가 필요하다.
 
 ### ② 켜는 순서
 0. 사전: PC3 에 PR 785·786 이 들어간 최신 main 을 받아 `npm.cmd run build`. PC3 에서 `status --lane=…` 가 `lease: null` 로 읽히면 연결 정상.
@@ -66,7 +75,7 @@ WRITER_LEASE_WRITE_APPROVED=true node dist/src/jobs/writer-lease.js handover --l
 ### ③ 닫힘 시험 (PC3 쓰기 0 상태에서 한 번)
 PC3 실행기를 «아직 보유자가 아닌» 상태로 두고 시험한다(쓰기 0 이 보장됨).
 - 임대 없음: 아직 claim 안 한 레인(예: `lease-test`)으로 `WRITER_LEASE_ENFORCE=1 WRITER_LEASE_LANE=lease-test WRITER_LEASE_PC=PC3 SOURCE_CYCLE_UNATTENDED=1 node dist/src/runtime/source-cycle-runtime.js --unattended` → 종료 코드 1, 출력 `lease.error = WRITER_LEASE_MISSING`(10-23 PC1 에서 실제 확인함), `alerts.jsonl` 에 같은 사유, 원천 읽기·쓰기 없음.
-- 읽기 실패: 같은 명령에 `FIREBASE_PROJECT_ID=freepasserp5` 로 두되 `SOURCE_CYCLE_GCLOUD_ACCOUNT=none@invalid` 처럼 잘못된 계정으로 토큰을 실패시킨다(이 방법은 아직 실행해 보지 않음) → 종료 코드 1, `WRITER_LEASE_REQUEST_FAILED` 또는 토큰 오류 코드, 쓰기 없음.
+- 읽기 실패: 같은 명령에 `FIREBASE_PROJECT_ID=freepasserp5` 로 두되 `SOURCE_CYCLE_GCLOUD_ACCOUNT=none@invalid` 처럼 잘못된 계정으로 토큰을 실패시킨다→ 종료 코드 1, `GCLOUD_TOKEN_FAILED_CRASH`(토큰 오류 코드), `alerts.jsonl` 에 같은 사유, 쓰기 0 (10-23 PC1 에서 실제 확인함).
 - 설정 오류: `WRITER_LEASE_ENFORCE=true` → `WRITER_LEASE_ENFORCE_INVALID`, 종료 1.
 확인 뒤 `lease-test` 레인은 쓰지 않으므로 정리할 것이 없다(문서가 만들어지지 않는다).
 

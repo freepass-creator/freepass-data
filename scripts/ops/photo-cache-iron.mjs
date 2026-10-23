@@ -2,6 +2,10 @@
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR; const apply = process.argv.includes('--apply');
+if (apply) {
+  const { ensureWriterLease } = await import('../../dist/src/runtime/ensure-writer-lease.js');
+  await ensureWriterLease(process.env, 'photo');
+}
 const UA = { 'User-Agent': 'Mozilla/5.0 (compatible; FreePassPhotoLink/1.0)' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const sm = await (await fetch('https://ironrentcar.com/sitemap.xml', { headers: UA })).text();

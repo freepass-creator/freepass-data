@@ -2,11 +2,13 @@ import { pathToFileURL } from 'node:url';
 import { aicaSourceAdapter } from '../adapters/supplier-source-capture.js';
 import { aicaSheetsGridReader } from '../infra/aica-sheet-reader.js';
 import { collectSupplierSource, type AicaGridBinding, type AicaGridObservation, type SourceIntakeBatch } from '../domain/source-intake.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 export async function captureAica(input: {
   bindings: readonly AicaGridBinding[]; expectedFreshnessSeconds: number | null;
   applyRaw: boolean; approved: boolean;
   verifyBoundTabs?: boolean;
+  env?: NodeJS.ProcessEnv;
 }, ports: {
   readGrid?: (binding: AicaGridBinding) => Promise<AicaGridObservation>;
   ingestRawBatch?: (batch: SourceIntakeBatch) => Promise<unknown>;
@@ -19,6 +21,7 @@ export async function captureAica(input: {
   const { batch, evidence } = await collectSupplierSource(adapter, ports.now?.());
   if (input.applyRaw) {
     if (evidence.status !== 'RAW_READY') throw new Error('AICA_RAW_SOURCE_HOLD');
+    await ensureWriterLease(input.env ?? process.env, 'aica-raw');
     const ingest = ports.ingestRawBatch ?? (async (value: SourceIntakeBatch) => {
       const { createSourceIngestDataAccessRuntime } = await import('./data-access-runtime.js');
       return (await createSourceIngestDataAccessRuntime()).ingestRawBatch(value);
@@ -39,7 +42,7 @@ export async function aicaCaptureCommand(args: string[], env: NodeJS.ProcessEnv 
   const freshness = env.AICA_EXPECTED_FRESHNESS_SECONDS === undefined ? null : Number(env.AICA_EXPECTED_FRESHNESS_SECONDS);
   if (freshness !== null && (!Number.isSafeInteger(freshness) || freshness <= 0)) throw new Error('AICA_FRESHNESS_INVALID');
   return captureAica({ bindings, expectedFreshnessSeconds: freshness, applyRaw: args.includes('--apply-raw'),
-    approved: env.AICA_RAW_INGEST_APPROVED === 'true', verifyBoundTabs: env.AICA_VERIFY_BOUND_TABS === 'true' });
+    approved: env.AICA_RAW_INGEST_APPROVED === 'true', verifyBoundTabs: env.AICA_VERIFY_BOUND_TABS === 'true', env });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   aicaCaptureCommand(process.argv.slice(2)).then(report => {

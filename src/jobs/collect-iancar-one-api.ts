@@ -12,6 +12,7 @@ import {
 import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 import { createHash } from 'node:crypto';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 // Strict isolated entrypoint. Never reaches legacy reports, DB access or private raw capture.
 if (process.argv.slice(2).includes('--source-only')) {
@@ -99,6 +100,7 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
       row.observedAt = new Date().toISOString();
     }
     const { runIancarPhotoPublication } = await import('./data-access-runtime.js');
+    if (apply) await ensureWriterLease(process.env, 'photo');
     publicationAttempted = true;
     const result = await runIancarPhotoPublication({ records: [row], verificationOnly: true, apply,
       ...(discoverPlan ? {} : { expectedPlanDigest }) });
@@ -125,6 +127,7 @@ if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
   if (!backupPath || !expectedSourceDigest) throw new Error('IANCAR_RESTORE_BACKUP_INVALID');
   if (requested.has('--apply') && process.env.IANCAR_PHOTO_RESTORE_APPROVED !== 'true') throw new Error('IANCAR_PHOTO_APPROVAL_REQUIRED');
   const { runIancarPhotoRestore } = await import('./data-access-runtime.js');
+  if (requested.has('--apply')) await ensureWriterLease(process.env, 'photo');
   console.log(JSON.stringify(await runIancarPhotoRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
   process.exit(0);
 }
@@ -181,7 +184,10 @@ if (requested.has('--photos')) {
     if (await readFile(path, 'utf8') !== bytes) throw new Error('IANCAR_PHOTO_CAPTURE_READBACK_FAILED');
     console.log(JSON.stringify({ privateCapturePath: path }));
   }
-  if (requested.has('--apply-photos')) console.log(JSON.stringify(await runIancarPhotoPublication({ records, apply: true, expectedPlanDigest: plan.planDigest })));
+  if (requested.has('--apply-photos')) {
+    await ensureWriterLease(process.env, 'photo');
+    console.log(JSON.stringify(await runIancarPhotoPublication({ records, apply: true, expectedPlanDigest: plan.planDigest })));
+  }
   process.exit(0);
 }
 if (requested.has('--apply-photos')) throw new Error('IANCAR_PHOTOS_MODE_REQUIRED');
@@ -266,6 +272,7 @@ if (requested.has('--apply-raw')) {
   if (!capture.readyForRawIngest) {
     throw new Error('EANCAR_ONE_SOURCE_NOT_READY_FOR_RAW_INGEST');
   }
+  await ensureWriterLease(process.env, 'iancar-raw');
   const { createSourceIngestDataAccessRuntime } = await import('./data-access-runtime.js');
   const runtime = await createSourceIngestDataAccessRuntime();
   const run = await runtime.ingestRawBatch(batch);
