@@ -3409,3 +3409,9 @@ This file exists so another session can continue without re-discovering or re-cr
 - 현재 등록된 공급사 코드가 정확히 하나인 입력 탭에서 회사명 셀만 비어 있으면 그 탭의 등록 소유자를 공급사 근거로 사용한다. RAW의 빈 회사명은 바꾸지 않고 `supplierCodeBasis=REGISTERED_EXCLUSIVE_TAB_OWNER`를 함께 보존한다. 회사 이름을 만들거나 과거 개별 시트로 fallback하지 않는다.
 - 두 공급사가 쓰는 스타·빌린카·경진 같은 공용 탭의 빈 회사명, 알 수 없는 값이 들어 있는 회사명, 미등록/부재 탭은 계속 미확정이다. 기존 공급사+차량번호 중복·다중 공급사 격리, 상태·대여료·차종 마스터·공개 판단을 완화하지 않는다. 공급사를 알아도 물리 차량/차종 검증 HOLD는 그대로다.
 - 원117의 한 행이 단독 공급사 탭에서 회사명 하나가 비어 원문 가격까지 기존 native 경로에서 빠지는 원인을 대상으로 한다. 관련267 PASS/1 기존 조건부 SKIP 및 build 검증은 코드 근거이며, 다음 source 회차의 해당 원키→새 안정 키→기존 상품 writer→ERP5/F01 되읽기 전에는 실제 해결로 세지 않는다. 원본 셀 쓰기·새 writer·새 스케줄은 없다.
+## 2026-10-23 runtimeCli 밖 무인 쓰기 writer lease 관문
+
+- 목적 / 대상 revision: `work/freepass-data/writer-lease-gates-20261023`, 기준 `2c2d9c41cc44a1435d181c0f85d693d7586c28bf`; 커밋·push 없음.
+- 변경: 기존 `leaseConfigFromEnv`·`writerLeaseStore`를 조합한 기본 꺼짐 공용 관문을 추가하고, 사진 일일·사진 캐시·승인 사진 등록·AICA/Iron/손오공/이안카 RAW 적용·이안카 사진 적용/복원과 5분 source request 처리의 쓰기 전에 연결했다. 레인과 비쓰기 대상은 `WRITER-LEASE.md` 표에 고정했다.
+- 검증: `npx.cmd tsc --noEmit -p .` PASS; `npx.cmd vitest run tests/writer-lease.test.ts tests/writer-lease-ensure.test.ts tests/iancar-photo-daily.test.ts tests/supplier-iron-capture.test.ts tests/sonogong-api-runtime.test.ts` 39 PASS; `node scripts/check-data-access-boundary.mjs` PASS.
+- 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 운영 env에서 각 레인을 claim하고 `WRITER_LEASE_ENFORCE=1`, `WRITER_LEASE_PC`를 켜는 일은 별도 운영 전환이다. 기존 dirty 문서 한 줄과 `_ipt.mjs`, `_ms.mjs`, `_why2.mjs`는 보존했다.

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$EnvFile,
   [string]$RequestDir,
   [int]$MinIntervalMinutes = 5,
@@ -24,6 +24,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $RequestDir) { throw 'RequestDir is required (a private directory outside the repository).' }
+if ($EnvFile) {
+  $envPath = (Resolve-Path -LiteralPath $EnvFile).Path
+  if ($envPath.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'EnvFile must live outside the repository.' }
+  . $envPath
+}
+# 예약 요청 상태를 바꾸기 전에 임대를 확인한다. 종료 코드 3과 확인 실패는 이번 회차를 건너뛴다.
+if ($env:WRITER_LEASE_ENFORCE -eq '1') {
+  $leaseJs = Join-Path $repo 'dist\src\jobs\writer-lease.js'
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+  try { & $node $leaseJs check '--lane=source-requests' *> $null } catch { Write-Output 'WRITER_LEASE_CHECK_FAILED'; exit 0 }
+  if ($LASTEXITCODE -eq 3) { Write-Output 'WRITER_LEASE_NOT_HELD'; exit 0 }
+  if ($LASTEXITCODE -ne 0) { Write-Output 'WRITER_LEASE_CHECK_FAILED'; exit 0 }
+}
 $dir = (Resolve-Path -LiteralPath $RequestDir).Path
 if ($dir.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'RequestDir must live outside the repository.' }
 $processed = Join-Path $dir 'processed'; $rejected = Join-Path $dir 'rejected'; $inflight = Join-Path $dir 'inflight'

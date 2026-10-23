@@ -8,6 +8,8 @@ const allowedRawInfraConsumers = new Set([
   // SPEC3 explicitly authorizes this legacy-products REST composition. It uses the
   // central target resolver, immutable private backups, updateTime CAS and readback.
   'src/runtime/source-cycle-runtime.ts',
+  // 공용 writer lease 관문은 기존 lease store의 check(필요 시 갱신)만 노출한다.
+  'src/runtime/ensure-writer-lease.ts',
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',

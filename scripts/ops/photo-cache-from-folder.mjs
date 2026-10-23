@@ -2,6 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { gcloudUserToken } from '../../dist/src/infra/source-cycle-firestore.js';
 const dir = process.env.SOURCE_CYCLE_PRIVATE_DIR; const apply = process.argv.includes('--apply'); const only = process.argv.find(a => a.startsWith('--code='))?.slice(7) ?? 'RP023';
+if (apply) {
+  const { ensureWriterLease } = await import('../../dist/src/runtime/ensure-writer-lease.js');
+  await ensureWriterLease(process.env, 'photo');
+}
 const gws = process.env.GWS_BIN;
 // 무인 적용용 안전 옵션(PC1 커맨드 승인 2026-10-22): --only-sheet-link 는 엔진이 시트 링크로 채운(검증된) photo_link 문서만, --max-writes=N 은 이번 실행의 쓰기 상한.
 const onlySheetLink = process.argv.includes('--only-sheet-link');
