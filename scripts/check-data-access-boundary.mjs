@@ -13,6 +13,7 @@ const allowedRawInfraConsumers = new Set([
   'src/jobs/data-access-runtime.ts',
   'src/jobs/apply-iancar-policy-sync.ts',
   'src/jobs/iancar-policy-link.ts',
+  'src/jobs/normalize-first-registration.ts',
   'src/jobs/apply-billincar-policy-repair.ts',
   'src/jobs/apply-vehicle-name-reference-repair.ts'
 ]);
@@ -133,6 +134,7 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']],
   ['src/jobs/apply-iancar-policy-sync.ts', ['runtime.access.write(']],
   ['src/jobs/iancar-policy-link.ts', ['runtime.access.write(', 'runtime.access.read(']],
+  ['src/jobs/normalize-first-registration.ts', ['runtime.access.write(', 'runtime.access.read(']],
   ['src/jobs/apply-billincar-policy-repair.ts', ['runtime.access.write(']],
   ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
 ]);
