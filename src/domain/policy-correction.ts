@@ -68,6 +68,9 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
   mileage_upcharge_per_10000km: amount,
   over_mileage_rate_domestic: amount,
   over_mileage_rate_imported: amount,
+  over_mileage_rate_per_km: rule('numeric-per-km', positiveNumber),
+  late_fee_rate: rule('fraction', (v) => positiveNumber(v) && (v as number) <= 1),
+  deposit_overdue_rounds: rule('positive-integer', (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1),
   basic_driver_age: rule('age-lower', matches(/^만 \d+세 이상$/)),
   driver_age_lowering: rule('age-lowering', matches(/^(불가|협의|만 \d+세까지)$/)),
   age_lowering_cost: amount,
@@ -106,6 +109,11 @@ for (const field of TEXT_FIELDS) ALLOWED_FIELDS[field] = textRule;
 
 export const policyCorrectionItemDigest = (item: PolicyCorrectionItem) => stableDigest(item);
 export const isPolicyCorrectionClear = (item: PolicyCorrectionItem) => item.operation === 'clear';
+const sourceBoundLegacyFields = new Set(['late_fee_rate', 'over_mileage_rate_per_km', 'deposit_overdue_rounds']);
+const clearReplacementFields: Record<string, string[]> = {
+  late_fee_rate: ['policy_extra_terms'],
+  over_mileage_rate_per_km: ['policy_extra_terms', 'over_mileage_rate_domestic', 'over_mileage_rate_imported'],
+};
 const requireSourceEvidence = (item: PolicyCorrectionItem) => {
   const scope = item.evidence?.applicability;
   if (typeof item.evidence?.answerSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(item.evidence.answerSha256)
@@ -139,6 +147,22 @@ const layerMap = (data: Record<string, unknown>, layer: PolicyCorrectionLayer): 
     : data;
 const storedEvidence = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string): Record<string, unknown> | undefined =>
   layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)?.[field]) : objectValue(objectValue(data.field_evidence)?.[field]);
+
+/** Retire a misleading legacy scalar only when the same source still has its full scoped replacement. */
+export function assertPolicyCorrectionReplacement(data: Record<string, unknown>, item: PolicyCorrectionItem, items: PolicyCorrectionItem[] = []) {
+  if (!isPolicyCorrectionClear(item)) return;
+  for (const field of clearReplacementFields[item.field] ?? []) {
+    const replacement = items.find(next => next.policyCode === item.policyCode && next.supplierCode === item.supplierCode
+      && next.layer === 'supplierCondition' && next.field === field && !isPolicyCorrectionClear(next));
+    const value = replacement ? replacement.to : data[field];
+    const evidence: Record<string, unknown> | undefined = replacement ? { ...replacement.evidence } : storedEvidence(data, 'supplierCondition', field);
+    if (!present(value) || !ALLOWED_FIELDS[field]!.validate(value as PolicyCorrectionValue)
+      || !evidence?.answerSha256 || evidence.answerSha256 !== item.evidence.answerSha256
+      || !evidence.applicability || (!replacement && evidence.value !== value)) {
+      throw new Error('SOURCE_REPLACEMENT_REQUIRED ' + item.policyCode + '.' + item.field + ':' + field);
+    }
+  }
+}
 /** The stored layer container / entry must have the shape this corrector writes (a map, entries as maps with a «value»).
  * Anything else (string, number, array …) is refused — never read as «absent», so «from: null» cannot overwrite it. */
 // A stored sales_policy «value» is a scalar: string, finite number, boolean or null — arrays/objects would slip past the contradiction check.
@@ -220,14 +244,14 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
     if (!ALLOWED_FIELDS[item.field]) throw new Error(`FIELD_NOT_ALLOWED ${item.field}`);
     if (item.operation !== undefined && item.operation !== 'set' && item.operation !== 'clear') throw new Error('INVALID_OPERATION');
     if (isPolicyCorrectionClear(item)) {
-      if (item.field !== 'own_damage_repair_ratio' || item.layer !== 'supplierCondition'
+      if ((item.field !== 'own_damage_repair_ratio' && !Object.hasOwn(clearReplacementFields, item.field)) || item.layer !== 'supplierCondition'
         || Object.hasOwn(item, 'to')) throw new Error('CLEAR_NOT_ALLOWED');
       if (item.from === null || item.from === '' || item.from === undefined) throw new Error('CLEAR_FROM_REQUIRED');
       requireSourceEvidence(item);
     } else {
       if (item.to === null || item.to === undefined || item.to === '') throw new Error(`EMPTY_TO ${item.policyCode}.${item.field}`);
       if (!ALLOWED_FIELDS[item.field]!.validate(item.to)) throw new Error(`INVALID_VALUE ${item.policyCode}.${item.field}`);
-      if (item.field === 'policy_extra_terms'
+      if (sourceBoundLegacyFields.has(item.field) || item.field === 'policy_extra_terms'
         || (item.field === 'own_damage_compensation' && !matches(MONEY_LIMIT)(item.to))) requireSourceEvidence(item);
     }
     if (item.layer !== 'supplierCondition' && item.layer !== 'salesPolicy') throw new Error(`INVALID_LAYER ${item.policyCode}.${item.field}`);
@@ -252,6 +276,7 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
     for (const item of items) {
       if (data.provider_company_code !== item.supplierCode) throw new Error(`SUPPLIER_MISMATCH ${policyCode}`);
       assertStoredShape(policyCode, data, item.layer, item.field);
+      assertPolicyCorrectionReplacement(data, item, items);
       const current = storedPolicyValue(data, item.layer, item.field);
       if (!exactSame(current === undefined ? null : current, item.from)) throw new Error(`CONFLICT ${policyCode}.${item.field}`);
       const lastDate = lastEvidenceDate(data, item.layer, item.field);
