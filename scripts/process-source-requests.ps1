@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$EnvFile,
   [string]$RequestDir,
   [int]$MinIntervalMinutes = 5,
