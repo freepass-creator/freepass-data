@@ -26,6 +26,8 @@ import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-a
 import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
+import { leaseConfigFromEnv } from '../domain/writer-lease.js';
+import { writerLeaseStore } from '../infra/writer-lease-firestore.js';
 import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
 import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
@@ -738,7 +740,8 @@ export function selectUnattendedPlugins<T extends { sourceId: string }>(plugins:
 }
 
 export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes,
-  runtimeFactory: typeof createSourceCycleRuntime = createSourceCycleRuntime) {
+  runtimeFactory: typeof createSourceCycleRuntime = createSourceCycleRuntime,
+  leaseStoreFactory: (e: NodeJS.ProcessEnv) => Pick<ReturnType<typeof writerLeaseStore>, 'check'> = e => writerLeaseStore({ env: e })) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
   const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string; configNotices?: string[];
@@ -798,7 +801,13 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           for (const r of parsed.reports ?? []) if (typeof r.exposure?.after === 'number') priorAfter.set(r.source, r.exposure.after);
         }
       } catch { /* 첫 회차 또는 기록 없음 */ }
+      const leaseConfig = leaseConfigFromEnv(env);   // 쓰는 쪽 하나(기본 꺼짐): 원천마다 시작 전에 임대를 다시 확인해, 회차 도중 넘어갔으면 남은 원천은 쓰지 않는다
+      const leaseStore = leaseConfig ? leaseStoreFactory(env) : null;
       for (const plugin of selected) {
+        if (leaseConfig && leaseStore) {
+          const still = await leaseStore.check(leaseConfig.lane, leaseConfig.pc).catch(() => null);
+          if (!still?.held) { record.exit = 1; record.error = 'WRITER_LEASE_LOST'; await alert('WRITER_LEASE_LOST'); break; }
+        }
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
           { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
             // 상류 갱신 감시(독립 판독기): --watch-sync 를 줄 때만(기본 꺼짐). 창(분)은 SOURCE_CYCLE_IANCAR_WATCH_MIN(기본 20, 1~30) — 예: :50 에 시작해 :10 까지.
@@ -851,6 +860,29 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
   return record;
 }
 
+/** 쓰는 쪽 하나(writer lease, 기본 꺼짐 WRITER_LEASE_ENFORCE=1): 무인 회차 시작에 임대를 확인·갱신하고, 내 PC 가 아니면 쓰기 0 으로 끝낸다(exit 0, lease-skips.jsonl 에만 기록).
+ *  설정이 틀리거나 임대를 읽지 못하면 닫힘 — 쓰지 않고 exit 1 + 알림. 임대 확인이 필요 없으면(꺼짐) null. */
+export async function writerLeaseGate(env: NodeJS.ProcessEnv, store: Pick<ReturnType<typeof writerLeaseStore>, 'check'> | undefined = undefined) {
+  const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+  const at = new Date().toISOString();
+  let outcome: Record<string, unknown>, exit = 0;
+  try {
+    const config = leaseConfigFromEnv(env);
+    if (!config) return null;
+    const result = await (store ?? writerLeaseStore({ env })).check(config.lane, config.pc);
+    if (result.held) return null;
+    outcome = { lane: config.lane, pc: config.pc, ...result };
+    if (result.status === 'NO_LEASE') { outcome.error = 'WRITER_LEASE_MISSING'; exit = 1; }   // 첫 인수를 놓친 채 «정상 건너뜀»으로 보이지 않게
+  } catch (error) {
+    const code = error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'WRITER_LEASE_ERROR';
+    outcome = { error: code }; exit = 1;
+  }
+  await mkdir(directory, { recursive: true });
+  await appendFile(join(directory, 'lease-skips.jsonl'), JSON.stringify({ at, ...outcome, writes: 0 }) + '\n', { mode: 0o600 });
+  if (exit) await appendFile(join(directory, 'alerts.jsonl'), JSON.stringify({ source: 'RUNNER', reason: String(outcome.error), at }) + '\n', { mode: 0o600 });
+  return { started: at, finished: new Date().toISOString(), exit, lease: outcome };
+}
+
 export async function runtimeCli(args: string[], env = process.env) {
   const get = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
   const acceptDrift = (get('--accept-drift') ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -859,7 +891,13 @@ export async function runtimeCli(args: string[], env = process.env) {
   if (args.includes('--unattended')) {
     if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
     if (args.includes('--apply') || get('--plan') || get('--rollback')) throw new Error('UNATTENDED_ARGS_INVALID');
+    const gated = await writerLeaseGate(env);
+    if (gated) return gated;
     return runUnattended(args, env, acceptDrift);
+  }
+  if (args.includes('--apply') || get('--rollback')) {   // 수동 쓰기도 쓰는 쪽 하나 조건을 따른다(기본 꺼짐)
+    const blocked = await writerLeaseGate(env);
+    if (blocked) throw new Error('WRITER_LEASE_NOT_HELD');
   }
   const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
   const key = get('--rollback');

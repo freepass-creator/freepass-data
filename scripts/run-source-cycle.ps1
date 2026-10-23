@@ -36,7 +36,17 @@ $cycleExit = $LASTEXITCODE
 # 사진 폴더 연결 «계획만» 단계(2026-10-22 PC1 커맨드 승인): SOURCE_CYCLE_PHOTO_PLAN_CODES(쉼표 공급사 코드)가 있을 때만, 회차가 끝난 뒤 공급사별로 계획(쓰기 0, --apply 를 넘기지 않는다)을 돌려
 # 비공개 디렉터리 photo-plan.log 에 요약만 남긴다. 단계 전체가 예외·시간 초과(공급사당 3분, 전체 10분)와 격리돼 회차 종료 코드·결과에 영향을 주지 않는다.
 try {
-  if ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -and $env:SOURCE_CYCLE_PRIVATE_DIR) {
+  # 쓰는 쪽 하나(writer lease, 기본 꺼짐): WRITER_LEASE_ENFORCE=1 이면 사진 단계도 «사진» 레인 임대(WRITER_LEASE_PHOTO_LANE, 기본 photo)를 가진 PC 만 돈다. 임대를 못 읽으면 건너뛴다(닫힘).
+  $photoLeaseOk = $true
+  if ($env:WRITER_LEASE_ENFORCE -eq '1') {
+    $photoLeaseOk = $false
+    try {
+      $leaseJs = Join-Path $repo 'dist\src\jobs\writer-lease.js'
+      $photoLane = if ($env:WRITER_LEASE_PHOTO_LANE) { $env:WRITER_LEASE_PHOTO_LANE } else { 'photo' }
+      if (Test-Path -LiteralPath $leaseJs) { & $node $leaseJs check "--lane=$photoLane" *> $null; $photoLeaseOk = ($LASTEXITCODE -eq 0) }
+    } catch { $photoLeaseOk = $false }
+  }
+  if ($photoLeaseOk -and $env:SOURCE_CYCLE_PHOTO_PLAN_CODES -and $env:SOURCE_CYCLE_PRIVATE_DIR) {
     $ErrorActionPreference = 'Continue'
     $photoScript = Join-Path $repo 'scripts\ops\photo-cache-from-folder.mjs'
     $photoLog = Join-Path $env:SOURCE_CYCLE_PRIVATE_DIR 'photo-plan.log'
