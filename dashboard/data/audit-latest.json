@@ -13,43 +13,43 @@
   "change": {
     "counts": {
       "ADDED": 0,
-      "CHANGED": 2,
+      "CHANGED": 1,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 2363
+      "UNCHANGED": 2370
     },
     "current": {
-      "count": 2365,
-      "digest": "d46592e55c2c65eb6c8c5ff993f60d1020b57ab5c262801d4523aa3980e43363",
-      "readTime": "2026-10-23T07:53:51.463596Z"
+      "count": 2371,
+      "digest": "11d2b6b184c61546825e8d26ba9804be858aeac512eee67edb449ae9573d778d",
+      "readTime": "2026-10-23T13:46:32.408682Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "8e8ac5bf9353911b046aea7f58a5d2779ad84b82fd06001439b20c6e9c6d307a",
-    "inventoryTransitionCount": 1,
+    "digest": "f23bc257ba666eddcf432005f17266a85c209f49ccadff32d8c880fdea1e7876",
+    "inventoryTransitionCount": 0,
     "previous": {
-      "count": 2365,
-      "digest": "54bb511776d81921f906339510fb1c459bf9acf3f688ed1a0fd96c80900cba5a",
-      "readTime": "2026-10-23T07:22:06.519984Z"
+      "count": 2371,
+      "digest": "7eec5f4b3525eb295fd7f7cf2cd3c63454e33f8e0c295f6a3215f448a15aa510",
+      "readTime": "2026-10-23T13:19:57.160157Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 1,
+    "inventoryTransitionCount": 0,
     "mappedForReview": 132,
-    "mappingHold": 2233,
-    "productFieldPathCount": 1281
+    "mappingHold": 2239,
+    "productFieldPathCount": 1287
   },
-  "runId": "39920792090-1",
+  "runId": "39963908407-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 2365
+      "products": 2371
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "d46592e55c2c65eb6c8c5ff993f60d1020b57ab5c262801d4523aa3980e43363",
+    "digest": "11d2b6b184c61546825e8d26ba9804be858aeac512eee67edb449ae9573d778d",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-23T07:53:51.463596Z"
+    "readTime": "2026-10-23T13:46:32.408682Z"
   },
   "version": "erp5-source-inventory/1"
 }
