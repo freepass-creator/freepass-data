@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { buildFirstRegistrationPlan } from '../domain/first-registration-normalize.js';
 import { decodeIancarBackupValue, encodeIancarBackupValue } from './iancar-backup-value.js';
@@ -76,7 +76,7 @@ export async function applyFirstRegistration(options: { nowMs: number; expectedP
 
 const RESTORE_FIELDS = new Set(['first_registration_date', 'first_registration_date_precision', 'first_registration_date_correction']);
 
-/** 복원: 문서가 «적용 값 그대로»면 되돌리고, 이미 «이전 값»이면 건너뛴다(부분 적용·재시도 가능). 둘 다 아니면 중단한다. 이전에 없던 칸은 삭제한다. 끝나면 되읽기. */
+/** 복원: 문서가 «적용 값 그대로»면 되돌리고, 이미 «이전 값»이면 건너뛴다(부분 적용·재시도 가능). 둘 다 아니면 중단한다. 이전에 없던 칸은 삭제하지 않고 null 로 둔다(삭제 금지 원칙). 끝나면 되읽기. */
 export async function restoreFirstRegistration(options: { backupPath: string; expectedPlanDigest: string; apply: boolean }) {
   const backup = JSON.parse(await readFile(options.backupPath, 'utf8'));
   const app = getTargetFirebaseApp();
@@ -94,7 +94,7 @@ export async function restoreFirstRegistration(options: { backupPath: string; ex
   });
   type Row = (typeof rows)[number];
   const isApplied = (data: Record<string, unknown>, r: Row) => Object.keys(r.patch).every(k => stableDigest(data[k] ?? null) === stableDigest(r.patch[k]));
-  const isRestored = (data: Record<string, unknown>, r: Row) => Object.keys(r.patch).every(k => r.absent.has(k) ? !(k in data) : stableDigest(data[k] ?? null) === stableDigest(r.before[k]));
+  const isRestored = (data: Record<string, unknown>, r: Row) => Object.keys(r.patch).every(k => stableDigest(data[k] ?? null) === stableDigest(r.absent.has(k) ? null : r.before[k]));
   for (let i = 0; i < rows.length; i += 100) {
     const part: Row[] = rows.slice(i, i + 100);
     await db.runTransaction(async tx => {
@@ -103,7 +103,7 @@ export async function restoreFirstRegistration(options: { backupPath: string; ex
         const r = part[j]!; const data = (snap.data() ?? {}) as Record<string, unknown>;
         if (isRestored(data, r)) return;                                   // 이미 이전 값 — 건너뜀
         if (!isApplied(data, r)) throw new Error('FIRST_REGISTRATION_RESTORE_REVISION_CHANGED');
-        if (options.apply) tx.update(snap.ref, Object.fromEntries(Object.keys(r.patch).map(k => [k, r.absent.has(k) ? FieldValue.delete() : r.before[k]])));
+        if (options.apply) tx.update(snap.ref, Object.fromEntries(Object.keys(r.patch).map(k => [k, r.absent.has(k) ? null : r.before[k]])));
       });
     });
   }
