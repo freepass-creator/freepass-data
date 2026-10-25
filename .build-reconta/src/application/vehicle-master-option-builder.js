@@ -1,0 +1,212 @@
+import { deterministicVehicleMasterId, deterministicVehicleMasterRecordId, sealVehicleMasterCompatibilityRule, sealVehicleMasterNode, sealVehicleMasterPriceRevision, } from '../domain/vehicle-master.js';
+function normalized(value) {
+    return value
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[()[\]{}]/g, ' ')
+        .replace(/[^0-9a-z가-힣.]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+function observations(fieldPath, value, sourceDocumentIds) {
+    return [...new Set(sourceDocumentIds)].sort().map((sourceDocumentId) => ({
+        fieldPath,
+        value,
+        sourceDocumentId,
+    }));
+}
+function policy(requiredFieldPaths) {
+    return {
+        requiredFieldPaths,
+        minCorroboratingSourcesWithoutOfficial: 2,
+    };
+}
+function isPackage(option) {
+    return option.kind === 'OPTION' && (option.packageItems.length > 0 ||
+        /패키지/.test(option.name));
+}
+function nodeTypeFor(option) {
+    if (option.kind === 'COLOR')
+        return 'COLOR';
+    return isPackage(option) ? 'PACKAGE' : 'OPTION';
+}
+function priceTypeFor(option) {
+    if (option.kind === 'COLOR')
+        return 'COLOR';
+    return isPackage(option) ? 'PACKAGE' : 'OPTION';
+}
+export function buildVehicleMasterOptionProposalSet(input) {
+    const revision = input.revision ?? 1;
+    const trim = input.trimProposalSet.trim.record;
+    const modelYearId = input.trimProposalSet.modelYear.record.id;
+    const modelYearRefs = {
+        makeId: trim.refs.makeId ?? null,
+        modelId: trim.refs.modelId ?? null,
+        generationId: trim.refs.generationId ?? null,
+        phaseId: trim.refs.phaseId ?? null,
+        modelYearId,
+    };
+    const structuralSelections = [];
+    const canonicalOptions = input.reconciled.options.filter((option) => {
+        if (option.kind === 'SEATS' || option.kind === 'DRIVETRAIN') {
+            structuralSelections.push({
+                kind: option.kind,
+                name: option.name,
+                price: option.price,
+                sourceDocumentIds: option.sourceDocumentIds,
+            });
+            return false;
+        }
+        return true;
+    });
+    const nodeIdByLabel = new Map();
+    for (const option of canonicalOptions) {
+        const nodeType = nodeTypeFor(option);
+        const id = deterministicVehicleMasterId(nodeType, {
+            modelYearId,
+            identity: normalized(option.name),
+            selectionKind: option.kind,
+        });
+        nodeIdByLabel.set(normalized(option.name), id);
+    }
+    const unresolvedConditions = [];
+    const options = canonicalOptions.map((option) => {
+        const nodeType = nodeTypeFor(option);
+        const nodeId = nodeIdByLabel.get(normalized(option.name));
+        const node = sealVehicleMasterNode({
+            id: nodeId,
+            nodeType,
+            status: 'ACTIVE',
+            revision,
+            canonicalName: option.name,
+            parentId: modelYearId,
+            refs: modelYearRefs,
+            aliases: [],
+            attributes: {
+                selectionKind: option.kind,
+                note: option.note,
+                packageItems: option.packageItems,
+            },
+            sourceEvidenceIds: option.sourceDocumentIds,
+            effectiveFrom: null,
+            effectiveTo: null,
+            createdAt: input.observedAt,
+            updatedAt: input.observedAt,
+        });
+        const nodeUnit = {
+            record: node,
+            observations: observations('canonicalName', option.name, option.sourceDocumentIds),
+            policy: policy(['canonicalName']),
+        };
+        let priceUnit = null;
+        if (option.price !== null) {
+            const price = sealVehicleMasterPriceRevision({
+                id: deterministicVehicleMasterRecordId('price', {
+                    targetId: nodeId,
+                    priceType: priceTypeFor(option),
+                    effectiveFrom: input.reconciled.effectiveFrom,
+                    revision,
+                }),
+                targetId: nodeId,
+                priceType: priceTypeFor(option),
+                amount: option.price,
+                currency: 'KRW',
+                revision,
+                sourceEvidenceIds: option.sourceDocumentIds,
+                sourceDocumentIds: option.sourceDocumentIds,
+                effectiveFrom: input.reconciled.effectiveFrom,
+                effectiveTo: null,
+                createdAt: input.observedAt,
+                updatedAt: input.observedAt,
+            });
+            priceUnit = {
+                record: price,
+                observations: [
+                    ...observations('amount', option.price, option.sourceDocumentIds),
+                    ...observations('currency', 'KRW', option.sourceDocumentIds),
+                ],
+                policy: policy(['amount', 'currency']),
+            };
+        }
+        const availability = sealVehicleMasterCompatibilityRule({
+            id: deterministicVehicleMasterRecordId('rule', {
+                subjectId: nodeId,
+                ruleType: 'AVAILABLE_IF',
+                trimId: trim.id,
+            }),
+            revision,
+            subjectId: nodeId,
+            ruleType: 'AVAILABLE_IF',
+            targetIds: [],
+            scope: { trimId: trim.id },
+            condition: { sourceLabel: option.name },
+            effect: 'VALID',
+            priority: 100,
+            sourceEvidenceIds: option.sourceDocumentIds,
+            effectiveFrom: null,
+            effectiveTo: null,
+            createdAt: input.observedAt,
+            updatedAt: input.observedAt,
+        });
+        const availabilityUnit = {
+            record: availability,
+            observations: observations('condition.sourceLabel', option.name, option.sourceDocumentIds),
+            policy: policy(['condition.sourceLabel']),
+        };
+        const dependencies = [];
+        for (const condition of option.conditions) {
+            const targetId = nodeIdByLabel.get(normalized(condition.targetLabel));
+            if (!targetId) {
+                unresolvedConditions.push({
+                    optionName: option.name,
+                    relation: condition.relation,
+                    targetLabel: condition.targetLabel,
+                    raw: condition.raw,
+                    sourceDocumentIds: option.sourceDocumentIds,
+                });
+                continue;
+            }
+            const rule = sealVehicleMasterCompatibilityRule({
+                id: deterministicVehicleMasterRecordId('rule', {
+                    subjectId: nodeId,
+                    ruleType: condition.relation,
+                    targetId,
+                    trimId: trim.id,
+                }),
+                revision,
+                subjectId: nodeId,
+                ruleType: condition.relation,
+                targetIds: [targetId],
+                scope: { trimId: trim.id },
+                condition: {
+                    targetLabel: condition.targetLabel,
+                    raw: condition.raw,
+                },
+                effect: condition.relation === 'EXCLUDES' ? 'INVALID' : 'VALID',
+                priority: 200,
+                sourceEvidenceIds: option.sourceDocumentIds,
+                effectiveFrom: null,
+                effectiveTo: null,
+                createdAt: input.observedAt,
+                updatedAt: input.observedAt,
+            });
+            dependencies.push({
+                record: rule,
+                observations: observations('condition.targetLabel', condition.targetLabel, option.sourceDocumentIds),
+                policy: policy(['condition.targetLabel']),
+            });
+        }
+        return {
+            source: option,
+            node: nodeUnit,
+            price: priceUnit,
+            availability: availabilityUnit,
+            dependencies,
+        };
+    });
+    return {
+        options,
+        structuralSelections: structuralSelections.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
+        unresolvedConditions,
+    };
+}

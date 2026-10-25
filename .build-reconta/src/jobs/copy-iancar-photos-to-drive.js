@@ -1,0 +1,189 @@
+/** 이안카 사진 → 우리 공유 드라이브 압축 사본 복사 잡(설계: docs/IANCAR-PHOTO-DRIVE-DESIGN-20261014.md).
+ *   npm run copy:iancar-photos -- [--mode DRY_RUN|PILOT|FULL] [--out <등록용.csv>]
+ * 모드 3단: DRY_RUN(기본, 쓰기 0: 상세·드라이브 읽기만) → PILOT(IANCAR_PHOTO_PILOT_ONLY=N, 기본 10대) → FULL.
+ * PILOT/FULL 은 IANCAR_PHOTO_COPY_APPROVED=true 가 있어야 쓴다. 쓰기 주체 = 이미 로그인된 gws 계정(키 파일·서비스 계정 없음).
+ * 환경: EANCAR_ONE_API_KEY(+선택 BASE_URL), IANCAR_PHOTO_DRIVE_ROOT_ID(공유 드라이브 «이안카» 폴더 id — 저장소에 두지 않는다), GWS_BIN(선택),
+ *   한도: IANCAR_PHOTO_COPY_MAX_VEHICLES(40)·MAX_PHOTOS(400)·MAX_PER_VEHICLE(10)·TIME_BUDGET_MIN(40)·INTERVAL_MS(1500, 최소 1000)·PILOT_ONLY(10).
+ * 출력: 번호는 끝 4자리만. 키·사진 URL·응답 본문은 어디에도 쓰지 않는다. 등록용 CSV(전체 번호)는 --out(비공개 디렉터리)에만 쓴다. */
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
+import { collectIancarOneVehicleList, createIancarOneApiClient, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes, IancarOneApiError } from '../adapters/iancar-one-api.js';
+import { renderVehiclePhotoRendition } from '../adapters/vehicle-photo-rendition.js';
+import { createGwsPhotoDrive, gwsRunner } from '../infra/gws-photo-drive.js';
+import { resolveGwsBin } from '../infra/gws-bin.js';
+import { DEFAULT_PHOTO_COPY_LIMITS, photoCopyCsv, runIancarPhotoCopy } from '../application/iancar-photo-drive-copy.js';
+/** 사진 복사의 «원천 준비» 판정. 재고를 게시하는 엔진 회차(15분 신선도)와 달리 사진은 id 로 고정된 불변 자료이고 차량별 상세가 stale=false 를 다시 확인하므로,
+ * 목록의 «신선도 초과»(동기화 시각이 15분보다 오래됨)만으로는 막지 않는다 — 그 값은 공급사 동기화 주기(20~60분) 때문에 정시 직후 창 밖에서는 늘 걸린다.
+ * 막는 것: 공급사가 stale 로 표시, 동기화 시각이 maxAge(기본 3시간)보다 오래됨(상류 정지), 시각 이상·행 수/페이지 정합 이상 등 «신선도 초과 외» 이슈 전부. */
+/** 출력해도 되는 준비 거부 코드(허용 목록). 목록에 없는 이슈는 IANCAR_ONE_OTHER_ISSUE 로만 알린다(원천 문자열을 그대로 내보내지 않는다). */
+export const PHOTO_READY_CODES = new Set([
+    'IANCAR_ONE_SOURCE_TIME_IN_FUTURE', 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED', 'IANCAR_ONE_PAGINATION_METADATA_DRIFT', 'IANCAR_ONE_SYNC_TIME_DRIFT',
+    'IANCAR_ONE_SOURCE_STALE', 'IANCAR_ONE_PAGINATION_TOTAL_MISMATCH', 'IANCAR_ONE_EMPTY_INVENTORY_REQUIRES_REVIEW',
+    'IANCAR_ONE_SYNC_TOO_OLD', 'IANCAR_ONE_SYNCED_AT_INVALID', 'IANCAR_ONE_OTHER_ISSUE'
+]);
+export function photoSourceReadiness(capture, nowMs, maxAgeMs) {
+    const codes = new Set(capture.issues.filter(code => code !== 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED')
+        .map(code => (PHOTO_READY_CODES.has(code) ? code : 'IANCAR_ONE_OTHER_ISSUE')));
+    if (capture.stale)
+        codes.add('IANCAR_ONE_SOURCE_STALE');
+    const synced = Date.parse(capture.syncedAt);
+    if (!Number.isFinite(synced))
+        codes.add('IANCAR_ONE_SYNCED_AT_INVALID');
+    else if (nowMs - synced > maxAgeMs)
+        codes.add('IANCAR_ONE_SYNC_TOO_OLD');
+    return { ready: codes.size === 0, codes: [...codes].sort() };
+}
+const photoSourceMaxAgeMs = (env) => int(env.IANCAR_PHOTO_COPY_MAX_SOURCE_AGE_MIN, 180, 15, 24 * 60) * 60_000;
+/** FULL 모드 승인 확인 값: 대상 «이안카» 폴더 id 에 묶인 해시(다른 폴더·실수로 복사한 값은 통하지 않는다). 파일럿 합격 뒤 사람이 이 값을 환경에 넣는다. */
+export const fullApprovalToken = (rootFolderId) => createHash('sha256').update(`iancar-photo-copy-full/1\n${rootFolderId}`).digest('hex').slice(0, 16);
+const SELLABLE = new Set(['AVAILABLE', 'PREPARING', 'RESERVED']); // 판매 노출 상태(IANCAR-ONE-API.md 매핑): 출고가능·상품화중·계약중
+const int = (value, fallback, min, max) => {
+    if (value === undefined || value === '')
+        return fallback;
+    const n = Number(value);
+    if (!Number.isSafeInteger(n) || n < min || n > max)
+        throw new Error('PHOTO_COPY_LIMIT_INVALID');
+    return n;
+};
+export function photoCopyLimitsFromEnv(env = process.env) {
+    const d = DEFAULT_PHOTO_COPY_LIMITS;
+    return {
+        maxVehicles: int(env.IANCAR_PHOTO_COPY_MAX_VEHICLES, d.maxVehicles, 1, 200),
+        maxPhotos: int(env.IANCAR_PHOTO_COPY_MAX_PHOTOS, d.maxPhotos, 1, 2000),
+        maxPerVehicle: int(env.IANCAR_PHOTO_COPY_MAX_PER_VEHICLE, d.maxPerVehicle, 1, 10),
+        timeBudgetMs: int(env.IANCAR_PHOTO_COPY_TIME_BUDGET_MIN, d.timeBudgetMs / 60_000, 1, 180) * 60_000,
+        intervalMs: int(env.IANCAR_PHOTO_COPY_INTERVAL_MS, d.intervalMs, 1000, 60_000),
+        maxConsecutiveFailures: d.maxConsecutiveFailures,
+        maxConsecutiveStale: int(env.IANCAR_PHOTO_COPY_MAX_CONSECUTIVE_STALE, d.maxConsecutiveStale, 1, 100),
+        pilotOnly: int(env.IANCAR_PHOTO_PILOT_ONLY, d.pilotOnly, 1, 100),
+    };
+}
+/** 502/503/504 를 클라이언트 내장 재시도에 넘기지 않는다(실패 재시도 0): 합성 상태 599 → IANCAR_ONE_API_HTTP_599(일시 오류)로 한 번에 끝난다. */
+const noTransientRetry = async (input, init) => {
+    const response = await fetch(input, init);
+    if ([502, 503, 504].includes(response.status)) {
+        await response.body?.cancel();
+        return new Response(null, { status: 599 });
+    }
+    return response;
+};
+export function createIancarPhotoSource(env = process.env) {
+    const config = iancarOneApiConfigFromEnv(env);
+    if (!config.apiKey)
+        throw new Error('IANCAR_ONE_API_KEY_REQUIRED');
+    const client = createIancarOneApiClient(config, noTransientRetry);
+    const plates = new Map();
+    return {
+        async listVehicles() {
+            const capture = await collectIancarOneVehicleList(config, noTransientRetry);
+            const readiness = photoSourceReadiness(capture, Date.now(), photoSourceMaxAgeMs(env));
+            if (!readiness.ready)
+                throw Object.assign(new Error('IANCAR_SOURCE_NOT_READY'), { detail: readiness.codes }); // 상류 정지(공급사 stale·동기화 수 시간 초과)·정합 이상 중에는 복사하지 않는다
+            const out = [];
+            for (const record of capture.records) {
+                const payload = record.payload;
+                const plate = typeof payload.plate_number === 'string' ? payload.plate_number.replace(/\s+/g, '') : '';
+                const status = typeof payload.inventory_status === 'string' ? payload.inventory_status : '';
+                if (!plate || !SELLABLE.has(status))
+                    continue;
+                const labelRaw = payload.model_name ?? payload.name;
+                plates.set(record.vehicleId, plate);
+                out.push({ vehicleId: record.vehicleId, plate, ...(typeof labelRaw === 'string' && labelRaw.trim() ? { label: labelRaw } : {}) });
+            }
+            return out;
+        },
+        async photoIds(vehicle) {
+            const detail = await client.getVehicle(vehicle.vehicleId);
+            const raw = (detail?.data ?? detail);
+            if (raw && Array.isArray(raw.photos) && raw.photos.length === 0 && raw.stale === false)
+                return []; // 원천에 사진 없음 = «대상 없음»
+            const ids = iancarOnePhotoIds(detail, vehicle.vehicleId, plates.get(vehicle.vehicleId) ?? vehicle.plate);
+            // 상세 갱신 시각(details_updated_at): 폴더 완료 표식에 함께 남기는 «바뀐 차량» 신호(문자열 ISO 만, 아니면 없음).
+            const updated = typeof raw?.details_updated_at === 'string' && Number.isFinite(Date.parse(raw.details_updated_at)) ? raw.details_updated_at : null;
+            return { ids, version: updated };
+        },
+        async download(vehicle, photoId) {
+            return readIancarOnePhotoBytes(await client.getPhoto(vehicle.vehicleId, photoId));
+        },
+    };
+}
+/** 드라이브 사본 압축: 기본 긴 변 800px·품질 72(mozjpeg) — 대표 2026-10-14 «이안카 사진 더 줄여서». 이전 960px·80 의 약 절반 크기.
+ * IANCAR_PHOTO_MAX_EDGE(480~1600)·IANCAR_PHOTO_QUALITY(50~90)로 바꿀 수 있다. 범위 밖 값은 시작 전에 거부. */
+export function iancarPhotoCompression(env) {
+    const num = (value, fallback, min, max, code) => {
+        if (value === undefined || value.trim() === '')
+            return fallback;
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < min || n > max)
+            throw new Error(code);
+        return n;
+    };
+    return { maxEdge: num(env.IANCAR_PHOTO_MAX_EDGE, 800, 480, 1600, 'IANCAR_PHOTO_MAX_EDGE_INVALID'),
+        quality: num(env.IANCAR_PHOTO_QUALITY, 72, 50, 90, 'IANCAR_PHOTO_QUALITY_INVALID') };
+}
+export async function iancarPhotoCopyCli(argv, env = process.env, log = console.log) {
+    const flag = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
+    const mode = (flag('--mode') ?? env.IANCAR_PHOTO_COPY_MODE ?? 'DRY_RUN');
+    if (!['DRY_RUN', 'PILOT', 'FULL'].includes(mode))
+        throw new Error('PHOTO_COPY_MODE_INVALID');
+    if (mode !== 'DRY_RUN' && env.IANCAR_PHOTO_COPY_APPROVED !== 'true')
+        throw new Error('IANCAR_PHOTO_COPY_APPROVAL_REQUIRED');
+    const rootFolderId = (env.IANCAR_PHOTO_DRIVE_ROOT_ID ?? '').trim();
+    if (!rootFolderId)
+        throw new Error('IANCAR_PHOTO_DRIVE_ROOT_ID_REQUIRED');
+    // FULL 은 파일럿 한도(PILOT_ONLY)를 우회하는 모드이므로 «파일럿 합격 후 사람이 만든 확인 값» 이 있어야 한다: 값 = fullApprovalToken(대상 폴더에 묶임).
+    if (mode === 'FULL' && env.IANCAR_PHOTO_FULL_APPROVED !== fullApprovalToken(rootFolderId))
+        throw new Error('IANCAR_PHOTO_FULL_APPROVAL_REQUIRED');
+    const bin = resolveGwsBin(env);
+    if (!bin)
+        throw new Error('GWS_UNAVAILABLE');
+    const limits = photoCopyLimitsFromEnv(env);
+    iancarPhotoCompression(env); // 잘못된 압축 값은 쓰기 전에 거부
+    // 업로드 임시 폴더 = gws 실행의 작업 폴더(gws --upload 는 작업 폴더 안 파일만 받는다). 실행 전에 만들어 둔다.
+    const tempDir = join(env.SOURCE_CYCLE_PRIVATE_DIR || tmpdir(), 'iancar-photo-copy-tmp');
+    mkdirSync(tempDir, { recursive: true });
+    // 등록 목록(--out)은 항상 «이번 회차 결과»만 담는다(Codex 재검토 ②): 시작 때 헤더만 있는 CSV 로 덮어써 두어, 회차가 예외로 끝나거나 완료 차량이 0대여도
+    // 이전 회차 목록이 남아 등록되는 일이 없다.
+    const out = flag('--out');
+    if (out)
+        writeFileSync(resolve(out), photoCopyCsv({ completed: [] }), { mode: 0o600 });
+    const result = await runIancarPhotoCopy({
+        source: createIancarPhotoSource(env),
+        compress: input => renderVehiclePhotoRendition(input, 'detail', iancarPhotoCompression(env)),
+        drive: createGwsPhotoDrive({ run: gwsRunner(bin, { cwd: tempDir }), rootFolderId, tempDir }),
+        sleep: ms => new Promise(r => setTimeout(r, ms)),
+        now: Date.now,
+    }, mode, limits);
+    if (out)
+        writeFileSync(resolve(out), photoCopyCsv(result), { mode: 0o600 });
+    // 보고: 번호는 끝 4자리, 코드·건수만. completed(전체 번호)는 출력하지 않는다.
+    // 요약 구분: stale 로 건너뛴 차량이 남았으면 «미완(incomplete)» — 실패는 아니지만 다음 회차에 마저 처리해야 한다(종료 코드 3). 갱신 시각이 바뀐 완료 차량 수도 알린다.
+    const skippedStale = result.counts.SKIPPED_STALE;
+    const detailsUpdated = result.rows.filter(r => r.code === 'DETAILS_UPDATED_AT_CHANGED').length;
+    log(JSON.stringify({ mode, stop: result.stop, vehicles: result.vehicles, counts: result.counts, photosWritten: result.photosWritten,
+        skippedStale, incomplete: skippedStale > 0 || result.stop === 'SOURCE_STALE', detailsUpdatedSinceCopy: detailsUpdated,
+        // 확인 값은 명시 요청(--print-full-token)이 있을 때만 DRY_RUN 결과에 싣는다(파일럿 합격 뒤 사람이 의도적으로 꺼내 환경에 넣는 값).
+        ...(mode === 'DRY_RUN' && argv.includes('--print-full-token') ? { fullApprovalToken: fullApprovalToken(rootFolderId) } : {}),
+        bytesWritten: result.bytesWritten, limits: { maxVehicles: limits.maxVehicles, maxPhotos: limits.maxPhotos, maxPerVehicle: limits.maxPerVehicle,
+            pilotOnly: mode === 'PILOT' ? limits.pilotOnly : null }, rows: result.rows }, null, 2));
+    return result;
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+    iancarPhotoCopyCli(process.argv.slice(2)).then(result => {
+        // 종료 코드: 0 정상 · 1 실패·한도·상류 정지로 중단 · 2 설정 오류 · 3 미완(stale 로 건너뛴 차량이 남음, 실패 아님).
+        if (['RATE_LIMITED', 'CONSECUTIVE_FAILURES', 'SOURCE_STALE'].includes(result.stop) || result.counts.FAILED > 0)
+            process.exitCode = 1;
+        else if (result.counts.SKIPPED_STALE > 0)
+            process.exitCode = 3;
+    }).catch(error => {
+        const code = error instanceof IancarOneApiError ? error.code : error instanceof Error && /^[A-Z0-9_]{3,64}$/.test(error.message) ? error.message : 'PHOTO_COPY_ERROR';
+        // 준비 판정 거부는 원인 코드(issues)만 함께 낸다: 값·번호·URL 없음.
+        const detail = error && typeof error === 'object' && Array.isArray(error.detail)
+            ? (error.detail.filter((c) => typeof c === 'string' && PHOTO_READY_CODES.has(c))) : [];
+        console.error(detail.length ? `${code} ${detail.join(',')}` : code);
+        process.exitCode = 2;
+    });
+}

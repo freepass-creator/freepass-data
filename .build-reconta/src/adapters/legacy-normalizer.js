@@ -1,0 +1,128 @@
+import { assessDepositEvidence, depositEvidenceInputFromProduct, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+const COMMERCIAL_TYPE = {
+    '신차렌트': 'NEW_RENT',
+    '중고렌트': 'USED_RENT',
+    '재렌트': 'USED_RENT',
+    '신차구독': 'NEW_SUBSCRIPTION',
+    '중고구독': 'USED_SUBSCRIPTION',
+    '재구독': 'USED_SUBSCRIPTION',
+    '오공구독': 'OGONG_SUBSCRIPTION',
+    '픽업구독': 'PICKUP_SUBSCRIPTION'
+};
+const text = (value) => {
+    const v = String(value ?? '').trim();
+    return v || undefined;
+};
+const int = (value) => {
+    if (value === '' || value == null)
+        return undefined;
+    const n = Number(String(value).replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? Math.trunc(n) : undefined;
+};
+function money(value) {
+    if (value === '' || value == null)
+        return undefined;
+    const amount = int(value);
+    if (amount == null || amount < 0)
+        return null;
+    return { amount, currency: 'KRW' };
+}
+function parsePriceKey(sourceKey) {
+    const match = sourceKey.trim().match(/^(\d+)(?:_(\d+)만)?$/);
+    if (!match?.[1])
+        return null;
+    return {
+        termMonths: Number(match[1]),
+        ...(match[2] ? { mileageLimitKmPerYear: Number(match[2]) * 10000 } : {})
+    };
+}
+function parsePriceTerms(data, issues) {
+    const price = data.price;
+    if (!price || typeof price !== 'object' || Array.isArray(price))
+        return [];
+    const out = [];
+    for (const [sourceKey, rawTerms] of Object.entries(price)) {
+        const key = parsePriceKey(sourceKey);
+        if (!key) {
+            issues.push(`UNSUPPORTED_PRICE_KEY:${sourceKey}`);
+            continue;
+        }
+        if (!rawTerms || typeof rawTerms !== 'object' || Array.isArray(rawTerms)) {
+            issues.push(`INVALID_PRICE_TERMS:${sourceKey}`);
+            continue;
+        }
+        const terms = rawTerms;
+        const monthlyRent = money(terms.rent);
+        if (!monthlyRent) {
+            issues.push(`MISSING_OR_INVALID_RENT:${sourceKey}`);
+            continue;
+        }
+        const evidence = assessDepositEvidence(depositEvidenceInputFromProduct(data, terms.deposit, {
+            termMonths: key.termMonths, hasPositivePaidDeposit: hasConflictingPaidDeposit(price)
+        }));
+        if (evidence.state === 'UNKNOWN')
+            issues.push(`DEPOSIT_REVIEW_REQUIRED:${sourceKey}:${evidence.reason}`);
+        const deposit = {
+            depositState: evidence.state,
+            deposit: evidence.amount === null ? null : { amount: evidence.amount, currency: 'KRW' }
+        };
+        out.push({
+            termKey: `source:${sourceKey}`,
+            termMonths: key.termMonths,
+            monthlyRent,
+            ...deposit,
+            ...('mileageLimitKmPerYear' in key
+                ? { mileageLimitKmPerYear: key.mileageLimitKmPerYear }
+                : {})
+        });
+    }
+    return out.sort((a, b) => a.termMonths - b.termMonths ||
+        (a.mileageLimitKmPerYear ?? 0) - (b.mileageLimitKmPerYear ?? 0));
+}
+export function normalizeLegacyProduct(raw) {
+    const d = raw.data;
+    const issues = [];
+    const productTypeRaw = text(d.product_type);
+    const commercialType = productTypeRaw ? COMMERCIAL_TYPE[productTypeRaw] : undefined;
+    if (productTypeRaw && !commercialType)
+        issues.push(`UNKNOWN_PRODUCT_TYPE:${productTypeRaw}`);
+    const model = text(d.model);
+    if (!model)
+        issues.push('MISSING_MODEL');
+    const productCode = text(d.product_code);
+    const carNumber = text(d.car_number);
+    const maker = text(d.maker);
+    const subModel = text(d.sub_model);
+    const trimName = text(d.trim_name);
+    const providerCompanyCode = text(d.provider_company_code);
+    const policyCode = text(d.policy_code);
+    const vehicleStatusRaw = text(d.vehicle_status);
+    const year = text(d.year);
+    const fuelType = text(d.fuel_type);
+    const mileageKm = int(d.mileage);
+    const driveType = text(d.drive_type);
+    const seats = int(d.seats);
+    const origin = text(d.origin);
+    return {
+        sourceRecordId: raw.sourceRecordId,
+        sourceFingerprint: raw.fingerprint,
+        ...(productCode ? { productCode } : {}),
+        ...(carNumber ? { carNumber } : {}),
+        ...(maker ? { maker } : {}),
+        ...(model ? { model } : {}),
+        ...(subModel ? { subModel } : {}),
+        ...(trimName ? { trimName } : {}),
+        ...(commercialType ? { commercialType } : {}),
+        ...(providerCompanyCode ? { providerCompanyCode } : {}),
+        ...(policyCode ? { policyCode } : {}),
+        ...(vehicleStatusRaw ? { vehicleStatusRaw } : {}),
+        ...(year ? { year } : {}),
+        ...(fuelType ? { fuelType } : {}),
+        ...(mileageKm !== undefined ? { mileageKm } : {}),
+        ...(driveType ? { driveType } : {}),
+        ...(seats !== undefined ? { seats } : {}),
+        ...(origin ? { origin } : {}),
+        priceTerms: parsePriceTerms(d, issues),
+        issues
+    };
+}

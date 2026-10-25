@@ -9,6 +9,8 @@ const fuelKey = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').t
 /** 별칭 → 표준 이름. 표준 이름 자신(공백만 다른 «플러그인하이브리드» 포함)도 키로 들어간다. */
 export const FUEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   휘발유: '가솔린',
+  // 손오공 API 에 영문 코드 «GASOLINE» 이 한 대(2026-10-23 RP012 6331) 들어와 FUEL_UNRESOLVED 로 연료가 비었다. 비교 키가 대소문자를 무시하므로 «gasoline» 도 같다.
+  GASOLINE: '가솔린',
   경유: '디젤',
   HEV: '하이브리드',
   // 손오공 API «가솔린+전기» 는 하이브리드 표기다(2026-10-19 판매 중 73대 전부 차명에 «하이브리드/HEV», 마스터 확정 10대 모두 vehicle_trim_master.fuel=하이브리드).

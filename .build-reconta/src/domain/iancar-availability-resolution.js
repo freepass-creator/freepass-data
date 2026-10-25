@@ -1,0 +1,61 @@
+export const IANCAR_AVAILABILITY_RULE_VERSION = 'iancar-availability-resolution/2';
+const explicit = new Map([
+    ['예약', ['예약중', 'RESERVED']], ['예약중', ['예약중', 'RESERVED']], ['계약중', ['예약중', 'RESERVED']],
+    ['판매', ['판매완료', 'SOLD']], ['판매완료', ['판매완료', 'SOLD']], ['출고불가', ['출고불가', 'UNAVAILABLE']]
+]);
+const revision = (value) => typeof value === 'string' && value.trim().length > 0 && value === value.trim();
+const instant = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)
+    && Number.isFinite(Date.parse(value));
+/**
+ * CREATE_NEW_JUSTIFIED: the existing ERP5 mapper interprets one published record. It cannot
+ * resolve two independent upstream observations without losing absence and precedence evidence.
+ * This pure function performs no reads or writes and never authorizes deletion.
+ */
+export function resolveIancarAvailability(input) {
+    if (!input || typeof input !== 'object' || typeof input.erp?.observed !== 'boolean'
+        || typeof input.sheet?.observed !== 'boolean' || typeof input.previouslyRegistered !== 'boolean'
+        || typeof input.erp.coverageComplete !== 'boolean' || typeof input.erp.freshnessVerified !== 'boolean'
+        || typeof input.sheet.coverageComplete !== 'boolean' || typeof input.sheet.freshnessVerified !== 'boolean'
+        || !revision(input.erp.sourceRevision) || !instant(input.erp.observedAt)
+        || !revision(input.sheet.sourceRevision) || !instant(input.sheet.observedAt)) {
+        throw new Error('INVALID_IANCAR_AVAILABILITY_INPUT');
+    }
+    const raw = input.erp.explicitState;
+    if (raw !== undefined && raw !== null && (typeof raw !== 'string' || !raw.trim() || raw !== raw.trim())) {
+        throw new Error('INVALID_IANCAR_ERP_EXPLICIT_STATE');
+    }
+    const base = { ruleVersion: IANCAR_AVAILABILITY_RULE_VERSION, deleteAuthorized: false };
+    if (!input.erp.observed && raw)
+        throw new Error('ERP_STATE_WITHOUT_OBSERVATION');
+    const erpTrusted = input.erp.coverageComplete && input.erp.freshnessVerified;
+    if (!erpTrusted)
+        return {
+            ...base,
+            sourceDecision: input.erp.observed ? 'IANCAR_ERP' : input.sheet.observed ? 'IANCAR_SHEET' : 'NONE',
+            state: '미관측', canonicalStatus: 'HOLD', reviewRequired: true,
+            reasons: ['IANCAR_ERP_EVIDENCE_NOT_CURRENT_AND_COMPLETE']
+        };
+    if (input.erp.observed) {
+        if (raw) {
+            const mapped = explicit.get(raw);
+            if (!mapped)
+                return { ...base, sourceDecision: 'IANCAR_ERP', state: '미관측', canonicalStatus: 'HOLD',
+                    reviewRequired: true, reasons: ['UNKNOWN_EXPLICIT_ERP_STATE', 'ERP_VALUE_MUST_NOT_BE_GUESSED'] };
+            return { ...base, sourceDecision: 'IANCAR_ERP', state: mapped[0], canonicalStatus: mapped[1],
+                reviewRequired: false, reasons: ['EXPLICIT_ERP_STATE'] };
+        }
+        return { ...base, sourceDecision: 'IANCAR_ERP', state: '출고가능', canonicalStatus: 'AVAILABLE',
+            reviewRequired: false, reasons: input.sheet.observed ? ['ERP_PRECEDENCE_OVER_SHEET'] : ['OBSERVED_IN_IANCAR_ERP'] };
+    }
+    if (input.sheet.observed || input.previouslyRegistered)
+        return {
+            ...base,
+            sourceDecision: 'IANCAR_ERP',
+            state: '출고불가',
+            canonicalStatus: 'UNAVAILABLE',
+            reviewRequired: false,
+            reasons: ['ABSENT_FROM_CURRENT_COMPLETE_IANCAR_ERP']
+        };
+    return { ...base, sourceDecision: 'NONE', state: '미관측', canonicalStatus: 'NO_CANDIDATE',
+        reviewRequired: false, reasons: ['NOT_OBSERVED_OR_REGISTERED'] };
+}

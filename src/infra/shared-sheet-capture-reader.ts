@@ -49,8 +49,11 @@ function sheetsViaGws(url: URL, env: NodeJS.ProcessEnv): unknown {
     out = execFileSync(bin, [...args, '--params', JSON.stringify(params)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     // gws 실패는 «Command failed» 한 줄뿐이라 원인을 알 수 없었다(2026-10-13 RP017 READ_FAILED). 표준 오류에서 상태만 뽑아 코드로 남기고 본문은 남기지 않는다.
-    const err = e as NodeJS.ErrnoException & { stderr?: string | Buffer; status?: number | null; signal?: string | null };
+    const err = e as NodeJS.ErrnoException & { stderr?: string | Buffer; status?: number | null; stdout?: string | Buffer; signal?: string | null };
     const text = String(err.stderr ?? '');
+    // gws 는 API 오류 본문을 stdout JSON 으로 낸다(error.code). 코드 숫자만 남기고 메시지·값은 남기지 않는다.
+    const apiCode = /"code"\s*:\s*(\d{3})/.exec(String(err.stdout ?? ''))?.[1];
+    if (apiCode) throw new Error(`SHARED_SHEET_API_${apiCode}`);
     if (err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM') throw new Error('SHARED_SHEET_GWS_TIMEOUT');
     const http = /\b(429|401|403|5\d\d)\b/.exec(text)?.[1];
     if (http) throw new Error(`SHARED_SHEET_HTTP_${http}`);

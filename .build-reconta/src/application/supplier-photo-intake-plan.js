@@ -1,0 +1,167 @@
+/** 공급사 사진 인입 «계획»(구현 ② — 쓰기 0): freepasspics/<공급사>/<번호 차종>/ 폴더 ↔ 상품 문서 매칭, 서류 제외 분류, 상한 적용.
+ *  설계: docs/KAKAO-PHOTO-TO-PRODUCT-DESIGN-20261016.md. 순수 로직 — 드라이브·Firestore 를 만지지 않는다(입력은 호출자가 읽어 준 스냅숏).
+ *  원칙: 불확실하면 보류(fail-closed). 번호 매칭 키는 «같은 공급사 안 전체 번호»이며 끝 4자리는 표시 전용이다. */
+import { folderMatchesPlate, plateFromFolderName } from '../domain/photo-folder-match.js';
+export const INTAKE_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'];
+export const INTAKE_MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const INTAKE_MAX_PHOTOS_PER_VEHICLE = 200;
+export const INTAKE_MAX_VEHICLES_PER_RUN = 50;
+/** 서류 의심이 이 비율 이상이면 폴더 통째 보류(서류 묶음일 가능성). */
+export const INTAKE_DOCUMENT_HOLD_RATIO = 0.5;
+/** 파일명에 들어 있으면 서류로 보는 표지. 늘리는 쪽으로만 바꾼다(시험으로 고정). */
+export const DOCUMENT_NAME_MARKERS = ['등록증', '자동차등록', '서류', '사업자', '보험', '계약', '신분', '면허', '인감', '명의', '통장', '견적', '영수'];
+const squashName = (v) => v.normalize('NFC').toLowerCase().replace(/\s+/g, '');
+export const isDocumentName = (name) => { const n = squashName(name); return DOCUMENT_NAME_MARKERS.some(m => n.includes(m)); };
+/** «사용X»(아이카 사용 금지 표지, 상위 설계 §2): 정확한 의미 확인 전까지 안전 쪽 해석 = 등록 제외. 파일명·폴더명에 들어 있으면 제외/보류. */
+export const USE_RESTRICTED_MARKERS = ['사용x', '사용불가', '사용금지'];
+export const isUseRestrictedName = (name) => { const n = squashName(name); return USE_RESTRICTED_MARKERS.some(m => n.includes(m)); };
+const isImage = (f) => f.mimeType !== null && INTAKE_IMAGE_MIME.includes(f.mimeType.toLowerCase());
+export const last4 = (plate) => String(plate).replace(/\D/g, '').slice(-4);
+const emptyCounts = () => ({ PLANNED: 0, SKIP_HAS_REFS: 0, HOLD_FOLDER_DUPLICATE: 0, HOLD_PRODUCT_NONE: 0, HOLD_PRODUCT_DUPLICATE: 0,
+    HOLD_DOCUMENT_RATIO: 0, HOLD_USE_RESTRICTED: 0, HOLD_DOCUMENT_FOLDER: 0, HOLD_NO_PHOTOS: 0, HOLD_OVER_RUN_CAP: 0, SKIP_FOLDER_UNPARSED: 0 });
+/** 파일 정렬 기준(등록 도구와 같은 값): 영문 로케일·숫자 인식(2 < 10). */
+export const intakeNameCompare = (a, b) => String(a).localeCompare(String(b), 'en', { numeric: true });
+/** 한 폴더의 직계 파일을 분류한다: 사진 후보와 제외 사유별 건수. 서류 표지·비이미지·큰 파일 제외, 상한 초과분은 이름순 뒤쪽을 제외. */
+export function classifyFolderFiles(files) {
+    const excluded = {};
+    const bump = (r) => { excluded[r] = (excluded[r] ?? 0) + 1; };
+    const kept = [];
+    let documentLike = 0;
+    for (const f of files) {
+        if (isUseRestrictedName(f.name)) {
+            bump('USE_RESTRICTED');
+            continue;
+        }
+        if (isDocumentName(f.name)) {
+            documentLike++;
+            bump('DOCUMENT_NAME');
+            continue;
+        }
+        // PDF 는 사진 폴더에서 서류로 본다(이름에 표지가 없어도 «001.pdf»): 서류 비율에 넣고 사진 후보에서 뺀다(Codex #690).
+        if ((f.mimeType ?? '').toLowerCase() === 'application/pdf') {
+            documentLike++;
+            bump('DOCUMENT_PDF');
+            continue;
+        }
+        if (!isImage(f)) {
+            bump('NOT_IMAGE');
+            continue;
+        }
+        if (!/^[a-f0-9]{64}$/.test(f.sha256 ?? '')) {
+            bump('NO_CHECKSUM');
+            continue;
+        }
+        if (f.size === null || f.size > INTAKE_MAX_FILE_BYTES || f.size <= 0) {
+            bump('FILE_TOO_LARGE');
+            continue;
+        }
+        kept.push(f);
+    }
+    kept.sort((a, b) => intakeNameCompare(a.name, b.name) || a.id.localeCompare(b.id));
+    const photos = kept.slice(0, INTAKE_MAX_PHOTOS_PER_VEHICLE);
+    for (let i = photos.length; i < kept.length; i++)
+        bump('OVER_PHOTO_CAP');
+    return { photos, excluded, documentLike, candidates: kept.length };
+}
+/** 서류 의심 비율 판정(계획 모듈과 등록 도구가 같은 함수를 쓴다 — Codex #690 재검토): 서류 표지 파일이 있고 «서류 / (사진 후보 + 서류)» 가 기준 이상이면 폴더 통째 보류. */
+export const isDocumentHeavy = (documentLike, photoCandidates) => documentLike > 0 && documentLike + photoCandidates > 0 && documentLike / (documentLike + photoCandidates) >= INTAKE_DOCUMENT_HOLD_RATIO;
+export function planSupplierIntake(input, options) {
+    const counts = emptyCounts();
+    const allowed = options.allowedSuppliers.has(input.supplierCode);
+    const maxVehicles = options.maxVehicles ?? INTAKE_MAX_VEHICLES_PER_RUN;
+    if (!allowed)
+        return { supplierCode: input.supplierCode, allowed: false, vehicles: [], counts, photosPlanned: 0, documentsExcluded: 0 };
+    const productsByPlate = new Map();
+    for (const p of input.products)
+        productsByPlate.set(p.plate, [...(productsByPlate.get(p.plate) ?? []), p]);
+    const foldersByPlate = new Map();
+    const vehicles = [];
+    for (const f of input.folders) {
+        const plate = plateFromFolderName(f.name);
+        if (!plate) {
+            counts.SKIP_FOLDER_UNPARSED++;
+            continue;
+        }
+        foldersByPlate.set(plate, [...(foldersByPlate.get(plate) ?? []), f]);
+    }
+    let planned = 0, photosPlanned = 0, documentsExcluded = 0;
+    for (const [plate, folders] of [...foldersByPlate].sort(([a], [b]) => a.localeCompare(b))) {
+        const add = (v) => {
+            counts[v.status]++;
+            vehicles.push({ plateLast4: last4(plate), subfoldersIgnored: 0, ...v });
+        };
+        if (folders.length > 1) {
+            add({ folderId: null, status: 'HOLD_FOLDER_DUPLICATE', photos: [], excluded: {} });
+            continue;
+        }
+        const folder = folders[0];
+        if (!folderMatchesPlate(folder.name, plate)) {
+            add({ folderId: folder.id, status: 'SKIP_FOLDER_UNPARSED', photos: [], excluded: {} });
+            continue;
+        }
+        // 폴더 이름이 서류 묶음이면(«번호 등록증») 안의 파일명에 표지가 없어도 통째로 보류한다(Codex #690 (a)).
+        if (isDocumentName(folder.name)) {
+            add({ folderId: folder.id, status: 'HOLD_DOCUMENT_FOLDER', photos: [], excluded: {} });
+            continue;
+        }
+        if (isUseRestrictedName(folder.name)) {
+            add({ folderId: folder.id, status: 'HOLD_USE_RESTRICTED', photos: [], excluded: {} });
+            continue;
+        }
+        const prods = productsByPlate.get(plate) ?? [];
+        if (prods.length === 0) {
+            add({ folderId: folder.id, status: 'HOLD_PRODUCT_NONE', photos: [], excluded: {} });
+            continue;
+        }
+        if (prods.length > 1) {
+            add({ folderId: folder.id, status: 'HOLD_PRODUCT_DUPLICATE', photos: [], excluded: {} });
+            continue;
+        }
+        if (prods[0].hasPhotoRefs) {
+            add({ folderId: folder.id, status: 'SKIP_HAS_REFS', photos: [], excluded: {} });
+            continue;
+        }
+        const cls = classifyFolderFiles(folder.files);
+        documentsExcluded += cls.documentLike;
+        const subfoldersIgnored = folder.subfolderCount ?? 0;
+        if (isDocumentHeavy(cls.documentLike, cls.candidates)) {
+            add({ folderId: folder.id, status: 'HOLD_DOCUMENT_RATIO', photos: [], excluded: cls.excluded, subfoldersIgnored });
+            continue;
+        }
+        if (cls.photos.length === 0) {
+            add({ folderId: folder.id, status: 'HOLD_NO_PHOTOS', photos: [], excluded: cls.excluded, subfoldersIgnored });
+            continue;
+        }
+        if (planned >= maxVehicles) {
+            add({ folderId: folder.id, status: 'HOLD_OVER_RUN_CAP', photos: [], excluded: cls.excluded, subfoldersIgnored });
+            continue;
+        }
+        planned++;
+        photosPlanned += cls.photos.length;
+        add({ folderId: folder.id, status: 'PLANNED', photos: cls.photos, excluded: cls.excluded, subfoldersIgnored });
+    }
+    return { supplierCode: input.supplierCode, allowed: true, vehicles, counts, photosPlanned, documentsExcluded };
+}
+/** 인입 대상 공급사 = 인입 플래그 ∩ 사본 허용표(서빙 못 하는 사진을 세지 않는다). 허용표에 없는 항목은 무시. */
+export function intakeSuppliers(intakeFlag, copyAllowed) {
+    const out = new Set();
+    for (const part of String(intakeFlag ?? '').split(',')) {
+        const code = part.trim().toUpperCase();
+        if (code && copyAllowed.has(code))
+            out.add(code);
+    }
+    return out;
+}
+/** 보고용 요약(끝 4자리만, 파일 id·이름 없음). */
+export function summarizeSupplierPlan(plan) {
+    if (!plan.allowed)
+        return [`${plan.supplierCode} 인입 대상 아님(플래그·허용표 밖) — 처리 안 함`];
+    const c = plan.counts;
+    const lines = [`${plan.supplierCode} 계획 ${c.PLANNED}대·사진 ${plan.photosPlanned}장·서류 제외 ${plan.documentsExcluded}장`,
+        `보류: 폴더중복 ${c.HOLD_FOLDER_DUPLICATE}·문서없음 ${c.HOLD_PRODUCT_NONE}·문서중복 ${c.HOLD_PRODUCT_DUPLICATE}·서류의심 ${c.HOLD_DOCUMENT_RATIO}·사용X ${c.HOLD_USE_RESTRICTED}·서류폴더 ${c.HOLD_DOCUMENT_FOLDER}·사진없음 ${c.HOLD_NO_PHOTOS}·상한 ${c.HOLD_OVER_RUN_CAP}`,
+        `건너뜀: 이미 등록 ${c.SKIP_HAS_REFS}·번호 못 읽음 ${c.SKIP_FOLDER_UNPARSED}`];
+    for (const v of plan.vehicles)
+        if (v.status !== 'PLANNED' && v.status !== 'SKIP_HAS_REFS')
+            lines.push(`${v.plateLast4} ${v.status}`);
+    return lines;
+}

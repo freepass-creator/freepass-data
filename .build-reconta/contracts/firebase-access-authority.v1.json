@@ -1,0 +1,124 @@
+{
+    "contractVersion": "firebase-access-authority-v1",
+    "schemaVersion": "1.1.0",
+    "authority": {
+        "owner": "freepass-data",
+        "rule": "FREEPASS_DATA_WRITE_AUTHORITY_WITH_EXPLICIT_SERVER_READ_PROFILES",
+        "defaultConsumerRule": "NO_FIREBASE_BUSINESS_ACCESS_WITHOUT_AN_APPROVED_PROFILE",
+        "firebaseAuthException": "CONSUMERS_MAY_USE_FIREBASE_AUTH_FOR_IDENTITY_ONLY"
+    },
+    "prohibitedOutsideFreePassData": [
+        "unapproved Firebase business-data credentials; no browser credentials or long-lived service-account keys",
+        "firebase/firestore business-data writes or reads outside an explicitly approved server read profile",
+        "firebase/database RTDB business-data reads or writes",
+        "firebase/storage business-data uploads/downloads",
+        "service-account access outside the profile's approved server identity and target",
+        "direct collection/path access as a public runtime business contract"
+    ],
+    "serverReadProfiles": [
+        {
+            "id": "erp5-production-catalog-server-read",
+            "consumer": "freepasserp5",
+            "environment": "production",
+            "executionBoundary": "SERVER_ONLY",
+            "operation": "READ_ONLY",
+            "contractEffect": "POLICY_DESCRIPTION_ONLY_NOT_PERMISSION_GRANT",
+            "effectiveGrant": false,
+            "policyReference": "docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration",
+            "codeEvidence": {
+                "state": "CODE_CONFIRMED",
+                "revision": "28b58768b109c664bcce34d3c95b36005c800f52",
+                "references": {
+                    "target": "https://github.com/freepass-creator/freepasserp5/blob/28b58768b109c664bcce34d3c95b36005c800f52/lib/firestore-config.mjs",
+                    "identity": "https://github.com/freepass-creator/freepasserp5/blob/28b58768b109c664bcce34d3c95b36005c800f52/lib/firestore-auth.mjs",
+                    "readMask": "https://github.com/freepass-creator/freepasserp5/blob/28b58768b109c664bcce34d3c95b36005c800f52/lib/firestore-catalog-fields.mjs",
+                    "reader": "https://github.com/freepass-creator/freepasserp5/blob/28b58768b109c664bcce34d3c95b36005c800f52/lib/firestore-reader.mjs"
+                }
+            },
+            "target": { "project": "freepasserp5", "database": "(default)", "callerSelectedTargetAllowed": false },
+            "identity": {
+                "mode": "WIF",
+                "audience": "//iam.googleapis.com/projects/110304297079/locations/global/workloadIdentityPools/erp5-production/providers/erp5-production",
+                "serviceAccount": "erp5-firestore-reader@freepasserp5.iam.gserviceaccount.com",
+                "oidcIssuer": "https://oidc.vercel.com/freepass-projects",
+                "oidcAudience": "https://vercel.com/freepass-projects",
+                "oidcSubject": "owner:freepass-projects:project:freepasserp5:environment:production",
+                "unexpiredClaimsRequired": true,
+                "signatureVerifier": "GOOGLE_STS",
+                "requestedOAuthScope": "https://www.googleapis.com/auth/datastore",
+                "browserCredentialsAllowed": false,
+                "automaticCredentialFallbackAllowed": false
+            },
+            "readScope": {
+                "readerOperation": "getCatalogSnapshot",
+                "collections": ["products", "policy", "partner"],
+                "fieldMaskExport": "CATALOG_FIELDS",
+                "fieldMaskAuthority": "codeEvidence.references.readMask",
+                "classification": "SERVER_READ_MASK_NOT_PUBLIC_RESPONSE_SCHEMA",
+                "publicResponseAllowlistRequired": true,
+                "readOnlyTransactionRequired": true,
+                "arbitraryCollectionsAllowed": false,
+                "catalogOffersAllowed": false,
+                "firestoreWritesAllowed": false,
+                "rtdbAllowed": false,
+                "storageAccessAllowed": false
+            },
+            "feeAuthorization": {
+                "includedInCatalogProfile": false,
+                "separateHumanOrganizationFieldAuthorizationRequired": true,
+                "exactOfferIdTermKeyRevisionRequired": true
+            },
+            "photoAccess": {
+                "mode": "SEPARATE_DATA_PHOTOS_CAPABILITY",
+                "consumerId": "erp5-public-media",
+                "capabilities": ["photos"],
+                "directStorageOrSupplierCredentialsAllowed": false
+            },
+            "runtimeEvidence": {
+                "appliedIamGrant": "UNKNOWN",
+                "liveIdentityAndReadMaskEnforcement": "UNKNOWN",
+                "productionAccessVerified": false,
+                "newPermissionsGranted": false,
+                "iamBoundary": "DATABASE_SCOPE_IS_NOT_COLLECTION_FIELD_OR_FEE_AUTHORIZATION"
+            },
+            "requiredServerReadFlow": [
+                "approved production server identity",
+                "FreePass Data stored fact contract and pinned server read mask",
+                "platform server authorization and public response allowlist",
+                "fixed-target Firestore read-only transaction",
+                "consumer-scoped identity/purpose/readback evidence; implementation requires separate verification"
+            ]
+        }
+    ],
+    "requiredConsumerFlow": [
+        "consumer identity",
+        "FreePass Data contract",
+        "Data Access Gateway",
+        "domain read/command adapter",
+        "Firebase/Firestore/Storage"
+    ],
+    "completionCriteria": [
+        "no unapproved consumer or browser runtime holds Firebase business-data credentials",
+        "only an explicit approved server read profile may use a Firestore business-data reader",
+        "every read/write has consumer identity capability and purpose",
+        "every write returns idempotency/revision/authority receipt",
+        "unapproved old direct data paths are removed or denied; approved server reads are separately verified",
+        "Firebase Auth is not used as a database authorization bypass"
+    ],
+    "migrationDebt": {
+        "freepass-admin": [
+            "contract/settlement/esign ERP5 repositories still access Firestore directly"
+        ],
+        "freepass-sales": [
+            "browser app and analytics still access welrixtable Firestore/Storage directly",
+            "intake pipeline writes Firestore directly"
+        ],
+        "freepass-estimate": [
+            "legacy RTDB/Storage modules remain for leads/contracts/chat/legacy quote paths"
+        ],
+        "freepasserp4": [
+            "legacy operational readers/writers still own Firebase credentials outside migrated catalog boundary"
+        ],
+        "kakao-ops": []
+    }
+}

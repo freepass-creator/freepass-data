@@ -1,0 +1,422 @@
+import { pathToFileURL } from 'node:url';
+import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { planSourceCycle, applySourceCycle, deepEqual } from '../application/source-cycle.js';
+import { sourceCyclePlugin } from '../adapters/source-cycle-plugins.js';
+import { fileCycleControl } from '../adapters/source-cycle-control.js';
+/** 연속 실패 정지 뒤 자동 재시도까지의 냉각 시간. */
+export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
+/** 비밀·토큰·키·이메일 모양을 가린다(사후 진단 로그 전용). */
+export function maskDiagnosticText(text) {
+    return text
+        .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
+        .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]+/gi, '$1 [MASKED]')
+        .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]*)?/g, '[JWT]')
+        .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|authorization|private[_-]?key|cookie|session|sid)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi, '$1$2[MASKED]')
+        .replace(/([?&](?:key|token|access_token|api_key|apikey|password|secret|sig|signature)=)[^&\s]+/gi, '$1[MASKED]')
+        .replace(/\b(?:AIza|ghp_|gho_|sk-|xox[a-z]-)[A-Za-z0-9_-]{10,}/g, '[KEY]')
+        .replace(/\b[A-Za-z0-9+\/_-]{32,}={0,2}/g, '[LONG_TOKEN]');
+}
+/** 코드 형식이 아닌 예외의 단계·이름·메시지 앞부분·스택 상위를 비공개 로그(cycle-errors.jsonl)에 한 줄 JSON 으로 남긴다. 실패해도 본 동작에 영향 없음. */
+export async function recordCycleError(sourceId, stage, error, at = new Date(), env = process.env) {
+    try {
+        const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+        const err = error;
+        const name = String(err?.constructor?.name ?? typeof error);
+        const message = maskDiagnosticText(String(err?.message ?? (typeof error === 'string' ? error : '')).slice(0, 300));
+        const stack = typeof err?.stack === 'string' ? err.stack.split(/\r?\n/).slice(0, 5).map(l => maskDiagnosticText(l).slice(0, 300)) : [];
+        await mkdir(directory, { recursive: true });
+        await appendFile(join(directory, 'cycle-errors.jsonl'), `${JSON.stringify({ at: at.toISOString(), sourceId, stage, errorName: name, message, stack })}\n`, 'utf8');
+    }
+    catch { /* 진단 로그 실패는 본 동작에 영향 없음 */ }
+}
+export async function runSourceCycle(plugin, commands, control, options = {}) {
+    const sw = options.syncWatch;
+    if (sw && !(Number.isFinite(sw.windowMs) && sw.windowMs > 0 && sw.windowMs <= 60 * 60_000
+        && (sw.pollMs === undefined || (Number.isFinite(sw.pollMs) && sw.pollMs >= 1_000 && sw.pollMs <= 10 * 60_000))
+        && (sw.readRetries === undefined || (Number.isInteger(sw.readRetries) && sw.readRetries >= 0 && sw.readRetries <= 5))
+        && (sw.backoffMs === undefined || (sw.backoffMs.length <= 5 && sw.backoffMs.every(ms => Number.isFinite(ms) && ms >= 1_000 && ms <= 120_000)))
+        && (sw.stallMs === undefined || (Number.isFinite(sw.stallMs) && sw.stallMs >= 10 * 60_000))))
+        throw new Error('SYNC_WATCH_OPTIONS_INVALID');
+    const release = await control.acquire(plugin.sourceId);
+    if (!release)
+        return { status: 'LOCKED', writes: 0, summary: '원천 잠금: 중복 회차 생략' };
+    const clock = options.now ?? Date.now;
+    try {
+        const state = await control.load(plugin.sourceId);
+        // 연속 실패 정지는 «냉각 시간(기본 60분) 뒤 한 번 더 시도»로 자동 복구한다(대표 2026-10-14 «걸림돌 해제»).
+        // 적용 불확실(APPLY_UNCERTAIN)은 쓰기 결과를 사람이 확인해야 하므로 자동 복구하지 않는다. 복구 뒤 실패가 이어지면 다시 정지(실패 수를 2 로 되돌려 한 번만 더 시도).
+        if (state.stopped) {
+            const last = Date.parse(state.lastAttemptAt ?? '');
+            // 시각이 없거나 깨졌거나 미래(시계 이상)면 영구 정지가 되지 않게 «냉각 끝»으로 본다. 다음 회차는 어차피 새로 읽고 계획·CAS·되읽기를 거치므로 재시도는 멱등이다.
+            const now = clock();
+            const cooled = state.error !== 'APPLY_UNCERTAIN' && (!Number.isFinite(last) || last > now + 5 * 60_000 || now - last >= SOURCE_STOP_COOLDOWN_MS);
+            if (!cooled)
+                return { status: 'STOPPED', writes: 0, summary: '연속 실패 3회: 수동 원인 확인 필요' };
+            state.stopped = false;
+            state.failures = 2;
+            await control.alert(plugin.sourceId, 'AUTO_RECOVER_AFTER_COOLDOWN');
+        }
+        const previousFailures = state.failures;
+        let plan = null;
+        let outcome = null;
+        let inlineStarted = false;
+        let readDetail = null; // 읽기가 불완전했을 때의 안전한 세부 코드(알림·요약에 남긴다)
+        let summary = '';
+        let stage = 'START'; // 예외 진단용 단계명(보고·상태에는 쓰지 않는다)
+        state.lastAttemptAt = new Date(clock()).toISOString();
+        state.readCount = 0;
+        state.heldCount = 0;
+        try {
+            let synced = null;
+            stage = 'SYNC_PROBE';
+            const watch = options.onlyWhenSynced ? options.syncWatch : undefined;
+            const sleepWatch = options.sleepMs ?? ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+            let watchDeadline = Number.POSITIVE_INFINITY; // 감시 종료 시각: 읽기·재시도 직전에도 확인한다
+            if (options.onlyWhenSynced) {
+                if (plugin.family !== 'IANCAR' || !plugin.syncedAt)
+                    throw new Error('SYNC_PROBE_UNAVAILABLE');
+                if (watch) {
+                    // 감시: 확인 요청 오류(503 등)는 넘기고 다음 간격에 다시 본다. 갱신(마지막 반영과 다른 synced_at)이 신선도 12분 안에 보이면 즉시 읽는다.
+                    // 조회 성공(값)과 조회 장애(null)를 구분한다: 마지막 «성공» 조회 값만 정지 판정에 쓰고, 조회가 전부 실패한 회차는 정지로 단정하지 않는다.
+                    const pollMs = watch.pollMs ?? 120_000, attempts = Math.max(1, Math.ceil(watch.windowMs / pollMs));
+                    const deadline = clock() + watch.windowMs; // 절대 종료 시각: 조회 소요 시간도 창에 포함
+                    // 마지막 «성공» 조회의 값과 시각. 조회가 실패해도 이 값을 «지금 본 값»처럼 쓰지 않도록 시각을 함께 추적한다.
+                    watchDeadline = deadline;
+                    const ok = { value: null, at: -1, lastOk: false };
+                    const probe = async () => {
+                        const left = deadline - clock();
+                        if (left <= 0)
+                            return; // 종료 시각 뒤에는 조회하지 않는다(성공 여부 기록도 바꾸지 않는다)
+                        ok.lastOk = false;
+                        let timer;
+                        try {
+                            // 진행 중 조회도 남은 시간까지만 기다린다(응답을 못 받으면 조회 장애로 본다).
+                            const v = await Promise.race([plugin.syncedAt(), new Promise(resolve => { timer = setTimeout(() => resolve(null), left); })]);
+                            // 종료 시각 뒤에 도착한 응답(요청 자체는 취소할 수 없다)·깨진 값·미래 값은 조회 실패로 보고 버린다.
+                            if (!v || clock() > deadline || !Number.isFinite(Date.parse(v)) || Date.parse(v) > clock())
+                                return;
+                            ok.value = v;
+                            ok.at = clock();
+                            ok.lastOk = true;
+                        }
+                        catch { /* 조회 장애: 다음 간격에 다시 본다 */ }
+                        finally {
+                            if (timer)
+                                clearTimeout(timer);
+                        }
+                    };
+                    // 신선도 10분·역행 검사는 감시 여부와 무관하게 아래 공통 경로에서 그대로 적용한다. 여기서는 «읽기를 시작할 만한 새 갱신인가»만 본다.
+                    const fresh = (v) => !!v && v !== state.lastSyncedAt && clock() - Date.parse(v) <= 10 * 60_000
+                        && !(state.lastSyncedAt && Date.parse(v) < Date.parse(state.lastSyncedAt));
+                    await probe();
+                    for (let i = 0; i < attempts && !fresh(ok.value) && clock() < deadline; i++) {
+                        await sleepWatch(Math.max(0, Math.min(pollMs, deadline - clock())));
+                        if (clock() >= deadline)
+                            break; // 대기로 종료 시각에 닿았으면 더 조회·읽기하지 않는다
+                        await probe();
+                    }
+                    const seen = ok.value;
+                    if (seen && state.lastSyncedAt && Date.parse(seen) < Date.parse(state.lastSyncedAt))
+                        throw new Error('SYNC_REGRESSED');
+                    // 정지 판정은 종료 직전(조회 간격의 2배, 최소 5분) 안에 «성공» 관측이 있을 때만 한다. 그 뒤 계속 실패했으면 판정을 보류한다.
+                    const probeOk = ok.lastOk && ok.at >= 0 && clock() - ok.at <= Math.max(5 * 60_000, 2 * pollMs); // 마지막 조회가 성공이어야 한다
+                    if (!fresh(seen)) {
+                        const stalled = probeOk && !!seen && clock() - Date.parse(seen) >= (watch.stallMs ?? 2 * 60 * 60_000);
+                        state.error = stalled ? 'UPSTREAM_STALLED' : null;
+                        await control.save(plugin.sourceId, state);
+                        await control.heartbeat(plugin.sourceId, state, null);
+                        if (stalled)
+                            await control.alert(plugin.sourceId, 'UPSTREAM_STALLED');
+                        return { status: 'UNCHANGED_SYNC', writes: 0, summary: stalled ? `원천 갱신 정지 의심: 조회에 성공했으나 synced_at ${seen} 이 ${Math.round((watch.stallMs ?? 2 * 60 * 60_000) / 60_000)}분 이상 그대로`
+                                : !probeOk ? '감시 창 안에 synced_at 조회가 모두 실패(원천 정지 판정 보류)' : '감시 창 안에 새 갱신 없음(다음 감시에서 다시 확인)' };
+                    }
+                    synced = seen;
+                }
+                else {
+                    synced = await plugin.syncedAt();
+                }
+                if (!synced || !Number.isFinite(Date.parse(synced)) || Date.parse(synced) > clock())
+                    throw new Error('SYNC_PROBE_INVALID');
+                // 상세 읽기에 약 5분이 걸리고 상류 신선도 창은 15분이다. 갱신 후 10분이 넘었으면 이번 갱신은 창 안에 끝낼 수 없어 다음 갱신을 기다린다
+                // (넘긴 채 읽으면 DETAIL_SOURCE_DRIFT 로 5분마다 되풀이 실패하며 공급사 API 만 소모한다).
+                if (clock() - Date.parse(synced) > 10 * 60_000 && synced !== state.lastSyncedAt) {
+                    state.error = null;
+                    await control.save(plugin.sourceId, state);
+                    await control.heartbeat(plugin.sourceId, state, null);
+                    return { status: 'UNCHANGED_SYNC', writes: 0, summary: `synced_at 갱신 후 10분 초과(synced_at ${synced}, ${Math.round((clock() - Date.parse(synced)) / 60_000)}분 경과): 신선도 창 안에 상세 읽기를 끝낼 수 없어 다음 갱신을 기다림` };
+                }
+                if (synced === state.lastSyncedAt) {
+                    state.error = null;
+                    await control.save(plugin.sourceId, state);
+                    await control.heartbeat(plugin.sourceId, state, null);
+                    return { status: 'UNCHANGED_SYNC', writes: 0, summary: 'synced_at 동일: 원천 수집 생략' };
+                }
+                if (state.lastSyncedAt && Date.parse(synced) < Date.parse(state.lastSyncedAt))
+                    throw new Error('SYNC_REGRESSED');
+            }
+            if (clock() >= watchDeadline) { // 종료 시각 뒤에는 읽지 않는다(다음 감시에서 다시 본다)
+                state.error = null;
+                await control.save(plugin.sourceId, state);
+                await control.heartbeat(plugin.sourceId, state, null);
+                return { status: 'UNCHANGED_SYNC', writes: 0, summary: '감시 창 종료 시각에 닿아 읽기를 시작하지 않음(다음 감시에서 다시 확인)' };
+            }
+            stage = 'READ';
+            let read = await plugin.read();
+            // 감시 회차: 일시 오류는 회차를 실패로 만들기 전에 지수 백오프로 다시 읽는다(신선도 창 11분을 넘기면 중단).
+            if (watch) {
+                const backoff = watch.backoffMs ?? [20_000, 60_000];
+                for (let i = 0; i < (watch.readRetries ?? 2); i++) {
+                    const text = `${String(read.error ?? '')} ${String(read.detail ?? '')}`;
+                    if (read.complete || !/HTTP_50[234]|TIMEOUT|TimeoutError|NO_RESPONSE/i.test(text))
+                        break;
+                    // 대기 «후»에도 신선도 10분 안이어야 다시 읽는다(대기 전 값으로 판단하면 10분50초 + 60초 = 11분50초에 읽게 된다).
+                    const wait = backoff[i] ?? 60_000;
+                    if (clock() + wait >= watchDeadline)
+                        break;
+                    if (synced && clock() + wait - Date.parse(synced) > 10 * 60_000)
+                        break;
+                    await sleepWatch(wait);
+                    if (clock() >= watchDeadline || (synced && clock() - Date.parse(synced) > 10 * 60_000))
+                        break;
+                    read = await plugin.read();
+                }
+            }
+            if (read.clockDiagnostic)
+                state.lastReadClockDiagnostic = read.clockDiagnostic;
+            // 읽기 자체가 던진 실패는 detail 이 사유 코드에 이미 합쳐진다. 읽기는 됐지만 불완전한 경우에만 별도로 남긴다.
+            readDetail = read.raw !== null && !read.complete && read.detail ? read.detail : null;
+            // 상류 원천의 갱신 시각 때문에 읽기를 마치지 못한 경우(정지 UPSTREAM_STALE, 상세를 읽는 사이 신선도 창을 넘긴 DETAIL_SOURCE_DRIFT)는 우리 쪽 실패가 아니다.
+            const upstreamTiming = !read.complete && (read.detail === 'UPSTREAM_STALE' || read.detail === 'IANCAR_ONE_DETAIL_SOURCE_DRIFT' ||
+                read.detail === 'SONOGONG_API_PASS_INTERVAL'); // 마지막 완전 읽기 후 45분 안: 공급사 API 부하 방어로 읽지 않는다(우리 쪽 실패 아님)
+            if (read.raw === null && read.error && !upstreamTiming)
+                throw new Error(read.detail ? `${read.error}_${read.detail}` : read.error);
+            if (upstreamTiming) {
+                // 상류 원천(공급사)이 갱신되지 않은 것이다 — 우리 쪽 실패가 아니므로 연속 실패로 세거나 정지하지 않는다(정지하면 공급사가 다시
+                // 갱신해도 사람이 풀어야 한다). 쓰기 0, 신선도는 ERROR 로 남아 보이고, 같은 사유의 알림은 한 번만 남긴다.
+                const reasonCode = read.detail;
+                const alreadyKnown = state.error === reasonCode;
+                state.error = reasonCode;
+                await control.save(plugin.sourceId, state);
+                await control.heartbeat(plugin.sourceId, state, null);
+                if (!alreadyKnown)
+                    await control.alert(plugin.sourceId, reasonCode);
+                return { status: 'HOLD', writes: 0, verified: 0, plan: null,
+                    summary: `상류 원천 갱신 시각 문제(${reasonCode}): 쓰기 0, 연속 실패로 세지 않음` };
+            }
+            if (synced && plugin.syncedAtOfRead?.(read) !== synced)
+                throw new Error('SYNC_CHANGED_DURING_READ');
+            stage = 'CONVERT';
+            const converted = plugin.toRecords(read);
+            state.readCount = converted.records.length;
+            state.heldCount = converted.held.length;
+            state.observationOnlyCount = plugin.observationCountOfRead?.(read) ?? 0;
+            state.heldReasons = {};
+            for (const h of converted.held)
+                for (const reason of h.reasons) {
+                    const code = /^[A-Z][A-Z0-9_]{2,48}/.exec(reason)?.[0] ?? 'OTHER';
+                    state.heldReasons[code] = (state.heldReasons[code] ?? 0) + 1;
+                }
+            const unassigned = converted.held.filter(h => h.reasons.some(r => r.includes('UID_REQUIRED'))).length;
+            state.unassignedPlateCount = unassigned;
+            state.observedSellableCount = converted.records.filter(r => r.status.saleAvailable === true).length;
+            // 원천 원문 계층: 게이트 0(관측 전용 원천은 문서에서 만든 레코드라 제외). 실패해도 회차를 막지 않는다.
+            if (!plugin.observationOnly && !options.approvedPlan && commands.storeRaw) {
+                try {
+                    const stored = await commands.storeRaw({ sourceId: plugin.sourceId, records: converted.records, held: converted.held.map(h => ({ row: h.row, reasons: h.reasons })),
+                        observedAt: read.observedAt ?? new Date(clock()).toISOString(), complete: read.complete && !read.error });
+                    state.rawStored = stored.stored;
+                    state.rawAbsentMarked = stored.absentMarked;
+                }
+                catch {
+                    await control.alert(plugin.sourceId, 'RAW_STORE_FAILED');
+                }
+            }
+            if (plugin.observationOnly) {
+                if (!read.complete || read.error)
+                    throw new Error('SOURCE_INCOMPLETE');
+                state.failures = 0;
+                state.error = null;
+                state.lastCompleteAt = read.observedAt;
+                await control.save(plugin.sourceId, state);
+                await control.heartbeat(plugin.sourceId, state, null);
+                return { status: 'OBSERVED', writes: 0, summary: `관측 전용 원천 ${converted.records.filter(r => r.status.saleAvailable === true).length} · 번호미배정 ${unassigned} · 상품 쓰기 0 · 수집기 최종 갱신 ${read.observedAt}` };
+            }
+            if (options.approvedPlan) {
+                // A fresh transport read naturally has a new observation clock. Pin approved facts,
+                // not a stale transport snapshot: only clocks may differ, source synced_at is retained.
+                const prior = options.approvedPlan.evidence;
+                const withoutReadClock = (v) => Array.isArray(v) ? v.map(withoutReadClock) :
+                    v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'observedAt' && k !== 'captured_at')
+                        .map(([k, child]) => [k, withoutReadClock(child)])) : v;
+                if (!read.observedAt || Date.parse(read.observedAt) < Date.parse(prior.observedAt ?? '') || Date.parse(read.observedAt) > clock() ||
+                    !deepEqual(withoutReadClock(converted.records), withoutReadClock(prior.records)) || converted.held.length !== prior.heldCount ||
+                    unassigned !== (prior.unassignedPlateCount ?? 0) ||
+                    (read.complete && !read.error) !== prior.complete)
+                    throw new Error('CYCLE_REPLAN_REQUIRED');
+                converted.records = structuredClone(prior.records);
+                read.observedAt = prior.observedAt;
+            }
+            // 부재 하향을 막는 보류는 «번호 불명·충돌» 계열뿐이다(독립 검토 2026-10-14). 값·상태 계열(가격·기간 비어 있음, 상태 불명, 동일 복사본)은 그 행의
+            // 레코드가 이미 읽기 결과에 있어(계획의 seen 에 포함) 다른 차의 부재 판정을 가리지 않는다. 보류 사유는 «A,B» 로 이어 붙은 문자열일 수 있어 쉼표로 나눈다.
+            // 이안카 요금 사실 보류(요금 없음·기준 밖 값·중복 요금 행)도 값 계열이다: 그 차의 행(번호·상태)은 읽기 결과에 그대로 있어 그 차만 보호되고
+            // 다른 차의 부재 하향은 막지 않는다. 번호 계열 보류(번호 없음·형식·중복 번호)는 여기에 넣지 않는다 — 어느 문서인지 몰라 부재 하향을 유보한다.
+            // RENT_REVIEW_REQUIRED(대여료 해석 불가·타당 범위 밖)도 행 레코드가 TERMS_HOLD 로 읽기 결과에 남아 있어 값 계열이다.
+            const VALUE_CLASS_HOLDS = new Set(['TERMS_HOLD', 'STATUS_UNKNOWN', 'DUPLICATE_UID_SUSPECT', 'INFO_INCOMPLETE', 'RENT_REVIEW_REQUIRED',
+                'IANCAR_ONE_RATES_EMPTY', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW', 'IANCAR_ONE_DUPLICATE_RATE',
+                // 읽는 동안 상태가 바뀐 차(목록·상세 시차): 행(번호·상태)은 읽기 결과에 있고 그 차만 보류한다 — 다른 차의 부재 하향은 막지 않는다.
+                'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', 'IANCAR_ONE_DETAIL_SOURCE_DRIFT', 'IANCAR_ONE_LIST_CHANGED_DURING_READ']);
+            const benign = converted.held.filter(h => h.reasons.length > 0 &&
+                h.reasons.every(r => r.split(',').map(s => s.trim()).filter(Boolean).every(s => VALUE_CLASS_HOLDS.has(s)))).length;
+            stage = 'PLAN';
+            const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
+                observedAt: read.observedAt, heldCount: converted.held.length,
+                ...(benign ? { benignHeldCount: benign } : {}),
+                ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
+            plan = built.plan;
+            state.reconciliation = built.reconciliation;
+            // 읽기 단계 보류 사유에 계획 단계 보류 사유를 합친다(같은 코드는 더한다).
+            for (const [code, n] of Object.entries(built.heldReasons))
+                state.heldReasons[code] = (state.heldReasons[code] ?? 0) + n;
+            state.heldCount = plan.held;
+            if (options.approvedPlan && !deepEqual(plan, options.approvedPlan))
+                throw new Error('CYCLE_REPLAN_REQUIRED');
+            if (plan.blockers.length)
+                throw new Error(plan.blockers.join(','));
+            // 무인 회차(autoApprove): 방금 읽은 계획을 그대로 적용한다. 같은 회차라 사람의 지연이 없고, 문서별 CAS·백업·되읽기가 막아 주므로
+            // 승인 계획 재검증용 «두 번째 읽기»가 필요 없다 — 읽기가 긴 원천(이안카 약 5분)은 두 읽기 사이에 원천이 바뀌어 매번 중단되던 문제.
+            const inline = options.autoApprove === true && !options.approvedPlan && plan.entries.length > 0;
+            const applying = options.apply === true || inline;
+            inlineStarted = inline;
+            stage = 'APPLY';
+            const applied = await applySourceCycle(commands, plan, inline
+                ? { apply: true, digest: built.digest, approval: built.digest, now: clock() } : { ...options, now: clock() });
+            outcome = applied;
+            const counts = (kind, exposedOnly = false) => plan.entries.filter(e => e.kind === kind && (!exposedOnly || e.after.listable)).length;
+            summary = `원천 ${plan.sourceCount} → 노출 ${plan.exposedBefore - counts('DOWNGRADE') + counts('ENROLL', true) + counts('REEXPOSE')} (계획), 하향 ${counts('DOWNGRADE')}·편입 ${counts('ENROLL')}(노출 ${counts('ENROLL', true)})·재노출 ${counts('REEXPOSE')}·갱신 ${counts('UPDATE')}, 되읽기 ${applying ? `${applied.verified}/${plan.entries.length}` : '미실행'} (${applied.status})`;
+            if (applied.status === 'APPLY_UNCERTAIN') {
+                const detail = 'uncertainDetail' in applied ? applied.uncertainDetail : '';
+                if (detail)
+                    summary += ` · 불확실 ${detail} · 쓰기 ${applied.writes}`;
+                throw new Error('APPLY_UNCERTAIN');
+            }
+            summary += ` · 번호미배정 ${unassigned}`;
+            if (plan.warnings.length)
+                summary += ` · ${plan.warnings.join(',')}`;
+            if (built.reasonCensus)
+                summary += ` · ${built.reasonCensus}`; // 진단 전용: 계획 digest 밖
+            const readNotes = read.raw?.notes;
+            if (Array.isArray(readNotes) && readNotes.length)
+                summary += ` · ${readNotes.filter((n) => typeof n === 'string' && /^[A-Z0-9_:가-힣]{3,60}$/.test(n)).join(',')}`;
+            if (plugin.family === 'AICA') {
+                const monthly = converted.records.filter(r => r.raw.product_group === 'MONTHLY_RENT' && r.status.saleAvailable === true).length;
+                summary += ` · 장기 ${state.observedSellableCount - monthly} · 월렌트 ${monthly}`;
+            }
+            if (!read.complete || read.error)
+                throw new Error('SOURCE_INCOMPLETE');
+            state.failures = 0;
+            state.error = null;
+            state.lastCompleteAt = read.observedAt;
+            // A dry-run must never consume the change token for a later authorized apply.
+            if (applying && !plan.held)
+                state.lastSyncedAt = synced;
+            await control.save(plugin.sourceId, state);
+            await control.heartbeat(plugin.sourceId, state, plan);
+            return { ...applied, planDigest: built.digest, summary, plan };
+        }
+        catch (e) {
+            // Only internal safe codes reach logs; no provider response bodies or customer raw data.
+            const candidate = e instanceof Error ? e.message : '';
+            const reason = /^[A-Z0-9_,]+$/.test(candidate) ? candidate : 'CYCLE_ERROR';
+            if (reason === 'CYCLE_ERROR')
+                await recordCycleError(plugin.sourceId, stage, e);
+            if (options.manualPlan === true && options.apply !== true) {
+                // 수동 plan 의 실패는 무인 회차의 실패 수·정지·마지막 시도 시각을 건드리지 않는다(저장하지 않음). 사유만 알린다.
+                return { status: 'HOLD', writes: 0, verified: 0,
+                    summary: `${summary ? summary + ' · ' : ''}수동 plan 보류 ${reason}${readDetail ? ` · 불완전 사유 ${readDetail}` : ''} (연속 실패 수 변경 없음)`, plan };
+            }
+            state.failures = previousFailures + 1;
+            state.stopped = state.failures >= 3;
+            state.error = reason;
+            await control.save(plugin.sourceId, state);
+            try {
+                await control.heartbeat(plugin.sourceId, state, plan);
+            }
+            catch {
+                await control.alert(plugin.sourceId, 'HEARTBEAT_UNAVAILABLE');
+            }
+            await control.alert(plugin.sourceId, state.stopped ? `STOPPED:${reason}` : reason);
+            if (readDetail)
+                await control.alert(plugin.sourceId, `INCOMPLETE_${readDetail}`);
+            return { status: state.stopped ? 'STOPPED' : reason === 'APPLY_UNCERTAIN' ? 'APPLY_UNCERTAIN' : 'HOLD',
+                writes: outcome?.writes ?? (options.apply || inlineStarted ? null : 0), verified: outcome?.verified ?? 0,
+                summary: `${summary ? summary + ' · ' : ''}회차 보류 ${reason}${readDetail ? ` · 불완전 사유 ${readDetail}` : ''} (연속 ${state.failures})`, plan };
+        }
+    }
+    finally {
+        await release();
+    }
+}
+/** 무인 회차(대표 2026-10-13 「1시간 간격으로 업데이트 되는지 개발피시 돌아갈수 있게끔」): 한 번 읽어 계획을 세우고 변경이 있으면
+ * 그 계획을 바로 적용한다. blockers(하향 비율 상한·원천/카탈로그 불완전·STALE)·문서별 CAS·백업·되읽기·3회 실패 정지가 그대로
+ * 유지된다. 관측 전용 원천은 OBSERVED 로 끝나고 쓰지 않는다. 변경이 없으면 적용하지 않는다(stage PLAN). */
+export async function runUnattendedSourceCycle(plugin, commands, control, options = {}) {
+    const result = await runSourceCycle(plugin, commands, control, { ...options, autoApprove: true });
+    const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN';
+    const noChange = result.status === 'DRY_RUN' && 'plan' in result && result.plan && result.plan.entries.length === 0;
+    return { ...result, stage: (reachedApply ? 'APPLY' : 'PLAN'),
+        ...(noChange ? { summary: `${result.summary} · 변경 0: 적용 생략` } : {}) };
+}
+/** The scheduler loads a reviewed local runtime composition. No default credentials, target,
+ * production adapter or automatic approval. The runtime uses existing read collectors and CatalogStore. */
+export async function sourceCycleCli(argv) {
+    if (argv.includes('--apply'))
+        throw new Error('SCHEDULED_APPLY_NOT_AUTHORIZED');
+    const index = argv.indexOf('--runtime');
+    const snapshotIndex = argv.indexOf('--snapshot'), stateIndex = argv.indexOf('--state-dir');
+    let runtime;
+    if (snapshotIndex >= 0 && index < 0 && argv[snapshotIndex + 1] && stateIndex >= 0 && argv[stateIndex + 1]) {
+        const snapshot = JSON.parse(await readFile(resolve(argv[snapshotIndex + 1]), 'utf8'));
+        const directory = resolve(argv[stateIndex + 1]);
+        const noWrite = async () => { throw new Error('OFFLINE_PRODUCT_WRITE_FORBIDDEN'); };
+        runtime = { plugins: snapshot.sources.map(s => sourceCyclePlugin(s.definition, async () => s.capture)),
+            commands: { async list(source) {
+                    return { complete: snapshot.catalogComplete === true,
+                        products: snapshot.products.filter(p => p.record.sourceId === source),
+                        foreignUids: snapshot.products.filter(p => p.record.sourceId !== source).map(p => p.record.uid).sort() };
+                },
+                async read(source, uid) { return snapshot.products.find(p => p.record.sourceId === source && p.record.uid === uid) ?? null; },
+                backup: noWrite, readBackup: noWrite, compareAndApply: noWrite },
+            control: fileCycleControl(directory, async (source, state) => {
+                await appendFile(join(directory, 'offline-heartbeats.jsonl'), JSON.stringify({ source, ...state }) + '\n', { mode: 0o600 });
+            }) };
+    }
+    else {
+        if (index < 0 || !argv[index + 1] || snapshotIndex >= 0)
+            throw new Error('CYCLE_RUNTIME_REQUIRED');
+        const runtimePath = resolve(argv[index + 1]);
+        // Runtime is trusted local composition code, never an untrusted provider data file.
+        await readFile(runtimePath);
+        runtime = await import(pathToFileURL(runtimePath).href);
+    }
+    const sourceIndex = argv.indexOf('--source');
+    const selected = sourceIndex >= 0 ? runtime.plugins.filter(p => p.sourceId === argv[sourceIndex + 1]) : runtime.plugins;
+    if (!selected.length || new Set(selected.map(p => p.sourceId)).size !== selected.length)
+        throw new Error('CYCLE_SOURCE_CONFIG_INVALID');
+    let failed = false;
+    for (const plugin of selected) {
+        const result = await runSourceCycle(plugin, runtime.commands, runtime.control, { onlyWhenSynced: argv.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+        console.log(JSON.stringify({ source: plugin.sourceId, status: result.status, summary: result.summary,
+            digest: 'planDigest' in result ? result.planDigest : null }));
+        if (['HOLD', 'STOPPED', 'APPLY_UNCERTAIN'].includes(result.status))
+            failed = true;
+    }
+    return failed ? 1 : 0;
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    sourceCycleCli(process.argv.slice(2)).then(code => { process.exitCode = code; }, () => {
+        console.error('SOURCE_CYCLE_CLI_HOLD');
+        process.exitCode = 1;
+    });
+}

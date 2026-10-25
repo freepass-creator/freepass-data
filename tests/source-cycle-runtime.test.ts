@@ -412,11 +412,18 @@ describe('native mappings and UID', () => {
     expect(r.raw.spec_master_digest).toBe('verified-snapshot');
     expect(r.vehicleHold).toEqual(['VEHICLE_MASTER_REVIEW_REQUIRED']);
     expect(match).not.toHaveBeenCalled();
-    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set() }).rows[0]!.record.raw).not.toHaveProperty('spec');
-    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set(['OTHER']) }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    // 2026-10-25: 검토 UID 목록 밖이어도 원천 연식은 옮기고(쓰기 경로는 빈 칸만), 마스터 근거는 목록 안 차에만 붙는다.
+    for (const uids of [new Set<string>(), new Set(['OTHER'])]) {
+      const outside = f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: uids }).rows[0]!.record.raw;
+      expect(outside.spec).toEqual({ year: '2023' });
+      expect(outside).not.toHaveProperty('spec_master_digest');
+    }
     expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set([r.uid]) }).rows[0]!.record.raw.spec).toEqual({ year: '2023' });
     const bad = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '다른세대', 세부트림: '확인필요', 연식: 2023 }]);
-    expect(f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw).not.toHaveProperty('spec');
+    // 2026-10-25 대표 «원천 값은 반드시 옮긴다»: 차종이 마스터와 안 맞아도 원천 연식은 옮기고, 마스터 근거만 붙이지 않는다.
+    const badRaw = f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw;
+    expect(badRaw.spec).toEqual({ year: '2023' });
+    expect(badRaw).not.toHaveProperty('spec_master_digest');
   });
   it('F05 preserves an explicitly supplied master-admitted year through the existing spec writer without changing RAW or identity HOLD', () => {
     const s = sheet([{ 연식: 2023, '차명 원문': '합성 원문 차종', 최초등록일: 'https://example.invalid/not-a-date' }]);
@@ -440,16 +447,22 @@ describe('native mappings and UID', () => {
     expect(nativeCycleFields(p, { ...original, year: '2024' }, { specFillSources: new Set([s.source]) })).not.toHaveProperty('year');
     expect(nativeCycleFields(p, original)).not.toHaveProperty('year');
   });
-  it('F05 leaves missing, malformed, master-conflicting and registration-conflicting years in RAW without promoting them', () => {
+  it('F05 leaves missing, malformed and registration-conflicting years in RAW; a master-conflicting year moves without master evidence (2026-10-25)', () => {
     const match = vi.fn(() => ({ maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' }));
-    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2000 }, { 연식: 2023, 최초등록일: '2025-01' }]) {
+    const conflicting = sheet([{ 연식: 2000 }]);
+    const moved = f05NativeCapture(conflicting.source, conflicting.capture, conflicting.visibility, { digest: 'synthetic-master-digest', match,
+      allowsYear: (_id, year) => year === 2023 }).rows[0]!.record.raw;
+    expect(moved.spec).toEqual({ year: '2000' });
+    expect(moved).not.toHaveProperty('spec_master_id');
+    match.mockClear();
+    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2023, 최초등록일: '2025-01' }]) {
       const s = sheet([row]);
       const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
         allowsYear: (_id, year) => year === 2023 }).rows[0]!.record;
       expect(r.raw).not.toHaveProperty('spec');
       expect(r.raw.cells).toEqual(s.capture.tabs.find(t => t.rowCount > 1)!.values[1]);
     }
-    expect(match.mock.calls).toEqual([[{ rawName: '합성', year: '2000' }]]);
+    expect(match.mock.calls).toEqual([]);
   });
   it('keeps an exclusive registered supplier row when its company cell is blank, preserving RAW and identity HOLD', () => {
     const s = sheet([{ 회사명: '' }]);
@@ -684,6 +697,23 @@ describe('native mappings and UID', () => {
     f.tables[3]!.values = [f.tables[3]!.values[0]!, ...f.tables[3]!.values.slice(1).reverse()];
     expect((await aicaRead(f)).records.filter(r => r.raw.product_group === 'MONTHLY_RENT').map(r => r.uid).sort())
       .toEqual(monthly.map(r => r.uid).sort());
+  });
+  it('skipMonthly (대표 2026-10-23 아이카 월렌트 제외): 월렌트 상품 0건·장기 상품 그대로·범위는 완료로 센다, 끄면 기존 동작', async () => {
+    const f = aicaFixture();
+    f.tables[3]!.values = [['차종', '1개월', '비고'], ['Model A', '345,678', ''], ['Model B', -1]];
+    f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
+    f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
+    const on = aicaNativeCapture(f.tables, time, f.meta, { skipMonthly: true });
+    const off = aicaNativeCapture(f.tables, time, f.meta);
+    const longOnly = (c: typeof on) => c.rows.filter(r => r.record.raw.product_group !== 'MONTHLY_RENT').map(r => r.record.uid);
+    expect(on.rows.filter(r => r.record.raw.product_group === 'MONTHLY_RENT')).toHaveLength(0);
+    expect(on.heldCount).toBe(0); expect(on.complete).toBe(true);
+    expect(off.rows.filter(r => r.record.raw.product_group === 'MONTHLY_RENT')).toHaveLength(1);
+    expect(off.heldCount).toBe(1);
+    expect(longOnly(on)).toEqual(longOnly(off)); expect(longOnly(on)).toHaveLength(2);
+    // 월렌트 탭이 아예 없어도(읽지 않음) 완전 읽기로 센다 — 탭 이름 변동이 장기 상품 회차를 막지 않는다.
+    const none = aicaNativeCapture(f.tables.filter(t => t.title !== '월렌트'), time, f.meta, { skipMonthly: true });
+    expect(none.complete).toBe(true); expect(none.rows).toHaveLength(2);
   });
   it.each(['', '  ', null, undefined])('SPEC3C creates only the populated 48-month period (blank=%s)', async blank => {
     const out = await aicaRead(aicaFixture([aicaRow({ '36개월': blank, '48개월': '456,789', '60개월': blank })]));

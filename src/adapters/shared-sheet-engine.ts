@@ -135,27 +135,28 @@ export function sharedSheetRecords(read: SourceRead<SharedSheetCapture>, sourceY
     // 시트의 차종 4칸 후보(마스터 행과 정확히 일치할 때만 정제기가 쓴다).
     const sheetIdentity = sheetIdentityOf(tab.values[0], tab.values[row - 1]);
     if (sheetIdentity) r.raw.sheet_identity = sheetIdentity;
-    // Preserve the supplied year through the existing spec writer only after the active master
-    // admits that exact source name/year. Names and publication HOLD remain independent.
-    // Inconsistent registration/year and unsupported years remain RAW only; never infer a year.
+    // 2026-10-25 대표 «원천 값은 반드시 옮긴다»: 시트 연식은 차종 판정(마스터 연결)과 분리해 그대로 옮긴다.
+    // 연식 경로가 켜진 공급사(sourceYearMaster)면 검토 UID 목록·마스터 연결과 무관하게 원천 연식을 spec.year 로 싣는다(쓰기 경로는 빈 칸만 채운다).
+    // 연식·최초등록 모순, 형식 밖 연식은 여전히 RAW 에만 남긴다 — 연식을 추정하지 않는다.
+    // 마스터 근거(spec_master_digest·id)는 종전 게이트(검토 UID 목록 + 마스터 단일 대조 + 허용 연식)를 통과한 차에만 붙인다. 이름·발행 HOLD 는 그대로.
     const sourceYear = normalized.record.candidate.vehicleFacts?.fields.modelYear;
-    if (sourceYearMaster?.digest && (!sourceYearMaster.sourceYearUids || sourceYearMaster.sourceYearUids.has(r.uid))
-        && sourceYear?.state === 'KNOWN' && typeof sourceYear.value === 'number' &&
-        !normalized.record.candidate.issues.includes('YEAR_REGISTRATION_MISMATCH')) {
-      const facts = normalized.record.candidate.vehicleFacts?.fields;
-      const evidence = sourceYearMaster.sourceYearEvidence;
-      const names = ['maker', 'model', 'subModel', 'trimName'].map(key => facts?.[key]);
-      // Reuse the existing structured normalizer's accepted identity. The raw-name matcher is a different
-      // conservative path and can reject an identity already verified from the four sheet names/specs.
-      // A structured HOLD never falls back to that matcher. Product names/HOLD themselves remain unchanged.
-      const ids = evidence && facts?.vehicleIdentitySource?.state === 'KNOWN' && names.every(f => f?.state === 'KNOWN')
-        ? new Set(evidence.records.filter(record => record.names.every((name, index) => name === names[index]!.value)).map(record => record.masterId)) : new Set<string>();
-      const matched = evidence ? ids.size === 1 ? { master_id: [...ids][0]! } : null
-        : sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) });
-      if (matched && sourceYearMaster.allowsYear?.(matched.master_id, sourceYear.value) === true) {
-        r.raw.spec = { ...sheetSpec, year: String(sourceYear.value) };
-        r.raw.spec_master_digest = evidence?.snapshotDigest ?? sourceYearMaster.digest;
-        r.raw.spec_master_id = matched.master_id;
+    if (sourceYearMaster?.digest && sourceYear?.state === 'KNOWN' && typeof sourceYear.value === 'number'
+        && Number.isSafeInteger(sourceYear.value) && sourceYear.value >= 1900 && sourceYear.value <= 2100
+        && !normalized.record.candidate.issues.includes('YEAR_REGISTRATION_MISMATCH')) {
+      r.raw.spec = { ...sheetSpec, year: String(sourceYear.value) };
+      if (!sourceYearMaster.sourceYearUids || sourceYearMaster.sourceYearUids.has(r.uid)) {
+        const facts = normalized.record.candidate.vehicleFacts?.fields;
+        const evidence = sourceYearMaster.sourceYearEvidence;
+        const names = ['maker', 'model', 'subModel', 'trimName'].map(key => facts?.[key]);
+        // Reuse the existing structured normalizer's accepted identity. A structured HOLD never falls back to the raw-name matcher.
+        const ids = evidence && facts?.vehicleIdentitySource?.state === 'KNOWN' && names.every(f => f?.state === 'KNOWN')
+          ? new Set(evidence.records.filter(record => record.names.every((name, index) => name === names[index]!.value)).map(record => record.masterId)) : new Set<string>();
+        const matched = evidence ? ids.size === 1 ? { master_id: [...ids][0]! } : null
+          : sourceYearMaster.match({ rawName: r.vehicleText, year: String(sourceYear.value) });
+        if (matched && sourceYearMaster.allowsYear?.(matched.master_id, sourceYear.value) === true) {
+          r.raw.spec_master_digest = evidence?.snapshotDigest ?? sourceYearMaster.digest;
+          r.raw.spec_master_id = matched.master_id;
+        }
       }
     }
     // An invalid supplied period must not disappear from an otherwise apparently valid bundle.

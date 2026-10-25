@@ -1,12 +1,38 @@
 import { pathToFileURL } from 'node:url';
-import { readFile, appendFile } from 'node:fs/promises';
+import { readFile, appendFile, mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 import { planSourceCycle, applySourceCycle, deepEqual, type CycleCommands, type CyclePlan, type CycleControl, type CycleProduct } from '../application/source-cycle.js';
 import { sourceCyclePlugin, type CyclePlugin, type CycleCapture, type CycleSourceDefinition } from '../adapters/source-cycle-plugins.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 
 /** 연속 실패 정지 뒤 자동 재시도까지의 냉각 시간. */
 export const SOURCE_STOP_COOLDOWN_MS = 60 * 60 * 1000;
+
+/** 비밀·토큰·키·이메일 모양을 가린다(사후 진단 로그 전용). */
+export function maskDiagnosticText(text: string): string {
+  return text
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]+/gi, '$1 [MASKED]')
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]*)?/g, '[JWT]')
+    .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|authorization|private[_-]?key|cookie|session|sid)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi, '$1$2[MASKED]')
+    .replace(/([?&](?:key|token|access_token|api_key|apikey|password|secret|sig|signature)=)[^&\s]+/gi, '$1[MASKED]')
+    .replace(/\b(?:AIza|ghp_|gho_|sk-|xox[a-z]-)[A-Za-z0-9_-]{10,}/g, '[KEY]')
+    .replace(/\b[A-Za-z0-9+\/_-]{32,}={0,2}/g, '[LONG_TOKEN]');
+}
+
+/** 코드 형식이 아닌 예외의 단계·이름·메시지 앞부분·스택 상위를 비공개 로그(cycle-errors.jsonl)에 한 줄 JSON 으로 남긴다. 실패해도 본 동작에 영향 없음. */
+export async function recordCycleError(sourceId: string, stage: string, error: unknown, at: Date = new Date(), env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  try {
+    const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+    const err = error as { constructor?: { name?: string }; message?: unknown; stack?: unknown } | null | undefined;
+    const name = String(err?.constructor?.name ?? typeof error);
+    const message = maskDiagnosticText(String(err?.message ?? (typeof error === 'string' ? error : '')).slice(0, 300));
+    const stack = typeof err?.stack === 'string' ? err.stack.split(/\r?\n/).slice(0, 5).map(l => maskDiagnosticText(l).slice(0, 300)) : [];
+    await mkdir(directory, { recursive: true });
+    await appendFile(join(directory, 'cycle-errors.jsonl'), `${JSON.stringify({ at: at.toISOString(), sourceId, stage, errorName: name, message, stack })}\n`, 'utf8');
+  } catch { /* 진단 로그 실패는 본 동작에 영향 없음 */ }
+}
 export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { apply?: boolean; digest?: string; approval?: string; approvedPlan?: CyclePlan; onlyWhenSynced?: boolean; now?: () => number;
     /** 시험용 대기 주입. */
@@ -48,10 +74,12 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
     let inlineStarted = false;
     let readDetail: string | null = null;   // 읽기가 불완전했을 때의 안전한 세부 코드(알림·요약에 남긴다)
     let summary = '';
+    let stage = 'START';   // 예외 진단용 단계명(보고·상태에는 쓰지 않는다)
     state.lastAttemptAt = new Date(clock()).toISOString();
     state.readCount = 0; state.heldCount = 0;
     try {
       let synced: string | null = null;
+      stage = 'SYNC_PROBE';
       const watch = options.onlyWhenSynced ? options.syncWatch : undefined;
       const sleepWatch = options.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
       let watchDeadline = Number.POSITIVE_INFINITY;   // 감시 종료 시각: 읽기·재시도 직전에도 확인한다
@@ -127,6 +155,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         await control.heartbeat(plugin.sourceId, state, null);
         return { status: 'UNCHANGED_SYNC', writes: 0, summary: '감시 창 종료 시각에 닿아 읽기를 시작하지 않음(다음 감시에서 다시 확인)' };
       }
+      stage = 'READ';
       let read = await plugin.read();
       // 감시 회차: 일시 오류는 회차를 실패로 만들기 전에 지수 백오프로 다시 읽는다(신선도 창 11분을 넘기면 중단).
       if (watch) {
@@ -163,6 +192,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
           summary: `상류 원천 갱신 시각 문제(${reasonCode}): 쓰기 0, 연속 실패로 세지 않음` };
       }
       if (synced && plugin.syncedAtOfRead?.(read) !== synced) throw new Error('SYNC_CHANGED_DURING_READ');
+      stage = 'CONVERT';
       const converted = plugin.toRecords(read);
       state.readCount = converted.records.length; state.heldCount = converted.held.length;
       state.observationOnlyCount = plugin.observationCountOfRead?.(read) ?? 0;
@@ -214,6 +244,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
         'IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT', 'IANCAR_ONE_DETAIL_SOURCE_DRIFT', 'IANCAR_ONE_LIST_CHANGED_DURING_READ']);
       const benign = converted.held.filter(h => h.reasons.length > 0 &&
         h.reasons.every(r => r.split(',').map(s => s.trim()).filter(Boolean).every(s => VALUE_CLASS_HOLDS.has(s)))).length;
+      stage = 'PLAN';
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
         observedAt: read.observedAt, heldCount: converted.held.length,
         ...(benign ? { benignHeldCount: benign } : {}),
@@ -230,6 +261,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const inline = options.autoApprove === true && !options.approvedPlan && plan.entries.length > 0;
       const applying = options.apply === true || inline;
       inlineStarted = inline;
+      stage = 'APPLY';
       const applied = await applySourceCycle(commands, plan, inline
         ? { apply: true, digest: built.digest, approval: built.digest, now: clock() } : { ...options, now: clock() });
       outcome = applied;
@@ -260,6 +292,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       // Only internal safe codes reach logs; no provider response bodies or customer raw data.
       const candidate = e instanceof Error ? e.message : '';
       const reason = /^[A-Z0-9_,]+$/.test(candidate) ? candidate : 'CYCLE_ERROR';
+      if (reason === 'CYCLE_ERROR') await recordCycleError(plugin.sourceId, stage, e);
       if (options.manualPlan === true && options.apply !== true) {
         // 수동 plan 의 실패는 무인 회차의 실패 수·정지·마지막 시도 시각을 건드리지 않는다(저장하지 않음). 사유만 알린다.
         return { status: 'HOLD', writes: 0, verified: 0,

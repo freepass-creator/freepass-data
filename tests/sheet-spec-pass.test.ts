@@ -62,12 +62,14 @@ describe('A) F05 공유 시트 제원 → raw.spec', () => {
     expect(passed.raw.spec).toEqual({ ...goodSpec, year: '2023' });
     expect(passed.raw.spec_master_digest).toBe('synthetic-master-digest');
     expect(passed.raw.spec_master_id).toBe('synthetic-master');
-    // 검토 UID 목록 밖이면 연식은 빠지고 다른 제원만 남는다.
+    // 2026-10-25: 검토 UID 목록 밖이어도 원천 연식은 옮기고, 마스터 근거만 붙지 않는다.
     const notReviewed = f05(row, { ...master, sourceYearUids: new Set(['OTHER']) });
-    expect(notReviewed.raw.spec).toEqual(goodSpec);
+    expect(notReviewed.raw.spec).toEqual({ ...goodSpec, year: '2023' });
     expect(notReviewed.raw).not.toHaveProperty('spec_master_digest');
-    // 마스터가 허용하지 않는 연식도 연식은 빠진다.
-    expect(f05(row, { ...master, allowsYear: () => false }).raw.spec).toEqual(goodSpec);
+    // 2026-10-25: 마스터가 허용하지 않는 연식이어도 원천 연식은 옮기고(차종 판정과 분리), 마스터 근거만 붙이지 않는다.
+    const notAllowed = f05(row, { ...master, allowsYear: () => false });
+    expect(notAllowed.raw.spec).toEqual({ ...goodSpec, year: '2023' });
+    expect(notAllowed.raw).not.toHaveProperty('spec_master_id');
     // 끈 공급사는 연식 게이트만(기존 동작 그대로).
     expect(f05(row, master, false).raw.spec).toEqual({ year: '2023' });
   });
