@@ -29,8 +29,9 @@ export type VehicleUidMigrationWriteStore = {
   getAssetSnapshot?(assetId: string): Promise<VehicleUidMigrationDocumentSnapshot<VehicleAsset> | null>;
   getProductSnapshot?(productKey: string): Promise<VehicleUidMigrationDocumentSnapshot<VehicleUidMigrationProductDoc> | null>;
   updateAssetExternalIds(assetId: string, externalIds: VehicleExternalId[]): Promise<void>;
-  setProductVehicleUid(productKey: string, vehicleUid: string | null): Promise<void>;
+  /** 조건부 쓰기: expectedUpdateTime 이 있으면 그 시각일 때만, 없어도 읽은 시각을 전제로 쓴다(무조건 덮지 않음). */
+  setProductVehicleUid(productKey: string, vehicleUid: string | null, expectedUpdateTime?: VehicleUidMigrationUpdateTime): Promise<void>;
   restoreAssetExternalIds(assetId: string, externalIds: VehicleExternalId[] | undefined): Promise<void>;
-  deleteProductVehicleUid(productKey: string): Promise<void>;
+  deleteProductVehicleUid(productKey: string, expectedUpdateTime?: VehicleUidMigrationUpdateTime): Promise<void>;
   commitMutations?(mutations: VehicleUidMigrationStoreMutation[]): Promise<VehicleUidMigrationCommitResult | void>;
 };

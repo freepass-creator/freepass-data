@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import type { AuditEvent } from '../domain/catalog.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { productRevisionModeOf } from '../domain/product-revision.js';
+import { adminProductRevisionSink, localProductRevisionSink, productRevisionSinkOf, recordProductRevision, type ProductRevisionRecordResult } from './product-revision-writer.js';
 
 export type VehicleNameRepairItem = {
   id: string;
@@ -982,11 +984,16 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const variantsByPath: Record<string, Record<string, unknown>[]> = Object.fromEntries(variantRepairs.map((v, i) => [variantRefs[i]!.path, v.to]));
   const masterTrimsByPath: Record<string, string[]> = Object.fromEntries(variantRepairs.filter((v) => v.trims).map((v) => [`vehicle_master/${v.id}`, v.trims!]));
 
+  // 상품 변경 이력(기본 off, shadow 는 쓰기·되읽기 뒤 비공식 기록). 같은 계획을 다시 돌려도 같은 작업 id 라 이력은 하나만 남는다.
+  const revisionMode = productRevisionModeOf(process.env);
+  const revisionPlanDigest = stableDigest(plan);
+  let productWrites: Array<{ uid: string; before: Record<string, unknown> | null; after: Record<string, unknown> }> = [];
   await db.runTransaction(async (transaction) => {
     skippedAlreadyApplied = 0;
     activeSourceCorrectionIndexes.clear();
     correctionByPath = { ...plannedCorrectionByPath };
     correctionHistoryByPath = {};
+    productWrites = [];
     const current = refs.length ? await transaction.getAll(...refs) : [];
     const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
     const sourceCorrectionCurrent = sourceCorrectionRefs.length ? await transaction.getAll(...sourceCorrectionRefs) : [];
@@ -1282,6 +1289,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), raw];
       }
     });
+    // 조건부 쓰기(CAS 없는 쓰기 금지): 백업 때 updateTime 이 없는 문서는 이 트랜잭션에서 읽은 updateTime 을 전제로 쓴다.
+    // 트랜잭션 읽기는 모든 쓰기보다 먼저여야 하므로 여기서 한 번에 모은다(이미 읽은 문서는 그 스냅숏을 쓴다).
+    const liveByPath = Object.fromEntries([...current, ...identityCurrent, ...sourceCorrectionCurrent].map((s) => [s.ref.path, s]));
+    const unread = Object.values(byPath).map((x) => x.ref).filter((ref) => lockedUpdateTime[ref.path] === undefined && !(ref.path in liveByPath));
+    if (unread.length) Object.assign(liveByPath, Object.fromEntries((await transaction.getAll(...unread)).map((s) => [s.ref.path, s])));
     for (const { ref, fields, aliases } of Object.values(byPath)) {
       const update = {
         ...fields,
@@ -1300,8 +1312,15 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         if (live && stableDigest(live.data() ?? null) !== lockedDigest[ref.path]) throw new Error(`transaction product changed since backup ${ref.path}`);
       }
       const pinned = lockedUpdateTime[ref.path];
+      const live = liveByPath[ref.path];
       if (pinned !== undefined) transaction.update(ref, update, { lastUpdateTime: pinned as never });
-      else transaction.update(ref, update);
+      else {
+        if (!live?.exists || !live.updateTime) throw new Error(`transaction target missing for conditional update ${ref.path}`);
+        transaction.update(ref, update, { lastUpdateTime: live.updateTime });
+      }
+      if (ref.parent.id === FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products) {
+        productWrites.push({ uid: ref.id, before: (live?.data() as Record<string, unknown> | undefined) ?? null, after: update });
+      }
     }
     // create() fails the whole transaction if the document appeared meanwhile.
     for (const { c, ref } of creates) transaction.create(ref, { ...c.data, vehicle_name_reference_source_digest: plan.sourceDigest });
@@ -1378,5 +1397,20 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const sourceCorrectionAuditReadback = await readbackAuditEvents(db, activeSourceCorrectionAuditRefs, activeSourceCorrectionAudits, 'readback source correction audit mismatch');
-  return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
+  // 되읽기까지 통과한 뒤에만 이력을 남긴다(shadow: 실패해도 결과에만 남고 정정은 그대로).
+  const revisions: ProductRevisionRecordResult[] = [];
+  for (const write of productWrites) {
+    revisions.push(await recordProductRevision(revisionMode, () => productRevisionSinkOf(process.env, {
+      local: () => localProductRevisionSink(join(homedir(), '.codex', 'private', 'freepass-data-product-revisions')),
+      firestore: () => adminProductRevisionSink(db as never),
+    }), () => ({   // 지연 생성: off 면 호출되지 않고, shadow 에서 예외가 나도 기록 함수 안에서 격리된다
+      uid: write.uid, operationId: `vehicle-name-repair:${revisionPlanDigest}:${write.uid}`, kind: 'IDENTITY_CORRECTION',
+      actor: { kind: 'TOOL', id: 'repair:vehicle-name-parity', role: 'SERVICE', via: 'repair:vehicle-name-parity', host: hostname(),
+        ...(process.env.FREEPASS_APPROVED_BY ? { approvedBy: process.env.FREEPASS_APPROVED_BY } : {}) },
+      tool: { name: 'repair:vehicle-name-parity', runId, planDigest: revisionPlanDigest },
+      reason: '차종 이름 정정(계획 digest 승인)', evidence: { sourceDigest: plan.sourceDigest },
+      before: write.before, after: write.after, at: occurredAt,
+    })));
+  }
+  return { runId, backupPath, ...counts, revisions, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
 }

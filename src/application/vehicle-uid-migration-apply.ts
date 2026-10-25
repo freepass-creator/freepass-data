@@ -124,9 +124,9 @@ async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: 
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
       await store.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
     } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-      await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+      await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid, mutation.updateTime);
     } else if (mutation.kind === 'PRODUCT_DELETE_VEHICLE_UID') {
-      await store.deleteProductVehicleUid(mutation.productKey);
+      await store.deleteProductVehicleUid(mutation.productKey, mutation.updateTime);
     }
   }
   return { applied: actualWriteCount(mutations), skipped: [] };

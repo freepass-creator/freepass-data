@@ -50,6 +50,16 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     if (!mutation.assetIdentifierDigest) return undefined;
     return `asset:${mutation.kind === 'ASSET_EXTERNAL_IDS' ? mutation.assetId : mutation.vehicleUid}`;
   };
+  // 상품 단건 쓰기는 조건부로만(CAS 없는 쓰기 금지): 계획 때 updateTime 이 있으면 그 시각과 같을 때만, 없으면 트랜잭션에서 읽은 updateTime 을 전제로 쓴다.
+  const conditionalProductUpdate = async (productKey: string, patch: Record<string, unknown>, expected?: VehicleUidMigrationUpdateTime) => {
+    const ref = productRef(productKey);
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || !snap.updateTime) throw new Error('PRODUCT_NOT_FOUND');
+      if (expected && !sameUpdateTime(updateTimeValue(snap), expected)) throw new Error('CAS_CONFLICT');
+      tx.update(ref, patch, { lastUpdateTime: snap.updateTime });
+    });
+  };
   const mutationRef = (mutation: VehicleUidMigrationStoreMutation) =>
     mutation.kind === 'ASSET_EXTERNAL_IDS' ? assetRef(mutation.assetId) : productRef(mutation.productKey);
   const validateAssetDigest = (
@@ -168,14 +178,14 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     async updateAssetExternalIds(assetId, externalIds) {
       await assetRef(assetId).update({ externalIds });
     },
-    async setProductVehicleUid(productKey, vehicleUid) {
-      await productRef(productKey).update({ vehicle_uid: vehicleUid });
+    async setProductVehicleUid(productKey, vehicleUid, expectedUpdateTime) {
+      await conditionalProductUpdate(productKey, { vehicle_uid: vehicleUid }, expectedUpdateTime);
     },
     async restoreAssetExternalIds(assetId: string, externalIds: VehicleExternalId[] | undefined) {
       await assetRef(assetId).update(rollbackAssetExternalIdsPatch(externalIds));
     },
-    async deleteProductVehicleUid(productKey: string) {
-      await productRef(productKey).update(rollbackProductVehicleUidPatch(undefined));
+    async deleteProductVehicleUid(productKey: string, expectedUpdateTime?: VehicleUidMigrationUpdateTime) {
+      await conditionalProductUpdate(productKey, rollbackProductVehicleUidPatch(undefined), expectedUpdateTime);
     },
     async commitMutations(mutations: VehicleUidMigrationStoreMutation[]) {
       let applied = 0;
