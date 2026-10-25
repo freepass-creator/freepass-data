@@ -1,0 +1,161 @@
+import { createHash } from 'node:crypto';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { adminWorkflowReplacements, adminWorkflowSemanticOwners, assertAdminWorkflowCommitRequest, droppedTopLevelFields, changedSettlementAuditKeys, assertAdminWorkflowReadSpec, } from '../domain/admin-workflow.js';
+const RECEIPTS = FIRESTORE_COLLECTIONS.legacyAdminWorkflow.receipts;
+class AdminWorkflowConflictError extends Error {
+    code = 'ADMIN_WORKFLOW_CONFLICT';
+    constructor() { super('ADMIN_WORKFLOW_CONFLICT'); }
+}
+class AdminWorkflowIdempotencyError extends Error {
+    code = 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT';
+    constructor() { super('ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT'); }
+}
+export class AdminWorkflowReplacementDropsFieldsError extends Error {
+    resource;
+    droppedFields;
+    code = 'ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS';
+    constructor(resource, droppedFields) {
+        super('ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS');
+        this.resource = resource;
+        this.droppedFields = droppedFields;
+    }
+}
+const collectionName = (resource) => FIRESTORE_COLLECTIONS.legacyAdminWorkflow[resource];
+function queryFor(db, spec) {
+    let query = db.collection(collectionName(spec.resource));
+    for (const filter of spec.filters ?? [])
+        query = query.where(filter.field, filter.op, filter.value);
+    if (spec.limit)
+        query = query.limit(spec.limit);
+    return query;
+}
+const docResult = (id, exists, data) => {
+    const docs = exists ? [{ id, data: data ?? {} }] : [];
+    return {
+        schema: 'freepass-data.admin-workflow-read/v1',
+        docs,
+        digest: stableDigest({ kind: 'doc', id, exists, data: exists ? (data ?? {}) : null }),
+    };
+};
+const queryResult = (docs) => {
+    const sorted = [...docs].sort((a, b) => a.id.localeCompare(b.id));
+    return {
+        schema: 'freepass-data.admin-workflow-read/v1',
+        docs,
+        digest: stableDigest({ kind: 'query', docs: sorted }),
+    };
+};
+async function readWith(db, spec, tx) {
+    assertAdminWorkflowReadSpec(spec);
+    if (spec.kind === 'doc') {
+        const ref = db.collection(collectionName(spec.resource)).doc(spec.id);
+        const snap = tx ? await tx.get(ref) : await ref.get();
+        return docResult(snap.id, snap.exists, snap.exists ? snap.data() : undefined);
+    }
+    const query = queryFor(db, spec);
+    const snap = tx ? await tx.get(query) : await query.get();
+    return queryResult(snap.docs.map((doc) => ({ id: doc.id, data: doc.data() })));
+}
+function applyMutation(db, tx, mutation) {
+    const ref = db.collection(collectionName(mutation.resource)).doc(mutation.id);
+    if (mutation.op === 'set') {
+        if (mutation.merge)
+            tx.set(ref, mutation.data, { merge: true });
+        else
+            tx.set(ref, mutation.data);
+    }
+    else if (mutation.op === 'update') {
+        tx.update(ref, mutation.data);
+    }
+    else {
+        tx.create(ref, mutation.data);
+    }
+}
+function receiptId(consumerId, operationId) {
+    return 'awr_' + createHash('sha256').update(consumerId + '|' + operationId).digest('hex').slice(0, 40);
+}
+export function adminWorkflowStore(db) {
+    return {
+        async read(spec) {
+            return readWith(db, spec);
+        },
+        async commit(consumerId, request) {
+            assertAdminWorkflowCommitRequest(request);
+            const requestDigest = stableDigest({
+                consumerId,
+                operationId: request.operationId,
+                actor: request.actor,
+                purpose: request.purpose,
+                expectations: request.expectations,
+                mutations: request.mutations,
+            });
+            const receiptRef = db.collection(RECEIPTS).doc(receiptId(consumerId, request.operationId));
+            return db.runTransaction(async (tx) => {
+                const prior = await tx.get(receiptRef);
+                if (prior.exists) {
+                    const value = prior.data();
+                    if (value.requestDigest !== requestDigest)
+                        throw new AdminWorkflowIdempotencyError();
+                    return { ...value, idempotent: true };
+                }
+                for (const expectation of request.expectations) {
+                    const current = await readWith(db, expectation.spec, tx);
+                    if (current.digest !== expectation.digest)
+                        throw new AdminWorkflowConflictError();
+                }
+                // Track newly appended keys too, so later mutations in this command cannot rewrite them.
+                const auditProjected = Object.create(null);
+                for (const mutation of request.mutations) {
+                    if (mutation.resource !== 'settlementEvents')
+                        continue;
+                    if (!Object.hasOwn(auditProjected, mutation.id)) {
+                        const stored = await tx.get(db.collection(collectionName(mutation.resource)).doc(mutation.id));
+                        auditProjected[mutation.id] = stored.exists ? stored.data() : {};
+                    }
+                    const prior = auditProjected[mutation.id];
+                    const next = mutation.op === 'set' && mutation.merge !== true
+                        ? mutation.data : { ...prior, ...mutation.data };
+                    if (changedSettlementAuditKeys(prior, next).length)
+                        throw new AdminWorkflowConflictError();
+                    auditProjected[mutation.id] = next;
+                }
+                // All reads must finish before the first write in a Firestore transaction.
+                for (const mutation of adminWorkflowReplacements(request.mutations)) {
+                    const stored = await tx.get(db.collection(collectionName(mutation.resource)).doc(mutation.id));
+                    if (!stored.exists)
+                        continue;
+                    const dropped = droppedTopLevelFields(stored.data(), mutation.data);
+                    if (dropped.length)
+                        throw new AdminWorkflowReplacementDropsFieldsError(mutation.resource, dropped);
+                }
+                for (const mutation of request.mutations)
+                    applyMutation(db, tx, mutation);
+                const committedAt = new Date().toISOString();
+                const base = {
+                    schema: 'freepass-data.admin-workflow-receipt/v2',
+                    authority: 'FREEPASS_DATA_ACCESS_GATEWAY',
+                    authorityRole: 'EXECUTION_GATEWAY',
+                    semanticOwners: adminWorkflowSemanticOwners(request),
+                    consumerId,
+                    operationId: request.operationId,
+                    requestDigest,
+                    mutationCount: request.mutations.length,
+                    committedAt,
+                };
+                const receipt = {
+                    ...base,
+                    receiptDigest: stableDigest(base),
+                    idempotent: false,
+                };
+                tx.create(receiptRef, receipt);
+                return receipt;
+            });
+        },
+    };
+}
+export function createFirestoreAdminWorkflowStore() {
+    return adminWorkflowStore(getFirestore(getTargetFirebaseApp()));
+}

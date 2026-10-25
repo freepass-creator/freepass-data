@@ -1,0 +1,610 @@
+import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
+import { createHash } from 'node:crypto';
+import { Compute } from 'google-auth-library';
+import { getFirestore } from 'firebase-admin/firestore';
+import { createFirestoreSourceStore } from './source-firestore-store.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
+import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarEngineDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { logRouteError } from '../shared/route-error-log.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
+import { hasVehiclePhotoVerification, parsePhotoCopySuppliers } from '../domain/consumer-output-contract.js';
+import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia } from '../domain/consumer-output-contract.js';
+export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
+/** Internal stored facts only: no fee engine, source fetch, public projection or identity inference. */
+export function selectStoredProducts(products, policies, partners, search = {}, photoProjection, registeredNames) {
+    const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
+    for (const [key, value] of Object.entries(search))
+        if (!allowed.includes(key) || typeof value !== 'string' || !value.trim())
+            throw new Error('INVALID_PRODUCT_SEARCH');
+    if (search.plate && !isAssignedPlate(search.plate))
+        throw new Error('PLATE_NOT_ASSIGNED');
+    const text = (v) => typeof v === 'string' ? v.trim() : '';
+    // Remove legal designators only, not business words or arbitrary substrings.
+    const nameKey = (v) => text(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+        .replace(/^(?:\(주\)|주식회사)/, '').replace(/(?:\(주\)|주식회사)$/, '');
+    return Object.entries(products).flatMap(([productId, product]) => {
+        const supplierId = text(product.provider_company_code) || null;
+        // Existing partner records are name authority; do not promote a display-code fallback.
+        const suppliers = Object.entries(partners).filter(([id, p]) => supplierId &&
+            [id, p.partner_code, p.company_code, p.provider_company_code, p.id].includes(supplierId));
+        const supplierName = suppliers.length === 1 ? text(suppliers[0][1].partner_name) || text(suppliers[0][1].company_name) || text(suppliers[0][1].name) || null : null;
+        if (search.productId && search.productId.trim() !== productId)
+            return [];
+        if (search.supplierId && search.supplierId.trim() !== supplierId)
+            return [];
+        const supplierNames = [supplierName, ...(supplierId ? registeredNames?.(supplierId) ?? [] : [])].filter(Boolean);
+        if (search.supplierName && !supplierNames.some(name => nameKey(search.supplierName) === nameKey(name)))
+            return [];
+        if (search.plate && plateIdentityKey(search.plate) !== plateIdentityKey(product.car_number))
+            return [];
+        if (search.vehicleName && !nameKey([product.maker, product.model, product.sub_model, product.trim_name].filter(Boolean).join(' ')).includes(nameKey(search.vehicleName)))
+            return [];
+        const policyCode = text(product.policy_code);
+        const sameCode = Object.entries(policies).filter(([id, p]) => policyCode && (id === policyCode || p.policy_code === policyCode));
+        const company = (p) => text(p.companyId) || text(p.provider_company_code);
+        const exactPolicies = supplierId ? sameCode.filter(([, p]) => company(p) === supplierId) : [];
+        const linkedPolicies = exactPolicies.length ? exactPolicies : sameCode.filter(([, p]) => !company(p));
+        const fields = ['maker', 'model', 'sub_model', 'trim_name', 'fuel_type', 'engine_cc', 'drive_type', 'seats',
+            'car_number', 'vehicle_uid', 'vehicle_status', 'status', 'listable', 'product_type', 'price', 'deposit_note',
+            'options', 'ext_color', 'int_color', 'year', 'mileage', 'first_registration_date', 'annual_mileage',
+            'vehicle_class', 'engine_type', 'transmission', 'usage', 'accident_history', 'battery_capacity'];
+        return [{ productId, representationKind: 'LEGACY_PRODUCT', supplierId, supplierName,
+                supplierNameEvidence: { state: supplierName ? 'KNOWN' : 'UNKNOWN', reasonCode: supplierName ? null : 'PARTNER_NAME_NOT_UNIQUE_OR_MISSING' },
+                facts: Object.fromEntries(fields.map(k => [k, product[k] ?? null])),
+                factStates: Object.fromEntries(fields.map(k => [k, { state: product[k] == null || product[k] === ''
+                            || (Array.isArray(product[k]) && product[k].length === 0) ? 'UNKNOWN' : 'STORED',
+                        reasonCode: product[k] == null || product[k] === '' || (Array.isArray(product[k]) && product[k].length === 0)
+                            ? 'STORED_FIELD_NOT_OBSERVED' : null }])),
+                plateEvidence: { state: isAssignedPlate(product.car_number) ? 'KNOWN' : 'UNKNOWN',
+                    reasonCode: isAssignedPlate(product.car_number) ? null : 'ASSIGNED_PLATE_NOT_OBSERVED' },
+                priceEvidence: { state: product.price && typeof product.price === 'object' && !Array.isArray(product.price)
+                        && Object.keys(product.price).length ? 'STORED' : 'UNKNOWN', reasonCode: product.price && typeof product.price === 'object'
+                        && !Array.isArray(product.price) && Object.keys(product.price).length ? null : 'STORED_PRICE_TERMS_NOT_OBSERVED' },
+                policy: linkedPolicies.length === 1 ? { id: linkedPolicies[0][0], data: linkedPolicies[0][1] } : null,
+                policyEvidence: { state: linkedPolicies.length === 1 ? 'KNOWN' : 'UNKNOWN', reasonCode: linkedPolicies.length === 1 ? null : 'POLICY_NOT_UNIQUE_OR_MISSING' },
+                photos: { state: hasVehiclePhotoVerification(product) ? 'STORED_REVIEWED_REFS' : 'UNKNOWN',
+                    existingProjection: photoProjection ? photoProjection(product) : null,
+                    count: hasVehiclePhotoVerification(product) ? product.photo_original_refs.length : null,
+                    references: hasVehiclePhotoVerification(product) ? product.photo_original_refs.map((ref, index) => ({
+                        productId, index, referenceKind: 'STORED_REVIEW_METADATA', readerMethod: null,
+                        servingIndex: Number.isInteger(ref.servingIndex) ? ref.servingIndex : null,
+                        representative: typeof ref.representative === 'boolean' ? ref.representative : null,
+                        mediaType: typeof ref.mediaType === 'string' ? ref.mediaType : null,
+                    })) : null,
+                    suppliedFields: Object.fromEntries(['photo_link', 'tica_link', 'image_urls', 'image_url'].map(k => [k, {
+                            state: product[k] == null || product[k] === '' || (Array.isArray(product[k]) && !product[k].length) ? 'UNKNOWN' : 'STORED_UNVERIFIED',
+                            reasonCode: 'USE_EXISTING_PHOTO_PROJECTION_FOR_ACCESS',
+                        }])),
+                    reasonCode: hasVehiclePhotoVerification(product) ? null : 'PHOTO_REVIEW_REFS_UNVERIFIED', bytesVerified: false,
+                    servingState: 'NOT_AUTHORIZED_FOR_THIS_INTERNAL_READER', servingReasonCode: 'PHOTO_SERVING_CONSUMER_GRANT_REQUIRED' },
+            }];
+    });
+}
+/** Explicit opt-in only. Compute uses the runtime service account, never local user ADC/gws.
+ * No Drive listing, export, sharing, folder discovery, retries or runtime auto-registration.
+ * Vehicle identity, approval, hash and revocation remain in createVehiclePhotoReader.
+ */
+export function createApprovedDrivePhotoReader(options = {}) {
+    const auth = options.token ? undefined : new Compute({ scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
+    const token = options.token ?? (async () => (await auth.getAccessToken()).token ?? '');
+    const transport = options.fetchImpl ?? fetch;
+    return async (ref) => {
+        // Snapshot the exact approved ID before async work; never interpret URLs/shortcuts.
+        const fileId = ref.driveFileId;
+        const mediaType = ref.mediaType;
+        if (!/^[A-Za-z0-9_-]{1,200}$/.test(fileId))
+            throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+        try {
+            const bearer = await token();
+            if (!bearer || /[\r\n]/.test(bearer))
+                throw new Error();
+            const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+            const request = async (query) => {
+                const response = await transport(`${url}?${query}`, { method: 'GET', redirect: 'error', cache: 'no-store',
+                    signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${bearer}` } });
+                if (!response.ok) {
+                    await response.body?.cancel();
+                    throw new Error(response.status === 404 ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+                }
+                return response;
+            };
+            const metadata = await (await request('fields=id,mimeType,size,trashed&supportsAllDrives=true')).json();
+            const size = typeof metadata.size === 'string' && /^\d+$/.test(metadata.size) ? Number(metadata.size) : NaN;
+            if (metadata.id !== fileId || metadata.trashed !== false || metadata.mimeType !== mediaType
+                || validateVehiclePhotoMedia(metadata.mimeType, size))
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+            const response = await request('alt=media&supportsAllDrives=true');
+            const contentType = response.headers.get('content-type')?.split(';')[0]?.trim();
+            const length = response.headers.get('content-length');
+            if (contentType !== mediaType || (length !== null && (!/^\d+$/.test(length) || Number(length) !== size))) {
+                await response.body?.cancel();
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+            }
+            const reader = response.body?.getReader();
+            if (!reader)
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+            const chunks = [];
+            let received = 0;
+            try {
+                for (;;) {
+                    const part = await reader.read();
+                    if (part.done)
+                        break;
+                    received += part.value.byteLength;
+                    if (received > size || validateVehiclePhotoMedia(contentType, received))
+                        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+                    chunks.push(Buffer.from(part.value));
+                }
+            }
+            catch (error) {
+                await reader.cancel().catch(() => undefined);
+                throw error;
+            }
+            finally {
+                reader.releaseLock();
+            }
+            const bytes = Buffer.concat(chunks, received);
+            if (received !== size || validateVehiclePhotoMedia(contentType, received, bytes))
+                throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+            return { bytes, contentType: mediaType };
+        }
+        catch (error) {
+            // Never expose SDK/transport response bodies, URLs, credentials or upstream diagnostics.
+            throw new Error(error instanceof Error && error.message === 'VEHICLE_PHOTO_NOT_FOUND'
+                ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+        }
+    };
+}
+/** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
+export async function readVehicleMasterSnapshot() {
+    const db = getFirestore(getTargetFirebaseApp());
+    return db.runTransaction(async (tx) => {
+        const masters = await tx.get(db.collection('vehicle_master'));
+        const trims = await tx.get(db.collection('vehicle_trim_master'));
+        const documents = (q) => q.docs.map(d => ({ id: d.id, data: jsonSafe(d.data()) }));
+        const body = { readAt: masters.readTime.toDate().toISOString(), masters: documents(masters), trims: documents(trims) };
+        if (!masters.readTime.isEqual(trims.readTime))
+            throw new Error('VEHICLE_MASTER_NON_ATOMIC_READ');
+        return { source: 'freepasserp5/vehicle_master+vehicle_trim_master', complete: true, ...body,
+            digest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+    }, { readOnly: true });
+}
+export class CatalogCompatibilityProductReadError extends Error {
+    code;
+    statusCode;
+    constructor(code, statusCode) {
+        super(code);
+        this.code = code;
+        this.statusCode = statusCode;
+        this.name = 'CatalogCompatibilityProductReadError';
+    }
+}
+export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
+    '_key', 'product_code', 'provider_company_code', 'partner_code', 'provider_name', 'partner_name', 'deposit_note', 'policy_id', 'policy_code',
+    '_deleted', 'deletedAt', 'status', 'vehicle_status', 'status_kind', 'listable', 'publication_withdrawal',
+    'car_number', 'vehicle_uid', 'maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant',
+    'fuel_type', 'engine_type', 'engine_cc', 'drive_type', 'transmission', 'vehicle_class', 'product_type',
+    'year', 'seats', 'mileage', 'annual_mileage', 'ext_color', 'int_color', 'first_registration_date',
+    'price', 'iancar_phase_one', 'iancar_policy_terms',
+]);
+export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'provider_company_code',
+    'policy_name', 'policy_type', 'payment_method', 'payment_timing', 'basic_driver_age',
+    'driver_age_lowering', 'driver_age_upper_limit', 'license_period', 'personal_driver_scope',
+    'business_driver_scope', 'insurance_included', 'deposit_installment', 'deposit_card_payment',
+    'rental_card_payment', 'maintenance_service', 'credit_grade'];
+export const SINGLE_PARTNER_FACT_FIELDS = ['_key', 'partner_code', 'company_code', 'provider_company_code',
+    'partner_name', 'company_name', 'name', 'brand_name', 'alias'];
+/** Transport safety only. Price-key meaning and eligibility remain in the caller's existing parser. */
+export const isSingleProductPriceKey = (key) => key.length > 0 && key.length <= 80
+    && !['__proto__', 'constructor', 'prototype'].includes(key)
+    && !/[\u0000-\u001f\u007f]|https?:\/\/|<[^>]*>|AIza|ya29\./i.test(key);
+export const SINGLE_PRODUCT_PRICE_FIELDS = ['rent', 'deposit', 'depositState', 'deposit_state',
+    'depositStatusLabel', 'depositEvidenceReason', 'depositEvidenceBasis', 'depositRuleDifference'];
+const selectionUnavailable = () => { throw new CatalogCompatibilityProductReadError('PRODUCT_SELECTION_UNAVAILABLE', 503); };
+const selectedDocId = (value) => {
+    if (value == null || value === '')
+        return undefined;
+    if (typeof value !== 'string' || value.length > 200 || value.trim() !== value || /[\/\u0000-\u001f\u007f]/.test(value))
+        return selectionUnavailable();
+    return value;
+};
+const boundedScalar = (value) => {
+    if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
+        return value;
+    if (typeof value === 'string' && value.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(value))
+        return value;
+    return selectionUnavailable();
+};
+const pickSelectedFacts = (record, fields) => Object.fromEntries(fields
+    .filter(field => Object.hasOwn(record, field))
+    .map(field => [field, boundedScalar(record[field])]));
+/** Uses the existing target and transaction; no collection scan, alias inference or publication decision. */
+export async function readSingleProductCompatibility(db, consumerId, productId, readCollections) {
+    if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)))
+        return selectionUnavailable();
+    if (!productId || productId.length > 200 || productId.trim() !== productId || /[\/\u0000-\u001f\u007f]/.test(productId))
+        throw new CatalogCompatibilityProductReadError('INVALID_PRODUCT_SELECTION', 400);
+    if (!readCollections.has('products'))
+        return selectionUnavailable();
+    const layout = FIRESTORE_COLLECTIONS.legacyAdminWorkflow;
+    return db.runTransaction(async (tx) => {
+        const product = await tx.get(db.collection(layout.products).doc(productId));
+        if (!product.exists)
+            throw new CatalogCompatibilityProductReadError('PRODUCT_NOT_FOUND', 404);
+        const raw = product.data();
+        const readAt = product.readTime && new Date(product.readTime.toMillis()).toISOString();
+        const version = product.updateTime && new Date(product.updateTime.toMillis()).toISOString();
+        if (product.id !== productId || !readAt || !version)
+            return selectionUnavailable();
+        if (raw._key != null && raw._key !== '' && raw._key !== productId)
+            return selectionUnavailable();
+        const policyCode = selectedDocId(raw.policy_code);
+        const explicitPolicyId = selectedDocId(raw.policy_id);
+        if (policyCode && explicitPolicyId && policyCode !== explicitPolicyId)
+            return selectionUnavailable();
+        const policyId = policyCode ?? explicitPolicyId;
+        const providerCode = selectedDocId(raw.provider_company_code);
+        const partnerCode = selectedDocId(raw.partner_code);
+        if (providerCode && partnerCode && providerCode !== partnerCode)
+            return selectionUnavailable();
+        const partnerId = providerCode ?? partnerCode;
+        const linked = async (kind, id, collection, fields) => {
+            if (!id)
+                return { rows: {}, versions: [], evidence: { state: 'UNKNOWN', reasonCode: `${kind.toUpperCase()}_REFERENCE_NOT_OBSERVED` } };
+            if (!readCollections.has(kind))
+                return selectionUnavailable();
+            const doc = await tx.get(db.collection(collection).doc(id));
+            if (!doc.readTime || !doc.readTime.isEqual(product.readTime))
+                return selectionUnavailable();
+            if (!doc.exists)
+                return { rows: {}, versions: [], evidence: { state: 'UNKNOWN', reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
+            const updateTime = doc.updateTime && new Date(doc.updateTime.toMillis()).toISOString();
+            if (!updateTime || doc.id !== id)
+                return selectionUnavailable();
+            const facts = doc.data();
+            const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
+            if (codes.some(code => facts[code] != null && facts[code] !== '' && facts[code] !== id))
+                return selectionUnavailable();
+            return { rows: { [id]: { ...pickSelectedFacts(doc.data(), fields), _key: id } },
+                versions: [{ id, updateTime, updateTimeExact: { seconds: doc.updateTime.seconds, nanoseconds: doc.updateTime.nanoseconds } }], evidence: { state: 'KNOWN', reasonCode: null } };
+        };
+        const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
+        const partner = await linked('partner', partnerId, layout.partners, SINGLE_PARTNER_FACT_FIELDS);
+        const compatible = withCompatibilityDepositEvidence(raw, readAt);
+        const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== 'iancar_policy_terms' && f !== '_key'));
+        if (Object.hasOwn(compatible, 'price')) {
+            if (compatible.price === null)
+                selected.price = null;
+            else {
+                if (!compatible.price || typeof compatible.price !== 'object' || Array.isArray(compatible.price) || Object.keys(compatible.price).length > 200)
+                    return selectionUnavailable();
+                selected.price = Object.fromEntries(Object.entries(compatible.price).map(([key, row]) => {
+                    if (!isSingleProductPriceKey(key) || !row || typeof row !== 'object' || Array.isArray(row))
+                        return selectionUnavailable();
+                    const value = row;
+                    const result = pickSelectedFacts(value, SINGLE_PRODUCT_PRICE_FIELDS.filter(field => field !== 'depositEvidenceBasis' && field !== 'depositRuleDifference'));
+                    for (const [field, allowed] of [['depositEvidenceBasis', ['field', 'text', 'source', 'at']],
+                        ['depositRuleDifference', ['ruleAmount', 'ruleCode', 'differs']]]) {
+                        if (!Object.hasOwn(value, field))
+                            continue;
+                        if (!value[field] || typeof value[field] !== 'object' || Array.isArray(value[field]))
+                            return selectionUnavailable();
+                        result[field] = pickSelectedFacts(value[field], allowed);
+                    }
+                    return [key, result];
+                }));
+            }
+        }
+        if (Object.hasOwn(raw, 'iancar_phase_one')) {
+            const phase = raw.iancar_phase_one;
+            if (phase === null)
+                selected.iancar_phase_one = null;
+            else {
+                if (!phase || typeof phase !== 'object' || Array.isArray(phase))
+                    return selectionUnavailable();
+                const p = phase;
+                const result = pickSelectedFacts(p, ['policyStage']);
+                if (Object.hasOwn(p, 'priceAliases')) {
+                    if (!p.priceAliases || typeof p.priceAliases !== 'object' || Array.isArray(p.priceAliases) || Object.keys(p.priceAliases).length > 200)
+                        return selectionUnavailable();
+                    result.priceAliases = Object.fromEntries(Object.entries(p.priceAliases).map(([key, value]) => {
+                        if (!isSingleProductPriceKey(key))
+                            return selectionUnavailable();
+                        if (typeof value !== 'string' || !isSingleProductPriceKey(value))
+                            return selectionUnavailable();
+                        return [key, value];
+                    }));
+                }
+                selected.iancar_phase_one = result;
+            }
+        }
+        if (Object.hasOwn(raw, 'iancar_policy_terms')) {
+            // 이안카 차량별 보험·추가요금 조건: 고정 키·자료형만 통과(수수료·원가·내부 메모 없음). 모양이 다르면 응답하지 않는다.
+            const terms = projectIancarPolicyTerms(raw.iancar_policy_terms);
+            if (terms === undefined)
+                return selectionUnavailable();
+            selected.iancar_policy_terms = terms;
+        }
+        const snapshot = {
+            schema: 'freepass-data.catalog-compat/v1', data: { products: { [productId]: { ...selected, _key: productId } }, policies: policy.rows, partners: partner.rows },
+            meta: { consumerId, authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE', sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
+                observedAt: readAt, readAt, readTimeExact: { seconds: product.readTime.seconds, nanoseconds: product.readTime.nanoseconds }, collectionCounts: { products: 1, policies: policy.versions.length, partners: partner.versions.length },
+                depositEvidenceVersion: 'catalog-compat-deposit/1', selection: 'SINGLE_PRODUCT', readScope: 'SINGLE_PRODUCT', selectedProductId: productId,
+                documentVersions: { product: { id: productId, updateTime: version, updateTimeExact: { seconds: product.updateTime.seconds, nanoseconds: product.updateTime.nanoseconds } }, policies: policy.versions, partners: partner.versions },
+                linkedFacts: { policy: policy.evidence, partner: partner.evidence } },
+        };
+        if (Buffer.byteLength(JSON.stringify(snapshot)) > 1024 * 1024)
+            return selectionUnavailable();
+        return snapshot;
+    }, { readOnly: true });
+}
+const jsonSafe = (value) => {
+    if (value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+        return value;
+    if (value instanceof Date)
+        return value.toISOString();
+    if (Buffer.isBuffer(value))
+        return value.toString('base64');
+    if (Array.isArray(value))
+        return value.map(jsonSafe);
+    if (typeof value === 'object') {
+        const candidate = value;
+        if (typeof candidate.toMillis === 'function') {
+            try {
+                return candidate.toMillis();
+            }
+            catch { /* continue */ }
+        }
+        if (typeof candidate.path === 'string' && Object.keys(value).length <= 8) {
+            return candidate.path;
+        }
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonSafe(item)]));
+    }
+    return String(value);
+};
+const asMap = (snapshot) => Object.fromEntries(snapshot.docs.map((doc) => [
+    doc.id,
+    { ...jsonSafe(doc.data()), _key: doc.id },
+]));
+const allowedConsumer = (consumerId) => consumerId === 'erp-com' ||
+    consumerId === 'freepass-admin-catalog' ||
+    /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId);
+/** Response derivation only. UNKNOWN never retains an apparently confirmed numeric amount. */
+export function withCompatibilityDepositEvidence(product, now = new Date().toISOString()) {
+    const price = product.price;
+    if (!price || typeof price !== 'object' || Array.isArray(price))
+        return { ...product };
+    const paid = hasConflictingPaidDeposit(price);
+    return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                return [key, value];
+            const row = value;
+            const parsed = parseErp5CompatibilityPriceKey(key);
+            const evidence = product.provider_company_code === 'RP031' ? readIancarEngineDeposit(product, key, now)
+                : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+                    termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid
+                }));
+            const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
+            const depositEvidenceBasis = 'depositEvidenceBasis' in evidence ? evidence.depositEvidenceBasis : undefined;
+            return [key, { ...rowWithoutStaleBasis, deposit: evidence.amount, depositState: evidence.state,
+                    depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
+                    depositEvidenceReason: evidence.reason,
+                    ...('depositRuleDifference' in evidence ? { depositRuleDifference: evidence.depositRuleDifference } : {}),
+                    ...(evidence.state === 'ZERO' && depositEvidenceBasis ? { depositEvidenceBasis } : {}) }];
+        })) };
+}
+/**
+ * Transitional read-only bridge.
+ *
+ * The consumer never receives Firebase credentials or collection paths. This reader keeps
+ * the legacy document shape behind FreePass Data while canonical projections are completed.
+ * It must never become a write API or a fallback around the canonical release gate.
+ */
+/** Explicit RP031 opt-in only; missing or malformed configuration stays off. */
+export function parseIancarPhotoIdGateSuppliers(raw) {
+    return new Set(typeof raw === 'string' && raw.trim() === 'RP031' ? ['RP031'] : []);
+}
+export class FirestoreCatalogCompatibilityReader {
+    db = getFirestore(getTargetFirebaseApp());
+    sourceStore = createFirestoreSourceStore();
+    readCollections;
+    constructor(photoReader, approvedPhotoReader, options = {}) {
+        this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
+        this.readVehiclePhoto = createVehiclePhotoReader(async (productId) => (await this.db.collection('products').doc(productId).get()).data(), {
+            eligible: isPublicIancarPhotoProduct,
+            connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
+            read: async (product, index, fresh, expectedRegisteredPhotoCount) => {
+                if (!photoReader)
+                    throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+                // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
+                return photoReader(product.iancar_one_vehicle_id, product.car_number, index, fresh, expectedRegisteredPhotoCount);
+            },
+        }, approvedPhotoReader, undefined, options.photoReadFailureObserver, 
+        // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
+        parseIancarPhotoIdGateSuppliers(process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS), 
+        // 사본 없는 이안카 상품의 ONE 라이브 서빙. 기본 켜짐(종전), IANCAR_LIVE_PHOTO_FALLBACK=off 면 화면 요청이 ONE 을 부르지 않는다(대표 2026-10-15).
+        (process.env.IANCAR_LIVE_PHOTO_FALLBACK ?? '').trim().toLowerCase() !== 'off', 
+        // 사본 서빙 허용표(공급사 공통, 2026-10-15). FREEPASS_DATA_PHOTO_COPY_SUPPLIERS=RP031,RP0xx… — 비어 있으면 이안카만(종전 동작). RP031 은 항상 포함.
+        parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS));
+    }
+    readVehiclePhoto;
+    readProductCompat(consumerId, productId) {
+        return readSingleProductCompatibility(this.db, consumerId, productId, this.readCollections);
+    }
+    /** Shared internal consumer entrypoint. Current-source rows stay separate from saved products. */
+    async readStoredProducts(consumerId, search = {}, photoProjection, registeredNames) {
+        if (!['kakao-ops', 'freepass-admin-catalog'].includes(consumerId) && !/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))
+            throw new Error('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
+        selectStoredProducts({}, {}, {}, search); // Validate before network reads.
+        const C = FIRESTORE_COLLECTIONS;
+        const saved = await this.db.runTransaction(async (tx) => {
+            const [products, policies, partners, ledger, offers] = await Promise.all([
+                tx.get(this.db.collection(C.legacyAdminWorkflow.products)),
+                tx.get(this.db.collection(C.legacyAdminWorkflow.policies)),
+                tx.get(this.db.collection(C.legacyAdminWorkflow.partners)),
+                tx.get(this.db.collection(C.periodFees.ledger)),
+                tx.get(this.db.collection(C.catalog.offers)),
+            ]);
+            const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search, photoProjection, registeredNames);
+            return { rows: rows.map(row => ({ ...row,
+                    // Only exact saved product IDs may connect economics; never join by plate/name/code pattern.
+                    storedOffers: offers.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
+                    offerEvidence: { state: offers.docs.some(d => d.get('productId') === row.productId) ? 'STORED' : 'UNKNOWN',
+                        reasonCode: offers.docs.some(d => d.get('productId') === row.productId) ? null : 'CATALOG_OFFER_EXACT_PRODUCT_LINK_NOT_OBSERVED' },
+                    // No deployed ACTIVE-head contract has been verified. Preserve historical stored rows without selecting today's fees.
+                    storedLedgerRows: ledger.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
+                    currentFeeEvidence: { state: 'UNKNOWN', reasonCode: ledger.size ? 'PERIOD_FEE_ACTIVE_HEAD_UNVERIFIED' : 'PERIOD_FEE_LEDGER_NOT_OBSERVED' },
+                })), readAt: products.readTime.toDate().toISOString(),
+                ledgerRows: ledger.docs.map(d => jsonSafe(d.data())),
+                counts: { products: products.size, policies: policies.size, partners: partners.size, ledgerRows: ledger.size, offers: offers.size } };
+        }, { readOnly: true });
+        return { authority: 'STORED_FACTS', publicationDecision: 'HOLD', consumerId,
+            products: saved.rows,
+            ledgerRows: saved.ledgerRows,
+            diagnostics: { queryOutcome: saved.rows.length ? 'MATCHES' : 'NOT_OBSERVED',
+                supplierSearchResolution: search.supplierName && new Set(saved.rows.map(row => row.supplierId).filter(Boolean)).size > 1
+                    ? 'HOLD_AMBIGUOUS_REGISTERED_NAME' : 'EXACT_REGISTERED_OR_LEGAL_NAME',
+                emptyDoesNotProveAbsence: true, representation: 'LEGACY_PRODUCT',
+                unresolvedSupplierNames: saved.rows.filter(row => row.supplierName === null).length,
+                currentLedgerVerified: false },
+            meta: { readAt: saved.readAt, counts: saved.counts, snapshotConsistency: 'PRODUCT_POLICY_PARTNER_LEDGER_TRANSACTION' }, };
+    }
+    async read(consumerId) {
+        if (!allowedConsumer(consumerId))
+            throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
+        try {
+            const wantsAdminMaster = consumerId === 'freepass-admin-catalog';
+            const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
+            const requests = [
+                ...(this.readCollections.has('products') ? [['products', this.db.collection('products').get()]] : []),
+                ...(this.readCollections.has('policy') ? [['policy', this.db.collection('policy').get()]] : []),
+                ...(wantsErpPresentation && this.readCollections.has('partner')
+                    ? [
+                        ['partner', this.db.collection('partner').get()],
+                    ]
+                    : []),
+                ...(wantsErpPresentation && this.readCollections.has('user')
+                    ? [
+                        ['user', this.db.collection('user').get()],
+                    ]
+                    : []),
+                ...(wantsAdminMaster && this.readCollections.has('vehicle_master')
+                    ? [['vehicle_master', this.db.collection('vehicle_master').get()]]
+                    : []),
+            ];
+            const resolved = await Promise.all(requests.map(async ([name, query]) => [name, await query]));
+            const byName = new Map(resolved.map(([name, snapshot]) => [name, snapshot]));
+            const get = (name) => byName.get(name);
+            const products = get('products');
+            const policies = get('policy');
+            if (!products || !policies)
+                throw new Error('CATALOG_COMPAT_REQUIRED_COLLECTION_MISSING');
+            const collectionCounts = Object.fromEntries(resolved.map(([name, snapshot]) => [name, snapshot.size]));
+            const observedAt = new Date().toISOString();
+            return {
+                schema: 'freepass-data.catalog-compat/v1',
+                data: {
+                    products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
+                    policies: asMap(policies),
+                    ...(get('partner') ? { partners: asMap(get('partner')) } : {}),
+                    ...(get('user') ? { users: asMap(get('user')) } : {}),
+                    ...(get('vehicle_master') ? { vehicleMaster: asMap(get('vehicle_master')) } : {}),
+                },
+                meta: {
+                    consumerId,
+                    authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+                    sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
+                    observedAt,
+                    collectionCounts,
+                    depositEvidenceVersion: 'catalog-compat-deposit/1',
+                },
+            };
+        }
+        catch (error) {
+            logRouteError('erp5-compat-catalog-reader', 'compat_reader_read', error);
+            throw error;
+        }
+    }
+    async readKakaoReferenceSource(consumerId, options) {
+        if (consumerId !== 'kakao-ops')
+            throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
+        return this.readReferenceProducts(consumerId, options);
+    }
+    async readInternalAiReferenceSource(consumerId, options) {
+        if (!/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))
+            throw new Error('INTERNAL_AI_CONSUMER_NOT_ALLOWED');
+        return this.readReferenceProducts(consumerId, options);
+    }
+    async readReferenceProducts(consumerId, options) {
+        const [products, policies, masterRead] = await Promise.all([
+            this.db.collection('products').get(), this.db.collection('policy').get(),
+            readVehicleMasterSnapshot().then(vehicleMasterSnapshot => ({ vehicleMasterSnapshot, vehicleMasterReadState: 'AVAILABLE' }))
+                .catch(() => ({ vehicleMasterSnapshot: null, vehicleMasterReadState: 'UNAVAILABLE' })),
+        ]);
+        return {
+            consumerId,
+            products: asMap(products),
+            policies: asMap(policies),
+            ...masterRead,
+            observedAt: new Date().toISOString(),
+        };
+    }
+    async readTrustScorecardInput() {
+        const C = FIRESTORE_COLLECTIONS;
+        const [compat, masterSnapshot, legacyPolicies, vehicleModels, vehicleAssets, catalogProducts, catalogOffers, sourceDefinitions, sourceHeads,] = await Promise.all([
+            this.read('freepass-admin-catalog'),
+            readVehicleMasterSnapshot(),
+            this.db.collection('policy').get(),
+            this.db.collection(C.catalog.vehicleModels).get(),
+            this.db.collection(C.catalog.vehicleAssets).get(),
+            this.db.collection(C.catalog.products).get(),
+            this.db.collection(C.catalog.offers).get(),
+            this.db.collection(C.source.definitions).get(),
+            this.db.collection(C.source.heads).get(),
+        ]);
+        const sourceHeadById = new Map(sourceHeads.docs.map((doc) => [doc.id, jsonSafe(doc.data())]));
+        const sourceFreshness = sourceDefinitions.docs.map((doc) => {
+            const definition = jsonSafe(doc.data());
+            const head = sourceHeadById.get(doc.id);
+            const expected = definition.expectedFreshnessSeconds;
+            return {
+                sourceId: String(definition.sourceId ?? doc.id),
+                expectedFreshnessSeconds: Number.isSafeInteger(expected) ? expected : null,
+                observedAt: typeof head?.observedAt === 'string' ? head.observedAt : null,
+                acceptedAt: typeof head?.acceptedAt === 'string' ? head.acceptedAt : null,
+            };
+        });
+        return {
+            readAt: compat.meta.observedAt,
+            legacyProducts: compat.data.products,
+            legacyPolicies: asMap(legacyPolicies),
+            legacyVehicleMasterRows: Object.entries(compat.data.vehicleMaster ?? {}).map(([id, row]) => ({
+                id,
+                maker: String(row.maker ?? ''),
+                model: String(row.model ?? ''),
+                subModel: String(row.sub_model ?? row.subModel ?? ''),
+                generationCode: typeof row.generationCode === 'string' ? row.generationCode : null,
+                yearStart: typeof row.yearStart === 'string' ? row.yearStart : null,
+                yearEnd: typeof row.yearEnd === 'string' ? row.yearEnd : null,
+            })),
+            vehicleReferenceRows: masterSnapshot.trims.map((row) => ({
+                maker: String(row.data.maker ?? ''),
+                model: String(row.data.model ?? ''),
+                subModel: String(row.data.sub_model ?? row.data.subModel ?? ''),
+                yearStart: typeof row.data.yearStart === 'string' ? row.data.yearStart : null,
+                yearEnd: typeof row.data.yearEnd === 'string' ? row.data.yearEnd : null,
+            })),
+            canonical: {
+                vehicleModels: vehicleModels.docs.map((doc) => jsonSafe(doc.data())),
+                vehicleAssets: vehicleAssets.docs.map((doc) => jsonSafe(doc.data())),
+                products: catalogProducts.docs.map((doc) => jsonSafe(doc.data())),
+                offers: catalogOffers.docs.map((doc) => jsonSafe(doc.data())),
+            },
+            sourceFreshness,
+        };
+    }
+}
+export function createFirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader, options) {
+    return new FirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader, options);
+}

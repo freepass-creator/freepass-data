@@ -1,0 +1,969 @@
+import { auditOfferEconomicsTerms, refreshOfferEconomicsForChangedInputs } from './resolve-offer-commercial-terms.js';
+import { randomUUID } from 'node:crypto';
+import { assertCommandWriter, assertFieldAuthority, resolveFieldAuthority } from '../domain/authority.js';
+import { assertCatalogWriterOwnership, resolveExecutionWriter } from '../domain/writer-ownership.js';
+import { stableDigest, stableValue } from '../shared/stable-digest.js';
+import { sharedSheetStatusPolicy } from '../adapters/normalize-shared-sheet.js';
+export class ReviewedSourceChangeRejectedError extends Error {
+    code = 'REVIEWED_SOURCE_CHANGE_REJECTED';
+}
+export class ReviewedSourceChangeConflictError extends Error {
+    code = 'REVIEWED_SOURCE_CHANGE_CONFLICT';
+}
+export class ReviewedSourceChangeBlockedError extends Error {
+    blockedChanges;
+    code = 'REVIEWED_SOURCE_CHANGE_BLOCKED';
+    constructor(blockedChanges) {
+        super('Source change contains structural/identity changes that require separate commands');
+        this.blockedChanges = blockedChanges;
+    }
+}
+export class ReviewedSourceChangeApprovalMismatchError extends Error {
+    code = 'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH';
+}
+export class ReviewedSourceChangeIdempotencyConflictError extends Error {
+    code = 'REVIEWED_SOURCE_CHANGE_IDEMPOTENCY_CONFLICT';
+}
+function isOfferOperation(operation) {
+    return operation.kind.startsWith('OFFER_');
+}
+function sameValue(a, b) {
+    return JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
+}
+function sourceRevision(head) {
+    return head.checkpoint.sourceRevision ?? head.checkpoint.checksum ?? undefined;
+}
+function sameIssues(actual, approved) {
+    const a = [...actual].sort();
+    const b = [...(approved ?? [])].sort();
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+function assertCandidateSemantics(candidateRecord) {
+    const candidate = candidateRecord.candidate;
+    if (candidateRecord.status === 'REJECTED') {
+        throw new ReviewedSourceChangeRejectedError('Rejected candidate cannot update Canonical');
+    }
+    if ((candidateRecord.status === 'VALID' && candidate.issues.length > 0) ||
+        (candidateRecord.status === 'WARNING' && candidate.issues.length === 0)) {
+        throw new ReviewedSourceChangeRejectedError('Candidate validation status and issue evidence are inconsistent');
+    }
+    if (candidate.sourceRecordId !== candidateRecord.sourceRecordId ||
+        candidate.sourceFingerprint !== candidateRecord.sourceFingerprint) {
+        throw new ReviewedSourceChangeRejectedError('Candidate envelope and normalized payload source identity do not match');
+    }
+    const seen = new Set();
+    for (const term of candidate.priceTerms) {
+        if (seen.has(term.termKey)) {
+            throw new ReviewedSourceChangeRejectedError(`Duplicate PriceTerm key: ${term.termKey}`);
+        }
+        seen.add(term.termKey);
+        if (!Number.isInteger(term.termMonths) || term.termMonths < 1) {
+            throw new ReviewedSourceChangeRejectedError(`Invalid termMonths for ${term.termKey}`);
+        }
+        if (term.monthlyRent.currency !== 'KRW' ||
+            !Number.isInteger(term.monthlyRent.amount) ||
+            term.monthlyRent.amount < 0) {
+            throw new ReviewedSourceChangeRejectedError(`Invalid monthlyRent for ${term.termKey}`);
+        }
+        if (term.mileageLimitKmPerYear !== undefined &&
+            term.mileageLimitKmPerYear !== null &&
+            (!Number.isInteger(term.mileageLimitKmPerYear) || term.mileageLimitKmPerYear < 0)) {
+            throw new ReviewedSourceChangeRejectedError(`Invalid mileage limit for ${term.termKey}`);
+        }
+        if (term.depositState === 'KNOWN') {
+            if (!term.deposit ||
+                term.deposit.currency !== 'KRW' ||
+                !Number.isInteger(term.deposit.amount) ||
+                term.deposit.amount <= 0) {
+                throw new ReviewedSourceChangeRejectedError(`KNOWN deposit requires a positive KRW amount for ${term.termKey}`);
+            }
+        }
+        else if (term.depositState === 'ZERO') {
+            if (!term.deposit ||
+                term.deposit.currency !== 'KRW' ||
+                term.deposit.amount !== 0) {
+                throw new ReviewedSourceChangeRejectedError(`ZERO deposit requires KRW 0 for ${term.termKey}`);
+            }
+        }
+        else if (term.deposit !== undefined && term.deposit !== null) {
+            throw new ReviewedSourceChangeRejectedError(`${term.depositState} deposit must not contain an amount for ${term.termKey}`);
+        }
+    }
+}
+async function loadState(reader, bindingId, candidateId) {
+    const binding = await reader.getSourceBinding(bindingId);
+    if (!binding) {
+        throw new ReviewedSourceChangeRejectedError(`Source binding not found: ${bindingId}`);
+    }
+    const candidateRecord = await reader.getCandidate(candidateId);
+    if (!candidateRecord) {
+        throw new ReviewedSourceChangeRejectedError(`Candidate not found: ${candidateId}`);
+    }
+    assertCandidateSemantics(candidateRecord);
+    if (candidateRecord.sourceId !== binding.sourceId ||
+        candidateRecord.sourceRecordId !== binding.sourceRecordId) {
+        throw new ReviewedSourceChangeRejectedError('Candidate source identity does not match the existing binding');
+    }
+    const [run, head, model, product, offer, asset] = await Promise.all([
+        reader.getSourceRun(candidateRecord.runId),
+        reader.getSourceHead(candidateRecord.sourceId),
+        reader.getVehicleModel(binding.vehicleModelId),
+        reader.getProduct(binding.productId),
+        reader.getOffer(binding.offerId),
+        binding.vehicleAssetId
+            ? reader.getVehicleAsset(binding.vehicleAssetId)
+            : Promise.resolve(null)
+    ]);
+    if (!run || run.status !== 'COMPLETED') {
+        throw new ReviewedSourceChangeRejectedError('Candidate source run is not completed');
+    }
+    if (run.sourceId !== candidateRecord.sourceId ||
+        run.checkpoint?.sourceId !== candidateRecord.sourceId) {
+        throw new ReviewedSourceChangeRejectedError('Candidate source run identity is inconsistent');
+    }
+    if (!head ||
+        head.sourceId !== candidateRecord.sourceId ||
+        head.checkpoint.sourceId !== candidateRecord.sourceId ||
+        head.coverage.completeness !== 'COMPLETE' ||
+        head.runId !== candidateRecord.runId ||
+        run.headStatus !== 'CURRENT') {
+        throw new ReviewedSourceChangeRejectedError('Candidate is not from the accepted current source head');
+    }
+    if (!model || !product || !offer) {
+        throw new ReviewedSourceChangeRejectedError('Existing Canonical entities for the binding are incomplete');
+    }
+    if (product.vehicleModelId !== model.id ||
+        offer.productId !== product.id ||
+        product.id !== binding.productId ||
+        offer.id !== binding.offerId) {
+        throw new ReviewedSourceChangeRejectedError('Existing Canonical binding relationships are inconsistent');
+    }
+    if (binding.vehicleAssetId) {
+        if (!asset || product.vehicleAssetId !== asset.id) {
+            throw new ReviewedSourceChangeRejectedError('Existing VehicleAsset binding relationship is inconsistent');
+        }
+    }
+    else if (product.vehicleAssetId) {
+        throw new ReviewedSourceChangeRejectedError('Product has a VehicleAsset that is not represented in the source binding');
+    }
+    return {
+        binding,
+        candidateRecord,
+        run,
+        head,
+        model,
+        asset,
+        product,
+        offer
+    };
+}
+function changeId(input) {
+    return 'chg_' + stableDigest([
+        input.entityType,
+        input.entityId,
+        input.fieldPath,
+        stableValue(input.before),
+        stableValue(input.after)
+    ]).slice(0, 32);
+}
+function buildChanges(state, operationalRefresh) {
+    const { candidateRecord, model, asset, product, offer } = state;
+    const candidate = candidateRecord.candidate;
+    const diffs = [];
+    const operations = new Map();
+    const blocked = (entityType, entityId, fieldPath, before, after, reasonCode) => {
+        if (sameValue(before, after))
+            return;
+        const id = changeId({ entityType, entityId, fieldPath, before, after });
+        diffs.push({
+            changeId: id,
+            classification: 'BLOCKED',
+            entityType,
+            entityId,
+            fieldPath,
+            before: structuredClone(before),
+            after: structuredClone(after),
+            reasonCode
+        });
+    };
+    const reviewable = (entityType, entityId, fieldPath, before, after, reasonCode, authorityFieldPath, operation) => {
+        if (sameValue(before, after))
+            return;
+        const aggregate = entityType;
+        const rule = resolveFieldAuthority(aggregate, authorityFieldPath);
+        const refreshAllowed = Boolean(rule) && rule.sourceRefresh !== 'SOURCE_REFRESH_BLOCKED';
+        const id = changeId({ entityType, entityId, fieldPath, before, after });
+        diffs.push({
+            changeId: id,
+            classification: refreshAllowed ? 'REVIEWABLE' : 'BLOCKED',
+            entityType,
+            entityId,
+            fieldPath,
+            before: structuredClone(before),
+            after: structuredClone(after),
+            reasonCode: refreshAllowed
+                ? reasonCode
+                : rule
+                    ? 'SOURCE_REFRESH_BLOCKED'
+                    : 'NO_FIELD_AUTHORITY_RULE',
+            authorityRuleId: rule?.ruleId ?? null
+        });
+        if (refreshAllowed) {
+            operations.set(id, {
+                ...operation,
+                changeId: id,
+                authorityFieldPath
+            });
+        }
+    };
+    if (operationalRefresh) {
+        const status = candidate.vehicleFacts?.fields.supplierStatus;
+        const mapping = status?.state === 'KNOWN' ? sharedSheetStatusPolicy(status.value) : null;
+        if (!mapping || !asset) {
+            throw new ReviewedSourceChangeRejectedError('Known registered supplier status and VehicleAsset required for operational refresh');
+        }
+        reviewable('product', product.id, 'status', product.status, mapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD', 'SOURCE_EXPOSURE_CHANGE', 'status', { kind: 'PRODUCT_STATUS', value: mapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD' });
+        reviewable('vehicle_asset', asset.id, 'status', asset.status, mapping.assetStatus, 'SOURCE_ASSET_STATUS_CHANGE', 'status', { kind: 'ASSET_STATUS', value: mapping.assetStatus });
+    }
+    const blockedIfProvided = (entityType, entityId, fieldPath, candidateValue, currentValue, reasonCode) => {
+        if (candidateValue !== undefined && candidateValue !== null) {
+            blocked(entityType, entityId, fieldPath, currentValue, candidateValue, reasonCode);
+        }
+    };
+    blockedIfProvided('vehicle_model', model.id, 'maker', candidate.maker, model.maker, 'VEHICLE_IDENTITY_CHANGE');
+    blockedIfProvided('vehicle_model', model.id, 'model', candidate.model, model.model, 'VEHICLE_IDENTITY_CHANGE');
+    blockedIfProvided('vehicle_model', model.id, 'subModel', candidate.subModel, model.subModel ?? null, 'SHARED_MODEL_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    blockedIfProvided('vehicle_model', model.id, 'trim', candidate.trimName, model.trim ?? null, 'SHARED_MODEL_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    blockedIfProvided('vehicle_model', model.id, 'fuel', candidate.fuelType, model.fuel ?? null, 'SHARED_MODEL_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    blockedIfProvided('vehicle_model', model.id, 'drive', candidate.driveType, model.drive ?? null, 'SHARED_MODEL_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    if (candidate.seats !== undefined) {
+        blocked('vehicle_model', model.id, 'seats', model.seats ?? null, candidate.seats, 'SHARED_MODEL_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    }
+    if (candidate.commercialType !== undefined) {
+        blocked('product', product.id, 'commercialType', product.commercialType, candidate.commercialType, 'COMMERCIAL_TYPE_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    }
+    if (candidate.providerCompanyCode) {
+        if (state.binding.sourceSupplierCode === undefined) {
+            blocked('offer', offer.id, 'sourceSupplierCode', null, candidate.providerCompanyCode, 'SOURCE_SUPPLIER_MAPPING_EVIDENCE_MISSING');
+        }
+        else {
+            blocked('offer', offer.id, 'sourceSupplierCode', state.binding.sourceSupplierCode, candidate.providerCompanyCode, 'SOURCE_SUPPLIER_MAPPING_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        }
+    }
+    if (candidate.carNumber) {
+        if (!asset) {
+            blocked('vehicle_asset', bindingPlaceholder(product.id), 'plateNumber', null, candidate.carNumber, 'VEHICLE_ASSET_IDENTITY_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        }
+        else {
+            blocked('vehicle_asset', asset.id, 'plateNumber', asset.plateNumber ?? null, candidate.carNumber, 'VEHICLE_ASSET_IDENTITY_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        }
+    }
+    if (candidate.mileageKm !== undefined) {
+        if (!asset) {
+            blocked('vehicle_asset', bindingPlaceholder(product.id), 'odometerKm', null, candidate.mileageKm, 'VEHICLE_ASSET_REQUIRED');
+        }
+        else {
+            reviewable('vehicle_asset', asset.id, 'odometerKm', asset.odometerKm ?? null, candidate.mileageKm, 'SOURCE_ODOMETER_CHANGE', 'odometerKm', {
+                kind: 'ASSET_ODOMETER',
+                value: candidate.mileageKm
+            });
+        }
+    }
+    if (candidate.vehicleFacts) {
+        if (!asset)
+            blocked('vehicle_asset', bindingPlaceholder(product.id), 'sourceVehicleFacts', null, candidate.vehicleFacts, 'VEHICLE_ASSET_REQUIRED');
+        else
+            reviewable('vehicle_asset', asset.id, 'sourceVehicleFacts', asset.sourceVehicleFacts ?? null, candidate.vehicleFacts, 'SOURCE_VEHICLE_FACTS_CHANGE', 'sourceVehicleFacts', { kind: 'ASSET_SOURCE_FACTS', value: candidate.vehicleFacts });
+    }
+    const currentByTerm = new Map(offer.priceTerms.map((term) => [term.termKey, term]));
+    const candidateByTerm = new Map(candidate.priceTerms.map((term) => [term.termKey, term]));
+    const currentKeys = [...currentByTerm.keys()].sort();
+    const candidateKeys = [...candidateByTerm.keys()].sort();
+    if (!sameValue(currentKeys, candidateKeys)) {
+        blocked('offer', offer.id, 'priceTerms.structure', currentKeys, candidateKeys, 'PRICE_TERM_STRUCTURE_CHANGE_REQUIRES_SEPARATE_COMMAND');
+    }
+    for (const termKey of currentKeys.filter((key) => candidateByTerm.has(key))) {
+        const current = currentByTerm.get(termKey);
+        const next = candidateByTerm.get(termKey);
+        blocked('offer', offer.id, `priceTerms.${termKey}.termMonths`, current.termMonths, next.termMonths, 'PRICE_TERM_STRUCTURE_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        blocked('offer', offer.id, `priceTerms.${termKey}.monthlyRent.currency`, current.monthlyRent.currency, next.monthlyRent.currency, 'CURRENCY_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        if (current.deposit && next.deposit) {
+            blocked('offer', offer.id, `priceTerms.${termKey}.deposit.currency`, current.deposit.currency, next.deposit.currency, 'CURRENCY_CHANGE_REQUIRES_SEPARATE_COMMAND');
+        }
+        reviewable('offer', offer.id, `priceTerms.${termKey}.monthlyRent`, current.monthlyRent, next.monthlyRent, 'SOURCE_MONTHLY_RENT_CHANGE', `priceTerms.${termKey}.monthlyRent`, {
+            kind: 'OFFER_MONTHLY_RENT',
+            termKey,
+            value: structuredClone(next.monthlyRent)
+        });
+        // Missing current evidence cannot authorize erasing a previously evidenced amount.
+        // Block the whole refresh: keep the old revision, never bind it to the new source head.
+        const depositEvidenceLost = Boolean(current.deposit) && next.depositState === 'UNKNOWN';
+        if (depositEvidenceLost) {
+            blocked('offer', offer.id, `priceTerms.${termKey}.depositState`, current.depositState, next.depositState, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+            blocked('offer', offer.id, `priceTerms.${termKey}.deposit`, current.deposit ?? null, next.deposit ?? null, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+        }
+        if (!depositEvidenceLost)
+            reviewable('offer', offer.id, `priceTerms.${termKey}.depositState`, current.depositState, next.depositState, 'SOURCE_DEPOSIT_STATE_CHANGE', `priceTerms.${termKey}.depositState`, {
+                kind: 'OFFER_DEPOSIT_STATE',
+                termKey,
+                value: next.depositState
+            });
+        if (!depositEvidenceLost)
+            reviewable('offer', offer.id, `priceTerms.${termKey}.deposit`, current.deposit ?? null, next.deposit ?? null, 'SOURCE_DEPOSIT_CHANGE', `priceTerms.${termKey}.deposit`, {
+                kind: 'OFFER_DEPOSIT',
+                termKey,
+                value: next.deposit ? structuredClone(next.deposit) : null
+            });
+        reviewable('offer', offer.id, `priceTerms.${termKey}.mileageLimitKmPerYear`, current.mileageLimitKmPerYear ?? null, next.mileageLimitKmPerYear ?? null, 'SOURCE_MILEAGE_LIMIT_CHANGE', `priceTerms.${termKey}.mileageLimitKmPerYear`, {
+            kind: 'OFFER_MILEAGE_LIMIT',
+            termKey,
+            value: next.mileageLimitKmPerYear ?? null
+        });
+    }
+    return { diffs, operations };
+}
+function bindingPlaceholder(productId) {
+    return `unbound_asset_for_${productId}`;
+}
+function toReview(state, diffs) {
+    return {
+        bindingId: state.binding.bindingId,
+        bindingRevision: state.binding.revision,
+        candidateId: state.candidateRecord.candidateId,
+        sourceId: state.binding.sourceId,
+        sourceRecordId: state.binding.sourceRecordId,
+        previousFingerprint: state.binding.sourceFingerprint,
+        candidateFingerprint: state.candidateRecord.sourceFingerprint,
+        sourceRunId: state.run.runId,
+        vehicleModelRevision: state.model.revision,
+        productRevision: state.product.revision,
+        offerRevision: state.offer.revision,
+        ...(state.asset ? { vehicleAssetRevision: state.asset.revision } : {}),
+        candidateIssues: structuredClone(state.candidateRecord.candidate.issues),
+        diffs: structuredClone(diffs),
+        reviewableChangeIds: diffs
+            .filter((item) => item.classification === 'REVIEWABLE')
+            .map((item) => item.changeId)
+            .sort(),
+        blockedChangeIds: diffs
+            .filter((item) => item.classification === 'BLOCKED')
+            .map((item) => item.changeId)
+            .sort()
+    };
+}
+export async function reviewSourceChange(store, bindingId, candidateId, operationalRefresh) {
+    const state = await loadState(store, bindingId, candidateId);
+    const { diffs } = buildChanges(state, operationalRefresh);
+    return toReview(state, diffs);
+}
+function requestDigest(input, writerId) {
+    return stableDigest({
+        commandType: 'APPLY_REVIEWED_SOURCE_CHANGE',
+        bindingId: input.bindingId,
+        candidateId: input.candidateId,
+        expectedHeadRunId: input.expectedHeadRunId,
+        expectedBindingRevision: input.expectedBindingRevision,
+        expectedVehicleModelRevision: input.expectedVehicleModelRevision,
+        expectedProductRevision: input.expectedProductRevision,
+        expectedOfferRevision: input.expectedOfferRevision,
+        expectedVehicleAssetRevision: input.expectedVehicleAssetRevision ?? null,
+        approvedChangeIds: [...input.approvedChangeIds].sort(),
+        approvedIssues: [...(input.approvedIssues ?? [])].sort(),
+        actor: input.actor,
+        writerId,
+        ...(input.expectedOwnershipDigest ? { expectedOwnershipDigest: input.expectedOwnershipDigest } : {}),
+        ...(input.operationalRefresh ? { operationalRefresh: input.operationalRefresh } : {}),
+        reason: input.reason
+    });
+}
+function assertExpectedRevisions(state, input) {
+    const mismatches = [];
+    if (state.binding.revision !== input.expectedBindingRevision) {
+        mismatches.push(`binding expected ${input.expectedBindingRevision}, actual ${state.binding.revision}`);
+    }
+    if (state.model.revision !== input.expectedVehicleModelRevision) {
+        mismatches.push(`vehicle_model expected ${input.expectedVehicleModelRevision}, actual ${state.model.revision}`);
+    }
+    if (state.product.revision !== input.expectedProductRevision) {
+        mismatches.push(`product expected ${input.expectedProductRevision}, actual ${state.product.revision}`);
+    }
+    if (state.offer.revision !== input.expectedOfferRevision) {
+        mismatches.push(`offer expected ${input.expectedOfferRevision}, actual ${state.offer.revision}`);
+    }
+    if (state.asset) {
+        if (input.expectedVehicleAssetRevision === undefined || input.expectedVehicleAssetRevision === null) {
+            mismatches.push('vehicle_asset expected revision is required');
+        }
+        else if (state.asset.revision !== input.expectedVehicleAssetRevision) {
+            mismatches.push(`vehicle_asset expected ${input.expectedVehicleAssetRevision}, actual ${state.asset.revision}`);
+        }
+    }
+    else if (input.expectedVehicleAssetRevision !== undefined &&
+        input.expectedVehicleAssetRevision !== null) {
+        mismatches.push('vehicle_asset revision supplied but binding has no asset');
+    }
+    if (mismatches.length) {
+        throw new ReviewedSourceChangeConflictError(mismatches.join('; '));
+    }
+}
+function exactSet(actual, expected) {
+    const a = [...new Set(actual)].sort();
+    const b = [...new Set(expected)].sort();
+    return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+/** 운영 갱신(operationalRefresh)이 받아들이는 주행거리 변화: 감소·비정수·한 번에 30,000km 초과 증가는 «이상치»로 보고 막는다(계획 단계 보류·적용 단계 거절 공통).
+ * 이전 값이 비어 있던 첫 채움은 허용한다. 사람이 고친 값(원천 마지막 관측과 다른 값)은 적용 단계에서 따로 보존한다. */
+export const OPERATIONAL_ODOMETER_MAX_INCREASE_KM = 30_000;
+export function isSaneOperationalOdometerChange(before, after) {
+    if (typeof after !== 'number' || !Number.isSafeInteger(after) || after < 0)
+        return false;
+    if (before === null || before === undefined)
+        return true;
+    if (typeof before !== 'number' || !Number.isFinite(before))
+        return false;
+    return after >= before && after - before <= OPERATIONAL_ODOMETER_MAX_INCREASE_KM;
+}
+async function assertOperationalRefresh(tx, state, input, operations, now) {
+    const fence = input.operationalRefresh;
+    if (input.actor.kind !== 'SERVICE' || input.actor.id !== 'service:freepass-data') {
+        throw new ReviewedSourceChangeRejectedError('Operational refresh requires the existing FreePass Data service');
+    }
+    const age = Date.parse(now) - Date.parse(state.head.observedAt);
+    if (!Number.isSafeInteger(fence.maxObservationAgeSeconds) || fence.maxObservationAgeSeconds <= 0 ||
+        !Number.isFinite(age) || age < 0 || age > fence.maxObservationAgeSeconds * 1000 ||
+        state.run.observedAt !== state.head.observedAt || state.run.coverage.completeness !== 'COMPLETE' ||
+        state.candidateRecord.status !== 'VALID' || state.candidateRecord.candidate.issues.length) {
+        throw new ReviewedSourceChangeRejectedError('Operational source evidence is stale, incomplete or unconfirmed');
+    }
+    const previous = await tx.getCandidate(fence.previousCandidateId);
+    if (!previous || previous.sourceId !== state.binding.sourceId ||
+        previous.sourceRecordId !== state.binding.sourceRecordId ||
+        previous.runId !== state.binding.sourceRunId ||
+        previous.sourceFingerprint !== state.binding.sourceFingerprint || previous.status !== 'VALID' || previous.candidate.issues.length ||
+        previous.candidate.sourceRecordId !== previous.sourceRecordId ||
+        previous.candidate.sourceFingerprint !== previous.sourceFingerprint) {
+        throw new ReviewedSourceChangeConflictError('Previous candidate does not match the current source binding');
+    }
+    const old = previous.candidate;
+    const oldStatus = old.vehicleFacts?.fields.supplierStatus;
+    const oldMapping = oldStatus?.state === 'KNOWN' ? sharedSheetStatusPolicy(oldStatus.value) : null;
+    if (!oldMapping || !state.asset ||
+        state.product.status !== (oldMapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD') ||
+        state.asset.status !== oldMapping.assetStatus ||
+        !sameValue(oldStatus, state.asset.sourceVehicleFacts?.fields.supplierStatus)) {
+        throw new ReviewedSourceChangeConflictError('Existing status is unknown or diverges from the last source observation; preserve Canonical');
+    }
+    // Check even when the new source equals a human value: advancing its binding would erase that divergence.
+    for (const current of state.offer.priceTerms) {
+        const previousTerm = old.priceTerms?.find(term => term.termKey === current.termKey);
+        if (!previousTerm || !sameValue(previousTerm.monthlyRent, current.monthlyRent)) {
+            throw new ReviewedSourceChangeConflictError('Existing rent diverges from the last source observation; preserve human input');
+        }
+    }
+    for (const operation of operations) {
+        if (operation.kind === 'OFFER_MONTHLY_RENT') {
+            const previousTerm = old.priceTerms?.find((term) => term.termKey === operation.termKey);
+            const currentTerm = state.offer.priceTerms.find((term) => term.termKey === operation.termKey);
+            if (!previousTerm || !currentTerm || !sameValue(previousTerm.monthlyRent, currentTerm.monthlyRent)) {
+                throw new ReviewedSourceChangeConflictError('Existing rent diverges from the last source observation; preserve human input');
+            }
+        }
+        else if (operation.kind === 'ASSET_SOURCE_FACTS') {
+            // This mode owns supplier status only. Other facts remain under their existing reviewed commands.
+            const withoutStatus = (facts) => {
+                if (!facts)
+                    return null;
+                const copy = structuredClone(facts);
+                delete copy.fields.supplierStatus;
+                // 같은 명령에 정상 범위의 ASSET_ODOMETER 가 있으면 사실 칸의 주행거리 변화는 그 명령이 소유한다(아래 ASSET_ODOMETER 분기가 이상치·사람 값을 검사).
+                if (operations.some(o => o.kind === 'ASSET_ODOMETER'))
+                    delete copy.fields.mileageKm;
+                // Provenance, not source facts: a normalizer rule-version bump (and the identity-decision record it adds) re-stamps
+                // every fact without changing any value/state/evidence. Treating that as «human divergence» froze the whole
+                // operational refresh after a rule upgrade (shared-sheet run 38750295212: 72 of 77 held, only ruleVersion differed).
+                // Values, states and evidence strings of every real fact are still compared exactly.
+                delete copy.fields.vehicleIdentitySource;
+                const record = copy;
+                delete record.ruleVersion;
+                for (const fact of Object.values(record.fields))
+                    if (fact)
+                        delete fact.ruleVersion;
+                return copy;
+            };
+            if (!sameValue(oldStatus, state.asset.sourceVehicleFacts?.fields.supplierStatus) ||
+                !sameValue(withoutStatus(operation.value), withoutStatus(state.asset.sourceVehicleFacts))) {
+                throw new ReviewedSourceChangeConflictError('Source facts contain human divergence or changes outside supplier status');
+            }
+        }
+        else if (operation.kind === 'ASSET_ODOMETER') {
+            // 주행거리: 마지막 원천 관측과 같은 저장값(사람이 고친 값은 보존)에서만, 감소·과대 증가(이상치)는 거절한다.
+            const lastObserved = old.mileageKm ?? null, stored = state.asset.odometerKm ?? null;
+            if (!sameValue(lastObserved, stored)) {
+                throw new ReviewedSourceChangeConflictError('Existing odometer diverges from the last source observation; preserve human input');
+            }
+            if (!isSaneOperationalOdometerChange(stored, operation.value)) {
+                throw new ReviewedSourceChangeRejectedError('Operational refresh rejects an odometer decrease or an implausible increase');
+            }
+        }
+        else if (operation.kind !== 'PRODUCT_STATUS' && operation.kind !== 'ASSET_STATUS') {
+            throw new ReviewedSourceChangeRejectedError('Operational refresh is limited to known supplier status and existing period rent');
+        }
+    }
+    const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
+    for (const operation of operations) {
+        const path = operation.kind === 'OFFER_MONTHLY_RENT'
+            ? `priceTerms.${operation.termKey}.monthlyRent.amount` : operation.kind === 'ASSET_ODOMETER' ? 'mileageKm' : 'vehicleFacts';
+        const expected = operation.kind === 'OFFER_MONTHLY_RENT'
+            ? operation.value.amount : operation.kind === 'ASSET_ODOMETER' ? operation.value : state.candidateRecord.candidate.vehicleFacts;
+        const matches = parents.filter((parent) => parent.stage === 'RAW_TO_NORMALIZED' && parent.normalized?.fieldPath === path);
+        if (matches.length !== 1 || matches[0].runId !== state.run.runId ||
+            matches[0].sourceId !== state.binding.sourceId || matches[0].sourceRecordId !== state.binding.sourceRecordId ||
+            matches[0].sourceFingerprint !== state.candidateRecord.sourceFingerprint ||
+            matches[0].observedAt !== state.head.observedAt ||
+            matches[0].normalized?.candidateId !== state.candidateRecord.candidateId ||
+            !sameValue(matches[0].normalized?.value, expected)) {
+            throw new ReviewedSourceChangeRejectedError('Operational refresh lineage does not match the accepted source observation');
+        }
+    }
+}
+function nextOfferFromOperations(offer, operations, now, input, validationStatus, sourceRevisionValue) {
+    if (!operations.some(isOfferOperation))
+        return offer;
+    let terms = structuredClone(offer.priceTerms);
+    for (const operation of operations) {
+        if (!isOfferOperation(operation))
+            continue;
+        terms = terms.map((term) => {
+            if (term.termKey !== operation.termKey)
+                return term;
+            if (operation.kind === 'OFFER_MONTHLY_RENT') {
+                return { ...term, monthlyRent: structuredClone(operation.value) };
+            }
+            if (operation.kind === 'OFFER_DEPOSIT_STATE') {
+                return { ...term, depositState: operation.value };
+            }
+            if (operation.kind === 'OFFER_DEPOSIT') {
+                const next = { ...term };
+                if (operation.value)
+                    next.deposit = structuredClone(operation.value);
+                else
+                    delete next.deposit;
+                return next;
+            }
+            if (operation.kind === 'OFFER_MILEAGE_LIMIT') {
+                const next = { ...term };
+                if (operation.value === null)
+                    delete next.mileageLimitKmPerYear;
+                else
+                    next.mileageLimitKmPerYear = operation.value;
+                return next;
+            }
+            return term;
+        });
+    }
+    const { sourceRevision: _previousSourceRevision, ...base } = offer;
+    return {
+        ...base,
+        priceTerms: terms,
+        revision: offer.revision + 1,
+        validationStatus,
+        updatedAt: now,
+        updatedBy: input.actor,
+        ...(sourceRevisionValue ? { sourceRevision: sourceRevisionValue } : {})
+    };
+}
+function nextAssetFromOperations(asset, operations, now, input, validationStatus, sourceRevisionValue) {
+    const odometer = operations.find((item) => item.kind === 'ASSET_ODOMETER');
+    const facts = operations.find((item) => item.kind === 'ASSET_SOURCE_FACTS');
+    const status = operations.find((item) => item.kind === 'ASSET_STATUS');
+    if (!odometer && !facts && !status)
+        return asset;
+    if (!asset) {
+        throw new ReviewedSourceChangeRejectedError('VehicleAsset missing for odometer update');
+    }
+    const { sourceRevision: _previousSourceRevision, ...base } = asset;
+    return {
+        ...base,
+        ...(odometer ? { odometerKm: odometer.value } : {}),
+        ...(facts ? { sourceVehicleFacts: structuredClone(facts.value) } : {}),
+        ...(status ? { status: status.value } : {}),
+        revision: asset.revision + 1,
+        validationStatus,
+        updatedAt: now,
+        updatedBy: input.actor,
+        ...(sourceRevisionValue ? { sourceRevision: sourceRevisionValue } : {})
+    };
+}
+function buildRefreshLineage(input) {
+    const records = [];
+    const parentFor = (normalizedPath) => input.parents.find((item) => item.stage === 'RAW_TO_NORMALIZED' &&
+        item.normalized?.fieldPath === normalizedPath);
+    const append = (parent, entityType, entityId, revision, fieldPath, value) => {
+        if (!parent || !parent.normalized) {
+            throw new ReviewedSourceChangeRejectedError(`Missing normalized lineage for reviewed source change: ${fieldPath}`);
+        }
+        records.push({
+            lineageRecordId: 'lin_' + stableDigest([
+                parent.lineageRecordId,
+                entityType,
+                entityId,
+                revision,
+                fieldPath,
+                'reviewed-source-change'
+            ]).slice(0, 40),
+            lineageId: parent.lineageId,
+            stage: 'NORMALIZED_TO_CANONICAL',
+            parentLineageRecordId: parent.lineageRecordId,
+            runId: parent.runId,
+            sourceId: parent.sourceId,
+            sourceRecordId: parent.sourceRecordId,
+            sourceFingerprint: parent.sourceFingerprint,
+            observedAt: parent.observedAt,
+            source: parent.source,
+            normalized: parent.normalized,
+            canonical: {
+                entityType,
+                entityId,
+                revision,
+                fieldPath,
+                value: structuredClone(value)
+            },
+            transformId: 'reviewed-source-change',
+            transformVersion: '1.0.0'
+        });
+    };
+    for (const operation of input.operations) {
+        if (operation.kind === 'PRODUCT_STATUS') {
+            append(parentFor('vehicleFacts'), 'product', input.productAfter.id, input.productAfter.revision, 'status', input.productAfter.status);
+        }
+        if (operation.kind === 'ASSET_STATUS' && input.assetAfter) {
+            append(parentFor('vehicleFacts'), 'vehicle_asset', input.assetAfter.id, input.assetAfter.revision, 'status', input.assetAfter.status);
+        }
+        if (operation.kind === 'ASSET_SOURCE_FACTS' && input.assetAfter) {
+            append(parentFor('vehicleFacts'), 'vehicle_asset', input.assetAfter.id, input.assetAfter.revision, 'sourceVehicleFacts', input.assetAfter.sourceVehicleFacts);
+        }
+        if (operation.kind === 'OFFER_MONTHLY_RENT') {
+            const term = input.offerAfter.priceTerms.find((x) => x.termKey === operation.termKey);
+            append(parentFor(`priceTerms.${operation.termKey}.monthlyRent.amount`), 'offer', input.offerAfter.id, input.offerAfter.revision, `priceTerms.${operation.termKey}.monthlyRent.amount`, term.monthlyRent.amount);
+        }
+        else if (operation.kind === 'OFFER_DEPOSIT_STATE') {
+            const term = input.offerAfter.priceTerms.find((x) => x.termKey === operation.termKey);
+            append(parentFor(`priceTerms.${operation.termKey}.depositState`), 'offer', input.offerAfter.id, input.offerAfter.revision, `priceTerms.${operation.termKey}.depositState`, term.depositState);
+        }
+        else if (operation.kind === 'OFFER_DEPOSIT') {
+            const term = input.offerAfter.priceTerms.find((x) => x.termKey === operation.termKey);
+            if (term.deposit) {
+                append(parentFor(`priceTerms.${operation.termKey}.deposit.amount`), 'offer', input.offerAfter.id, input.offerAfter.revision, `priceTerms.${operation.termKey}.deposit.amount`, term.deposit.amount);
+            }
+        }
+        else if (operation.kind === 'OFFER_MILEAGE_LIMIT') {
+            const term = input.offerAfter.priceTerms.find((x) => x.termKey === operation.termKey);
+            if (term.mileageLimitKmPerYear !== undefined) {
+                append(parentFor(`priceTerms.${operation.termKey}.mileageLimitKmPerYear`), 'offer', input.offerAfter.id, input.offerAfter.revision, `priceTerms.${operation.termKey}.mileageLimitKmPerYear`, term.mileageLimitKmPerYear);
+            }
+        }
+        else if (operation.kind === 'ASSET_ODOMETER') {
+            if (!input.assetAfter) {
+                throw new ReviewedSourceChangeRejectedError('VehicleAsset missing after odometer update');
+            }
+            append(parentFor('mileageKm'), 'vehicle_asset', input.assetAfter.id, input.assetAfter.revision, 'odometerKm', input.assetAfter.odometerKm);
+        }
+    }
+    return records;
+}
+export async function applyReviewedSourceChange(store, input, now = new Date().toISOString()) {
+    assertCommandWriter('APPLY_REVIEWED_SOURCE_CHANGE', input.actor);
+    if (!input.reason.trim()) {
+        throw new ReviewedSourceChangeRejectedError('reason is required');
+    }
+    const writer = resolveExecutionWriter(input.actor, input.writer);
+    const requestHash = requestDigest(input, writer.id);
+    return store.transact(async (tx) => {
+        if (input.expectedOwnershipDigest && stableDigest(await tx.getCatalogWriterOwnership()) !== input.expectedOwnershipDigest)
+            throw new ReviewedSourceChangeConflictError('Catalog writer ownership changed after planning');
+        assertCatalogWriterOwnership(await tx.getCatalogWriterOwnership(), writer);
+        const existing = await tx.getReviewedSourceChangeReceipt(input.idempotencyKey);
+        if (existing) {
+            if (existing.requestDigest !== requestHash) {
+                throw new ReviewedSourceChangeIdempotencyConflictError(`Idempotency key ${input.idempotencyKey} was reused with different source-change input`);
+            }
+            return existing;
+        }
+        const state = await loadState(tx, input.bindingId, input.candidateId);
+        if (state.head.runId !== input.expectedHeadRunId) {
+            throw new ReviewedSourceChangeConflictError(`Expected source head ${input.expectedHeadRunId}, actual ${state.head.runId}`);
+        }
+        assertExpectedRevisions(state, input);
+        if (!sameIssues(state.candidateRecord.candidate.issues, input.approvedIssues)) {
+            throw new ReviewedSourceChangeApprovalMismatchError('Candidate issues must be explicitly and exactly approved');
+        }
+        const { diffs, operations } = buildChanges(state, input.operationalRefresh);
+        const review = toReview(state, diffs);
+        const blocked = review.diffs.filter((item) => item.classification === 'BLOCKED');
+        if (blocked.length) {
+            throw new ReviewedSourceChangeBlockedError(blocked);
+        }
+        if (!exactSet(input.approvedChangeIds, review.reviewableChangeIds)) {
+            throw new ReviewedSourceChangeApprovalMismatchError('Approved change IDs must exactly match the current reviewable diff set');
+        }
+        const selectedOperations = review.reviewableChangeIds.map((id) => {
+            const operation = operations.get(id);
+            if (!operation) {
+                throw new ReviewedSourceChangeRejectedError(`Missing source-change operation for approved change ${id}`);
+            }
+            return operation;
+        });
+        if (input.operationalRefresh) {
+            await assertOperationalRefresh(tx, state, input, selectedOperations, now);
+        }
+        for (const operation of selectedOperations) {
+            const aggregate = operation.kind === 'PRODUCT_STATUS' ? 'product'
+                : isOfferOperation(operation) ? 'offer' : 'vehicle_asset';
+            const authority = assertFieldAuthority({
+                aggregate,
+                fieldPath: operation.authorityFieldPath,
+                command: 'APPLY_REVIEWED_SOURCE_CHANGE',
+                actor: input.actor
+            });
+            if (authority.sourceRefresh === 'SOURCE_REFRESH_BLOCKED') {
+                throw new ReviewedSourceChangeBlockedError([
+                    review.diffs.find((item) => item.changeId === operation.changeId)
+                ]);
+            }
+        }
+        const revisionValue = sourceRevision(state.head);
+        const validationStatus = state.candidateRecord.status === 'WARNING' ? 'WARNING' : 'VALID';
+        const nextOffer = nextOfferFromOperations(state.offer, selectedOperations, now, input, validationStatus, revisionValue);
+        const nextAsset = nextAssetFromOperations(state.asset, selectedOperations, now, input, validationStatus, revisionValue);
+        const offerChanged = nextOffer !== state.offer;
+        const assetChanged = nextAsset !== state.asset;
+        const productStatus = selectedOperations.find((item) => item.kind === 'PRODUCT_STATUS');
+        const nextProduct = productStatus ? { ...state.product, status: productStatus.value,
+            revision: state.product.revision + 1, validationStatus, updatedAt: now, updatedBy: input.actor,
+            ...(revisionValue ? { sourceRevision: revisionValue } : {}) } : state.product;
+        const productChanged = nextProduct !== state.product;
+        if (offerChanged) {
+            nextOffer.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(state.offer, nextOffer, false, state.product.commercialType, state.model.fuel);
+            if (input.operationalRefresh) {
+                if (auditOfferEconomicsTerms(state.offer).invalidFacts.length) {
+                    throw new ReviewedSourceChangeRejectedError('Existing economics are inconsistent; preserve the previous Canonical snapshot');
+                }
+                // The existing engine computes amounts. This writer only admits an already confirmed, unchanged rule.
+                nextOffer.internalEconomicsTerms = (state.offer.internalEconomicsTerms ?? []).map(previous => {
+                    const proposed = nextOffer.internalEconomicsTerms.find(term => term.termKey === previous.termKey);
+                    const currentPrice = nextOffer.priceTerms.find(term => term.termKey === previous.termKey);
+                    const next = { ...structuredClone(previous), monthlyRent: structuredClone(currentPrice.monthlyRent) };
+                    for (const side of ['supplierBillingFee', 'channelPayoutFee']) {
+                        const fee = previous[side], calculation = fee.calculation;
+                        const basisKey = fee.referenceRentBasis?.termKey ?? previous.termKey;
+                        const basisChanged = !sameValue(state.offer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent, nextOffer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent);
+                        const value = proposed?.[side];
+                        // An old FIXED snapshot may hide a rent dependency. Never commit stale amounts or
+                        // reinterpret its rule from its name; changed calculation evidence needs separate review.
+                        if (basisChanged && calculation?.kind === 'FIXED' && !fee.referenceRentBasis &&
+                            (fee.state === 'KNOWN' || fee.state === 'ZERO') &&
+                            (!sameValue(fee.amount, value?.amount) || !sameValue(calculation, value?.calculation) ||
+                                fee.ruleId !== value?.ruleId || fee.policyId !== value?.policyId ||
+                                !sameValue(fee.sourceRefs, value?.sourceRefs))) {
+                            throw new ReviewedSourceChangeRejectedError('Existing FIXED economics differ from changed-rent evidence; explicit review required before commit');
+                        }
+                        const dependent = !!fee.referenceRentBasis || calculation?.kind === 'MULTIPLY' ||
+                            (calculation?.kind === 'RATE' && calculation.base === 'MONTHLY_RENT_X_TERM');
+                        if (!basisChanged || !dependent || (fee.state !== 'KNOWN' && fee.state !== 'ZERO'))
+                            continue;
+                        const sameCalculation = fee.referenceRentBasis
+                            ? value?.referenceRentBasis?.termKey === fee.referenceRentBasis.termKey &&
+                                value.referenceRentBasis.multiplier === fee.referenceRentBasis.multiplier
+                            : sameValue(value?.calculation, calculation);
+                        if (!fee.ruleId || !fee.policyId || !fee.sourceRefs.some(ref => ref.trim()) || !value ||
+                            (value.state !== 'KNOWN' && value.state !== 'ZERO') || !sameCalculation ||
+                            value.ruleId !== fee.ruleId || value.policyId !== fee.policyId) {
+                            throw new ReviewedSourceChangeRejectedError('Changed rent has no identical confirmed economics rule; preserve Canonical');
+                        }
+                        next[side] = structuredClone(value);
+                    }
+                    return next;
+                });
+            }
+        }
+        const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
+        const refreshLineage = buildRefreshLineage({
+            parents,
+            operations: selectedOperations,
+            offerBefore: state.offer,
+            offerAfter: nextOffer,
+            assetBefore: state.asset,
+            assetAfter: nextAsset,
+            productAfter: nextProduct
+        });
+        if (productChanged) {
+            await tx.updateProduct(nextProduct);
+            await tx.appendRevision({
+                revisionRecordId: 'rev_' + stableDigest([input.commandId, 'product', nextProduct.id, nextProduct.revision]).slice(0, 32),
+                entityType: 'product', entityId: nextProduct.id, revision: nextProduct.revision,
+                previousRevision: state.product.revision, snapshot: nextProduct, actor: input.actor,
+                reason: input.reason, origin: 'SOURCE_REFRESH', commandId: input.commandId, occurredAt: now,
+                sourceBindingId: state.binding.bindingId, sourceRunId: state.run.runId
+            });
+            await tx.appendAudit({ eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
+                entityType: 'product', entityId: nextProduct.id, action: 'REVIEWED_SOURCE_CHANGE_APPLIED',
+                before: state.product, after: nextProduct, reason: input.reason, writerId: writer.id,
+                revisionBefore: state.product.revision, revisionAfter: nextProduct.revision, occurredAt: now });
+        }
+        if (offerChanged) {
+            await tx.putOffer(nextOffer);
+            await tx.appendRevision({
+                revisionRecordId: 'rev_' + stableDigest([
+                    input.commandId,
+                    'offer',
+                    nextOffer.id,
+                    nextOffer.revision
+                ]).slice(0, 32),
+                entityType: 'offer',
+                entityId: nextOffer.id,
+                revision: nextOffer.revision,
+                previousRevision: state.offer.revision,
+                snapshot: nextOffer,
+                actor: input.actor,
+                reason: input.reason,
+                origin: 'SOURCE_REFRESH',
+                commandId: input.commandId,
+                occurredAt: now,
+                sourceBindingId: state.binding.bindingId,
+                sourceRunId: state.run.runId
+            });
+            await tx.appendAudit({
+                eventId: randomUUID(),
+                commandId: input.commandId,
+                actor: input.actor,
+                entityType: 'offer',
+                entityId: nextOffer.id,
+                action: 'REVIEWED_SOURCE_CHANGE_APPLIED',
+                before: state.offer,
+                after: nextOffer,
+                reason: input.reason,
+                writerId: writer.id,
+                revisionBefore: state.offer.revision,
+                revisionAfter: nextOffer.revision,
+                occurredAt: now
+            });
+        }
+        if (assetChanged && nextAsset && state.asset) {
+            await tx.updateVehicleAsset(nextAsset);
+            await tx.appendRevision({
+                revisionRecordId: 'rev_' + stableDigest([
+                    input.commandId,
+                    'vehicle_asset',
+                    nextAsset.id,
+                    nextAsset.revision
+                ]).slice(0, 32),
+                entityType: 'vehicle_asset',
+                entityId: nextAsset.id,
+                revision: nextAsset.revision,
+                previousRevision: state.asset.revision,
+                snapshot: nextAsset,
+                actor: input.actor,
+                reason: input.reason,
+                origin: 'SOURCE_REFRESH',
+                commandId: input.commandId,
+                occurredAt: now,
+                sourceBindingId: state.binding.bindingId,
+                sourceRunId: state.run.runId
+            });
+            await tx.appendAudit({
+                eventId: randomUUID(),
+                commandId: input.commandId,
+                actor: input.actor,
+                entityType: 'vehicle_asset',
+                entityId: nextAsset.id,
+                action: 'REVIEWED_SOURCE_CHANGE_APPLIED',
+                before: state.asset,
+                after: nextAsset,
+                reason: input.reason,
+                writerId: writer.id,
+                revisionBefore: state.asset.revision,
+                revisionAfter: nextAsset.revision,
+                occurredAt: now
+            });
+        }
+        for (const record of refreshLineage) {
+            await tx.appendLineage(record);
+        }
+        const bindingNeedsAdvance = state.binding.sourceFingerprint !== state.candidateRecord.sourceFingerprint ||
+            state.binding.sourceRunId !== state.run.runId;
+        const nextBinding = bindingNeedsAdvance
+            ? {
+                ...state.binding,
+                sourceFingerprint: state.candidateRecord.sourceFingerprint,
+                sourceRunId: state.run.runId,
+                sourceObservedAt: state.head.observedAt,
+                sourceCheckpointRevision: state.head.checkpoint.sourceRevision ?? null,
+                sourceCheckpointChecksum: state.head.checkpoint.checksum ?? null,
+                sourceSupplierCode: state.candidateRecord.candidate.providerCompanyCode ??
+                    state.binding.sourceSupplierCode ??
+                    null,
+                revision: state.binding.revision + 1,
+                updatedAt: now,
+                updatedBy: input.actor
+            }
+            : state.binding;
+        if (bindingNeedsAdvance) {
+            await tx.updateSourceBinding(nextBinding);
+            await tx.appendAudit({
+                eventId: randomUUID(),
+                commandId: input.commandId,
+                actor: input.actor,
+                entityType: 'canonical_binding',
+                entityId: nextBinding.bindingId,
+                action: 'SOURCE_BINDING_ADVANCED',
+                before: state.binding,
+                after: nextBinding,
+                reason: input.reason,
+                writerId: writer.id,
+                revisionBefore: state.binding.revision,
+                revisionAfter: nextBinding.revision,
+                occurredAt: now
+            });
+        }
+        if (offerChanged || assetChanged || productChanged) {
+            await tx.appendOutbox({
+                eventId: randomUUID(),
+                eventType: 'catalog.source-change.applied',
+                entityType: 'product',
+                entityId: state.product.id,
+                sourceRevision: state.binding.revision,
+                targetRevision: nextBinding.revision,
+                commandId: input.commandId,
+                correlationId: input.commandId,
+                causationId: state.run.runId,
+                occurredAt: now,
+                status: 'PENDING',
+                attempts: 0
+            });
+        }
+        const receipt = {
+            idempotencyKey: input.idempotencyKey,
+            commandId: input.commandId,
+            status: offerChanged || assetChanged || productChanged ? 'CANONICAL_COMMITTED' : 'NO_CHANGE',
+            requestDigest: requestHash,
+            bindingId: nextBinding.bindingId,
+            bindingRevision: nextBinding.revision,
+            sourceRunId: state.run.runId,
+            sourceFingerprint: state.candidateRecord.sourceFingerprint,
+            writerId: writer.id,
+            appliedChangeIds: [...review.reviewableChangeIds],
+            offerId: nextOffer.id,
+            offerRevision: nextOffer.revision,
+            productRevision: nextProduct.revision,
+            ...(nextAsset
+                ? {
+                    vehicleAssetId: nextAsset.id,
+                    vehicleAssetRevision: nextAsset.revision
+                }
+                : {}),
+            committedAt: now
+        };
+        await tx.putReviewedSourceChangeReceipt(receipt);
+        return receipt;
+    });
+}

@@ -13,6 +13,7 @@ import { boundedOptions, asBoundedOptions, OPTIONS_MAX_ITEMS } from '../domain/s
 import { resolveErp5InventoryStatus, PROVIDER_AVAILABLE_STATUS_LABELS } from '../domain/erp5-inventory-status.js';
 import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supplier-deposit-policy.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
+import { validColorValue, colorPlaceholder } from '../domain/source-spec-validation.js';
 import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from '../domain/reviewed-spec-correction.js';
 import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFillValues, type MasterSpecValues } from '../domain/spec-refill.js';
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
@@ -259,8 +260,8 @@ const realCalendarDate = (v: string): boolean => {
   return day >= 1 && day <= days;
 };
 const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
-  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
-  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  ext_color: validColorValue,   // 자리표(«-»·«없음» 등)는 색상이 아니다(domain/source-spec-validation 의 같은 규칙)
+  int_color: validColorValue,
   fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
   first_registration_date: v => realCalendarDate(v),
   year: v => /^(19|20)\d{2}$/.test(v),
@@ -530,7 +531,7 @@ export const sheetSpecFields = (spec: unknown): Fields => {
   const out: Fields = {};
   for (const key of SHEET_SPEC_KEYS) {
     const v = (spec as Record<string, unknown>)[key];
-    if (typeof v === 'string' && v.trim() && v.length <= 40) out[key] = v.trim();
+    if (typeof v === 'string' && v.trim() && v.length <= 40 && (key !== 'ext_color' || !colorPlaceholder(v.trim()))) out[key] = v.trim();   // 외부색상 자리표(«-» 등)는 새 문서에도 싣지 않는다(길이·숫자 규칙은 종전 그대로 40자 이하만)
   }
   return out;
 };

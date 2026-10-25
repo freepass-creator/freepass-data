@@ -10,7 +10,7 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type Sha
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations, runUnattended } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations, runUnattended, settleSourceObservationUncertainty, reconcileF05SourceObservations } from '../src/runtime/source-cycle-runtime.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { ingestSharedSheetObservedRows } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
@@ -398,6 +398,135 @@ describe('existing unattended F05 producer source-head stage',()=>{
     expect(result.exit).toBe(1);expect((await control.load('F05_SOURCE_ROWS')).error).toBe('APPLY_UNCERTAIN');
   });
 });
+describe('F05 source-rows APPLY_UNCERTAIN reconciliation (2026-10-23 deadlock)',()=>{
+  const env={SOURCE_CYCLE_UNATTENDED:'1',SOURCE_CYCLE_F05_SOURCE_ROWS:'1',SOURCE_CYCLE_SOURCES:'F05',SOURCE_CYCLE_F05_SHEET_ID:'synthetic-only'};
+  const intent={sourceId:'shared-sheet:synthetic',runId:'run_intent',sourceDigest:'digest',observedAt:time};
+  const uncertain=()=>({...emptyCycleState(),stopped:true,error:'APPLY_UNCERTAIN' as const,sourceObservationIntent:intent,failures:1,readCount:7,heldCount:3,lastCompleteAt:'2026-10-13T00:00:00.000Z'});
+  const memoryControl=(initial=uncertain())=>{let state:any=structuredClone(initial);return{load:async()=>structuredClone(state),save:vi.fn(async(_key:string,next:any)=>{state=structuredClone(next);}),peek:()=>state};};
+  type RunLike={sourceId?:string;status:string;headStatus:string;rawCount?:number;completedAt?:string;warningCount?:number};
+  const fake=(opts:{run?:RunLike|null;head?:{runId:string}|null;raw?:number;headAfter?:{runId:string}|null;headSeq?:Array<{runId:string}|null>;fail?:boolean})=>{
+    let calls=0;
+    return{getRun:async()=>{if(opts.fail)throw Error('FIRESTORE_DOWN');return opts.run===null?null:{sourceId:intent.sourceId,rawCount:194,...opts.run};},
+      getSourceHead:async()=>{calls++;const h=opts.headSeq?opts.headSeq[Math.min(calls-1,opts.headSeq.length-1)]:calls>1&&opts.headAfter!==undefined?opts.headAfter:opts.head??null;return h?{sourceId:intent.sourceId,runId:h.runId}:null;},
+      listRaw:async()=>Array.from({length:opts.raw??194},(_,i)=>({rawRecordId:`r${i}`}))} as any;
+  };
+  const reader=(source:any)=>(async<T,>(run:(s:any)=>Promise<T>)=>run(source));
+  const failedRun={status:'FAILED',headStatus:'PENDING'};
+  const prove=(source:any,mode:'AUTO'|'MANUAL',save:boolean,control=memoryControl())=>settleSourceObservationUncertainty({control,readSource:reader(source),now:()=>new Date('2026-10-23T12:00:00.000Z')},{mode,save}).then(result=>({result,control}));
+
+  it('proves FAILED run + head elsewhere = not promoted: proof-only changes nothing, apply reopens retry and records the history',async()=>{
+    const source=fake({run:failedRun,head:{runId:'run_previous'}});
+    const dry=await prove(source,'MANUAL',false);
+    expect(dry.result).toMatchObject({status:'PROVEN_NOT_PROMOTED',saved:false,proof:{outcome:'NOT_PROMOTED',evidence:{headRunId:'run_previous',runStatus:'FAILED'}}});
+    expect(dry.control.save).not.toHaveBeenCalled();expect(dry.control.peek()).toMatchObject({stopped:true,error:'APPLY_UNCERTAIN'});
+    const done=await prove(fake({run:failedRun,head:{runId:'run_previous'}}),'MANUAL',true);
+    expect(done.result.status).toBe('CLEARED');
+    const state=done.control.peek();
+    expect(state).toMatchObject({stopped:false,error:null,failures:1,readCount:7,heldCount:3,lastCompleteAt:'2026-10-13T00:00:00.000Z'});
+    expect(state).not.toHaveProperty('sourceObservationIntent');
+    expect(state.sourceObservationReconciliation).toMatchObject({reconciledAt:'2026-10-23T12:00:00.000Z',outcome:'NOT_PROMOTED',mode:'MANUAL',previousIntent:intent,evidence:{headRunId:'run_previous',runStatus:'FAILED',runHeadStatus:'PENDING'}});
+  });
+  it('proves not-promoted only for a FAILED run (terminal) or a COMPLETED-but-INELIGIBLE run; STALE and an absent run are not proof',async()=>{
+    for(const o of [{run:{status:'COMPLETED',headStatus:'INELIGIBLE'},head:{runId:'run_previous'}},{run:failedRun,head:null}] as const)
+      expect((await prove(fake(o as any),'AUTO',true)).result.status,JSON.stringify(o)).toBe('CLEARED');
+    // A (intent) may have been promoted, then superseded by B: A=COMPLETED/STALE while head=B. That is NOT «never promoted».
+    const stale=await prove(fake({run:{status:'COMPLETED',headStatus:'STALE'},head:{runId:'run_newer'}}),'AUTO',true);
+    expect(stale.result).toMatchObject({status:'UNPROVEN',reason:'RUN_COMPLETED_STALE_HEAD_ELSEWHERE'});expect(stale.control.save).not.toHaveBeenCalled();
+    // a missing run document cannot exclude a late-arriving write
+    const absent=await prove(fake({run:null,head:{runId:'run_previous'}}),'AUTO',true);
+    expect(absent.result).toMatchObject({status:'UNPROVEN',reason:'RUN_ABSENT_HEAD_ELSEWHERE'});expect(absent.control.save).not.toHaveBeenCalled();
+  });
+  it('keeps the control-state invariant when reopening: failures>=3 is lowered so the saved file still loads',async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'f05-invariant-'));
+    try{
+      const control=fileCycleControl(dir,async()=>{});
+      await control.save('F05_SOURCE_ROWS',{...uncertain(),failures:3});
+      const done=await settleSourceObservationUncertainty({control,readSource:reader(fake({run:failedRun,head:{runId:'p'}})),now:()=>new Date('2026-10-23T12:00:00.000Z')},{mode:'MANUAL',save:true});
+      expect(done.status).toBe('CLEARED');
+      const reloaded=await control.load('F05_SOURCE_ROWS');
+      expect(reloaded).toMatchObject({stopped:false,error:null,failures:2});expect(reloaded.sourceObservationReconciliation?.outcome).toBe('NOT_PROMOTED');
+    }finally{await rm(dir,{recursive:true,force:true});}
+  });
+  it('rejects the head moving while the raw rows are being counted',async()=>{
+    const r=await prove(fake({run:{status:'COMPLETED',headStatus:'CURRENT',rawCount:194},raw:194,headSeq:[{runId:intent.runId},{runId:intent.runId},{runId:'run_other'}]}),'MANUAL',true);
+    expect(r.result).toMatchObject({status:'UNPROVEN',reason:'HEAD_CHANGED_DURING_READBACK'});expect(r.control.save).not.toHaveBeenCalled();
+  });
+  it('refuses to mix the reconcile command with unattended/plan/rollback modes (no unattended run is entered)',async()=>{
+    for(const extra of ['--unattended','--plan','--rollback','--source','--accept-drift'])
+      await expect(runtimeCli(['--reconcile-source-rows',extra,'x'],{SOURCE_CYCLE_UNATTENDED:'1'} as any),extra).rejects.toThrow('RECONCILE_ARGS_INVALID');
+  });
+  it('confirms APPLIED only manually: head points at the intent run, COMPLETED/CURRENT, raw rows equal run.rawCount',async()=>{
+    const applied={run:{status:'COMPLETED',headStatus:'CURRENT',rawCount:194,completedAt:'2026-10-23T09:39:30.000Z',warningCount:99},head:{runId:intent.runId},raw:194};
+    const auto=await prove(fake(applied),'AUTO',true);
+    expect(auto.result).toMatchObject({status:'UNPROVEN',reason:'APPLIED_CONFIRMATION_REQUIRES_MANUAL'});expect(auto.control.save).not.toHaveBeenCalled();
+    const manual=await prove(fake(applied),'MANUAL',true);
+    expect(manual.result.status).toBe('CONFIRMED_APPLIED');
+    expect(manual.control.peek()).toMatchObject({stopped:false,error:null,lastCompleteAt:'2026-10-23T09:39:30.000Z',readCount:194,heldCount:99,sourceObservationReconciliation:{outcome:'APPLIED_CONFIRMED',evidence:{rawCount:194}}});
+  });
+  it('refuses to close when it cannot prove: head points at intent but run not CURRENT, raw count differs, run still RUNNING, head moves, readback fails, intent missing',async()=>{
+    const cases:Array<[string,any,string]>=[
+      ['head=intent but run FAILED',{run:failedRun,head:{runId:intent.runId}},'HEAD_POINTS_TO_INTENT_BUT_RUN_NOT_CURRENT'],
+      ['head=intent but run STALE',{run:{status:'COMPLETED',headStatus:'STALE'},head:{runId:intent.runId}},'HEAD_POINTS_TO_INTENT_BUT_RUN_NOT_CURRENT'],
+      ['raw count mismatch',{run:{status:'COMPLETED',headStatus:'CURRENT',rawCount:194},head:{runId:intent.runId},raw:193},'RAW_COUNT_MISMATCH'],
+      ['run still RUNNING',{run:{status:'RUNNING',headStatus:'PENDING'},head:{runId:'run_previous'}},'RUN_RUNNING_PENDING_HEAD_ELSEWHERE'],
+      ['COMPLETED+CURRENT but head elsewhere',{run:{status:'COMPLETED',headStatus:'CURRENT'},head:{runId:'run_previous'}},'RUN_COMPLETED_CURRENT_HEAD_ELSEWHERE'],
+      ['head moved between reads',{run:failedRun,head:{runId:'run_a'},headAfter:{runId:'run_b'}},'HEAD_CHANGED_DURING_READBACK'],
+      ['run of another source',{run:{...failedRun,sourceId:'other'},head:{runId:'run_previous'}},'RUN_SOURCE_MISMATCH'],
+      ['readback throws',{fail:true},'READBACK_FAILED'],
+    ];
+    for(const [name,o,reason] of cases){const r=await prove(fake(o),'MANUAL',true);expect(r.result,name).toMatchObject({status:'UNPROVEN',reason});expect(r.control.save,name).not.toHaveBeenCalled();expect(r.control.peek().error,name).toBe('APPLY_UNCERTAIN');}
+    const missing=await prove(fake({run:failedRun,head:{runId:'x'}}),'MANUAL',true,memoryControl({...uncertain(),sourceObservationIntent:undefined} as any));
+    expect(missing.result).toMatchObject({status:'UNPROVEN',reason:'INTENT_MISSING'});
+    const calm=await prove(fake({run:failedRun,head:{runId:'x'}}),'MANUAL',true,memoryControl({...emptyCycleState()} as any));
+    expect(calm.result).toEqual({status:'NOT_UNCERTAIN'});expect(calm.control.save).not.toHaveBeenCalled();
+  });
+  it('manual command holds the F05_SOURCE_ROWS lease, is proof-only by default, closes only with --apply, and exits 1 when unproven',async()=>{
+    const release=vi.fn(async()=>{});
+    const control=memoryControl();
+    const proofOnly=await reconcileF05SourceObservations(env,['--reconcile-source-rows'],{acquire:async()=>release,control,readSource:reader(fake({run:failedRun,head:{runId:'p'}}))});
+    expect(proofOnly).toMatchObject({mode:'PROOF_ONLY',exit:0,status:'PROVEN_NOT_PROMOTED',saved:false});expect(control.save).not.toHaveBeenCalled();
+    const applied=await reconcileF05SourceObservations(env,['--reconcile-source-rows','--apply'],{acquire:async()=>release,control,readSource:reader(fake({run:failedRun,head:{runId:'p'}}))});
+    expect(applied).toMatchObject({mode:'APPLY',exit:0,status:'CLEARED',saved:true});expect(control.peek().error).toBeNull();
+    const stuck=await reconcileF05SourceObservations(env,['--reconcile-source-rows','--apply'],{acquire:async()=>release,control:memoryControl(),readSource:reader(fake({run:{status:'RUNNING',headStatus:'PENDING'},head:{runId:'p'}}))});
+    expect(stuck).toMatchObject({exit:1,status:'UNPROVEN'});expect(release).toHaveBeenCalledTimes(3);
+    await expect(reconcileF05SourceObservations(env,[],{acquire:async()=>null,control:memoryControl()})).rejects.toThrow('F05_SOURCE_ROWS_LOCKED');
+  });
+  it('next unattended cycle self-heals only when not-promoted is proven; otherwise it stays fenced and never persists',async()=>{
+    const capture=async()=>sheet([{}]).capture,release=vi.fn(async()=>{});
+    const report={status:'SOURCE_HEAD_VERIFIED',rawRows:5,heldCandidateRows:1,verifiedAt:'2026-10-23T12:00:00.000Z',sourceId:intent.sourceId,runId:'run_new'} as any;
+    const healed=memoryControl(),persist=vi.fn(async({claimEffect}:any)=>{await claimEffect({...intent,runId:'run_new'});return report;});
+    const ok=await refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,control:healed,persist,readSource:reader(fake({run:failedRun,head:{runId:'run_previous'}}))});
+    expect(ok).toMatchObject({status:'SOURCE_HEAD_VERIFIED'});expect(persist).toHaveBeenCalledOnce();expect(healed.peek()).toMatchObject({stopped:false,error:null,readCount:5,heldCount:1});
+    for(const o of [{run:{status:'RUNNING',headStatus:'PENDING'},head:{runId:'p'}},{run:{status:'COMPLETED',headStatus:'CURRENT',rawCount:194},head:{runId:intent.runId},raw:194},{fail:true}] as any[]){
+      const stuck=memoryControl(),again=vi.fn();
+      await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,control:stuck,persist:again,readSource:reader(fake(o))})).rejects.toThrow('UNCERTAIN_REQUIRES_READBACK');
+      expect(again).not.toHaveBeenCalled();expect(stuck.peek().error).toBe('APPLY_UNCERTAIN');
+    }
+    // no readSource and a replaced persist (existing tests): auto-settle is skipped, fence unchanged
+    const legacy=memoryControl();await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,control:legacy,persist:vi.fn()})).rejects.toThrow('UNCERTAIN_REQUIRES_READBACK');
+  });
+  it('a write that fails after the journal claim (DEADLINE_EXCEEDED, run FAILED) is reopened for retry right away, and the original failure is still reported',async()=>{
+    const release=vi.fn(async()=>{}),capture=async()=>sheet([{}]).capture;
+    const control=memoryControl({...emptyCycleState()} as any);
+    const persist=vi.fn(async({claimEffect}:any)=>{await claimEffect({...intent,runId:'run_deadline'});throw Error('DEADLINE_EXCEEDED');});
+    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,control,persist,
+      readSource:reader({...fake({run:failedRun,head:{runId:'run_previous'}}),getRun:async()=>({sourceId:intent.sourceId,status:'FAILED',headStatus:'PENDING'})})})).rejects.toThrow('DEADLINE_EXCEEDED');
+    expect(control.peek()).toMatchObject({stopped:false,error:null,sourceObservationReconciliation:{outcome:'NOT_PROMOTED',mode:'AUTO',previousIntent:{runId:'run_deadline'}}});
+    // if the failed run cannot be proven (still RUNNING) the fence stays
+    const held=memoryControl({...emptyCycleState()} as any);
+    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,control:held,persist,
+      readSource:reader(fake({run:{status:'RUNNING',headStatus:'PENDING'},head:{runId:'run_previous'}}))})).rejects.toThrow('DEADLINE_EXCEEDED');
+    expect(held.peek()).toMatchObject({stopped:true,error:'APPLY_UNCERTAIN'});
+  });
+  it('CLI flag reads the real control file and stays proof-only without --apply (no Firestore needed when the state is not uncertain)',async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'f05-reconcile-'));
+    try{
+      const result:any=await runtimeCli(['--reconcile-source-rows'],{SOURCE_CYCLE_PRIVATE_DIR:dir} as any);
+      expect(result).toMatchObject({schema:'freepass-data.f05-source-rows-reconcile/v1',mode:'PROOF_ONLY',exit:0,status:'NOT_UNCERTAIN'});
+      expect((await readdir(dir)).filter(n=>n.endsWith('.state.json'))).toEqual([]);
+    }finally{await rm(dir,{recursive:true,force:true});}
+  });
+});
 describe('native mappings and UID', () => {
   it('uses the existing structured normalizer for a known source year when raw-name matching remains unresolved', () => {
     const s = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '합성세대', 세부트림: '합성트림',
@@ -412,11 +541,18 @@ describe('native mappings and UID', () => {
     expect(r.raw.spec_master_digest).toBe('verified-snapshot');
     expect(r.vehicleHold).toEqual(['VEHICLE_MASTER_REVIEW_REQUIRED']);
     expect(match).not.toHaveBeenCalled();
-    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set() }).rows[0]!.record.raw).not.toHaveProperty('spec');
-    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set(['OTHER']) }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    // 2026-10-25: 검토 UID 목록 밖이어도 원천 연식은 옮기고(쓰기 경로는 빈 칸만), 마스터 근거는 목록 안 차에만 붙는다.
+    for (const uids of [new Set<string>(), new Set(['OTHER'])]) {
+      const outside = f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: uids }).rows[0]!.record.raw;
+      expect(outside.spec).toEqual({ year: '2023' });
+      expect(outside).not.toHaveProperty('spec_master_digest');
+    }
     expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set([r.uid]) }).rows[0]!.record.raw.spec).toEqual({ year: '2023' });
     const bad = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '다른세대', 세부트림: '확인필요', 연식: 2023 }]);
-    expect(f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw).not.toHaveProperty('spec');
+    // 2026-10-25 대표 «원천 값은 반드시 옮긴다»: 차종이 마스터와 안 맞아도 원천 연식은 옮기고, 마스터 근거만 붙이지 않는다.
+    const badRaw = f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw;
+    expect(badRaw.spec).toEqual({ year: '2023' });
+    expect(badRaw).not.toHaveProperty('spec_master_digest');
   });
   it('F05 preserves an explicitly supplied master-admitted year through the existing spec writer without changing RAW or identity HOLD', () => {
     const s = sheet([{ 연식: 2023, '차명 원문': '합성 원문 차종', 최초등록일: 'https://example.invalid/not-a-date' }]);
@@ -440,16 +576,22 @@ describe('native mappings and UID', () => {
     expect(nativeCycleFields(p, { ...original, year: '2024' }, { specFillSources: new Set([s.source]) })).not.toHaveProperty('year');
     expect(nativeCycleFields(p, original)).not.toHaveProperty('year');
   });
-  it('F05 leaves missing, malformed, master-conflicting and registration-conflicting years in RAW without promoting them', () => {
+  it('F05 leaves missing, malformed and registration-conflicting years in RAW; a master-conflicting year moves without master evidence (2026-10-25)', () => {
     const match = vi.fn(() => ({ maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' }));
-    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2000 }, { 연식: 2023, 최초등록일: '2025-01' }]) {
+    const conflicting = sheet([{ 연식: 2000 }]);
+    const moved = f05NativeCapture(conflicting.source, conflicting.capture, conflicting.visibility, { digest: 'synthetic-master-digest', match,
+      allowsYear: (_id, year) => year === 2023 }).rows[0]!.record.raw;
+    expect(moved.spec).toEqual({ year: '2000' });
+    expect(moved).not.toHaveProperty('spec_master_id');
+    match.mockClear();
+    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2023, 최초등록일: '2025-01' }]) {
       const s = sheet([row]);
       const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
         allowsYear: (_id, year) => year === 2023 }).rows[0]!.record;
       expect(r.raw).not.toHaveProperty('spec');
       expect(r.raw.cells).toEqual(s.capture.tabs.find(t => t.rowCount > 1)!.values[1]);
     }
-    expect(match.mock.calls).toEqual([[{ rawName: '합성', year: '2000' }]]);
+    expect(match.mock.calls).toEqual([]);
   });
   it('keeps an exclusive registered supplier row when its company cell is blank, preserving RAW and identity HOLD', () => {
     const s = sheet([{ 회사명: '' }]);

@@ -1,0 +1,534 @@
+import { computeSupplierRuleDeposit, contractYearsMultiplierMax3, supplierDepositRuleFor, SUPPLIER_DEPOSIT_RULES } from './supplier-deposit-policy.js';
+import { representativeTerms } from './source-engine.js';
+import sharedSheetSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+const SHARED_SHEET_SUPPLIERS = new Set(sharedSheetSpec.supplierChannels.sharedInputSheet.map(c => c.code));
+/** 원천 엔진 작성 표식(source_cycle_write.by). infra 의 SOURCE_CYCLE_WRITER 와 같은 값. */
+export const SOURCE_ENGINE_WRITER = 'source-engine';
+/** Deposit evidence, not a pricing engine. A numeric placeholder is never proof of waiver. */
+export function assessDepositEvidence(input) {
+    const note = typeof input.note === 'string' ? input.note.trim() : '';
+    const raw = input.sourceAmount;
+    const amount = typeof raw === 'number' ? raw
+        : typeof raw === 'string' && /^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(raw)
+            ? Number(raw.replaceAll(',', '')) : NaN;
+    const valid = Number.isSafeInteger(amount) && amount >= 0;
+    const supplierId = typeof input.supplierId === 'string' ? input.supplierId.trim() : '';
+    const productType = typeof input.productType === 'string' ? input.productType.replace(/\s+/g, '') : '';
+    const forbidden = productType === '픽업구독' || supplierId === 'RP012';
+    const depositFreeFlag = input.depositFree === true || input.depositFree === '예';
+    const depositFreeNegativeFlag = input.depositFree === false || input.depositFree === '아니오' || input.depositFree === '아님' || input.depositFree === '불가';
+    const sourceWaiverBasis = isValidDepositSourceWaiverBasis(input.depositSourceWaiverBasis) ? input.depositSourceWaiverBasis : null;
+    const sourceWaiverText = depositText(input.depositSourceWaiverText);
+    const confirmationWaiverBasis = depositFreeConfirmationBasis(input.depositFreeConfirmation);
+    const noteWaiverBasis = note === '무보증' ? { field: 'deposit_note', text: '무보증' } : null;
+    const zeroBasis = sourceWaiverBasis ?? noteWaiverBasis ?? confirmationWaiverBasis;
+    const explicitZero = !!zeroBasis;
+    const unknown = (reason) => ({ state: 'UNKNOWN', amount: null, reason });
+    const missing = raw === undefined || raw === null || raw === '';
+    if (explicitZero && depositFreeNegativeFlag) {
+        return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
+    }
+    if ((noteWaiverBasis || confirmationWaiverBasis) && conflictsWithPeriodSourceWaiverText(sourceWaiverText)) {
+        return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
+    }
+    if (explicitZero && (!supplierId || !productType || (!missing && !valid))) {
+        return unknown('INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE');
+    }
+    if (explicitZero && (forbidden || (valid && amount > 0) || (input.hasPositivePaidDeposit && sourceWaiverBasis?.field !== 'source_cycle_record.terms') || (note && note !== '무보증'))) {
+        return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
+    }
+    if ((depositFreeFlag || note === '무보증' || input.depositFreeConfirmation !== undefined) && !explicitZero && (missing || (valid && amount === 0))) {
+        return unknown('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
+    }
+    if (!missing && !valid)
+        return unknown('INVALID_DEPOSIT_AMOUNT');
+    if (valid && amount > 0) {
+        return { state: 'KNOWN', amount, reason: 'SOURCE_AMOUNT' };
+    }
+    if (forbidden)
+        return unknown('ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY');
+    if (missing)
+        return unknown('MISSING_DEPOSIT_AMOUNT');
+    if (explicitZero)
+        return { state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', basis: zeroBasis };
+    return unknown('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
+}
+export const DEPOSIT_SOURCE_WAIVER_FIELDS = ['원문.전체.장기보증', '원문.전체.단기보증'];
+export function depositSourceWaiverFieldForTermMonths(termMonths) {
+    return Number.isSafeInteger(termMonths) && termMonths > 0
+        ? termMonths <= 12 ? DEPOSIT_SOURCE_WAIVER_FIELDS[1] : DEPOSIT_SOURCE_WAIVER_FIELDS[0]
+        : undefined;
+}
+function isValidDepositSourceWaiverBasis(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const record = value;
+    return record.text === '무보증' && ((record.field === '원문.전체.장기보증' || record.field === '원문.전체.단기보증')
+        || (record.field === 'source_cycle_record.terms' && record.source === SOURCE_ENGINE_WRITER && depositInstant(record.at)));
+}
+/** Existing shared-sheet writer evidence only. Never infer waiver from numeric zero or a legacy RAW snapshot. */
+export function sharedSheetEngineWaiverBasis(product, sourceAmount, months, rent, now = new Date().toISOString()) {
+    const mark = product.source_cycle_write, record = product.source_cycle_record;
+    if (!depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER || !depositRecord(record)
+        || !depositRecord(record.raw) || record.raw.source !== 'shared-sheet'
+        || !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId)) || ['RP012', 'RP031'].includes(String(record.sourceId))
+        || record.sourceId !== product.provider_company_code || typeof record.uid !== 'string' || !record.uid
+        || (record.plate ?? null) !== (product.car_number ?? null)
+        || product._deleted || product.deletedAt || product.publication_withdrawal || product.listable !== true
+        || (product.locked_by_contract !== undefined && product.locked_by_contract !== null && product.locked_by_contract !== false && product.locked_by_contract !== '')
+        || product.status_kind === '계약중' || product.status === '계약중'
+        || !depositInstant(record.observedAt) || mark.at !== record.observedAt || !depositInstant(now)
+        || Date.parse(record.observedAt) > Date.parse(now) || sourceAmount !== 0
+        || !Number.isSafeInteger(months) || months <= 0 || !Number.isSafeInteger(rent) || rent <= 0
+        || !Array.isArray(record.terms))
+        return undefined;
+    if ((product._key !== undefined && product._key !== record.uid) || !depositRecord(record.status) || record.status.saleAvailable !== true)
+        return undefined;
+    const matching = record.terms.filter((term) => depositRecord(term) && term.months === months);
+    // Ambiguous mileage/settlement variants must be resolved by the caller's exact term, never selected by rent alone.
+    if (matching.length !== 1)
+        return undefined;
+    const term = matching[0];
+    const raw = depositRecord(term) ? term.raw : undefined;
+    if (!engineTerm(term) || term.monthlyRent.state !== 'KNOWN' || term.monthlyRent.value !== rent
+        || term.deposit.state !== 'ZERO' || term.deposit.value !== 0 || !depositRecord(raw)
+        || raw[months <= 12 ? 'shortDeposit' : 'longDeposit'] !== '무보증')
+        return undefined;
+    const stored = depositRecord(product.price) ? product.price[String(months)] : undefined;
+    if (!depositRecord(stored) || stored.rent !== rent || stored.deposit !== 0)
+        return undefined;
+    return { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: record.observedAt };
+}
+function depositFreeConfirmationBasis(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const record = value;
+    return typeof record.source === 'string' && record.source.trim().length > 0
+        && record.text === '무보증'
+        && depositInstant(record.at)
+        ? { field: 'deposit_free_confirmation', text: '무보증', source: record.source.trim(), at: record.at }
+        : null;
+}
+function conflictsWithPeriodSourceWaiverText(value) {
+    if (!value || value === '무보증')
+        return false;
+    return true;
+}
+function readProductPath(product, path) {
+    return path.split('.').reduce((current, key) => {
+        if (!current || typeof current !== 'object' || Array.isArray(current))
+            return undefined;
+        return current[key];
+    }, product);
+}
+function sourceWaiverTextFromProduct(product, termMonths) {
+    const field = depositSourceWaiverFieldForTermMonths(termMonths);
+    return field ? { field, text: depositText(readProductPath(product, field)) } : { text: '' };
+}
+function sourceWaiverBasisFromProduct(product, termMonths) {
+    const source = sourceWaiverTextFromProduct(product, termMonths);
+    return source.field && source.text === '무보증' ? { field: source.field, text: '무보증' } : undefined;
+}
+function sourceRawAmountFromProduct(product, termMonths) {
+    const source = sourceWaiverTextFromProduct(product, termMonths);
+    return source.field ? readProductPath(product, source.field) : undefined;
+}
+export function parseDepositSourceRawAmount(value) {
+    if (typeof value === 'number')
+        return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+    if (typeof value !== 'string')
+        return undefined;
+    const raw = value.trim();
+    const exactWon = /^((?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+))(?:\s*원)?$/.exec(raw);
+    if (exactWon) {
+        const parsed = Number(exactWon[1].replaceAll(',', ''));
+        return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+    }
+    return undefined;
+}
+/** 빈 값(undefined·null·빈 문자열·빈 객체·빈 배열·false)은 «무보증 확인» 근거가 아니다 — Firestore 의 빈 필드는 null 로 오는 일이 흔하다. */
+function hasNonEmptyDepositFreeConfirmation(value) {
+    if (value === undefined || value === null || value === false)
+        return false;
+    if (typeof value === 'string')
+        return value.trim() !== '';
+    if (Array.isArray(value))
+        return value.length > 0;
+    if (typeof value === 'object')
+        return Object.keys(value).length > 0;
+    return true;
+}
+function hasAnyDepositWaiverOrConflictEvidence(input) {
+    const zeroEvidence = assessDepositEvidence({ ...input, sourceAmount: 0 });
+    if (zeroEvidence.state === 'ZERO')
+        return true;
+    if (zeroEvidence.reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' || zeroEvidence.reason === 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE')
+        return true;
+    const depositFreeText = typeof input.depositFree === 'string' ? input.depositFree.trim().toLowerCase() : '';
+    return input.depositFree === true || ['true', '예', '무보증', 'y', 'yes'].includes(depositFreeText)
+        || hasNonEmptyDepositFreeConfirmation(input.depositFreeConfirmation);
+}
+export function depositEvidenceInputFromProduct(product, sourceAmount, extra = {}) {
+    const engineWaiver = sharedSheetEngineWaiverBasis(product, sourceAmount, extra.termMonths, extra.monthlyRent);
+    return {
+        supplierId: product.provider_company_code,
+        productType: product.product_type,
+        note: product.deposit_note,
+        depositFree: product.deposit_free,
+        depositFreeConfirmation: product.deposit_free_confirmation,
+        depositSourceWaiverBasis: engineWaiver ?? sourceWaiverBasisFromProduct(product, extra.termMonths),
+        depositSourceWaiverText: engineWaiver ? '무보증' : sourceWaiverTextFromProduct(product, extra.termMonths).text,
+        depositSourceRawAmount: engineWaiver ? undefined : sourceRawAmountFromProduct(product, extra.termMonths),
+        ...(calculatedDepositRuleFromProduct(product, extra.termMonths) ? { calculatedDepositRule: calculatedDepositRuleFromProduct(product, extra.termMonths) } : {}),
+        sourceAmount,
+        ...extra,
+    };
+}
+/** 계산 보증금 근거(공급사 정책 정제 표 domain/supplier-deposit-policy — RP023·RP012, 대표 2026-10-14): 원천 엔진이 쓴 문서이고
+ * deposit_source=CALCULATED 이며 그 항(개월)의 규칙 코드가 그 공급사의 규칙일 때만 코드를 돌려준다. 규칙은 항마다 deposit_rules[개월] 에 있다
+ * (한 문서 안에서 원문 금액 항과 계산 항이 섞여도 항마다 정확하다). deposit_rules 가 없는 옛 문서(#642 문서 단위 deposit_rule)만 문서 값을 쓴다.
+ * 다른 공급사·다른 쓰기 주체의 같은 필드는 근거가 아니다. */
+export function calculatedDepositRuleFromProduct(product, termMonths) {
+    const mark = product.source_cycle_write;
+    if (product.deposit_source !== 'CALCULATED' || !mark || typeof mark !== 'object' || mark.by !== SOURCE_ENGINE_WRITER)
+        return undefined;
+    const perTerm = product.deposit_rules;
+    const code = perTerm && typeof perTerm === 'object' && !Array.isArray(perTerm)
+        ? (Number.isSafeInteger(termMonths) ? perTerm[String(termMonths)] : undefined)
+        : product.deposit_rule;
+    return supplierDepositRuleFor(product.provider_company_code, code) ?? undefined;
+}
+export function normalizeErp5CompatibilityInteger(value) {
+    if (typeof value === 'number')
+        return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+    if (typeof value !== 'string' || !/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(value))
+        return undefined;
+    const parsed = Number(value.replaceAll(',', ''));
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+/**
+ * 가격 키를 읽는다. `36` · `36_2만` · `36_인수형` · `12_월30000km` 꼴을 지원한다.
+ * Domain pure helper so infra/application/adapters can share the same months parsing without layer inversion.
+ */
+export function parseErp5CompatibilityPriceKey(key) {
+    const explicit = /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(key);
+    if (explicit) {
+        const months = Number(explicit[1]), km = Number(explicit[3]);
+        if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km))
+            return undefined;
+        const period = explicit[2] === '월' ? 'month' : 'year';
+        return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
+    }
+    const buyout = /^([1-9]\d*)_인수형$/.exec(key);
+    if (buyout)
+        return { months: Number(buyout[1]), settlement: 'BUYOUT' };
+    const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
+    if (!parsed)
+        return undefined;
+    const months = Number(parsed[1]);
+    if (!Number.isSafeInteger(months) || months <= 0)
+        return undefined;
+    if (!parsed[2])
+        return { months, settlement: 'RETURN' };
+    const km = Number(parsed[2]) * 10000;
+    return Number.isSafeInteger(km) ? { months, mileageKm: km, settlement: 'RETURN' } : undefined;
+}
+export const normalizeDepositSupplierId = (value) => typeof value === 'string' ? value.trim() : '';
+export const normalizeDepositProductType = (value) => typeof value === 'string' ? value.replace(/\s+/g, '') : '';
+export function resolveDepositByRuleNote(input) {
+    const note = typeof input.note === 'string' ? input.note.trim() : '';
+    const known = (code, multiplier, label = `대여료×${multiplier}`) => {
+        if (!Number.isSafeInteger(input.monthlyRent) || input.monthlyRent <= 0)
+            return { state: 'UNKNOWN', reason: 'MISSING' };
+        const amount = input.monthlyRent * multiplier;
+        return Number.isSafeInteger(amount) && amount > 0
+            ? { state: 'KNOWN', amount, code, multiplier, label }
+            : { state: 'UNKNOWN', reason: 'CONFLICT' };
+    };
+    if (/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note)) {
+        const years = contractYearsMultiplierMax3(input.termMonths); // 공급사 정책 정제 표와 같은 계산 하나(supplier-deposit-policy)
+        return years === null ? { state: 'UNKNOWN', reason: 'MISSING' } : known('RENT_X_CONTRACT_YEARS_MAX3', years);
+    }
+    if (/^국산:\s*월 대여료×2$/.test(note))
+        return known('RENT_X_2', 2);
+    if (/^수입:\s*12개월 대여료×3 · 18개월↑ ×6$/.test(note)) {
+        if (!Number.isSafeInteger(input.termMonths) || input.termMonths <= 0)
+            return { state: 'UNKNOWN', reason: 'MISSING' };
+        if (input.termMonths === 12)
+            return known('IMPORT_12_X3_18_PLUS_X6', 3);
+        if (input.termMonths >= 18)
+            return known('IMPORT_12_X3_18_PLUS_X6', 6);
+        return { state: 'UNKNOWN', reason: 'TERM_NOT_COVERED_BY_RULE' };
+    }
+    return { state: 'UNKNOWN', reason: 'NO_RULE' };
+}
+export function resolveDepositWithRuleNote(input) {
+    const evidence = assessDepositEvidence(input);
+    // 공급사 정책 계산 보증금(RP023 시트 규칙·RP012 구독 규칙, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»): 문서 금액이
+    // «현재 대여료·개월로 다시 계산한 규칙 값»과 정확히 같을 때만 계산값(KNOWN, CALCULATED_RULE)으로 보인다. 다르면(대여료가 바뀐 뒤 남은 낡은 계산값 등)
+    // 공급사 금액으로 둔갑하지 않게 UNKNOWN.
+    const calculated = supplierDepositRuleFor(normalizeDepositSupplierId(input.supplierId), input.calculatedDepositRule);
+    if (calculated && evidence.state === 'KNOWN') {
+        const expected = computeSupplierRuleDeposit(calculated, input.termMonths, input.monthlyRent);
+        if (expected === null || expected.amount !== evidence.amount)
+            return { state: 'UNKNOWN', amount: null, reason: 'CALCULATED_DEPOSIT_RULE_MISMATCH', rule: null };
+        return { state: 'KNOWN', amount: expected.amount, reason: `CALCULATED_RULE:${calculated}`,
+            rule: { code: calculated, multiplier: expected.multiplier, label: SUPPLIER_DEPOSIT_RULES[calculated].label } };
+    }
+    const sourceAmountRule = { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' };
+    const sourceRawAmount = parseDepositSourceRawAmount(input.depositSourceRawAmount);
+    const sourceRawCandidate = (input.sourceAmount === 0 || input.sourceAmount === '0' || input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '')
+        && sourceRawAmount !== undefined
+        && !hasAnyDepositWaiverOrConflictEvidence(input);
+    if (sourceRawCandidate && evidence.state === 'UNKNOWN') {
+        return { state: 'KNOWN', amount: sourceRawAmount, reason: 'SOURCE_RAW_AMOUNT',
+            rule: { code: 'SOURCE_RAW_AMOUNT', multiplier: null, label: '원문 보증금' },
+            depositRuleDifference: { ruleAmount: sourceRawAmount, ruleCode: 'SOURCE_RAW_AMOUNT', differs: true } };
+    }
+    if (evidence.state === 'KNOWN') {
+        const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+        const depositRuleDifference = rule.state === 'KNOWN' && rule.amount !== evidence.amount
+            ? { ruleAmount: rule.amount, ruleCode: rule.code, differs: true }
+            : undefined;
+        return { state: 'KNOWN', amount: evidence.amount, reason: 'SOURCE_AMOUNT', rule: sourceAmountRule,
+            ...(depositRuleDifference ? { depositRuleDifference } : {}) };
+    }
+    if (evidence.state === 'ZERO')
+        return {
+            state: 'ZERO',
+            amount: 0,
+            reason: 'EXPLICIT_ZERO_DEPOSIT',
+            depositEvidenceBasis: evidence.basis,
+            rule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증', depositEvidenceBasis: evidence.basis },
+        };
+    const supplierId = normalizeDepositSupplierId(input.supplierId);
+    const productType = normalizeDepositProductType(input.productType);
+    const missing = input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '';
+    const ruleCandidateDeposit = input.sourceAmount === 0 || input.sourceAmount === '0' || missing;
+    const rp012UsedRent = supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(productType);
+    const ruleAllowedReason = ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION', 'MISSING_DEPOSIT_AMOUNT', 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE'].includes(evidence.reason);
+    const narrow = input.ruleScope === 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
+    const scopeOk = !narrow || (supplierId === 'RP012' && /구독/.test(productType) && (input.sourceAmount === 0 || input.sourceAmount === '0'));
+    if (supplierId !== 'RP031' && !rp012UsedRent && ruleCandidateDeposit && ruleAllowedReason && scopeOk) {
+        const found = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+        const rule = narrow && found.state === 'KNOWN' && found.code !== 'RENT_X_CONTRACT_YEARS_MAX3' ? { state: 'UNKNOWN', reason: 'NO_RULE' } : found;
+        if (rule.state === 'KNOWN') {
+            return {
+                state: 'KNOWN',
+                amount: rule.amount,
+                reason: `SUPPLIER_RULE_NOTE:${rule.code}`,
+                rule: { code: rule.code, multiplier: rule.multiplier, label: rule.label },
+            };
+        }
+        if (rule.reason !== 'NO_RULE')
+            return { state: 'UNKNOWN', amount: null, reason: rule.reason, rule: null };
+    }
+    return { state: 'UNKNOWN', amount: null, reason: evidence.reason, rule: null };
+}
+export function depositFromYearsRuleNote(note, termMonths, monthlyRent) {
+    const resolved = resolveDepositByRuleNote({ note, termMonths, monthlyRent });
+    return resolved.state === 'KNOWN' && resolved.code === 'RENT_X_CONTRACT_YEARS_MAX3'
+        ? { amount: resolved.amount, multiplier: resolved.multiplier }
+        : null;
+}
+export function hasConflictingPaidDeposit(price) {
+    if (!price || typeof price !== 'object' || Array.isArray(price))
+        return false;
+    return Object.values(price).some(value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            return false;
+        const row = value;
+        // A product-wide waiver cannot erase a positive/invalid sibling just because rent is missing.
+        const deposit = row.deposit;
+        return deposit !== undefined && deposit !== null && deposit !== '' && deposit !== 0 && deposit !== '0';
+    });
+}
+/** Full input universe including inactive products. Details stay in private evidence, not public API. */
+export function depositStatusLabel(state, _sourceAmount, _note) {
+    if (state === 'ZERO')
+        return '무보증';
+    if (state === 'KNOWN')
+        return '보증금 있음';
+    return '미확인';
+}
+export function auditDepositEvidence(products) {
+    const findings = [];
+    const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+    for (const [productId, product] of Object.entries(products)) {
+        const prices = product.price && typeof product.price === 'object' && !Array.isArray(product.price)
+            ? Object.entries(product.price) : [];
+        const paid = prices.filter(([, row]) => row && typeof row === 'object' && positive(row.rent));
+        const hasPositivePaidDeposit = hasConflictingPaidDeposit(product.price);
+        for (const [termKey, value] of paid) {
+            const row = value;
+            const parsed = parseErp5CompatibilityPriceKey(termKey);
+            const result = assessDepositEvidence(depositEvidenceInputFromProduct(product, row.deposit, { termMonths: parsed?.months, hasPositivePaidDeposit }));
+            findings.push({ productId, listable: product.listable === true, supplierId: String(product.provider_company_code ?? ''),
+                productType: String(product.product_type ?? ''), termKey, state: result.state, reason: result.reason,
+                sourceAmount: row.deposit ?? null, proposedAmount: result.amount,
+                depositStatusLabel: depositStatusLabel(result.state, row.deposit, product.deposit_note) });
+        }
+    }
+    const counts = { KNOWN: 0, ZERO: 0, UNKNOWN: 0 };
+    for (const row of findings)
+        counts[row.state]++;
+    const unresolvedAllZeroProducts = Object.entries(products).filter(([id]) => {
+        const rows = findings.filter(row => row.productId === id);
+        return rows.length > 0 && rows.every(row => row.sourceAmount === 0 || row.sourceAmount === '0') && rows.some(row => row.state === 'UNKNOWN');
+    }).map(([productId, product]) => ({ productId, listable: product.listable === true }));
+    const labelCounts = {};
+    for (const row of findings)
+        labelCounts[row.depositStatusLabel] = (labelCounts[row.depositStatusLabel] ?? 0) + 1;
+    return { productCount: Object.keys(products).length, paidTermCount: findings.length, counts,
+        unknownProductCount: new Set(findings.filter(row => row.state === 'UNKNOWN').map(row => row.productId)).size,
+        unresolvedAllZeroProductCount: unresolvedAllZeroProducts.length,
+        visibleUnresolvedAllZeroProductCount: unresolvedAllZeroProducts.filter(row => row.listable).length,
+        labelCounts,
+        findings, writeAuthorized: false };
+}
+const depositRecord = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const depositText = (v) => typeof v === 'string' ? v.trim() : '';
+export const depositInstant = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
+const engineAmount = (v) => depositRecord(v)
+    && ((v.state === 'ZERO' && v.value === 0) || (v.state === 'KNOWN' && typeof v.value === 'number' && Number.isSafeInteger(v.value) && v.value > 0)
+        || (v.state === 'UNKNOWN' && v.value === null));
+const engineTerm = (v) => depositRecord(v) && Number.isSafeInteger(v.months) && v.months > 0
+    && (v.mileage === null || typeof v.mileage === 'string') && engineAmount(v.monthlyRent) && engineAmount(v.deposit);
+/**
+ * 이안카(RP031) 보증금 판정 — 원천 엔진(source-engine)이 쓴 문서의 원천 기록(source_cycle_record.terms)만 근거로 쓴다.
+ * 엔진이 이안카 상품 문서의 유일한 작성 주체다(대표 2026-10-14 «옛날 구버전 거는 과감하게 폐기»). 옛 1차 발행 칸(iancar_phase_one)은 근거가 아니다.
+ * - 옵션 키 `{개월}_연{N}km`·`{개월}_월{N}km` 은 (개월, 약정거리)가 같은 항, 개월 키는 엔진 판매 가격 칸과 같은 대표 항(representativeTerms).
+ * - 그 항의 보증금이 ZERO|KNOWN 이고 price[키].deposit 과 같을 때만 확정. ZERO 는 원천이 0원으로 준 무보증이다.
+ * - 짧은 신선도 창을 따로 두지 않는다(엔진 주기·철회가 신선도를 맡는다; 기존 «오래된 양수 금액 유지»와 같은 쪽). 미래 시각 관측만 거절한다.
+ *   필요한 호출자는 opts.maxAgeSeconds 로 명시적으로 창을 걸 수 있다.
+ */
+export function readIancarEngineDeposit(product, priceKey, now = new Date().toISOString(), opts = {}) {
+    const unknown = () => ({ state: 'UNKNOWN', amount: null, reason: 'IANCAR_ENGINE_DEPOSIT_EVIDENCE_UNVERIFIED' });
+    const mark = product.source_cycle_write, record = product.source_cycle_record;
+    // 이관 중 보존(Codex #639 ①): 엔진 작성 표식(source_cycle_write)도 원천 기록(source_cycle_record)도 «둘 다 없는» 기존 문서는 엔진이 아직 쓰지 않은 문서다.
+    // 이런 문서의 기존 KNOWN/ZERO 값을 일괄 UNKNOWN 으로 바꾸지 않고 옛 1차 발행 근거(iancar_phase_one) 판정을 그대로 쓴다. 엔진이 그 문서를 새로 확인해
+    // 표식·기록을 남기면 아래 엔진 근거가 이긴다. 표식이나 기록이 «하나라도 있는데» 맞지 않는 문서(다른 주체가 덮음 등)는 아래에서 UNKNOWN 이다.
+    // 값이 «실제로 없을 때(undefined/null)»만 레거시. 문자열·배열 등 손상된 값이 있으면 레거시로 우회하지 않고 아래에서 UNKNOWN 이다(Codex #639 재검토).
+    if (product.provider_company_code === 'RP031' && (mark === undefined || mark === null) && (record === undefined || record === null)) {
+        const legacy = readIancarLegacyPublishedDeposit(product, priceKey, now, opts.preserveStalePositiveReference === true ? { preserveStalePositiveReference: true } : {});
+        return legacy.state === 'UNKNOWN' ? unknown() : legacy; // 미확인 사유 코드는 한 가지(엔진 근거 미확인)로 통일
+    }
+    if (product.provider_company_code !== 'RP031' || !depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER
+        || product._deleted || product.deletedAt || product.publication_withdrawal
+        || !depositRecord(record) || record.sourceId !== 'RP031' || !Array.isArray(record.terms) || !record.terms.length
+        || (record.plate ?? null) !== (product.car_number ?? null)
+        || !depositRecord(product.price) || !depositInstant(now))
+        return unknown();
+    const observedAt = depositInstant(record.observedAt) ? record.observedAt : null;
+    if (!observedAt || Date.parse(observedAt) - Date.parse(now) > 60_000)
+        return unknown();
+    if (opts.maxAgeSeconds !== undefined && Date.parse(now) - Date.parse(observedAt) > opts.maxAgeSeconds * 1000)
+        return unknown();
+    const terms = record.terms;
+    if (!terms.every(engineTerm))
+        return unknown();
+    const option = /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(priceKey);
+    let term;
+    if (option) {
+        const mileage = `${option[3]}km/${option[2] === '월' ? 'month' : 'year'}`;
+        const matching = terms.filter(t => t.months === Number(option[1]) && t.mileage === mileage);
+        term = matching.length === 1 ? matching[0] : undefined;
+    }
+    else if (/^[1-9]\d*$/.test(priceKey)) {
+        term = representativeTerms(terms).find(t => t.months === Number(priceKey));
+    }
+    const row = product.price[priceKey];
+    // 월 대여료 일치(Codex #639 ②): 가격 칸의 월 대여료가 원천 기록 항의 월 대여료와 다르면(월요금이 바뀐 뒤 원천 조건과 달라진 칸) 보증금도 확인하지 않는다.
+    if (!term || !depositRecord(row) || (term.deposit.state !== 'ZERO' && term.deposit.state !== 'KNOWN')
+        || row.deposit !== term.deposit.value || term.monthlyRent.state === 'UNKNOWN' || row.rent !== term.monthlyRent.value)
+        return unknown();
+    const amount = term.deposit.value;
+    // 0원 확정 금지(Codex #639 ③): 유상 보증금 안내(deposit_note)가 남아 있으면(무보증·기간별 상이 안내만 예외) 원천 ZERO 라도 확정하지 않는다.
+    const note = depositText(product.deposit_note);
+    if (amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
+        || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
+        || (note && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(note))))
+        return unknown();
+    // ONE 이 0원으로 준 항은 원천이 직접 준 무보증이다(자리표시 0 이 아니라 엔진이 ZERO 로 판정해 기록한 값).
+    if (amount === 0)
+        return { state: 'ZERO', amount: 0, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE',
+            depositEvidenceBasis: { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: observedAt } };
+    return { state: 'KNOWN', amount, reason: 'IANCAR_ENGINE_SOURCE_EVIDENCE' };
+}
+// ── 옛 1차 발행 근거(iancar_phase_one) 읽기: 엔진 작성 표식이 «없는» 기존 문서의 값을 보존하기 위한 이관용 경로(Codex #639 ①).
+// 엔진이 그 문서를 새로 확인해 표식을 남기면 엔진 근거가 이긴다. 이관이 끝나면 이 함수와 호출을 지운다.
+const LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS = 15 * 60;
+const depositInteger = (v) => typeof v === 'number' && Number.isSafeInteger(v);
+/** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
+export function readIancarLegacyPublishedDeposit(product, priceKey, now = new Date().toISOString(), options = {}) {
+    const unknown = () => ({ state: 'UNKNOWN', amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+    const e = product.iancar_phase_one;
+    if (product.provider_company_code !== 'RP031' || product.source !== 'EANCAR_ONE_API'
+        || product.source_schema !== 'iancar-one-phase-one-product/1' || !depositRecord(e)
+        || e.stage !== 'PHASE_ONE' || e.publicationPlane !== 'ERP5_COMPATIBILITY_BRIDGE'
+        || !depositText(product.iancar_one_vehicle_id) || e.sourceVehicleId !== product.iancar_one_vehicle_id
+        || !/^\d{2,3}[가-힣]\d{4}$/.test(depositText(product.car_number).replace(/\s/g, ''))
+        || product._deleted || product.deletedAt || product.publication_withdrawal
+        || !/^[a-f0-9]{64}$/.test(String(e.sourceDigest)) || !/^[a-f0-9]{64}$/.test(String(e.ratesDigest))
+        || !depositInstant(now) || !depositInstant(e.sourceSyncedAt)
+        || product._direct_ingest_at !== Date.parse(e.sourceSyncedAt)
+        || !Array.isArray(e.terms) || !e.terms.length || !depositRecord(e.priceAliases) || !depositRecord(product.price))
+        return unknown();
+    const terms = e.terms;
+    for (const t of terms) {
+        if (!depositRecord(t) || !depositInteger(t.termMonths) || t.termMonths < 1 || t.termMonths > 60
+            || !depositRecord(t.contractedMileage) || !depositInteger(t.contractedMileage.km) || t.contractedMileage.km < 1
+            || !['month', 'year'].includes(String(t.contractedMileage.period))
+            || !depositRecord(t.monthlyRent) || t.monthlyRent.currency !== 'KRW' || !depositInteger(t.monthlyRent.amount)
+            || t.monthlyRent.amount < 100_000 || t.monthlyRent.amount > 20_000_000 || t.vatIncluded !== true
+            || !depositRecord(t.deposit) || t.deposit.currency !== 'KRW' || !depositInteger(t.deposit.amount) || t.deposit.amount < 0
+            || t.depositState !== (t.deposit.amount === 0 ? 'ZERO' : 'KNOWN')
+            || t.key !== `${t.termMonths}:${t.contractedMileage.km}:${t.contractedMileage.period}`
+            || t.compatibilityPriceKey !== `${t.termMonths}_${t.contractedMileage.period === 'month' ? '월' : '연'}${t.contractedMileage.km}km`)
+            return unknown();
+    }
+    if (new Set(terms.map(t => t.key)).size !== terms.length)
+        return unknown();
+    const matching = terms.filter(t => depositRecord(t) && t.compatibilityPriceKey === priceKey);
+    let term = matching.length === 1 ? matching[0] : undefined;
+    if (!term && /^\d+$/.test(priceKey)) {
+        const scoped = terms.filter(t => depositRecord(t) && t.termMonths === Number(priceKey));
+        if (!scoped.length || new Set(scoped.map(t => t.contractedMileage.period)).size !== 1)
+            return unknown();
+        const lowest = scoped.reduce((a, b) => Number(a.contractedMileage.km) < Number(b.contractedMileage.km) ? a : b);
+        if (e.priceAliases[priceKey] !== lowest.key)
+            return unknown();
+        term = lowest;
+    }
+    const row = product.price[priceKey];
+    if (!term || !depositRecord(row) || !depositRecord(term.deposit) || !depositRecord(term.monthlyRent)
+        || row.deposit !== term.deposit.amount || row.rent !== term.monthlyRent.amount)
+        return unknown();
+    const direct = product.price[String(term.compatibilityPriceKey)];
+    if (!depositRecord(direct) || direct.rent !== row.rent || direct.deposit !== row.deposit)
+        return unknown();
+    if (term.deposit.amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
+        || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
+        || (depositText(product.deposit_note) && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(depositText(product.deposit_note)))))
+        return unknown();
+    // Freshness cannot erase a structurally verified positive source amount. This is a
+    // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
+    if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000)
+        return unknown();
+    if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > LEGACY_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
+        // Public/compat callers keep their previous fail-closed result. Only authenticated
+        // REFERENCE_ONLY/HOLD output can opt in to retaining a stale source amount.
+        if (!options.preserveStalePositiveReference || term.deposit.amount === 0)
+            return unknown();
+        const source = resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+            termMonths: term.termMonths, monthlyRent: row.rent, hasPositivePaidDeposit: hasConflictingPaidDeposit(product.price),
+        }));
+        if (source.state !== 'KNOWN')
+            return unknown();
+        return { state: 'KNOWN', amount: source.amount, reason: 'SOURCE_AMOUNT',
+            ...(source.depositRuleDifference ? { depositRuleDifference: source.depositRuleDifference } : {}),
+            publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' };
+    }
+    return { state: term.depositState, amount: term.deposit.amount,
+        reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' };
+}

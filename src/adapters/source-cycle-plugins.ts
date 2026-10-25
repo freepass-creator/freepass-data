@@ -9,6 +9,7 @@ import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-sou
 import { IancarOneApiError, type IancarOneListCapture } from './iancar-one-api.js';
 import type { CycleRead } from '../ports/source-cycle.js';
 import { stableIancarPayload } from './iancar-stable-facts.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 
 export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION' | 'FILE';
 export type CycleSourceDefinition = {
@@ -208,7 +209,8 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       const year = pick('year');
       if ((typeof year === 'number' && Number.isSafeInteger(year) && year >= 1900 && year <= 2100) || (typeof year === 'string' && /^(19|20)\d{2}$/.test(year.trim()))) spec.year = String(year).trim();
       const fuel = pick('fuel'), color = pick('color'), mileage = pick('mileage'), registered = pick('first_registration_date');
-      if (typeof fuel === 'string' && fuel.trim()) spec.fuel_type = fuel.trim();
+      // 연료는 차종 기준 한 장의 표준 이름으로만(휘발유→가솔린·전기차→전기·lpg→LPG, 2026-10-25). 표에 없거나 차명과 어긋나면 비우고 원문은 raw.fuel 에 남는다.
+      if (typeof fuel === 'string' && fuel.trim()) { const canon = canonicalFuel(fuel, detail.name); if (canon) spec.fuel_type = canon; }
       if (typeof color === 'string' && color.trim()) spec.ext_color = color.trim();
       if (typeof mileage === 'number' && Number.isSafeInteger(mileage) && mileage >= 0) spec.mileage = String(mileage);
       if (typeof registered === 'string' && validCalendarDate(registered.trim())) spec.first_registration_date = registered.trim();

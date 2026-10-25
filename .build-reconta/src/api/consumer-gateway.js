@@ -1,0 +1,1635 @@
+import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
+import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
+import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
+import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
+import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import Fastify from 'fastify';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormatsModule from 'ajv-formats';
+import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
+import adminCatalogSchema from '../../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
+import commercialOfferSchema from '../../contracts/commercial-offer-view-v1.schema.json' with { type: 'json' };
+import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
+import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
+import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
+import estimateQuoteReadReceiptSchema from '../../contracts/estimate-quote-read-receipt-v1.schema.json' with { type: 'json' };
+import estimateQuoteWriteReceiptSchema from '../../contracts/estimate-quote-write-receipt-v1.schema.json' with { type: 'json' };
+import estimateShareEnvelopeReadReceiptSchema from '../../contracts/estimate-share-envelope-read-receipt-v1.schema.json' with { type: 'json' };
+import estimateShareEnvelopeWriteReceiptSchema from '../../contracts/estimate-share-envelope-write-receipt-v1.schema.json' with { type: 'json' };
+import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
+import settlementLedgerSchemaV2 from '../../contracts/settlement-ledger-view-v2.schema.json' with { type: 'json' };
+import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
+import internalAiReferenceSchema from '../../contracts/internal-ai-reference-v1.schema.json' with { type: 'json' };
+import contractFeeLinksSchema from '../../contracts/contract-fee-links-v1.schema.json' with { type: 'json' };
+import publicProductFeedSchema from '../../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
+import { ESTIMATE_NEWCAR_MASTER_CONTRACT, ESTIMATE_NEWCAR_MASTER_PROJECTION_ID, uncoveredEstimateMasterIssues, validateEstimateMasterSemantics } from '../domain/estimate-master.js';
+import { readCatalogDataHealth } from '../application/catalog-health.js';
+import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { renderVehiclePhotoRendition } from '../adapters/vehicle-photo-rendition.js';
+import { createPhotoRenditionCache } from './photo-rendition-cache.js';
+import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import { SINGLE_PRODUCT_FACT_FIELDS, SINGLE_POLICY_FACT_FIELDS, SINGLE_PARTNER_FACT_FIELDS, SINGLE_PRODUCT_PRICE_FIELDS, isSingleProductPriceKey } from '../infra/erp5-compat-catalog-reader.js';
+import { buildKakaoCatalogReference, buildInternalAiReference, filterReferenceProducts, readCurrentReferenceObservations, referenceResponseDigest, referenceObservationToCompatibilityProduct, } from '../application/kakao-catalog-reference.js';
+import { assertQuotePutCommand, assertShareEnvelopePutCommand, normalizedArtifactVersion, } from '../domain/estimate-artifacts.js';
+import { assertAdminWorkflowCommitRequest, assertAdminWorkflowReadSpec, } from '../domain/admin-workflow.js';
+import { readSettlementLedgerView, projectAdminWorkflowCurrentFacts } from '../application/settlement-ledger-view.js';
+import { resolveContractFeeLink, } from '../application/contract-fee-link.js';
+import { assertSettlementLedgerReadRequest, } from '../domain/settlement-ledger-view.js';
+import { buildPublicProductFeed, buildPublicProductQuote, publicConsumerIdFromWhitelabel, } from './public-product-feed.js';
+import { logRouteError } from '../shared/route-error-log.js';
+import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
+/** Server-owned registrations; a request can never select a collection or projection. */
+export function parseConsumerBindings(raw) {
+    if (!raw)
+        throw new Error('FREEPASS_DATA_CONSUMERS_JSON is required');
+    const entries = JSON.parse(raw);
+    if (!Array.isArray(entries) || !entries.length)
+        throw new Error('Consumer registrations must be a non-empty array');
+    const ids = new Set();
+    const tokens = new Set();
+    return entries.map((entry) => {
+        if (!entry || typeof entry !== 'object')
+            throw new Error('Invalid consumer registration');
+        const item = entry;
+        // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
+        if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+            throw new Error('Consumer contract is not implemented for this registration');
+        }
+        const expectedProjection = item.id === 'freepass-estimate'
+            ? ESTIMATE_NEWCAR_MASTER_PROJECTION_ID
+            : item.id === 'freepass-admin-catalog'
+                ? 'admin-catalog'
+                : 'erp-public';
+        if (item.projectionId !== expectedProjection)
+            throw new Error('Unsupported consumer projection');
+        if (typeof item.token !== 'string' || item.token.trim() !== item.token || item.token.length < 32) {
+            throw new Error('Each consumer needs a distinct service token of at least 32 characters');
+        }
+        if (ids.has(item.id) || tokens.has(item.token))
+            throw new Error('Duplicate consumer ID or shared service token');
+        const internalAi = item.id.startsWith('internal-ai-');
+        if ((item.id === 'erp5-public-media' || item.id === 'erp5-public-catalog') && item.capabilities === undefined)
+            throw new Error('ERP5 public consumer capability must be explicit');
+        if (internalAi && item.capabilities === undefined)
+            throw new Error('Internal AI capability must be explicit');
+        const capabilities = item.capabilities === undefined
+            ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master', 'estimate-artifacts'] : ['catalog'])
+            : (() => {
+                if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
+                    throw new Error('Consumer capabilities must be a non-empty array');
+                }
+                const allowed = new Set(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read']);
+                const values = item.capabilities.map((value) => {
+                    if (typeof value !== 'string' || !allowed.has(value)) {
+                        throw new Error('Unsupported consumer capability');
+                    }
+                    return value;
+                });
+                if (new Set(values).size !== values.length) {
+                    throw new Error('Duplicate consumer capability');
+                }
+                return values;
+            })();
+        if ((item.id === 'erp5-public-media' && (capabilities.length !== 1 || capabilities[0] !== 'photos'))
+            || (item.id !== 'erp5-public-media' && capabilities.includes('photos')))
+            throw new Error('ERP5 media registration requires its exclusive photos capability');
+        if (item.id === 'erp5-public-catalog' && (capabilities.length !== 1 || capabilities[0] !== 'catalog')) {
+            throw new Error('ERP5 public catalog registration requires its exclusive catalog capability');
+        }
+        if (item.id === 'freepass-estimate') {
+            if (capabilities.some((value) => !['estimate-newcar-master', 'estimate-artifacts'].includes(value))) {
+                throw new Error('FreePass Estimate registration may only use Estimate capabilities');
+            }
+        }
+        else if (capabilities.includes('estimate-newcar-master')) {
+            throw new Error('Estimate master capability requires freepass-estimate registration');
+        }
+        else if (capabilities.includes('estimate-artifacts')) {
+            throw new Error('Estimate artifact capability requires freepass-estimate registration');
+        }
+        if (capabilities.includes('admin-workflow') && item.id !== 'freepass-admin-catalog') {
+            throw new Error('Admin workflow capability requires freepass-admin-catalog registration');
+        }
+        if (capabilities.includes('contract-fee-link-read') && item.id !== 'freepass-admin-catalog') {
+            throw new Error('Contract fee link capability requires freepass-admin-catalog registration');
+        }
+        if (capabilities.includes('catalog-reference') && item.id !== 'kakao-ops') {
+            throw new Error('Catalog reference capability requires kakao-ops registration');
+        }
+        if ((internalAi && capabilities.some(value => value !== 'internal-ai-reference')) ||
+            (!internalAi && capabilities.includes('internal-ai-reference'))) {
+            throw new Error('Internal AI registration may only use its dedicated read capability');
+        }
+        const referenceSourceScopes = item.referenceSourceScopes;
+        if (referenceSourceScopes !== undefined && (!Array.isArray(referenceSourceScopes)
+            || referenceSourceScopes.length !== 1 || referenceSourceScopes[0] !== 'COLLECTED'
+            || !(item.id === 'kakao-ops' && capabilities.includes('catalog-reference')
+                || internalAi && capabilities.includes('internal-ai-reference')
+                || item.id === 'erp-com' && capabilities.includes('catalog')))) {
+            throw new Error('Collected reference scope requires an explicit reference consumer grant');
+        }
+        ids.add(item.id);
+        tokens.add(item.token);
+        return {
+            id: item.id,
+            projectionId: expectedProjection,
+            token: item.token,
+            capabilities,
+            ...(referenceSourceScopes === undefined ? {} : { referenceSourceScopes: ['COLLECTED'] })
+        };
+    });
+}
+const hash = (value) => createHash('sha256').update(value).digest();
+const addFormats = (typeof addFormatsModule === 'function'
+    ? addFormatsModule
+    : addFormatsModule.default);
+class ConsumerReadError extends Error {
+    code;
+    statusCode;
+    details;
+    constructor(code, statusCode, details) {
+        super(code);
+        this.code = code;
+        this.statusCode = statusCode;
+        this.details = details;
+    }
+}
+const PUBLIC_CACHE_MS = 45_000;
+const PUBLIC_TIMEOUT_MS = 5_000;
+const PUBLIC_RATE_LIMIT_WINDOW_MS = 60_000;
+const PUBLIC_RATE_LIMIT_MAX = 120;
+const PUBLIC_RETRY_AFTER_SECONDS = 30;
+const PUBLIC_FEED_MAX_BYTES = 1_000_000;
+const PUBLIC_QUOTE_MAX_BYTES = 512_000;
+const PUBLIC_CACHE_MAX_ENTRIES = 64;
+const PUBLIC_RATE_LIMIT_MAX_ENTRIES = 4096;
+const publicCache = new Map();
+const publicInFlight = new Map();
+const publicRateLimits = new Map();
+const publicTrustProxyHops = () => {
+    const raw = process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS?.trim() ?? '';
+    if (!raw)
+        return 0;
+    if (!/^[0-3]$/.test(raw))
+        throw new Error('FREEPASS_PUBLIC_TRUST_PROXY_HOPS must be 0, 1, 2 or 3');
+    return Number(raw);
+};
+// Fastify exposes the chain from the socket outward; each route keeps its own trust budget.
+const clientIpAtHops = (request, hops) => request.ips?.[Math.min(hops, request.ips.length - 1)] ?? request.ip ?? 'unknown';
+const sweepExpired = (items, now) => {
+    for (const [key, value] of items) {
+        const expiresAt = value.expiresAt ?? value.resetAt;
+        if (expiresAt !== undefined && expiresAt <= now)
+            items.delete(key);
+    }
+};
+const trimOldest = (items, maxEntries) => {
+    while (items.size > maxEntries) {
+        const oldest = items.keys().next().value;
+        if (oldest === undefined)
+            break;
+        items.delete(oldest);
+    }
+};
+const publicRateLimited = (key, now = Date.now()) => {
+    sweepExpired(publicRateLimits, now);
+    const current = publicRateLimits.get(key);
+    if (!current || current.resetAt <= now) {
+        publicRateLimits.set(key, { resetAt: now + PUBLIC_RATE_LIMIT_WINDOW_MS, count: 1 });
+        trimOldest(publicRateLimits, PUBLIC_RATE_LIMIT_MAX_ENTRIES);
+        return false;
+    }
+    current.count += 1;
+    return current.count > PUBLIC_RATE_LIMIT_MAX;
+};
+const withPublicTimeout = async (work) => {
+    let timeout;
+    try {
+        return await Promise.race([
+            work,
+            new Promise((_, reject) => {
+                timeout = setTimeout(() => reject(new Error('PUBLIC_CATALOG_TIMEOUT')), PUBLIC_TIMEOUT_MS);
+            }),
+        ]);
+    }
+    finally {
+        if (timeout)
+            clearTimeout(timeout);
+    }
+};
+const responseBytes = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+const normalizePublicQuery = (query, registered) => {
+    const p = publicSingleQueryValue(query.p);
+    const wl = publicSingleQueryValue(query.wl);
+    const code = publicSingleQueryValue(query.code);
+    if (p !== undefined) {
+        if (!/^(?:RP|PT-)\d+$/.test(p))
+            throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
+        const allowed = publicProviderAllowlist();
+        if (!allowed.has(p))
+            throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_ALLOWED'), { statusCode: 400 });
+    }
+    if (wl !== undefined) {
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(wl))
+            throw Object.assign(new Error('PUBLIC_WL_INVALID'), { statusCode: 400 });
+        const allowed = publicWhitelabelAllowlist();
+        if (!allowed.has(wl))
+            throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
+        const consumerId = publicConsumerIdFromWhitelabel(wl);
+        if (!registered.has(consumerId))
+            throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
+    }
+    if (code !== undefined && !/^[A-Za-z0-9가-힣_-]{1,120}$/.test(code)) {
+        throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
+    }
+    return {
+        ...(p !== undefined ? { p } : {}),
+        ...(wl !== undefined ? { wl } : {}),
+        ...(code !== undefined ? { code } : {}),
+    };
+};
+export const publicRuntimeStatsForTest = () => ({
+    cacheEntries: publicCache.size,
+    inFlightEntries: publicInFlight.size,
+    rateLimitEntries: publicRateLimits.size,
+});
+export const resetPublicRuntimeForTest = () => {
+    publicCache.clear();
+    publicInFlight.clear();
+    publicRateLimits.clear();
+};
+const consumerContext = (consumerId, purpose, requestId) => ({
+    actor: { id: `consumer:${consumerId}`, kind: 'SERVICE' },
+    clientId: consumerId,
+    purpose,
+    requestId
+});
+const publicCatalogCompatSnapshot = (snapshot, consumerId) => {
+    const feed = buildPublicProductFeed(snapshot, {});
+    const products = Object.fromEntries(feed.products.map((product) => [
+        product.publicProductKey,
+        product,
+    ]));
+    const policies = Object.fromEntries(feed.products
+        .filter((product) => product._policy)
+        .map((product) => [`${product.publicProductKey}:policy`, product._policy]));
+    return {
+        ...snapshot,
+        data: {
+            products,
+            policies,
+            partners: {},
+            users: {},
+        },
+        meta: {
+            ...snapshot.meta,
+            consumerId,
+            collectionCounts: {
+                products: Object.keys(products).length,
+                policy: Object.keys(policies).length,
+                partners: 0,
+                users: 0,
+            },
+        },
+    };
+};
+export function createConsumerGateway(store, bindings, access, healthStore, compatReader, workflowStore, estimateArtifactStore, contractFeeLedgerRowsPort) {
+    // Validate again for callers constructing registrations without the environment parser.
+    assertPublicAllowlistsConfigured();
+    const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
+    const proxyHops = process.env.FREEPASS_DATA_TRUST_PROXY_HOPS ?? '0';
+    if (!/^[0-3]$/.test(proxyHops))
+        throw new Error('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID');
+    const photoProxyHops = Number(proxyHops);
+    const publicProxyHops = publicTrustProxyHops();
+    const trustedHops = Math.max(photoProxyHops, publicProxyHops);
+    // Enabling hops requires an ingress that prevents clients from reaching the socket directly.
+    const app = Fastify({ logger: false, trustProxy: trustedHops > 0 ? (_address, hop) => hop < trustedHops : false });
+    // Migration signal only: preserve auth, status and payload until each consumer's direct read is verified.
+    app.addHook('onRequest', async (request, reply) => {
+        if (request.method !== 'GET' || ![
+            '/v1/consumers/:consumerId/catalog',
+            '/v1/consumers/:consumerId/catalog-compat',
+            '/v1/consumers/:consumerId/catalog-reference',
+            '/v1/consumers/:consumerId/internal-ai-reference',
+        ].includes(request.routeOptions.url ?? ''))
+            return;
+        reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
+        reply.header('X-Freepass-Migration-Status', 'LEGACY_READ_PENDING_RETIREMENT');
+        reply.header('X-Freepass-Migration-Instruction', 'Read stored canonical data directly from Firestore in your platform server using an authorized read identity; do not recalculate or use legacy fallback.');
+        reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration>; rel="deprecation"');
+    });
+    const ajv = new Ajv2020({ strict: false });
+    addFormats(ajv);
+    ajv.addSchema(catalogSchema);
+    ajv.addSchema(commercialOfferSchema);
+    ajv.addSchema(contractFeeLinksSchema);
+    ajv.addSchema(publicProductFeedSchema);
+    const validateErpData = ajv.compile(erpViewSchema);
+    const validateAdminResponse = ajv.compile(adminCatalogSchema);
+    const validateHealth = ajv.compile(healthSchema);
+    const validateEstimateMaster = ajv.compile(estimateMasterSchema);
+    const validateEstimateQuoteReadReceipt = ajv.compile(estimateQuoteReadReceiptSchema);
+    const validateEstimateQuoteWriteReceipt = ajv.compile(estimateQuoteWriteReceiptSchema);
+    const validateEstimateShareEnvelopeReadReceipt = ajv.compile(estimateShareEnvelopeReadReceiptSchema);
+    const validateEstimateShareEnvelopeWriteReceipt = ajv.compile(estimateShareEnvelopeWriteReceiptSchema);
+    const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
+    const validateSettlementLedgerV2 = ajv.compile(settlementLedgerSchemaV2);
+    const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
+    const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
+    const validatePublicProductFeed = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed');
+    const validatePublicProductQuote = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote');
+    const validateContractFeeLinksRequest = ajv.getSchema('https://freepass.teamjpk.com/contracts/contract-fee-links-v1.schema.json#/$defs/request');
+    const validateContractFeeLinksResponse = ajv.getSchema('https://freepass.teamjpk.com/contracts/contract-fee-links-v1.schema.json#/$defs/response');
+    app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
+    const readPublicSnapshot = async (consumerId, cacheKey) => {
+        const now = Date.now();
+        sweepExpired(publicCache, now);
+        const cached = publicCache.get(cacheKey);
+        if (cached && cached.expiresAt > now)
+            return cached.value;
+        const current = publicInFlight.get(cacheKey);
+        if (current)
+            return current;
+        if (!compatReader)
+            throw new Error('PUBLIC_CATALOG_READER_UNAVAILABLE');
+        const work = withPublicTimeout(compatReader.read(consumerId))
+            .then((value) => {
+            publicCache.set(cacheKey, { expiresAt: Date.now() + PUBLIC_CACHE_MS, value });
+            trimOldest(publicCache, PUBLIC_CACHE_MAX_ENTRIES);
+            return value;
+        })
+            .finally(() => {
+            if (publicInFlight.get(cacheKey) === work)
+                publicInFlight.delete(cacheKey);
+        });
+        publicInFlight.set(cacheKey, work);
+        return work;
+    };
+    const publicRouteAllowed = (request, reply) => {
+        const route = request.routeOptions?.url ?? request.url.split('?')[0];
+        const key = `${clientIpAtHops(request, publicProxyHops)}:${route}`;
+        if (!publicRateLimited(key))
+            return true;
+        reply.header('Retry-After', String(PUBLIC_RETRY_AFTER_SECONDS));
+        reply.code(429).send({ error: '요청이 너무 많습니다.' });
+        return false;
+    };
+    app.get('/v1/public/catalog/feed', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        if (!publicRouteAllowed(request, reply))
+            return;
+        try {
+            const { p, wl } = normalizePublicQuery(request.query, registered);
+            const consumerId = publicConsumerIdFromWhitelabel(wl);
+            const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+            const response = buildPublicProductFeed(snapshot, { p, wl });
+            if (response.products.length > 5000 || responseBytes(response) > PUBLIC_FEED_MAX_BYTES || !validatePublicProductFeed(response)) {
+                return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+            }
+            return response;
+        }
+        catch (error) {
+            logRouteError('/v1/public/catalog/feed', 'public_feed', error);
+            const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number(error.statusCode) : 503;
+            if (statusCode === 400)
+                return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
+            if (statusCode === 404)
+                return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
+            return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+        }
+    });
+    app.get('/v1/public/catalog/quote', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        if (!publicRouteAllowed(request, reply))
+            return;
+        try {
+            if (Object.hasOwn(request.query, 'size') || Object.hasOwn(request.query, 'rendition'))
+                return reply.code(400).send({ error: '상품 안내 요청이 올바르지 않습니다.' });
+            const { p, wl, code } = normalizePublicQuery(request.query, registered);
+            if (!code)
+                return reply.code(400).send({ error: '상품 코드가 없습니다.' });
+            const consumerId = publicConsumerIdFromWhitelabel(wl);
+            const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+            const response = buildPublicProductQuote(snapshot, code, { p, wl });
+            if (!response)
+                return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
+            if (responseBytes(response) > PUBLIC_QUOTE_MAX_BYTES || !validatePublicProductQuote(response)) {
+                return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+            }
+            return response;
+        }
+        catch (error) {
+            logRouteError('/v1/public/catalog/quote', 'public_quote', error);
+            if (error instanceof Error && error.message === 'PUBLIC_QUOTE_CODE_REQUIRED') {
+                return reply.code(400).send({ error: '상품 코드가 없습니다.' });
+            }
+            const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number(error.statusCode) : 503;
+            if (statusCode === 400)
+                return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
+            if (statusCode === 404)
+                return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
+            return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+        }
+    });
+    const failedAuthPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.failedAuth);
+    const consumerPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.consumer);
+    let activePhotoResponses = 0;
+    // 줄인 사진(list/detail) 결과물 캐시 — 원천(ONE) 호출만 건너뛰고 DB 재확인은 매 요청 한다.
+    const renditionCache = createPhotoRenditionCache();
+    const photoHandler = async (request, reply) => {
+        reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+        const binding = registered.get(request.params.consumerId);
+        const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read bound vehicle photo through FreePass Data', request.id),
+            operation: 'READ_PRODUCT_PHOTO', resource: { kind: 'CATALOG', name: 'vehicle-product-photo' } };
+        try {
+            if (!binding || !matches) {
+                const retry = failedAuthPhotoLimit.take(clientIpAtHops(request, photoProxyHops));
+                if (retry)
+                    return reply.header('Retry-After', String(retry)).code(429).send({ code: 'VEHICLE_PHOTO_RATE_LIMITED' });
+                await access.deny('READ', spec, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            const consumerRetry = consumerPhotoLimit.take(binding.id);
+            if (consumerRetry)
+                return reply.header('Retry-After', String(consumerRetry)).code(429).send({ code: 'VEHICLE_PHOTO_RATE_LIMITED' });
+            if (!((binding.id === 'erp5-public-media' && binding.capabilities.includes('photos'))
+                || (binding.capabilities.includes('catalog') && (binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))))) {
+                await access.deny('READ', spec, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            const index = request.params.index === undefined ? undefined : Number(request.params.index);
+            const query = request.query;
+            const size = query.size;
+            if (Object.keys(query).some(key => key !== 'size') || (index === undefined && Object.keys(query).length > 0)
+                || (size !== undefined && size !== 'list' && size !== 'detail')) {
+                await access.deny('READ', spec, 'INVALID_REQUEST');
+                return reply.code(400).send({ code: 'INVALID_REQUEST' });
+            }
+            if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= PUBLIC_VEHICLE_PHOTO_LIMIT)
+                || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
+                await access.deny('READ', spec, 'INVALID_REQUEST');
+                return reply.code(400).send({ code: 'INVALID_REQUEST' });
+            }
+            spec.resource = { ...spec.resource, ...{ entityId: request.params.productId } };
+            if (!compatReader?.readVehiclePhoto) {
+                await access.deny('READ', spec, 'VEHICLE_PHOTO_READER_UNAVAILABLE');
+                return reply.code(503).send({ code: 'VEHICLE_PHOTO_READER_UNAVAILABLE' });
+            }
+            if (activePhotoResponses >= VEHICLE_PHOTO_MAX_CONCURRENT)
+                throw new Error('VEHICLE_PHOTO_BUSY');
+            activePhotoResponses++;
+            let released = false;
+            const release = () => {
+                if (released)
+                    return;
+                released = true;
+                activePhotoResponses--;
+                reply.raw.off('finish', release).off('close', release).off('error', release);
+            };
+            reply.raw.once('finish', release).once('close', release).once('error', release);
+            if (reply.raw.destroyed)
+                release();
+            const read = compatReader.readVehiclePhoto.bind(compatReader);
+            const supportsRenditionCache = compatReader.readVehiclePhoto.supportsRenditionCache === true;
+            const photoOptions = supportsRenditionCache && index !== undefined && size !== undefined
+                ? { renditionCacheLookup: tag => renditionCache.get(request.params.productId, index, size, tag) } : undefined;
+            const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
+                summarize: value => ({ count: value.count }) }, () => photoOptions ? read(binding.id, request.params.productId, index, photoOptions) : read(binding.id, request.params.productId, index));
+            if (result.fromRenditionCache) {
+                // 캐시 적중: 이미 검사·줄인 결과물. 비공개·철회·연결·개수 변경만 DB 로 다시 확인하고 내보낸다.
+                if (!await result.revalidate()) {
+                    renditionCache.dropProduct(request.params.productId);
+                    try {
+                        await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND');
+                    }
+                    catch (error) {
+                        if (!(error instanceof DataAccessAuditUnavailableError))
+                            throw error;
+                    }
+                    return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
+                }
+                if (typeof result.sourceCheckedAt === 'number' && result.cacheTag && index !== undefined && size !== undefined)
+                    renditionCache.touchSource(request.params.productId, index, size, result.cacheTag, result.sourceCheckedAt);
+                reply.header('X-Photo-Cache', 'HIT');
+                return reply.type(result.contentType).send(result.bytes);
+            }
+            if (!Number.isSafeInteger(result.count) || result.count < 0)
+                return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+            if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
+                return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+            let outputBytes = result.bytes, outputType = result.contentType;
+            if (index !== undefined && size !== undefined) {
+                const controller = new AbortController();
+                const abortRender = () => { controller.abort(); };
+                reply.raw.once('close', abortRender);
+                reply.raw.once('error', abortRender);
+                if (reply.raw.destroyed)
+                    controller.abort();
+                let rendered;
+                try {
+                    rendered = await renderVehiclePhotoRendition({ bytes: result.bytes, contentType: result.contentType }, size, { signal: controller.signal });
+                    if (controller.signal.aborted)
+                        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+                }
+                finally {
+                    reply.raw.off('close', abortRender);
+                    reply.raw.off('error', abortRender);
+                }
+                if (rendered.contentType !== 'image/jpeg' || validateVehiclePhotoMedia(rendered.contentType, Buffer.isBuffer(rendered.bytes) ? rendered.bytes.length : 0, rendered.bytes))
+                    return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+                outputBytes = rendered.bytes;
+                outputType = rendered.contentType;
+            }
+            // Raw approval/SHA and success audit precede rendering. Recheck after rendering
+            // too, so a withdrawal during compression cannot reach the response.
+            if (!await result.revalidate()) {
+                renditionCache.dropProduct(request.params.productId); // 최종 재확인 실패(원천 철회·개수 변경·DB 변경)이면 같은 상품의 다른 크기 캐시도 믿지 않는다
+                try {
+                    await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND');
+                }
+                catch (error) {
+                    if (!(error instanceof DataAccessAuditUnavailableError))
+                        throw error;
+                }
+                return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
+            }
+            if (index === undefined)
+                return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, result.count) });
+            if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes))
+                renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType, sourceCheckedAt: result.sourceCheckedAt ?? Date.now(), ...(result.albumFingerprint !== undefined ? { albumFingerprint: result.albumFingerprint } : {}), ...(result.sourceSha256 !== undefined ? { sourceSha256: result.sourceSha256 } : {}) });
+            return reply.type(outputType).send(outputBytes);
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = error instanceof Error ? error.message : '';
+            if (code === 'VEHICLE_PHOTO_NOT_FOUND')
+                renditionCache.dropProduct(request.params.productId); // 비공개·철회·불일치가 한 번이라도 확인되면 이 상품의 캐시를 믿지 않는다
+            if (code === 'VEHICLE_PHOTO_BUSY')
+                return reply.header('Retry-After', '2').code(429).send({ code });
+            if (['VEHICLE_PHOTO_NOT_FOUND', 'VEHICLE_PHOTO_READER_UNAVAILABLE', 'VEHICLE_PHOTO_UNAVAILABLE'].includes(code))
+                return reply.code(code === 'VEHICLE_PHOTO_NOT_FOUND' ? 404 : 503).send({ code });
+            return reply.code(503).send({ code: 'VEHICLE_PHOTO_READ_FAILED' });
+        }
+    };
+    app.get('/v1/consumers/:consumerId/catalog-compat/products/:productId/photos', photoHandler);
+    app.get('/v1/consumers/:consumerId/catalog-compat/products/:productId/photos/:index', photoHandler);
+    app.get('/v1/consumers/:consumerId/catalog', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read approved catalog projection through FreePass Data', request.id);
+        const resource = {
+            kind: 'PROJECTION',
+            name: binding?.projectionId ?? 'unregistered',
+            ...(binding ? { projectionId: binding.projectionId } : {})
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CONSUMER_CATALOG',
+                    resource
+                }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('catalog')) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CONSUMER_CATALOG',
+                    resource
+                }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            const result = await access.read({
+                context,
+                operation: 'READ_CONSUMER_CATALOG',
+                resource,
+                summarize: (value) => ({
+                    count: value.data.length,
+                    digest: value.meta.dataDigest,
+                    inputDigest: value.meta.inputDigest,
+                    releaseId: value.meta.releaseId,
+                    manifestId: value.meta.manifestId,
+                    revision: value.meta.revision
+                })
+            }, async () => {
+                const evidence = await readActiveProjectionEvidence(store, binding.projectionId);
+                const release = evidence.release;
+                if (!release)
+                    throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
+                if (release.schemaVersion !== '1.0.0') {
+                    throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+                }
+                if (evidence.consistency !== 'ATOMIC' ||
+                    evidence.projectionId !== binding.projectionId ||
+                    release.status !== 'ACTIVE' ||
+                    release.projectionId !== binding.projectionId ||
+                    !evidence.manifest ||
+                    !release.activatedAt ||
+                    !Number.isFinite(Date.parse(release.activatedAt))) {
+                    throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
+                }
+                const integrity = verifyProjectionReleaseIntegrity(release, evidence.manifest, evidence.lineage);
+                if (!integrity.valid) {
+                    throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503, {
+                        failures: integrity.failures
+                    });
+                }
+                const commonMeta = {
+                    consumerId: binding.id,
+                    projectionId: release.projectionId,
+                    authority: 'CANONICAL_ACTIVE',
+                    schemaVersion: release.schemaVersion,
+                    releaseId: release.releaseId,
+                    manifestId: release.manifestId,
+                    inputDigest: release.inputDigest,
+                    dataDigest: release.dataDigest,
+                    revision: release.canonicalRevision,
+                    generatedAt: release.generatedAt,
+                    activatedAt: release.activatedAt,
+                };
+                if (binding.projectionId === 'admin-catalog') {
+                    const data = release.data;
+                    const missingPolicyOfferIds = [...new Set(data.flatMap((product) => product.offers)
+                            .filter((offer) => offer.policyState === 'MISSING')
+                            .map((offer) => offer.offerId))].sort();
+                    const invalidPolicyFactRefs = [...new Set(data.flatMap((product) => product.offers)
+                            .flatMap((offer) => offer.invalidPolicyFactRefs))].sort();
+                    const commercialMissingOfferIds = [...new Set(data.flatMap((product) => product.offers)
+                            .filter((offer) => !offer.commercial)
+                            .map((offer) => offer.offerId))].sort();
+                    const response = {
+                        schema: 'freepass-data.admin-catalog/v1',
+                        data,
+                        meta: {
+                            ...commonMeta,
+                            projectionId: 'admin-catalog',
+                            ...summarizeEconomicsCoverage(data.flatMap(product => product.offers.flatMap(offer => offer.priceTerms))),
+                            policyParity: missingPolicyOfferIds.length || invalidPolicyFactRefs.length
+                                ? 'INCOMPLETE'
+                                : 'COMPLETE',
+                            missingPolicyOfferIds,
+                            invalidPolicyFactRefs,
+                            commercialCoverage: commercialMissingOfferIds.length
+                                ? 'INCOMPLETE'
+                                : 'COMPLETE',
+                            commercialMissingOfferIds,
+                        },
+                    };
+                    if (!validateAdminResponse(response)) {
+                        throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+                    }
+                    return response;
+                }
+                if (!validateErpData(release.data)) {
+                    throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+                }
+                const data = release.data;
+                const commercialMissingOfferIds = [...new Set(data.flatMap((product) => product.offers)
+                        .filter((offer) => !offer.commercial)
+                        .map((offer) => offer.offerId))].sort();
+                return {
+                    data,
+                    meta: {
+                        ...commonMeta,
+                        commercialCoverage: commercialMissingOfferIds.length
+                            ? 'INCOMPLETE'
+                            : 'COMPLETE',
+                        commercialMissingOfferIds,
+                    },
+                };
+            });
+            return result;
+        }
+        catch (error) {
+            logRouteError('/v1/consumers/:consumerId/catalog', 'consumer_catalog', error);
+            if (error instanceof ConsumerReadError) {
+                return reply.code(error.statusCode).send({ code: error.code, ...(error.details ?? {}) });
+            }
+            if (error instanceof DataAccessAuditUnavailableError) {
+                return reply.code(503).send({ code: error.code });
+            }
+            return reply.code(503).send({ code: 'CATALOG_READ_FAILED' });
+        }
+    });
+    app.get('/v1/consumers/:consumerId/catalog-compat', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read legacy-compatible catalog through FreePass Data', request.id);
+        const resource = {
+            kind: 'CATALOG',
+            name: 'erp5-catalog-compat'
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CONSUMER_CATALOG_COMPAT',
+                    resource
+                }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('catalog')) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CONSUMER_CATALOG_COMPAT',
+                    resource
+                }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!compatReader) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CONSUMER_CATALOG_COMPAT',
+                    resource
+                }, 'COMPATIBILITY_READER_UNAVAILABLE');
+                return reply.code(503).send({ code: 'COMPATIBILITY_READER_UNAVAILABLE' });
+            }
+            const sourceScope = request.query.sourceScope ?? 'LISTABLE';
+            if (typeof sourceScope !== 'string' || !['LISTABLE', 'COLLECTED'].includes(sourceScope)) {
+                return reply.code(400).send({ code: 'REFERENCE_SOURCE_SCOPE_INVALID' });
+            }
+            if (sourceScope === 'COLLECTED' && (binding.id !== 'erp-com' || !binding.referenceSourceScopes?.includes('COLLECTED'))) {
+                await access.deny('READ', { context, operation: 'READ_CONSUMER_CATALOG_COMPAT', resource }, 'REFERENCE_SOURCE_SCOPE_FORBIDDEN');
+                return reply.code(403).send({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+            }
+            const result = await access.read({
+                context,
+                operation: 'READ_CONSUMER_CATALOG_COMPAT',
+                resource,
+                summarize: (value) => ({
+                    count: value.meta.collectionCounts.products ?? 0,
+                    digest: stableDigest({
+                        schema: value.schema,
+                        consumerId: value.meta.consumerId,
+                        observedAt: value.meta.observedAt,
+                        collectionCounts: value.meta.collectionCounts,
+                        data: value.data,
+                    })
+                })
+            }, async () => {
+                const snapshot = await compatReader.read(binding.id === 'erp5-public-catalog' ? 'whitelabel-uniplan' : binding.id);
+                if (binding.id === 'erp5-public-catalog')
+                    return publicCatalogCompatSnapshot(snapshot, 'erp5-public-catalog');
+                if (sourceScope !== 'COLLECTED')
+                    return snapshot;
+                if (!compatReader.sourceStore)
+                    throw new Error('REFERENCE_SOURCE_STORE_UNAVAILABLE');
+                const evidence = await readCurrentReferenceObservations(compatReader.sourceStore);
+                const rows = Object.fromEntries(evidence.observations.map(row => [row.productId, referenceObservationToCompatibilityProduct(row)]));
+                if (Object.keys(rows).length !== evidence.observations.length)
+                    throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
+                if (Object.keys(rows).some(key => Object.hasOwn(snapshot.data.products, key)))
+                    throw new Error('REFERENCE_SOURCE_ROW_KEY_CONFLICT');
+                return { ...snapshot, data: { ...snapshot.data, products: { ...snapshot.data.products, ...rows } },
+                    meta: { ...snapshot.meta, sourceRowCoverage: evidence.sourceSnapshot,
+                        legacyProductCount: Object.keys(snapshot.data.products).length,
+                        collectionCounts: { ...snapshot.meta.collectionCounts, products: Object.keys(snapshot.data.products).length + Object.keys(rows).length } } };
+            });
+            if (result.schema !== 'freepass-data.catalog-compat/v1' ||
+                result.meta.consumerId !== binding.id ||
+                result.meta.authority !== 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' ||
+                result.meta.sourceProject !== 'freepasserp5' ||
+                !result.data.products ||
+                !result.data.policies) {
+                return reply.code(503).send({ code: 'CATALOG_COMPAT_RESPONSE_INVALID' });
+            }
+            return result;
+        }
+        catch (error) {
+            logRouteError('/v1/consumers/:consumerId/catalog-compat', 'consumer_catalog_compat', error);
+            if (error instanceof DataAccessAuditUnavailableError) {
+                return reply.code(503).send({ code: error.code });
+            }
+            return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
+        }
+    });
+    app.get('/v1/consumers/:consumerId/catalog-compat/products/:productId', async (request, reply) => {
+        reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+        reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
+        reply.header('X-Freepass-Migration-Status', 'LEGACY_READ_PENDING_RETIREMENT');
+        reply.header('X-Freepass-Migration-Instruction', 'Read stored canonical data directly from Firestore in your platform server using an authorized read identity; do not recalculate or use legacy fallback.');
+        reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration>; rel="deprecation"');
+        const binding = registered.get(request.params.consumerId);
+        const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read one legacy-compatible product fact', request.id),
+            operation: 'READ_CONSUMER_CATALOG_COMPAT', resource: { kind: 'CATALOG', name: 'erp5-catalog-compat-product' } };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', spec, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
+                await access.deny('READ', spec, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            const productId = request.params.productId;
+            if (!productId || productId.trim() !== productId || productId.length > 200 || /[\/\\\u0000-\u001f\u007f]/.test(productId) || Object.keys(request.query).length) {
+                await access.deny('READ', spec, 'INVALID_PRODUCT_SELECTION');
+                return reply.code(400).send({ code: 'INVALID_PRODUCT_SELECTION' });
+            }
+            if (!compatReader?.readProductCompat) {
+                await access.deny('READ', spec, 'PRODUCT_SELECTION_UNAVAILABLE');
+                return reply.code(503).send({ code: 'PRODUCT_SELECTION_UNAVAILABLE' });
+            }
+            const result = await access.read({ ...spec, resource: { ...spec.resource, entityId: productId },
+                requestDigest: stableDigest({ productId }), summarize: value => ({ count: 1, digest: stableDigest(value) }),
+            }, async () => {
+                const value = await compatReader.readProductCompat(binding.id, productId);
+                const object = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+                const stamp = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T.*Z$/.test(v) && Number.isFinite(Date.parse(v));
+                const invalid = () => { throw new Error('PRODUCT_SELECTION_RESPONSE_INVALID'); };
+                const exactKeys = (v, keys) => object(v)
+                    && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
+                const exactStamp = (pair, iso) => object(pair)
+                    && exactKeys(pair, ['seconds', 'nanoseconds'])
+                    && Number.isSafeInteger(pair.seconds) && Number.isInteger(pair.nanoseconds) && pair.nanoseconds >= 0 && pair.nanoseconds < 1e9
+                    && stamp(iso) && Date.parse(iso) === pair.seconds * 1000 + Math.floor(pair.nanoseconds / 1e6);
+                const scalar = (v) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
+                    || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
+                const fields = (row, allowed) => object(row) && Object.keys(row).every(k => allowed.includes(k) && scalar(row[k]));
+                const priceFields = (row) => object(row) && Object.keys(row).every(k => SINGLE_PRODUCT_PRICE_FIELDS.includes(k)
+                    && (k === 'depositEvidenceBasis' ? fields(row[k], ['field', 'text', 'source', 'at'])
+                        : k === 'depositRuleDifference' ? fields(row[k], ['ruleAmount', 'ruleCode', 'differs']) : scalar(row[k])));
+                if (!object(value) || value.schema !== 'freepass-data.catalog-compat/v1' || !object(value.data) || !object(value.meta))
+                    invalid();
+                const { data, meta } = value;
+                if (Object.keys(value).some(k => !['schema', 'data', 'meta'].includes(k))
+                    || Object.keys(meta).some(k => !['consumerId', 'authority', 'sourceProject', 'observedAt', 'collectionCounts', 'depositEvidenceVersion', 'selection', 'readScope', 'selectedProductId', 'readAt', 'readTimeExact', 'documentVersions', 'linkedFacts'].includes(k))
+                    || Object.keys(data).some(k => !['products', 'policies', 'partners'].includes(k))
+                    || !object(data.products) || !object(data.policies) || !object(data.partners)
+                    || Object.keys(data.products).length !== 1 || !Object.hasOwn(data.products, productId)
+                    || !object(data.products[productId]) || data.products[productId]._key !== productId
+                    || meta.consumerId !== binding.id || meta.authority !== 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' || meta.sourceProject !== 'freepasserp5'
+                    || meta.depositEvidenceVersion !== 'catalog-compat-deposit/1' || meta.selection !== 'SINGLE_PRODUCT' || meta.readScope !== 'SINGLE_PRODUCT'
+                    || meta.selectedProductId !== productId || !stamp(meta.readAt) || meta.observedAt !== meta.readAt
+                    || !object(meta.collectionCounts) || meta.collectionCounts.products !== 1
+                    || !object(meta.documentVersions) || !object(meta.documentVersions.product)
+                    || meta.documentVersions.product.id !== productId || !stamp(meta.documentVersions.product.updateTime)
+                    || Date.parse(meta.documentVersions.product.updateTime) > Date.parse(meta.readAt))
+                    invalid();
+                if (!exactStamp(meta.readTimeExact, meta.readAt) || !exactKeys(meta.collectionCounts, ['products', 'policies', 'partners'])
+                    || !exactKeys(meta.documentVersions, ['product', 'policies', 'partners']))
+                    invalid();
+                const versionOK = (v) => exactKeys(v, ['id', 'updateTime', 'updateTimeExact']) && exactStamp(v.updateTimeExact, v.updateTime)
+                    && (v.updateTimeExact.seconds < meta.readTimeExact.seconds || v.updateTimeExact.seconds === meta.readTimeExact.seconds && v.updateTimeExact.nanoseconds <= meta.readTimeExact.nanoseconds);
+                if (!versionOK(meta.documentVersions.product))
+                    invalid();
+                const product = data.products[productId];
+                if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one' && k !== 'iancar_policy_terms')), SINGLE_PRODUCT_FACT_FIELDS))
+                    invalid();
+                if (Object.hasOwn(product, 'iancar_policy_terms') && projectIancarPolicyTerms(product.iancar_policy_terms) === undefined)
+                    invalid();
+                if (Object.hasOwn(product, 'price') && product.price !== null && (!object(product.price) || Object.keys(product.price).length > 200
+                    || Object.entries(product.price).some(([k, row]) => !isSingleProductPriceKey(k) || !priceFields(row))))
+                    invalid();
+                if (Object.hasOwn(product, 'iancar_phase_one') && product.iancar_phase_one !== null) {
+                    const phase = product.iancar_phase_one;
+                    if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
+                        || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
+                            || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || typeof v !== 'string' || !isSingleProductPriceKey(v))))
+                        invalid();
+                }
+                for (const name of ['policies', 'partners']) {
+                    const versions = meta.documentVersions[name], rows = data[name];
+                    if (!Array.isArray(versions) || versions.length !== Object.keys(rows).length || meta.collectionCounts[name] !== versions.length
+                        || new Set(versions.map(v => v?.id)).size !== versions.length
+                        || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id]) || rows[v.id]._key !== v.id
+                            || !stamp(v.updateTime) || !versionOK(v) || !fields(rows[v.id], name === 'policies' ? SINGLE_POLICY_FACT_FIELDS : SINGLE_PARTNER_FACT_FIELDS)))
+                        invalid();
+                }
+                if (!exactKeys(meta.linkedFacts, ['policy', 'partner']))
+                    invalid();
+                for (const name of ['policy', 'partner']) {
+                    const fact = meta.linkedFacts[name];
+                    const count = Object.keys(data[name === 'policy' ? 'policies' : 'partners']).length;
+                    if (!exactKeys(fact, ['state', 'reasonCode']) || !(fact.state === 'KNOWN' && fact.reasonCode === null && count === 1
+                        || fact.state === 'UNKNOWN' && typeof fact.reasonCode === 'string' && [name === 'policy' ? 'POLICY_NOT_OBSERVED' : 'PARTNER_NOT_OBSERVED', name === 'policy' ? 'POLICY_REFERENCE_NOT_OBSERVED' : 'PARTNER_REFERENCE_NOT_OBSERVED'].includes(fact.reasonCode) && count === 0))
+                        invalid();
+                }
+                if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 1024 * 1024)
+                    invalid();
+                return value;
+            });
+            return reply.send(result);
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = error instanceof Error ? error.message : '';
+            if (code === 'PRODUCT_NOT_FOUND')
+                return reply.code(404).send({ code });
+            if (code === 'INVALID_PRODUCT_SELECTION')
+                return reply.code(400).send({ code });
+            return reply.code(503).send({ code: 'PRODUCT_SELECTION_UNAVAILABLE' });
+        }
+    });
+    for (const internalAi of [false, true]) {
+        app.get(`/v1/consumers/:consumerId/${internalAi ? 'internal-ai-reference' : 'catalog-reference'}`, async (request, reply) => {
+            const operation = internalAi ? 'READ_INTERNAL_AI_REFERENCE' : 'READ_KAKAO_CATALOG_REFERENCE';
+            const projectionId = internalAi ? 'internal-ai-reference' : 'kakao-catalog-reference';
+            const errorPrefix = internalAi ? 'INTERNAL_AI_REFERENCE' : 'KAKAO_REFERENCE';
+            const readSource = internalAi ? compatReader?.readInternalAiReferenceSource?.bind(compatReader)
+                : compatReader?.readKakaoReferenceSource?.bind(compatReader);
+            reply.header('Cache-Control', 'no-store');
+            const binding = registered.get(request.params.consumerId);
+            const supplied = request.headers.authorization ?? '';
+            const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+            const context = consumerContext(binding?.id ?? 'unregistered-consumer', `read ${projectionId} REFERENCE_ONLY facts through FreePass Data`, request.id);
+            const resource = {
+                kind: 'PROJECTION',
+                name: projectionId,
+                projectionId
+            };
+            try {
+                if (!binding || !matches) {
+                    await access.deny('READ', {
+                        context,
+                        operation,
+                        resource
+                    }, 'UNAUTHORIZED');
+                    return reply.code(401).send({ code: 'UNAUTHORIZED' });
+                }
+                if (internalAi ? !binding.id.startsWith('internal-ai-') || !binding.capabilities.includes('internal-ai-reference')
+                    : binding.id !== 'kakao-ops' || !binding.capabilities.includes('catalog-reference')) {
+                    await access.deny('READ', {
+                        context,
+                        operation,
+                        resource
+                    }, 'FORBIDDEN');
+                    return reply.code(403).send({ code: 'FORBIDDEN' });
+                }
+                const sourceScope = request.query.sourceScope ?? 'LISTABLE';
+                if (typeof sourceScope !== 'string' || !['LISTABLE', 'COLLECTED'].includes(sourceScope)) {
+                    throw new Error('REFERENCE_SOURCE_SCOPE_INVALID');
+                }
+                if (sourceScope === 'COLLECTED' && !binding.referenceSourceScopes?.includes('COLLECTED')) {
+                    await access.deny('READ', { context, operation, resource }, 'REFERENCE_SOURCE_SCOPE_FORBIDDEN');
+                    return reply.code(403).send({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+                }
+                if (!readSource) {
+                    await access.deny('READ', {
+                        context,
+                        operation,
+                        resource
+                    }, `${errorPrefix}_READER_UNAVAILABLE`);
+                    return reply.code(503).send({ code: `${errorPrefix}_READER_UNAVAILABLE` });
+                }
+                const result = await access.read({
+                    context,
+                    operation,
+                    resource,
+                    summarize: (value) => ({
+                        count: value.meta.projectedCount,
+                        digest: value.meta.dataDigest,
+                    })
+                }, async () => {
+                    const source = await readSource(binding.id, { sourceScope: sourceScope });
+                    if (source.consumerId !== binding.id)
+                        throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
+                    const scopedSource = { ...source, sourceScope: sourceScope,
+                        ...(sourceScope === 'COLLECTED' && compatReader?.sourceStore
+                            ? { sourceObservations: await readCurrentReferenceObservations(compatReader.sourceStore) } : {}) };
+                    const reference = internalAi ? buildInternalAiReference(scopedSource) : buildKakaoCatalogReference(scopedSource);
+                    const filtered = filterReferenceProducts(reference, request.query);
+                    const data = await Promise.all(filtered.data.map(async (product) => 'offers' in product ? ({ ...product,
+                        vehicleMediaEvidence: await inspectVehicleMediaEvidence({ productId: product.sourceProductId,
+                            product: source.products[product.sourceProductId], now: source.observedAt }),
+                    }) : product));
+                    const sourceSummary = filtered.sourceObservations ? { state: filtered.sourceObservations.state,
+                        reasonCode: filtered.sourceObservations.reasonCode, sourceSnapshot: filtered.sourceObservations.sourceSnapshot } : undefined;
+                    return { ...filtered, data, ...(sourceSummary ? { sourceObservations: sourceSummary } : {}),
+                        meta: { ...filtered.meta, dataDigest: referenceResponseDigest(data, sourceSummary) } };
+                });
+                if (!(internalAi ? validateInternalAiReference(result) : validateKakaoReference(result)) ||
+                    result.schema !== (internalAi ? 'freepass-data.internal-ai-reference/v1' : 'freepass-data.kakao-catalog-reference/v1') ||
+                    result.meta.consumerId !== binding.id ||
+                    result.meta.authority !== 'REFERENCE_ONLY' ||
+                    result.meta.publicationDecision !== 'HOLD' ||
+                    result.meta.sourceProject !== 'freepasserp5' ||
+                    (!result.data.length && !Object.keys(request.query).length) ||
+                    !result.commissionPolicy.digest) {
+                    return reply.code(503).send({ code: `${errorPrefix}_RESPONSE_INVALID` });
+                }
+                return result;
+            }
+            catch (error) {
+                if (error instanceof Error && ['REFERENCE_DEPOSIT_FILTER_INVALID', 'REFERENCE_SOURCE_SCOPE_INVALID'].includes(error.message)) {
+                    return reply.code(400).send({ code: error.message });
+                }
+                if (error instanceof DataAccessAuditUnavailableError) {
+                    return reply.code(503).send({ code: error.code });
+                }
+                return reply.code(503).send({ code: `${errorPrefix}_READ_FAILED` });
+            }
+        });
+    }
+    app.get('/v1/consumers/:consumerId/estimate-newcar-master', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read Estimate new-car master through FreePass Data', request.id);
+        const resource = {
+            kind: 'PROJECTION',
+            name: binding?.projectionId ?? 'unregistered',
+            ...(binding ? { projectionId: binding.projectionId } : {})
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_NEWCAR_MASTER', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('estimate-newcar-master') ||
+                binding.projectionId !== ESTIMATE_NEWCAR_MASTER_PROJECTION_ID) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_NEWCAR_MASTER', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            const result = await access.read({
+                context,
+                operation: 'READ_ESTIMATE_NEWCAR_MASTER',
+                resource,
+                summarize: (value) => ({
+                    count: value.data.length,
+                    digest: value.meta.dataDigest,
+                    inputDigest: value.meta.inputDigest,
+                    releaseId: value.meta.releaseId,
+                    manifestId: value.meta.manifestId,
+                    revision: value.meta.revision
+                })
+            }, async () => {
+                const evidence = await readActiveProjectionEvidence(store, binding.projectionId);
+                const release = evidence.release;
+                if (!release)
+                    throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
+                const records = release.data;
+                if (release.schemaVersion !== '1.0.0' || !validateEstimateMaster(records)) {
+                    throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+                }
+                const semanticIssues = validateEstimateMasterSemantics(records);
+                const uncoveredIssues = uncoveredEstimateMasterIssues(records, semanticIssues);
+                if (uncoveredIssues.length) {
+                    throw new ConsumerReadError('ESTIMATE_MASTER_SEMANTIC_INVALID', 503, {
+                        issueCount: uncoveredIssues.length,
+                        issues: uncoveredIssues.slice(0, 20)
+                    });
+                }
+                if (evidence.consistency !== 'ATOMIC' ||
+                    evidence.projectionId !== binding.projectionId ||
+                    release.status !== 'ACTIVE' ||
+                    release.projectionId !== binding.projectionId ||
+                    !evidence.manifest ||
+                    !release.activatedAt ||
+                    !Number.isFinite(Date.parse(release.activatedAt))) {
+                    throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
+                }
+                const integrity = verifyProjectionReleaseIntegrity(release, evidence.manifest, evidence.lineage);
+                if (!integrity.valid) {
+                    throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503, {
+                        failures: integrity.failures
+                    });
+                }
+                return {
+                    data: records,
+                    meta: {
+                        contract: ESTIMATE_NEWCAR_MASTER_CONTRACT,
+                        consumerId: binding.id,
+                        projectionId: release.projectionId,
+                        authority: 'CANONICAL_ACTIVE',
+                        schemaVersion: release.schemaVersion,
+                        releaseId: release.releaseId,
+                        manifestId: release.manifestId,
+                        inputDigest: release.inputDigest,
+                        dataDigest: release.dataDigest,
+                        revision: release.canonicalRevision,
+                        generatedAt: release.generatedAt,
+                        activatedAt: release.activatedAt
+                    }
+                };
+            });
+            return result;
+        }
+        catch (error) {
+            if (error instanceof ConsumerReadError) {
+                return reply.code(error.statusCode).send({ code: error.code, ...(error.details ?? {}) });
+            }
+            if (error instanceof DataAccessAuditUnavailableError) {
+                return reply.code(503).send({ code: error.code });
+            }
+            return reply.code(503).send({ code: 'ESTIMATE_MASTER_READ_FAILED' });
+        }
+    });
+    app.get('/v1/consumers/:consumerId/catalog-health', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read catalog health through FreePass Data', request.id);
+        const resource = {
+            kind: 'HEALTH',
+            name: 'catalog-data-health',
+            ...(binding ? { projectionId: binding.projectionId } : {})
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CATALOG_HEALTH',
+                    resource
+                }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('catalog-health')) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CATALOG_HEALTH',
+                    resource
+                }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!healthStore) {
+                await access.deny('READ', {
+                    context,
+                    operation: 'READ_CATALOG_HEALTH',
+                    resource
+                }, 'HEALTH_READER_UNAVAILABLE');
+                return reply.code(503).send({ code: 'HEALTH_READER_UNAVAILABLE' });
+            }
+            const report = await access.read({
+                context,
+                operation: 'READ_CATALOG_HEALTH',
+                resource,
+                summarize: (value) => ({
+                    count: value.issues.length,
+                    digest: stableDigest(value)
+                })
+            }, async () => {
+                const value = await readCatalogDataHealth(healthStore, healthStore);
+                if (!validateHealth(value)) {
+                    throw new ConsumerReadError('HEALTH_CONTRACT_INVALID', 503);
+                }
+                return value;
+            });
+            return reply
+                .code(report.status === 'BLOCKED' ? 503 : 200)
+                .send(report);
+        }
+        catch (error) {
+            if (error instanceof ConsumerReadError) {
+                return reply.code(error.statusCode).send({ code: error.code, ...(error.details ?? {}) });
+            }
+            if (error instanceof DataAccessAuditUnavailableError) {
+                return reply.code(503).send({ code: error.code });
+            }
+            return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
+        }
+    });
+    app.post('/v1/consumers/:consumerId/settlement-ledger/read', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read FreePass Data settlement ledger facts', request.id);
+        const resource = { kind: 'PROJECTION', name: 'settlement-ledger' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('settlement-ledger-read')) {
+                await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!workflowStore) {
+                await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'SETTLEMENT_LEDGER_UNAVAILABLE');
+                return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_UNAVAILABLE' });
+            }
+            assertSettlementLedgerReadRequest(request.body);
+            const result = await access.read({
+                context,
+                operation: 'READ_SETTLEMENT_LEDGER',
+                resource,
+                requestDigest: stableDigest(request.body),
+                summarize: (value) => ({ count: value.meta.count, digest: value.meta.dataDigest })
+            }, () => readSettlementLedgerView(workflowStore, binding.id, request.body));
+            if (!(request.body.viewVersion === 2 ? validateSettlementLedgerV2(result) : validateSettlementLedger(result))) {
+                return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_RESPONSE_INVALID' });
+            }
+            return result;
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = error instanceof Error ? error.message : 'SETTLEMENT_LEDGER_READ_FAILED';
+            if (code.startsWith('INVALID_SETTLEMENT_LEDGER_')
+                || code === 'SETTLEMENT_LEDGER_QUERY_REQUIRES_FILTER'
+                || code === 'SETTLEMENT_LEDGER_PERSON_LOOKUP_REQUIRES_AGENT_AND_CUSTOMER') {
+                return reply.code(400).send({ code });
+            }
+            return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_READ_FAILED' });
+        }
+    });
+    app.post('/v1/consumers/:consumerId/contract-fee-links', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read Admin contract fee links through FreePass Data', request.id);
+        const resource = { kind: 'CATALOG', name: 'contract-fee-links' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_CONTRACT_FEE_LINKS', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (binding.id !== 'freepass-admin-catalog' || !binding.capabilities.includes('contract-fee-link-read')) {
+                await access.deny('READ', { context, operation: 'READ_CONTRACT_FEE_LINKS', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!healthStore) {
+                await access.deny('READ', { context, operation: 'READ_CONTRACT_FEE_LINKS', resource }, 'CONTRACT_FEE_LINK_READER_UNAVAILABLE');
+                return reply.code(503).send({ code: 'CONTRACT_FEE_LINK_READER_UNAVAILABLE' });
+            }
+            if (!validateContractFeeLinksRequest(request.body)) {
+                return reply.code(400).send({ code: 'INVALID_CONTRACT_FEE_LINK_REQUEST', errors: validateContractFeeLinksRequest.errors });
+            }
+            const keys = request.body.items.map((item) => item.key);
+            if (new Set(keys).size !== keys.length) {
+                return reply.code(400).send({ code: 'DUPLICATE_CONTRACT_FEE_LINK_KEY' });
+            }
+            const result = await access.read({
+                context,
+                operation: 'READ_CONTRACT_FEE_LINKS',
+                resource,
+                requestDigest: stableDigest(request.body),
+                summarize: (value) => ({ count: value.results.length, digest: stableDigest(value.results) })
+            }, async () => {
+                const feeStore = healthStore;
+                const [assets, products, offers] = await Promise.all([
+                    feeStore.listVehicleAssets(),
+                    feeStore.listProducts(),
+                    feeStore.listOffers(),
+                ]);
+                const ledgerRows = contractFeeLedgerRowsPort
+                    ? await contractFeeLedgerRowsPort.listContractFeeLedgerRows()
+                    : undefined;
+                return {
+                    contract: 'contract-fee-links/v1',
+                    results: request.body.items.map(({ key, ...input }) => ({
+                        key,
+                        ...resolveContractFeeLink(input, { assets, products, offers, ...(ledgerRows ? { ledgerRows } : {}) }),
+                    })),
+                };
+            });
+            if (!validateContractFeeLinksResponse(result)) {
+                return reply.code(503).send({ code: 'CONTRACT_FEE_LINK_RESPONSE_INVALID' });
+            }
+            return result;
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            return reply.code(503).send({ code: 'CONTRACT_FEE_LINK_READ_FAILED' });
+        }
+    });
+    app.post('/v1/consumers/:consumerId/admin-workflow/read', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read Admin workflow data through FreePass Data', request.id);
+        const resource = { kind: 'SYSTEM', name: 'admin-workflow' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('admin-workflow')) {
+                await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!workflowStore) {
+                await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ADMIN_WORKFLOW_UNAVAILABLE' });
+            }
+            assertAdminWorkflowReadSpec(request.body);
+            const result = await access.read({
+                context,
+                operation: 'READ_ADMIN_WORKFLOW',
+                resource,
+                requestDigest: stableDigest(request.body),
+                summarize: (value) => ({ count: value.docs.length, digest: value.digest })
+            }, () => workflowStore.read(request.body));
+            return request.body.view === 'current-facts/v1'
+                ? { ...result, currentFacts: projectAdminWorkflowCurrentFacts(request.body, result) }
+                : result;
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = error instanceof Error ? error.message : 'ADMIN_WORKFLOW_READ_FAILED';
+            if (code.startsWith('INVALID_ADMIN_WORKFLOW_'))
+                return reply.code(400).send({ code });
+            return reply.code(503).send({ code: 'ADMIN_WORKFLOW_READ_FAILED' });
+        }
+    });
+    app.post('/v1/consumers/:consumerId/admin-workflow/commit', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'commit Admin workflow data through FreePass Data', request.id);
+        const resource = { kind: 'COMMAND', name: 'admin-workflow' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('admin-workflow')) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!workflowStore) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ADMIN_WORKFLOW_UNAVAILABLE' });
+            }
+            if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ADMIN_WORKFLOW_WRITE?.trim() !== 'on') {
+                await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_WRITE_DISABLED');
+                return reply.code(503).send({ code: 'ADMIN_WORKFLOW_WRITE_DISABLED' });
+            }
+            try {
+                assertAdminWorkflowCommitRequest(request.body);
+            }
+            catch (error) {
+                const code = error instanceof Error ? error.message : '';
+                if (code === 'ADMIN_WORKFLOW_RESOURCE_READ_ONLY') {
+                    await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, code);
+                    return reply.code(403).send({ code });
+                }
+                throw error;
+            }
+            const result = await access.write({
+                context,
+                operation: 'WRITE_ADMIN_WORKFLOW',
+                resource,
+                requestDigest: stableDigest(request.body),
+                summarize: (value) => ({ count: value.mutationCount, digest: value.receiptDigest })
+            }, () => workflowStore.commit(binding.id, request.body));
+            return result;
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = error && typeof error === 'object' && 'code' in error
+                ? String(error.code ?? '')
+                : error instanceof Error ? error.message : '';
+            if (code === 'ADMIN_WORKFLOW_CONFLICT' || code === 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT') {
+                return reply.code(409).send({ code });
+            }
+            if (code === 'ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS') {
+                const { resource: target, droppedFields } = error;
+                return reply.code(409).send({ code, resource: target, droppedFields });
+            }
+            if (code.startsWith('INVALID_ADMIN_WORKFLOW_'))
+                return reply.code(400).send({ code });
+            return reply.code(503).send({ code: 'ADMIN_WORKFLOW_COMMIT_FAILED' });
+        }
+    });
+    const artifactErrorCode = (error, fallback) => {
+        if (error && typeof error === 'object' && 'code' in error) {
+            const value = String(error.code ?? '');
+            if (value)
+                return value;
+        }
+        return error instanceof Error && error.message ? error.message : fallback;
+    };
+    const validatedArtifactReceipt = (validate, value, code) => {
+        if (!validate(value))
+            throw Object.assign(new Error(code), { code });
+        return value;
+    };
+    const validArtifactId = (value) => /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+    app.post('/v1/commands/freepass-estimate/issued-quotes', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get('freepass-estimate');
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'persist immutable issued Quote v2 through FreePass Data', request.id);
+        const resource = { kind: 'COMMAND', name: 'estimate-issued-quote' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('estimate-artifacts')) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!estimateArtifactStore) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+            }
+            if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE?.trim() !== 'on') {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_WRITE_DISABLED');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_WRITE_DISABLED' });
+            }
+            assertQuotePutCommand(request.body, request.headers['idempotency-key']);
+            const command = request.body;
+            return await access.write({
+                context,
+                operation: 'WRITE_ESTIMATE_ISSUED_QUOTE',
+                resource: {
+                    ...resource,
+                    entityType: 'issued-quote',
+                    entityId: command.quote.quoteId,
+                },
+                requestDigest: stableDigest(command),
+                summarize: (value) => ({
+                    count: 1,
+                    digest: value.snapshotHash,
+                    revision: value.quoteVersion,
+                }),
+            }, async () => validatedArtifactReceipt(validateEstimateQuoteWriteReceipt, await estimateArtifactStore.putIssuedQuote(command.quote, command.idempotencyKey), 'QUOTE_REPOSITORY_RECEIPT_INVALID'));
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_WRITE_FAILED');
+            if (code.includes('CONFLICT'))
+                return reply.code(409).send({ code });
+            if (code === 'QUOTE_REPOSITORY_COMMAND_INVALID' ||
+                code === 'QUOTE_REPOSITORY_QUOTE_INVALID' ||
+                code === 'QUOTE_V2_INTEGRITY_MISMATCH' ||
+                code === 'QUOTE_PRICING_ENGINE_UNVERIFIED' ||
+                code === 'QUOTE_REVISION_INVALID')
+                return reply.code(400).send({ code });
+            return reply.code(503).send({ code: 'QUOTE_REPOSITORY_WRITE_FAILED' });
+        }
+    });
+    app.get('/v1/consumers/:consumerId/issued-quotes/:quoteId', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read immutable issued Quote v2 through FreePass Data', request.id);
+        const resource = {
+            kind: 'SYSTEM',
+            name: 'estimate-issued-quote',
+            entityType: 'issued-quote',
+            entityId: request.params.quoteId,
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (binding.id !== 'freepass-estimate' || !binding.capabilities.includes('estimate-artifacts')) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!estimateArtifactStore) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+            }
+            if (!validArtifactId(request.params.quoteId))
+                return reply.code(400).send({ code: 'QUOTE_REPOSITORY_QUERY_INVALID' });
+            const version = normalizedArtifactVersion(request.query.quoteVersion, 'QUOTE_REPOSITORY_QUERY_INVALID');
+            return await access.read({
+                context,
+                operation: 'READ_ESTIMATE_ISSUED_QUOTE',
+                resource,
+                requestDigest: stableDigest({ quoteId: request.params.quoteId, quoteVersion: version }),
+                summarize: (value) => ({
+                    count: value.status === 'FOUND' ? 1 : 0,
+                    ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.quoteVersion } : {}),
+                }),
+            }, async () => validatedArtifactReceipt(validateEstimateQuoteReadReceipt, await estimateArtifactStore.getIssuedQuote(request.params.quoteId, version), 'QUOTE_REPOSITORY_RECEIPT_INVALID'));
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_READ_FAILED');
+            if (code === 'QUOTE_REPOSITORY_QUERY_INVALID')
+                return reply.code(400).send({ code });
+            if (code.includes('CONFLICT'))
+                return reply.code(409).send({ code });
+            return reply.code(503).send({ code: 'QUOTE_REPOSITORY_READ_FAILED' });
+        }
+    });
+    app.post('/v1/commands/freepass-estimate/share-envelopes', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get('freepass-estimate');
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'persist immutable Share Envelope through FreePass Data', request.id);
+        const resource = { kind: 'COMMAND', name: 'estimate-share-envelope' };
+        try {
+            if (!binding || !matches) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (!binding.capabilities.includes('estimate-artifacts')) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!estimateArtifactStore) {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+            }
+            if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE?.trim() !== 'on') {
+                await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_WRITE_DISABLED');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_WRITE_DISABLED' });
+            }
+            assertShareEnvelopePutCommand(request.body, request.headers['idempotency-key']);
+            const command = request.body;
+            return await access.write({
+                context,
+                operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE',
+                resource: {
+                    ...resource,
+                    entityType: 'share-envelope',
+                    entityId: command.envelope.envelopeId,
+                },
+                requestDigest: stableDigest(command),
+                summarize: (value) => ({
+                    count: 1,
+                    digest: value.snapshotHash,
+                    revision: value.envelopeVersion,
+                }),
+            }, async () => validatedArtifactReceipt(validateEstimateShareEnvelopeWriteReceipt, await estimateArtifactStore.putShareEnvelope(command.envelope, command.idempotencyKey), 'SHARE_ENVELOPE_RECEIPT_INVALID'));
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = artifactErrorCode(error, 'SHARE_ENVELOPE_WRITE_FAILED');
+            if (code.includes('CONFLICT') || code.includes('QUOTE_NOT_PERSISTED') || code.includes('QUOTE_RECEIPT_MISMATCH')) {
+                return reply.code(409).send({ code });
+            }
+            if (code === 'SHARE_ENVELOPE_COMMAND_INVALID' ||
+                code === 'SHARE_ENVELOPE_INVALID' ||
+                code === 'SHARE_ENVELOPE_INTEGRITY_MISMATCH' ||
+                code === 'SHARE_ENVELOPE_VERSION_UNSUPPORTED')
+                return reply.code(400).send({ code });
+            return reply.code(503).send({ code: 'SHARE_ENVELOPE_WRITE_FAILED' });
+        }
+    });
+    app.get('/v1/consumers/:consumerId/share-envelopes/:envelopeId', async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const binding = registered.get(request.params.consumerId);
+        const supplied = request.headers.authorization ?? '';
+        const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+        const context = consumerContext(binding?.id ?? 'unregistered-consumer', 'read immutable Share Envelope through FreePass Data', request.id);
+        const resource = {
+            kind: 'SYSTEM',
+            name: 'estimate-share-envelope',
+            entityType: 'share-envelope',
+            entityId: request.params.envelopeId,
+        };
+        try {
+            if (!binding || !matches) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'UNAUTHORIZED');
+                return reply.code(401).send({ code: 'UNAUTHORIZED' });
+            }
+            if (binding.id !== 'freepass-estimate' || !binding.capabilities.includes('estimate-artifacts')) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'FORBIDDEN');
+                return reply.code(403).send({ code: 'FORBIDDEN' });
+            }
+            if (!estimateArtifactStore) {
+                await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+                return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+            }
+            if (!validArtifactId(request.params.envelopeId))
+                return reply.code(400).send({ code: 'SHARE_ENVELOPE_QUERY_INVALID' });
+            const version = normalizedArtifactVersion(request.query.envelopeVersion, 'SHARE_ENVELOPE_QUERY_INVALID');
+            return await access.read({
+                context,
+                operation: 'READ_ESTIMATE_SHARE_ENVELOPE',
+                resource,
+                requestDigest: stableDigest({ envelopeId: request.params.envelopeId, envelopeVersion: version }),
+                summarize: (value) => ({
+                    count: value.status === 'FOUND' ? 1 : 0,
+                    ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.envelopeVersion } : {}),
+                }),
+            }, async () => validatedArtifactReceipt(validateEstimateShareEnvelopeReadReceipt, await estimateArtifactStore.getShareEnvelope(request.params.envelopeId, version), 'SHARE_ENVELOPE_RECEIPT_INVALID'));
+        }
+        catch (error) {
+            if (error instanceof DataAccessAuditUnavailableError)
+                return reply.code(503).send({ code: error.code });
+            const code = artifactErrorCode(error, 'SHARE_ENVELOPE_READ_FAILED');
+            if (code === 'SHARE_ENVELOPE_QUERY_INVALID')
+                return reply.code(400).send({ code });
+            if (code.includes('CONFLICT'))
+                return reply.code(409).send({ code });
+            return reply.code(503).send({ code: 'SHARE_ENVELOPE_READ_FAILED' });
+        }
+    });
+    return app;
+}

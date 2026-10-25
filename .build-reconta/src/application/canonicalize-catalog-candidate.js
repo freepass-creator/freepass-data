@@ -1,0 +1,605 @@
+import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
+import { randomUUID } from 'node:crypto';
+import { assertCommandWriter } from '../domain/authority.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { assertCatalogWriterOwnership, resolveExecutionWriter } from '../domain/writer-ownership.js';
+export class CanonicalizationRejectedError extends Error {
+    code = 'CANONICALIZATION_REJECTED';
+}
+export class CanonicalizationConflictError extends Error {
+    code = 'CANONICALIZATION_CONFLICT';
+}
+export class CanonicalizationIdempotencyConflictError extends Error {
+    code = 'CANONICALIZATION_IDEMPOTENCY_CONFLICT';
+}
+export class SourceChangedReviewRequiredError extends Error {
+    code = 'SOURCE_CHANGED_REVIEW_REQUIRED';
+}
+function opaqueId(prefix, ...parts) {
+    return `${prefix}_${stableDigest(parts).slice(0, 24)}`;
+}
+function requestDigest(input, writerId) {
+    return stableDigest({
+        commandType: 'CANONICALIZE_CATALOG_CANDIDATE',
+        candidateId: input.candidateId,
+        expectedHeadRunId: input.expectedHeadRunId,
+        decision: input.decision,
+        actor: {
+            id: input.actor.id,
+            kind: input.actor.kind,
+            organizationId: input.actor.organizationId ?? null
+        },
+        writerId,
+        ...(input.expectedOwnershipDigest ? { expectedOwnershipDigest: input.expectedOwnershipDigest } : {}),
+        reason: input.reason
+    });
+}
+function sameIssues(actual, approved) {
+    const a = [...actual].sort();
+    const b = [...(approved ?? [])].sort();
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+function assertModelCompatible(model, candidate) {
+    if (model.maker !== candidate.maker || model.model !== candidate.model) {
+        throw new CanonicalizationConflictError(`Resolved VehicleModel ${model.id} does not match candidate maker/model`);
+    }
+    if (!candidate.subModel?.trim() || !model.subModel?.trim() || candidate.subModel !== model.subModel) {
+        throw new CanonicalizationConflictError(`Resolved VehicleModel ${model.id} requires matching known subModel`);
+    }
+    const knownPairs = [
+        ['subModel', candidate.subModel, model.subModel],
+        ['trimName', candidate.trimName, model.trim],
+        ['fuelType', candidate.fuelType, model.fuel],
+        ['driveType', candidate.driveType, model.drive],
+        ['seats', candidate.seats, model.seats]
+    ];
+    for (const [field, candidateValue, canonicalValue] of knownPairs) {
+        if (candidateValue !== undefined && candidateValue !== canonicalValue) {
+            throw new CanonicalizationConflictError(`Resolved VehicleModel ${model.id} does not preserve candidate ${field}`);
+        }
+    }
+}
+function sourceRevision(checkpoint) {
+    return checkpoint.sourceRevision ?? checkpoint.checksum ?? undefined;
+}
+function meta(input) {
+    const revision = sourceRevision(input.checkpoint);
+    return {
+        schemaVersion: '1.0.0',
+        revision: 1,
+        validationStatus: input.validationStatus,
+        createdAt: input.now,
+        updatedAt: input.now,
+        createdBy: input.actor,
+        updatedBy: input.actor,
+        lineageId: input.lineageId,
+        ...(revision ? { sourceRevision: revision } : {})
+    };
+}
+function canonicalTarget(normalizedPath, entities) {
+    const modelFields = {
+        maker: ['maker', entities.model.maker],
+        model: ['model', entities.model.model],
+        subModel: ['subModel', entities.model.subModel ?? null],
+        trimName: ['trim', entities.model.trim ?? null],
+        fuelType: ['fuel', entities.model.fuel ?? null],
+        driveType: ['drive', entities.model.drive ?? null],
+        seats: ['seats', entities.model.seats ?? null]
+    };
+    if (normalizedPath in modelFields) {
+        const [fieldPath, value] = modelFields[normalizedPath];
+        return {
+            entityType: 'vehicle_model',
+            entityId: entities.model.id,
+            revision: entities.model.revision,
+            fieldPath,
+            value
+        };
+    }
+    if (entities.asset) {
+        if (normalizedPath === 'vehicleFacts')
+            return {
+                entityType: 'vehicle_asset', entityId: entities.asset.id, revision: entities.asset.revision,
+                fieldPath: 'sourceVehicleFacts', value: entities.asset.sourceVehicleFacts ?? null
+            };
+        if (normalizedPath === 'carNumber') {
+            return {
+                entityType: 'vehicle_asset',
+                entityId: entities.asset.id,
+                revision: entities.asset.revision,
+                fieldPath: 'plateNumber',
+                value: entities.asset.plateNumber ?? null
+            };
+        }
+        if (normalizedPath === 'mileageKm') {
+            return {
+                entityType: 'vehicle_asset',
+                entityId: entities.asset.id,
+                revision: entities.asset.revision,
+                fieldPath: 'odometerKm',
+                value: entities.asset.odometerKm ?? null
+            };
+        }
+    }
+    if (normalizedPath === 'commercialType') {
+        return {
+            entityType: 'product',
+            entityId: entities.product.id,
+            revision: entities.product.revision,
+            fieldPath: 'commercialType',
+            value: entities.product.commercialType
+        };
+    }
+    if (normalizedPath === 'providerCompanyCode') {
+        return {
+            entityType: 'offer',
+            entityId: entities.offer.id,
+            revision: entities.offer.revision,
+            fieldPath: 'supplierId',
+            value: entities.offer.supplierId
+        };
+    }
+    if (normalizedPath.startsWith('priceTerms.')) {
+        const canonicalPath = normalizedPath;
+        const termKey = normalizedPath.split('.')[1];
+        const term = entities.offer.priceTerms.find((item) => item.termKey === termKey);
+        if (!term)
+            return null;
+        const suffix = normalizedPath.split('.').slice(2).join('.');
+        let value = null;
+        if (suffix === 'monthlyRent.amount')
+            value = term.monthlyRent.amount;
+        else if (suffix === 'depositState')
+            value = term.depositState;
+        else if (suffix === 'deposit.amount')
+            value = term.deposit?.amount ?? null;
+        else if (suffix === 'termMonths')
+            value = term.termMonths;
+        else if (suffix === 'mileageLimitKmPerYear')
+            value = term.mileageLimitKmPerYear ?? null;
+        else
+            return null;
+        return {
+            entityType: 'offer',
+            entityId: entities.offer.id,
+            revision: entities.offer.revision,
+            fieldPath: canonicalPath,
+            value
+        };
+    }
+    return null;
+}
+function assertPriceTermInvariants(candidate) {
+    const seen = new Set();
+    for (const term of candidate.priceTerms) {
+        if (seen.has(term.termKey)) {
+            throw new CanonicalizationRejectedError(`Duplicate PriceTerm key: ${term.termKey}`);
+        }
+        seen.add(term.termKey);
+        if (!Number.isInteger(term.termMonths) || term.termMonths < 1) {
+            throw new CanonicalizationRejectedError(`Invalid termMonths for ${term.termKey}`);
+        }
+        if (term.monthlyRent.currency !== 'KRW' ||
+            !Number.isInteger(term.monthlyRent.amount) ||
+            term.monthlyRent.amount < 0) {
+            throw new CanonicalizationRejectedError(`Invalid monthlyRent for ${term.termKey}`);
+        }
+        if (term.mileageLimitKmPerYear !== undefined &&
+            term.mileageLimitKmPerYear !== null &&
+            (!Number.isInteger(term.mileageLimitKmPerYear) || term.mileageLimitKmPerYear < 0)) {
+            throw new CanonicalizationRejectedError(`Invalid mileage limit for ${term.termKey}`);
+        }
+        if (term.depositState === 'KNOWN') {
+            if (!term.deposit ||
+                term.deposit.currency !== 'KRW' ||
+                !Number.isInteger(term.deposit.amount) ||
+                term.deposit.amount <= 0) {
+                throw new CanonicalizationRejectedError(`KNOWN deposit must contain a positive KRW amount for ${term.termKey}`);
+            }
+        }
+        else if (term.depositState === 'ZERO') {
+            if (!term.deposit ||
+                term.deposit.currency !== 'KRW' ||
+                term.deposit.amount !== 0) {
+                throw new CanonicalizationRejectedError(`ZERO deposit must contain KRW 0 for ${term.termKey}`);
+            }
+        }
+        else if (term.deposit !== undefined && term.deposit !== null) {
+            throw new CanonicalizationRejectedError(`${term.depositState} deposit must not contain an amount for ${term.termKey}`);
+        }
+    }
+}
+function requiredNormalizedPaths(candidate) {
+    const required = ['maker', 'model', 'commercialType'];
+    if (candidate.vehicleFacts)
+        required.push('vehicleFacts');
+    if (candidate.subModel)
+        required.push('subModel');
+    if (candidate.trimName)
+        required.push('trimName');
+    if (candidate.fuelType)
+        required.push('fuelType');
+    if (candidate.driveType)
+        required.push('driveType');
+    if (candidate.seats !== undefined)
+        required.push('seats');
+    if (candidate.carNumber)
+        required.push('carNumber');
+    if (candidate.providerCompanyCode)
+        required.push('providerCompanyCode');
+    if (candidate.mileageKm !== undefined)
+        required.push('mileageKm');
+    for (const term of candidate.priceTerms) {
+        const prefix = `priceTerms.${term.termKey}`;
+        required.push(`${prefix}.monthlyRent.amount`);
+        required.push(`${prefix}.depositState`);
+        required.push(`${prefix}.termMonths`);
+        if (term.deposit)
+            required.push(`${prefix}.deposit.amount`);
+        if (term.mileageLimitKmPerYear !== undefined && term.mileageLimitKmPerYear !== null) {
+            required.push(`${prefix}.mileageLimitKmPerYear`);
+        }
+    }
+    return required;
+}
+function assertCriticalLineage(candidate, parents) {
+    const observed = new Set(parents
+        .filter((item) => item.stage === 'RAW_TO_NORMALIZED')
+        .map((item) => item.normalized?.fieldPath)
+        .filter((value) => Boolean(value)));
+    const missing = requiredNormalizedPaths(candidate).filter((path) => !observed.has(path));
+    if (missing.length) {
+        throw new CanonicalizationRejectedError(`Missing normalized lineage for canonical fields: ${missing.join(', ')}`);
+    }
+}
+function buildCanonicalLineage(parents, entities) {
+    const out = [];
+    for (const parent of parents) {
+        const normalized = parent.normalized;
+        if (!normalized)
+            continue;
+        const canonical = canonicalTarget(normalized.fieldPath, entities);
+        if (!canonical)
+            continue;
+        out.push({
+            lineageRecordId: `lin_${stableDigest([
+                parent.lineageRecordId,
+                canonical.entityType,
+                canonical.entityId,
+                canonical.revision,
+                canonical.fieldPath
+            ])}`,
+            lineageId: parent.lineageId,
+            stage: 'NORMALIZED_TO_CANONICAL',
+            parentLineageRecordId: parent.lineageRecordId,
+            runId: parent.runId,
+            sourceId: parent.sourceId,
+            sourceRecordId: parent.sourceRecordId,
+            sourceFingerprint: parent.sourceFingerprint,
+            observedAt: parent.observedAt,
+            source: parent.source,
+            normalized,
+            canonical,
+            transformId: 'catalog-canonicalizer',
+            transformVersion: '1.0.0'
+        });
+    }
+    return out;
+}
+function assertIdentityId(resolution, prefix) {
+    if (!resolution.id.startsWith(prefix + '_') || resolution.id.length < prefix.length + 4) {
+        throw new CanonicalizationRejectedError(`Canonical identity ${resolution.id} must use opaque ${prefix}_... form`);
+    }
+}
+export async function canonicalizeCatalogCandidate(store, input, now = new Date().toISOString()) {
+    assertCommandWriter('CANONICALIZE_CATALOG_CANDIDATE', input.actor);
+    if (!input.reason.trim())
+        throw new CanonicalizationRejectedError('reason is required');
+    if (!input.decision.supplierId.trim()) {
+        throw new CanonicalizationRejectedError('reviewed supplierId is required');
+    }
+    assertIdentityId(input.decision.vehicleModel, 'vm');
+    if (input.decision.vehicleAsset)
+        assertIdentityId(input.decision.vehicleAsset, 'va');
+    const writer = resolveExecutionWriter(input.actor, input.writer);
+    const digest = requestDigest(input, writer.id);
+    return store.transact(async (tx) => {
+        if (input.expectedOwnershipDigest && stableDigest(await tx.getCatalogWriterOwnership()) !== input.expectedOwnershipDigest)
+            throw new CanonicalizationConflictError('Catalog writer ownership changed after planning');
+        assertCatalogWriterOwnership(await tx.getCatalogWriterOwnership(), writer);
+        const existingReceipt = await tx.getCanonicalizationReceipt(input.idempotencyKey);
+        if (existingReceipt) {
+            if (existingReceipt.requestDigest !== digest) {
+                throw new CanonicalizationIdempotencyConflictError(`Idempotency key ${input.idempotencyKey} was reused with different canonicalization input`);
+            }
+            return existingReceipt;
+        }
+        const candidateRecord = await tx.getCandidate(input.candidateId);
+        if (!candidateRecord) {
+            throw new CanonicalizationRejectedError(`Candidate not found: ${input.candidateId}`);
+        }
+        const [run, head] = await Promise.all([
+            tx.getSourceRun(candidateRecord.runId),
+            tx.getSourceHead(candidateRecord.sourceId)
+        ]);
+        if (!run || run.status !== 'COMPLETED') {
+            throw new CanonicalizationRejectedError('Candidate source run is not completed');
+        }
+        if (run.sourceId !== candidateRecord.sourceId ||
+            run.checkpoint?.sourceId !== candidateRecord.sourceId) {
+            throw new CanonicalizationRejectedError('Candidate source run identity is inconsistent');
+        }
+        if (!head ||
+            head.sourceId !== candidateRecord.sourceId ||
+            head.checkpoint.sourceId !== candidateRecord.sourceId ||
+            head.coverage.completeness !== 'COMPLETE' ||
+            head.runId !== candidateRecord.runId ||
+            run.headStatus !== 'CURRENT') {
+            throw new CanonicalizationRejectedError('Candidate is not from the accepted current source head');
+        }
+        if (head.runId !== input.expectedHeadRunId) {
+            throw new CanonicalizationConflictError(`Expected source head ${input.expectedHeadRunId}, actual ${head.runId}`);
+        }
+        if (candidateRecord.status === 'REJECTED') {
+            throw new CanonicalizationRejectedError('Rejected candidate cannot become canonical');
+        }
+        const candidate = candidateRecord.candidate;
+        if ((candidateRecord.status === 'VALID' && candidate.issues.length > 0) ||
+            (candidateRecord.status === 'WARNING' && candidate.issues.length === 0)) {
+            throw new CanonicalizationRejectedError('Candidate validation status and issue evidence are inconsistent');
+        }
+        if (candidate.sourceRecordId !== candidateRecord.sourceRecordId ||
+            candidate.sourceFingerprint !== candidateRecord.sourceFingerprint) {
+            throw new CanonicalizationRejectedError('Candidate envelope and normalized payload source identity do not match');
+        }
+        if (!candidate.maker?.trim() || !candidate.model?.trim() || !candidate.commercialType || !candidate.priceTerms.length) {
+            throw new CanonicalizationRejectedError('Canonicalization requires maker, model, commercialType and at least one PriceTerm');
+        }
+        // 정제 순서: 세부모델이 정해지지 않으면 트림은 확정하지 않고 비운다(상품은 막지 않는다).
+        assertPriceTermInvariants(candidate);
+        if (!sameIssues(candidate.issues, input.decision.approvedIssues)) {
+            throw new CanonicalizationRejectedError('Candidate warnings/issues must be explicitly and exactly approved');
+        }
+        const bindingId = opaqueId('bind', candidateRecord.sourceId, candidateRecord.sourceRecordId);
+        const existingBinding = await tx.getSourceBinding(bindingId);
+        if (existingBinding) {
+            if (existingBinding.sourceFingerprint !== candidateRecord.sourceFingerprint) {
+                throw new SourceChangedReviewRequiredError('Source record changed after canonicalization; explicit re-review is required');
+            }
+            const receipt = {
+                idempotencyKey: input.idempotencyKey,
+                commandId: input.commandId,
+                status: 'NO_CHANGE',
+                bindingId,
+                sourceId: existingBinding.sourceId,
+                sourceRecordId: existingBinding.sourceRecordId,
+                sourceFingerprint: existingBinding.sourceFingerprint,
+                sourceRunId: existingBinding.sourceRunId,
+                productId: existingBinding.productId,
+                offerId: existingBinding.offerId,
+                committedAt: now,
+                requestDigest: digest,
+                writerId: writer.id
+            };
+            await tx.putCanonicalizationReceipt(receipt);
+            return receipt;
+        }
+        const modelResolution = input.decision.vehicleModel;
+        const modelExisting = await tx.getVehicleModel(modelResolution.id);
+        if (modelResolution.action === 'CREATE' && modelExisting) {
+            throw new CanonicalizationConflictError(`VehicleModel already exists: ${modelResolution.id}`);
+        }
+        if (modelResolution.action === 'LINK' && !modelExisting) {
+            throw new CanonicalizationConflictError(`VehicleModel to link does not exist: ${modelResolution.id}`);
+        }
+        const validationStatus = candidateRecord.status === 'WARNING' ? 'WARNING' : 'VALID';
+        const entityMeta = meta({
+            now,
+            actor: input.actor,
+            lineageId: bindingId,
+            validationStatus,
+            checkpoint: head.checkpoint
+        });
+        const model = modelExisting ?? {
+            ...entityMeta,
+            id: modelResolution.id,
+            maker: candidate.maker,
+            model: candidate.model,
+            displayName: [candidate.maker, candidate.model, candidate.subModel, candidate.trimName]
+                .filter(Boolean)
+                .join(' '),
+            ...(candidate.subModel?.trim() ? { subModel: candidate.subModel } : {}),
+            ...(candidate.subModel?.trim() && candidate.trimName?.trim() ? { trim: candidate.trimName } : {}),
+            ...(candidate.fuelType ? { fuel: candidate.fuelType } : {}),
+            ...(candidate.driveType ? { drive: candidate.driveType } : {}),
+            ...(candidate.seats !== undefined ? { seats: candidate.seats } : {})
+        };
+        if (modelExisting)
+            assertModelCompatible(model, candidate);
+        let asset;
+        if (candidate.carNumber) {
+            const assetResolution = input.decision.vehicleAsset;
+            if (!assetResolution) {
+                throw new CanonicalizationRejectedError('Candidate with carNumber requires an explicit VehicleAsset CREATE/LINK decision');
+            }
+            const existingAsset = await tx.getVehicleAsset(assetResolution.id);
+            if (assetResolution.action === 'CREATE') {
+                if (existingAsset) {
+                    throw new CanonicalizationConflictError(`VehicleAsset already exists: ${assetResolution.id}`);
+                }
+                if (!assetResolution.status) {
+                    throw new CanonicalizationRejectedError('Creating VehicleAsset requires an explicitly reviewed asset status');
+                }
+                asset = {
+                    ...entityMeta,
+                    id: assetResolution.id,
+                    vehicleModelId: model.id,
+                    status: assetResolution.status,
+                    plateNumber: candidate.carNumber,
+                    ...(candidate.vehicleFacts ? { sourceVehicleFacts: structuredClone(candidate.vehicleFacts), sourceFirstObservedAt: candidate.firstObservedAt ?? head.observedAt,
+                        ...(candidate.firstRunId ? { sourceFirstRunId: candidate.firstRunId } : {}) } : {}),
+                    ...(candidate.mileageKm !== undefined ? { odometerKm: candidate.mileageKm } : {})
+                };
+            }
+            else {
+                if (!existingAsset) {
+                    throw new CanonicalizationConflictError(`VehicleAsset to link does not exist: ${assetResolution.id}`);
+                }
+                if (existingAsset.vehicleModelId !== model.id ||
+                    existingAsset.plateNumber !== candidate.carNumber ||
+                    (candidate.mileageKm !== undefined &&
+                        existingAsset.odometerKm !== candidate.mileageKm)) {
+                    throw new CanonicalizationConflictError(`Resolved VehicleAsset ${existingAsset.id} conflicts with candidate identity`);
+                }
+                asset = existingAsset;
+            }
+        }
+        else if (input.decision.vehicleAsset) {
+            throw new CanonicalizationRejectedError('VehicleAsset decision is not allowed when candidate has no carNumber');
+        }
+        const productId = opaqueId('prd', candidateRecord.sourceId, candidateRecord.sourceRecordId);
+        const offerId = opaqueId('off', candidateRecord.sourceId, candidateRecord.sourceRecordId);
+        const [productCollision, offerCollision, parentLineage] = await Promise.all([
+            tx.getProduct(productId),
+            tx.getOffer(offerId),
+            tx.listLineageForCandidate(candidateRecord.candidateId)
+        ]);
+        assertCriticalLineage(candidate, parentLineage);
+        if (productCollision || offerCollision) {
+            throw new CanonicalizationConflictError('Deterministic Product/Offer identity already exists without a source binding');
+        }
+        const product = {
+            ...entityMeta,
+            id: productId,
+            vehicleModelId: model.id,
+            ...(asset ? { vehicleAssetId: asset.id } : {}),
+            commercialType: candidate.commercialType,
+            status: input.decision.productStatus ?? 'ACTIVE',
+            displayName: model.displayName
+        };
+        const offer = {
+            ...entityMeta,
+            id: offerId,
+            productId: product.id,
+            supplierId: input.decision.supplierId,
+            status: 'ACTIVE',
+            priceTerms: structuredClone(candidate.priceTerms)
+        };
+        offer.internalEconomicsTerms = precomputeOfferEconomics(offer, product.commercialType, model.fuel);
+        const binding = {
+            bindingId,
+            sourceId: candidateRecord.sourceId,
+            sourceRecordId: candidateRecord.sourceRecordId,
+            sourceFingerprint: candidateRecord.sourceFingerprint,
+            sourceRunId: run.runId,
+            sourceObservedAt: head.observedAt,
+            ...(head.checkpoint.sourceRevision
+                ? { sourceCheckpointRevision: head.checkpoint.sourceRevision }
+                : {}),
+            ...(head.checkpoint.checksum
+                ? { sourceCheckpointChecksum: head.checkpoint.checksum }
+                : {}),
+            ...(candidate.providerCompanyCode
+                ? { sourceSupplierCode: candidate.providerCompanyCode }
+                : {}),
+            vehicleModelId: model.id,
+            ...(asset ? { vehicleAssetId: asset.id } : {}),
+            productId: product.id,
+            offerId: offer.id,
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+            createdBy: input.actor,
+            updatedBy: input.actor
+        };
+        const canonicalLineage = buildCanonicalLineage(parentLineage, {
+            model,
+            ...(asset ? { asset } : {}),
+            product,
+            offer
+        });
+        const appendInitialRevision = async (entityType, entityId, snapshot) => {
+            await tx.appendRevision({
+                revisionRecordId: 'rev_' + stableDigest([
+                    input.commandId,
+                    entityType,
+                    entityId,
+                    '1'
+                ]).slice(0, 32),
+                entityType,
+                entityId,
+                revision: 1,
+                previousRevision: null,
+                snapshot,
+                actor: input.actor,
+                reason: input.reason,
+                origin: 'CANONICALIZATION',
+                commandId: input.commandId,
+                occurredAt: now,
+                sourceBindingId: binding.bindingId,
+                sourceRunId: run.runId
+            });
+        };
+        if (modelResolution.action === 'CREATE') {
+            await tx.putVehicleModel(model);
+            await appendInitialRevision('vehicle_model', model.id, model);
+        }
+        if (asset && input.decision.vehicleAsset?.action === 'CREATE') {
+            await tx.putVehicleAsset(asset);
+            await appendInitialRevision('vehicle_asset', asset.id, asset);
+        }
+        await tx.putProduct(product);
+        await appendInitialRevision('product', product.id, product);
+        await tx.putOffer(offer);
+        await appendInitialRevision('offer', offer.id, offer);
+        await tx.putSourceBinding(binding);
+        for (const lineage of canonicalLineage)
+            await tx.appendLineage(lineage);
+        await tx.appendAudit({
+            eventId: randomUUID(),
+            commandId: input.commandId,
+            actor: input.actor,
+            entityType: 'canonical_binding',
+            entityId: binding.bindingId,
+            action: 'CATALOG_CANDIDATE_CANONICALIZED',
+            before: null,
+            after: binding,
+            reason: input.reason,
+            writerId: writer.id,
+            revisionBefore: 0,
+            revisionAfter: 1,
+            occurredAt: now
+        });
+        await tx.appendOutbox({
+            eventId: randomUUID(),
+            eventType: 'catalog.canonicalized',
+            entityType: 'product',
+            entityId: product.id,
+            sourceRevision: 0,
+            targetRevision: 1,
+            commandId: input.commandId,
+            correlationId: input.commandId,
+            causationId: input.commandId,
+            occurredAt: now,
+            status: 'PENDING',
+            attempts: 0
+        });
+        const receipt = {
+            idempotencyKey: input.idempotencyKey,
+            commandId: input.commandId,
+            status: 'CANONICAL_COMMITTED',
+            bindingId,
+            sourceId: candidateRecord.sourceId,
+            sourceRecordId: candidateRecord.sourceRecordId,
+            sourceFingerprint: candidateRecord.sourceFingerprint,
+            sourceRunId: run.runId,
+            productId: product.id,
+            offerId: offer.id,
+            committedAt: now,
+            requestDigest: digest,
+            writerId: writer.id
+        };
+        await tx.putCanonicalizationReceipt(receipt);
+        return receipt;
+    });
+}

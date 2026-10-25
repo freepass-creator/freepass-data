@@ -1,0 +1,535 @@
+import { describe, expect, it } from 'vitest';
+import { assertCatalogSourceFreshness, buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
+import { readCatalogDataHealth } from '../src/application/catalog-health.js';
+import { seedDemoCatalog } from '../src/demo-seed.js';
+import { MemoryDataStore } from '../src/infra/memory-store.js';
+import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
+async function approvedActivationGuard(store, now) {
+    const event = [...store.outbox.values()].find((item) => item.status === 'PENDING');
+    if (!event)
+        throw new Error('TEST_OUTBOX_EVENT_REQUIRED');
+    const lease = {
+        leaseOwner: 'test-approved-activation',
+        leaseUntil: new Date(Date.parse(now) + 30_000).toISOString()
+    };
+    const claimed = await store.claimNext({ workerId: lease.leaseOwner, now, leaseUntil: lease.leaseUntil, eventId: event.eventId });
+    if (!claimed)
+        throw new Error('TEST_OUTBOX_CLAIM_REQUIRED');
+    return {
+        now: () => now,
+        sources: await assertCatalogSourceFreshness(store, now),
+        claim: { eventId: event.eventId, lease },
+        delivery: {
+            eventId: event.eventId,
+            eventType: event.eventType,
+            targetRevision: event.targetRevision,
+            processedAt: now
+        }
+    };
+}
+describe('Catalog Data Health v1', () => {
+    it('reports a valid release as HEALTHY when all projection digests match', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const release = await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('HEALTHY');
+        expect(report.checks.offerEconomics.economicsCoverage).toBe('COMPLETE');
+        expect(report.checks.offerEconomics.economicsTermCounts.supplierBillingFee).toEqual({ KNOWN: 0, ZERO: 1, UNKNOWN: 0, NOT_APPLICABLE: 0 });
+        expect(report.counts).toMatchObject({
+            vehicleModels: 1,
+            vehicleAssets: 1,
+            products: 1,
+            offers: 1,
+            policies: 0,
+            invalidCanonicalEntities: 0
+        });
+        expect(report.observation).toMatchObject({
+            readAt: '2026-09-21T10:01:00.000Z',
+            consistency: 'PARTIAL_MULTI_READ',
+            partialObservation: true,
+            activeReleaseCanonicalRevision: 1,
+            startActiveReleaseId: release.releaseId,
+            endActiveReleaseId: release.releaseId,
+            activeReleaseStable: true,
+            projectionEvidenceConsistency: 'ATOMIC'
+        });
+        expect(report.checks.canonicalRevisionIntegrity).toEqual({
+            status: 'PASS',
+            missingSnapshotCount: 0,
+            driftCount: 0
+        });
+        expect(report.checks.referentialIntegrity).toEqual({
+            status: 'PASS',
+            issueCount: 0
+        });
+        expect(report.checks.offerEconomics).toMatchObject({
+            status: 'PASS',
+            missingTermCount: 0,
+            unresolvedValueCount: 0,
+            invalidTermCount: 0
+        });
+        expect(report.checks.activeInputParity).toEqual({
+            status: 'PASS',
+            missingCount: 0,
+            staleRevisionCount: 0,
+            aheadRevisionCount: 0,
+            validationMismatchCount: 0
+        });
+        expect(report.checks.activeProjection).toMatchObject({
+            status: 'PASS',
+            activeReleaseId: release.releaseId,
+            releaseStatus: 'ACTIVE',
+            manifestPresent: true,
+            productCount: 1,
+            dataPayloadDigest: { status: 'PASS' },
+            canonicalInputDigest: { status: 'PASS' },
+            lineageContentIntegrity: { status: 'PASS' }
+        });
+        expect(report.checks.activeProjection.expectedEvidenceCount)
+            .toBe(report.checks.activeProjection.actualEvidenceCount);
+        expect(report.coverage.evaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+        expect(report.coverage.evaluated).toContain('OFFER_ECONOMICS_COMPLETENESS');
+        expect(report.coverage.notEvaluated).not.toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+        expect(report.coverage.notEvaluated).toContain('CONSISTENT_SNAPSHOT');
+    });
+    it('blocks health when any offered period lacks billing, payout or deposit economics', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const offer = await store.getOffer('offer_gv70_demo');
+        const [revision] = await store.listEntityHistory('offer', 'offer_gv70_demo');
+        const { internalEconomicsTerms: _removed, ...withoutEconomics } = offer;
+        await store.seed({
+            offers: [withoutEconomics],
+            revisionHistory: [{ ...revision, snapshot: withoutEconomics }]
+        });
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.offerEconomics).toMatchObject({ status: 'FAIL', missingTermCount: 1 });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'OFFER_ECONOMICS_TERM_MISSING',
+            entityId: 'offer_gv70_demo'
+        }));
+    });
+    it('degrades when ACTIVE release changes during the health observation window while unknown recalculated fees block overall health', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const first = await buildErpPublicProjection(store, store, '2026-09-21T09:00:00.000Z');
+        await updateOfferPrice(store, {
+            commandId: 'cmd_health_fence_r2',
+            idempotencyKey: 'idem_health_fence_r2',
+            offerId: 'offer_gv70_demo',
+            expectedRevision: 1,
+            termKey: '36@20000',
+            monthlyRent: { amount: 720000, currency: 'KRW' },
+            reason: 'health observation fence test',
+            actor: { id: 'user:test', kind: 'USER' }
+        }, '2026-09-21T09:30:00.000Z');
+        const second = await buildErpPublicProjection(store, store, '2026-09-21T09:31:00.000Z', { publishGuard: await approvedActivationGuard(store, '2026-09-21T09:31:00.000Z') });
+        let activeReadCount = 0;
+        const changingProjection = {
+            getActive: async (_projectionId) => {
+                activeReadCount += 1;
+                return activeReadCount === 1
+                    ? { ...first, status: 'ACTIVE' }
+                    : second;
+            },
+            getManifest: store.getManifest.bind(store),
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, changingProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.offerEconomics.economicsCoverage).toBe('INCOMPLETE');
+        expect(report.issues).toContainEqual(expect.objectContaining({ code: 'OFFER_ECONOMICS_VALUE_UNRESOLVED' }));
+        expect(report.observation).toMatchObject({
+            startActiveReleaseId: first.releaseId,
+            endActiveReleaseId: second.releaseId,
+            activeReleaseStable: false,
+            projectionEvidenceConsistency: 'PARTIAL_MULTI_READ'
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
+            severity: 'WARNING'
+        }));
+    });
+    it('degrades when the same ACTIVE release payload mutates during observation', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const release = await buildErpPublicProjection(store, store, '2026-09-21T09:00:00.000Z');
+        let activeReadCount = 0;
+        const changingProjection = {
+            getActive: async (_projectionId) => {
+                activeReadCount += 1;
+                if (activeReadCount === 1)
+                    return release;
+                const data = structuredClone(release.data);
+                data[0] = {
+                    ...data[0],
+                    displayName: 'TAMPERED_DURING_OBSERVATION'
+                };
+                return {
+                    ...release,
+                    data
+                };
+            },
+            getManifest: store.getManifest.bind(store),
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, changingProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('DEGRADED');
+        expect(report.observation).toMatchObject({
+            startActiveReleaseId: release.releaseId,
+            endActiveReleaseId: release.releaseId,
+            activeReleaseStable: false,
+            projectionEvidenceConsistency: 'PARTIAL_MULTI_READ'
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
+            severity: 'WARNING'
+        }));
+    });
+    it('degrades when ACTIVE manifest inputs lag current Canonical revisions while unknown recalculated fees block overall health', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T09:00:00.000Z');
+        await updateOfferPrice(store, {
+            commandId: 'cmd_health_stale_r2',
+            idempotencyKey: 'idem_health_stale_r2',
+            offerId: 'offer_gv70_demo',
+            expectedRevision: 1,
+            termKey: '36@20000',
+            monthlyRent: { amount: 725000, currency: 'KRW' },
+            reason: 'leave ACTIVE projection one revision behind',
+            actor: { id: 'user:test', kind: 'USER' }
+        }, '2026-09-21T09:30:00.000Z');
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.offerEconomics.economicsCoverage).toBe('INCOMPLETE');
+        expect(report.issues).toContainEqual(expect.objectContaining({ code: 'OFFER_ECONOMICS_VALUE_UNRESOLVED' }));
+        expect(report.checks.activeInputParity).toEqual({
+            status: 'WARN',
+            missingCount: 0,
+            staleRevisionCount: 1,
+            aheadRevisionCount: 0,
+            validationMismatchCount: 0
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+            severity: 'WARNING'
+        }));
+        expect(report.coverage.evaluated).toContain('ACTIVE_PROJECTION_INPUT_PARITY');
+    });
+    it('degrades when current Canonical lacks revision-history evidence', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const model = await store.getVehicleModel('vm_gv70_demo');
+        if (!model)
+            throw new Error('model fixture missing');
+        await store.seed({
+            policies: [{
+                    id: 'policy_without_history',
+                    kind: 'OTHER',
+                    version: '1',
+                    effectiveFrom: '2026-09-01T00:00:00.000Z',
+                    facts: {},
+                    schemaVersion: model.schemaVersion,
+                    revision: 1,
+                    validationStatus: 'VALID',
+                    createdAt: model.createdAt,
+                    updatedAt: model.updatedAt,
+                    createdBy: model.createdBy,
+                    updatedBy: model.updatedBy,
+                    lineageId: 'lin_policy_without_history'
+                }]
+        });
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('DEGRADED');
+        expect(report.checks.canonicalRevisionIntegrity).toEqual({
+            status: 'WARN',
+            missingSnapshotCount: 1,
+            driftCount: 0
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'CANONICAL_REVISION_SNAPSHOT_MISSING',
+            severity: 'WARNING',
+            entityType: 'policy',
+            entityId: 'policy_without_history'
+        }));
+    });
+    it('blocks same-revision Canonical content drift from immutable revision history', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T09:00:00.000Z');
+        const offer = await store.getOffer('offer_gv70_demo');
+        await store.seed({
+            offers: [{
+                    ...offer,
+                    priceTerms: offer.priceTerms.map((term) => ({
+                        ...term,
+                        monthlyRent: { amount: 999000, currency: 'KRW' }
+                    }))
+                }]
+        });
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.canonicalRevisionIntegrity).toEqual({
+            status: 'FAIL',
+            missingSnapshotCount: 0,
+            driftCount: 1
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'CANONICAL_REVISION_SNAPSHOT_DRIFT',
+            severity: 'ERROR',
+            entityType: 'offer',
+            entityId: 'offer_gv70_demo'
+        }));
+    });
+    it('blocks when ACTIVE manifest input revision is ahead of current Canonical state', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await updateOfferPrice(store, {
+            commandId: 'cmd_health_ahead_r2',
+            idempotencyKey: 'idem_health_ahead_r2',
+            offerId: 'offer_gv70_demo',
+            expectedRevision: 1,
+            termKey: '36@20000',
+            monthlyRent: { amount: 735000, currency: 'KRW' },
+            reason: 'build r2 before restoring current state to r1',
+            actor: { id: 'user:test', kind: 'USER' }
+        }, '2026-09-21T09:20:00.000Z');
+        await buildErpPublicProjection(store, store, '2026-09-21T09:21:00.000Z');
+        const history = await store.listEntityHistory('offer', 'offer_gv70_demo');
+        const revisionOne = history.find((item) => item.revision === 1);
+        if (!revisionOne)
+            throw new Error('revision one fixture missing');
+        await store.seed({
+            offers: [structuredClone(revisionOne.snapshot)]
+        });
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.activeInputParity).toEqual({
+            status: 'FAIL',
+            missingCount: 0,
+            staleRevisionCount: 0,
+            aheadRevisionCount: 1,
+            validationMismatchCount: 0
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
+            severity: 'ERROR'
+        }));
+    });
+    it('blocks health when Canonical references are broken', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const product = await store.getProduct('prod_gv70_demo');
+        await store.seed({
+            products: [{
+                    ...product,
+                    vehicleModelId: 'vm_missing'
+                }]
+        });
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.referentialIntegrity.status).toBe('FAIL');
+        expect(report.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                code: 'MISSING_PRODUCT_VEHICLE_MODEL',
+                severity: 'ERROR',
+                entityType: 'product',
+                entityId: 'prod_gv70_demo'
+            })
+        ]));
+    });
+    it('degrades rather than claiming healthy when no ACTIVE projection exists', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('DEGRADED');
+        expect(report.checks.activeProjection).toMatchObject({
+            status: 'WARN',
+            activeReleaseId: null,
+            manifestPresent: false,
+            dataPayloadDigest: { status: 'NOT_APPLICABLE' },
+            canonicalInputDigest: { status: 'NOT_APPLICABLE' }
+        });
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'NO_ACTIVE_RELEASE',
+            severity: 'WARNING'
+        }));
+    });
+    it('blocks when ACTIVE release evidence count disagrees with the manifest', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const inconsistentProjection = {
+            getActive: store.getActive.bind(store),
+            getManifest: async (releaseId) => {
+                const manifest = await store.getManifest(releaseId);
+                return manifest
+                    ? { ...manifest, fieldEvidenceCount: manifest.fieldEvidenceCount + 1 }
+                    : null;
+            },
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, inconsistentProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.activeProjection.status).toBe('FAIL');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
+            severity: 'ERROR'
+        }));
+    });
+    it('blocks when release.data is tampered without updating the stored digest', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const tamperedProjection = {
+            getActive: async (projectionId) => {
+                const release = await store.getActive(projectionId);
+                if (!release)
+                    return null;
+                const data = structuredClone(release.data);
+                data[0] = {
+                    ...data[0],
+                    displayName: '변조된 상품명'
+                };
+                return { ...release, data };
+            },
+            getManifest: store.getManifest.bind(store),
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, tamperedProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.activeProjection.dataPayloadDigest.status).toBe('FAIL');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
+            severity: 'ERROR'
+        }));
+    });
+    it('blocks when manifest canonicalInputs are tampered without updating inputDigest', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const tamperedProjection = {
+            getActive: store.getActive.bind(store),
+            getManifest: async (releaseId) => {
+                const manifest = await store.getManifest(releaseId);
+                if (!manifest)
+                    return null;
+                const canonicalInputs = structuredClone(manifest.canonicalInputs);
+                canonicalInputs[0] = {
+                    ...canonicalInputs[0],
+                    revision: canonicalInputs[0].revision + 100
+                };
+                return { ...manifest, canonicalInputs };
+            },
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, tamperedProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.checks.activeProjection.canonicalInputDigest.status).toBe('FAIL');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
+            severity: 'ERROR'
+        }));
+    });
+    it('keeps a legacy manifest without lineage digest as DEGRADED and NOT_EVALUATED', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const legacyProjection = {
+            getActive: store.getActive.bind(store),
+            getManifest: async (releaseId) => {
+                const manifest = await store.getManifest(releaseId);
+                if (!manifest)
+                    return null;
+                const { fieldEvidenceDigest: _legacyOmitted, ...legacyManifest } = manifest;
+                return legacyManifest;
+            },
+            listProjectionLineage: store.listProjectionLineage.bind(store)
+        };
+        const report = await readCatalogDataHealth(store, legacyProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('DEGRADED');
+        expect(report.checks.activeProjection.lineageContentIntegrity).toMatchObject({
+            status: 'NOT_EVALUATED',
+            stored: null
+        });
+        expect(report.coverage.notEvaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
+            severity: 'WARNING'
+        }));
+    });
+    it('blocks same-count lineage content tamper with the manifest digest', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const sameCountTamperedLineage = {
+            getActive: store.getActive.bind(store),
+            getManifest: store.getManifest.bind(store),
+            listProjectionLineage: async (releaseId) => {
+                const lineage = await store.listProjectionLineage(releaseId);
+                const copy = structuredClone(lineage);
+                if (copy[0]) {
+                    copy[0] = {
+                        ...copy[0],
+                        projection: {
+                            ...copy[0].projection,
+                            value: 'tampered-with-same-count'
+                        }
+                    };
+                }
+                return copy;
+            }
+        };
+        const report = await readCatalogDataHealth(store, sameCountTamperedLineage, '2026-09-21T10:01:00.000Z');
+        expect(report.checks.activeProjection.expectedEvidenceCount)
+            .toBe(report.checks.activeProjection.actualEvidenceCount);
+        expect(report.checks.activeProjection.lineageContentIntegrity).toMatchObject({
+            status: 'FAIL'
+        });
+        expect(report.status).toBe('BLOCKED');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+            severity: 'ERROR'
+        }));
+    });
+    it('blocks mutually consistent evidence for the wrong projection', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const active = await buildErpPublicProjection(store, store, '2026-09-21T10:00:00.000Z');
+        const manifest = await store.getManifest(active.releaseId);
+        const lineage = await store.listProjectionLineage(active.releaseId);
+        if (!manifest)
+            throw new Error('projection fixture missing');
+        const wrongLineage = lineage.map((item) => ({
+            ...item,
+            projectionId: 'wrong-projection'
+        }));
+        const wrongRelease = { ...active, projectionId: 'wrong-projection' };
+        const wrongManifest = {
+            ...manifest,
+            projectionId: 'wrong-projection',
+            fieldEvidenceDigest: stableRecordSetDigest(wrongLineage)
+        };
+        const wrongProjection = {
+            getActive: async () => wrongRelease,
+            getManifest: async () => wrongManifest,
+            listProjectionLineage: async () => wrongLineage,
+            getActiveEvidenceSnapshot: async () => ({
+                projectionId: 'erp-public',
+                release: wrongRelease,
+                manifest: wrongManifest,
+                lineage: wrongLineage,
+                consistency: 'ATOMIC'
+            })
+        };
+        const report = await readCatalogDataHealth(store, wrongProjection, '2026-09-21T10:01:00.000Z');
+        expect(report.status).toBe('BLOCKED');
+        expect(report.issues).toContainEqual(expect.objectContaining({
+            code: 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
+            severity: 'ERROR'
+        }));
+    });
+});

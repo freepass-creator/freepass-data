@@ -315,7 +315,10 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
           source_row: index + 2, product_group: 'LONG_TERM', ...productTypeFromCell(headers, cells, '구분'),
           original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])),
-          ...(Object.keys(spec).length ? { spec } : {}) },
+          ...(Object.keys(spec).length ? { spec } : {}),
+          // 시트 사실 후보(옵션·소비자가격, 2026-10-23 손실 칸 조사): 아이카 시트의 «옵션»·«소비자가격» 칸을 공통 시트와 같은 검증(sheet-facts)으로 후보에 싣는다.
+          // 쓰기는 기존 SHEET_FACT 경로가 맡는다(켠 공급사·칸만, 문서 칸이 비어 있을 때만, 기본 꺼짐). 변경 판정에서는 빠진다.
+          ...(sheetFactsOf(headers, cells) ? { sheet_facts: sheetFactsOf(headers, cells) } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }

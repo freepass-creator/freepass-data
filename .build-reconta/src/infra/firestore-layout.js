@@ -1,0 +1,81 @@
+import { compactFirestoreDocumentIdPart } from '../shared/stable-digest.js';
+export const FIRESTORE_COLLECTIONS = Object.freeze({
+    catalog: Object.freeze({
+        vehicleModels: 'catalog_vehicle_models',
+        vehicleAssets: 'catalog_vehicle_assets',
+        products: 'catalog_products',
+        offers: 'catalog_offers',
+        policies: 'catalog_policies',
+        sourceBindings: 'canonical_source_bindings',
+        revisions: 'catalog_entity_revisions'
+    }),
+    source: Object.freeze({
+        definitions: 'sources',
+        runs: 'source_runs',
+        heads: 'source_heads',
+        raw: 'raw_records',
+        eventReceipts: 'source_event_receipts',
+        candidates: 'normalized_candidates',
+        lineage: 'field_lineage'
+    }),
+    commands: Object.freeze({
+        receipts: 'command_receipts',
+        canonicalizationReceipts: 'canonicalization_receipts',
+        manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
+        reviewedSourceChangeReceipts: 'reviewed_source_change_receipts'
+    }),
+    ownership: Object.freeze({
+        writer: 'writer_ownership',
+        transferReceipts: 'writer_ownership_transfer_receipts'
+    }),
+    evidence: Object.freeze({
+        audits: 'audit_events',
+        outbox: 'outbox_events',
+        dataAccessEvents: 'data_access_events'
+    }),
+    estimateArtifacts: Object.freeze({
+        issuedQuotes: 'estimate_issued_quotes',
+        issuedQuoteHeads: 'estimate_issued_quote_heads',
+        shareEnvelopes: 'estimate_share_envelopes',
+        shareEnvelopeHeads: 'estimate_share_envelope_heads'
+    }),
+    legacyAdminWorkflow: Object.freeze({
+        products: 'products',
+        policies: 'policy',
+        vehicleMaster: 'vehicle_master',
+        settlementRows: 'settlement_rows',
+        settlementEvents: 'settlement_events',
+        settlementInvoices: 'settlement_invoices',
+        settlementCashEvents: 'settlement_cash_events',
+        settlementClawbacks: 'settlement_clawbacks',
+        settlementFeeRules: 'settlement_fee_rules',
+        settlementRules: 'settlement_rules',
+        partners: 'partner',
+        contracts: 'contract',
+        contractEvents: 'contract_event',
+        esignSessions: 'esign_session',
+        esignPrivate: 'esign_private',
+        esignEvents: 'esign_event',
+        esignIssueLocks: 'esign_issue_lock',
+        receipts: 'data_admin_workflow_receipts'
+    }),
+    periodFees: Object.freeze({
+        ledger: 'period_fee_ledger',
+        snapshotRuns: 'period_fee_snapshot_runs',
+        productChangeHistory: 'product_change_history'
+    }),
+    projection: Object.freeze({
+        releases: 'projection_releases',
+        manifests: 'projection_release_manifests',
+        lineage: 'projection_field_lineage',
+        deliveryReceipts: 'projection_delivery_receipts',
+        sheetDeliveryEvidence: 'sheet_delivery_evidence',
+        active: 'projection_active'
+    })
+});
+export const sourceFirestoreDocumentId = (value) => value.replaceAll('/', '__');
+export const firestoreSafeDocumentIdPart = (value) => {
+    return compactFirestoreDocumentIdPart(value);
+};
+export const periodFeeRunId = (snapshotId, planDigest) => [snapshotId, planDigest.slice(0, 24)].map(firestoreSafeDocumentIdPart).join('__');
+export const periodFeeRunDocumentKey = (runId, documentKey) => [runId, documentKey].map(firestoreSafeDocumentIdPart).join('__');

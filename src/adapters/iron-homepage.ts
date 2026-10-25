@@ -7,6 +7,7 @@ import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/so
 import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isContractedStatus } from '../domain/erp5-inventory-status.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 
 export const IRON_HOMEPAGE_POLICY = Object.freeze({ host: 'ironrentcar.com', baseUrl: 'https://ironrentcar.com', maxPages: 10, minIntervalMs: 500, timeoutMs: 20_000 });
 /** 차량 사진 원본 호스트(공개 버킷, scripts/ops/photo-cache-iron.mjs 와 같은 값). 이 호스트·이 경로만 사진으로 받는다(https 만). */
@@ -165,7 +166,10 @@ export function parseIronDetail(html: string, listing: IronListing, observedAt: 
   const spec: Record<string, string> = {};
   const year = /(\d{2,4})\s*년식/.exec(subtitle)?.[1];
   if (year) spec.year = String(Number(year) < 100 ? 2000 + Number(year) : Number(year));
-  if (facts.get('유종')) spec.fuel_type = facts.get('유종')!;
+  // 연료는 표준 이름으로만(2026-10-25 «휘발유»가 그대로 들어가던 원인). 표에 없거나 차명과 어긋나면 비운다(raw 모양은 바꾸지 않는다 — 원천 지문 흔들림 방지).
+  const fuelText = facts.get('유종');
+  const fuel = fuelText ? canonicalFuel(fuelText, title) : null;
+  if (fuel) spec.fuel_type = fuel;
   if (facts.get('외장 색상')) spec.ext_color = facts.get('외장 색상')!;
   if (facts.get('내장 색상')) spec.int_color = facts.get('내장 색상')!;
   const mileage = ironOdometer(facts.get('주행거리') ?? '');

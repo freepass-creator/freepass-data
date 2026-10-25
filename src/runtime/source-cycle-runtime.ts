@@ -27,6 +27,7 @@ import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POL
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
 import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
@@ -677,6 +678,93 @@ export function unattendedExitCode(input: { statuses: readonly string[]; freshne
   return { exit: 0, freshnessSkipped: onlyLocked && input.freshnessStatus !== 'HEALTHY' };
 }
 
+/** F05 원천 관측의 «적용 불확실(APPLY_UNCERTAIN)» 해소 — Firestore 되읽기로 증명될 때만 닫는다(2026-10-23: 60초 DEADLINE 으로 run 이 FAILED 가 됐는데
+ * control 이 APPLY_UNCERTAIN 으로 남아 12회차째 갱신이 막힌 데드락). 쓰기는 control 상태 파일뿐이고 Firestore 는 읽기만 한다. */
+export type SourceObservationIntent = NonNullable<Awaited<ReturnType<CycleControl['load']>>['sourceObservationIntent']>;
+export type SourceObservationProofSource = Pick<SourceIngestionStore, 'getRun' | 'getSourceHead' | 'listRaw'>;
+type ProofEvidence = { headRunId: string | null; runStatus: string; runHeadStatus: string | null; rawCount: number | null; completedAt?: string | null; warningCount?: number | null };
+export type SourceObservationProof =
+  | { outcome: 'NOT_PROMOTED'; evidence: ProofEvidence }
+  | { outcome: 'APPLIED'; evidence: ProofEvidence }
+  | { outcome: 'UNPROVEN'; reason: string; evidence?: ProofEvidence };
+/** intent runId 의 반영 여부를 되읽기로 가린다(순수 읽기). head 를 앞뒤로 두 번 읽어 도중에 움직이면 증명하지 않는다.
+ *  - head 가 intent run 을 가리키고 run=COMPLETED·CURRENT 이며 raw 행 수가 run.rawCount 와 같으면 APPLIED(반영됨).
+ *  - head 가 다른 run 이고, intent run 이 없거나 FAILED 이거나 COMPLETED 이지만 CURRENT 가 아니면 NOT_PROMOTED(승격 0).
+ *  - 그 밖(RUNNING·불일치·읽기 실패)은 UNPROVEN — 닫지 않는다. */
+export async function proveSourceObservationIntent(source: SourceObservationProofSource, intent: SourceObservationIntent): Promise<SourceObservationProof> {
+  const head1 = await source.getSourceHead(intent.sourceId);
+  const run = await source.getRun(intent.runId);
+  const head2 = await source.getSourceHead(intent.sourceId);
+  if (stableDigest(head1) !== stableDigest(head2)) return { outcome: 'UNPROVEN', reason: 'HEAD_CHANGED_DURING_READBACK' };
+  if (run && run.sourceId !== intent.sourceId) return { outcome: 'UNPROVEN', reason: 'RUN_SOURCE_MISMATCH' };
+  const evidence: ProofEvidence = { headRunId: head2?.runId ?? null, runStatus: run ? run.status : 'ABSENT', runHeadStatus: run?.headStatus ?? null, rawCount: null,
+    completedAt: run?.completedAt ?? null, warningCount: run?.warningCount ?? null };
+  if (head2?.runId === intent.runId) {
+    if (run?.status !== 'COMPLETED' || run.headStatus !== 'CURRENT') return { outcome: 'UNPROVEN', reason: 'HEAD_POINTS_TO_INTENT_BUT_RUN_NOT_CURRENT', evidence };
+    const raw = await source.listRaw(intent.runId);
+    evidence.rawCount = raw.length;
+    if (raw.length !== run.rawCount) return { outcome: 'UNPROVEN', reason: 'RAW_COUNT_MISMATCH', evidence };
+    // raw 조회 도중 head 가 움직였는지 한 번 더 본다
+    if (stableDigest(await source.getSourceHead(intent.sourceId)) !== stableDigest(head2)) return { outcome: 'UNPROVEN', reason: 'HEAD_CHANGED_DURING_READBACK', evidence };
+    return { outcome: 'APPLIED', evidence };
+  }
+  // 미승격의 증거는 «이 run 이 head 가 된 적이 없다» 여야 한다. FAILED 는 종단 상태(completeRun 은 RUNNING 만 받는다)이고, INELIGIBLE 은 head 자격이 없어 승격되지 않은 run 이다.
+  // COMPLETED/STALE 은 한때 head 였다가 다음 run 에 밀려난 흔적일 수 있고(새 head 승격 때 이전 head 를 STALE 로 바꿈), run 문서가 없는 것은 늦게 도착하는 쓰기를 배제하지 못해 증명이 아니다.
+  if (run?.status === 'FAILED' || (run?.status === 'COMPLETED' && run.headStatus === 'INELIGIBLE')) return { outcome: 'NOT_PROMOTED', evidence };
+  return { outcome: 'UNPROVEN', reason: `RUN_${run ? `${run.status}_${run.headStatus}` : 'ABSENT'}_HEAD_ELSEWHERE`, evidence };
+}
+export type SourceObservationSettlement =
+  | { status: 'NOT_UNCERTAIN' }
+  /** PROVEN_*: 증명만 했고 저장은 안 함(save=false). CLEARED/CONFIRMED_APPLIED: 증명 뒤 control 을 실제로 닫음. */
+  | { status: 'PROVEN_NOT_PROMOTED' | 'PROVEN_APPLIED' | 'CLEARED' | 'CONFIRMED_APPLIED'; proof: SourceObservationProof; saved: boolean }
+  | { status: 'UNPROVEN'; reason: string; proof?: SourceObservationProof };
+/** APPLY_UNCERTAIN 이면 되읽기 증명을 시도하고, 증명되면 control 을 닫는다(호출자가 F05_SOURCE_ROWS 잠금을 쥐고 있어야 한다).
+ *  mode AUTO: NOT_PROMOTED 만 자동으로 닫는다(반영됨 확정은 사람이 --apply 로). MANUAL: NOT_PROMOTED·APPLIED 둘 다. save=false 면 증명만(쓰기 없음). */
+export async function settleSourceObservationUncertainty(ports: {
+  control: Pick<CycleControl, 'load' | 'save'>; readSource: <T>(run: (source: SourceObservationProofSource) => Promise<T>) => Promise<T>; now?: () => Date;
+}, options: { mode: 'AUTO' | 'MANUAL'; save: boolean }): Promise<SourceObservationSettlement> {
+  const state = await ports.control.load('F05_SOURCE_ROWS');
+  if (state.error !== 'APPLY_UNCERTAIN') return { status: 'NOT_UNCERTAIN' };
+  const intent = state.sourceObservationIntent;
+  if (!intent) return { status: 'UNPROVEN', reason: 'INTENT_MISSING' };
+  const proof = await ports.readSource(source => proveSourceObservationIntent(source, intent))
+    .catch((): SourceObservationProof => ({ outcome: 'UNPROVEN', reason: 'READBACK_FAILED' }));
+  if (proof.outcome === 'UNPROVEN') return { status: 'UNPROVEN', reason: proof.reason, proof };
+  if (proof.outcome === 'APPLIED' && options.mode === 'AUTO') return { status: 'UNPROVEN', reason: 'APPLIED_CONFIRMATION_REQUIRES_MANUAL', proof };
+  if (options.save) {
+    const at = (ports.now ?? (() => new Date()))().toISOString();
+    const { sourceObservationIntent: _cleared, ...rest } = state;
+    // 제어 상태 불변식(failures>=3 이면 stopped 여야 함): stopped 를 풀 때 실패 수는 2 이하로 맞춘다 — 그렇지 않으면 저장 뒤 load 가 CYCLE_STATE_INVALID 로 던진다
+    const next = { ...rest, stopped: false, error: null, failures: Math.min(state.failures, 2),
+      sourceObservationReconciliation: { reconciledAt: at, outcome: proof.outcome === 'APPLIED' ? 'APPLIED_CONFIRMED' as const : 'NOT_PROMOTED' as const,
+        mode: options.mode, previousIntent: intent, evidence: proof.evidence } };
+    if (proof.outcome === 'APPLIED') {
+      next.lastCompleteAt = proof.evidence.completedAt ?? at;
+      if (typeof proof.evidence.rawCount === 'number') next.readCount = proof.evidence.rawCount;
+      if (typeof proof.evidence.warningCount === 'number') next.heldCount = proof.evidence.warningCount;
+    }
+    await ports.control.save('F05_SOURCE_ROWS', next);
+  }
+  const applied = proof.outcome === 'APPLIED';
+  return { status: options.save ? (applied ? 'CONFIRMED_APPLIED' : 'CLEARED') : (applied ? 'PROVEN_APPLIED' : 'PROVEN_NOT_PROMOTED'), proof, saved: options.save };
+}
+const defaultProofReader: <T>(run: (source: SourceObservationProofSource) => Promise<T>) => Promise<T> = run =>
+  withSharedSheetCatalogAccess(false, stableDigest(['f05-source-rows-reconcile']), (_catalog, source) => run(source));
+/** 수동 명령(--reconcile-source-rows [--apply]): F05_SOURCE_ROWS 잠금을 쥔 채 증명하고, --apply 일 때만 닫는다. 증명 안 되면 종료 코드 1. */
+export async function reconcileF05SourceObservations(env: NodeJS.ProcessEnv, args: string[], ports: {
+  acquire: (source: string) => Promise<null | (() => Promise<void>)>; control: Pick<CycleControl, 'load' | 'save'>;
+  readSource?: Parameters<typeof settleSourceObservationUncertainty>[0]['readSource']; now?: () => Date;
+}) {
+  const release = await ports.acquire('F05_SOURCE_ROWS');
+  if (!release) throw new Error('F05_SOURCE_ROWS_LOCKED');
+  try {
+    const apply = args.includes('--apply');
+    const result = await settleSourceObservationUncertainty({ control: ports.control, readSource: ports.readSource ?? defaultProofReader, ...(ports.now ? { now: ports.now } : {}) }, { mode: 'MANUAL', save: apply });
+    const exit = result.status === 'UNPROVEN' ? 1 : 0;
+    return { schema: 'freepass-data.f05-source-rows-reconcile/v1' as const, mode: apply ? 'APPLY' as const : 'PROOF_ONLY' as const, exit, ...result };
+  } finally { await release(); }
+}
+
 type F05SourceObservationReport = Awaited<ReturnType<typeof ingestSharedSheetObservedRows>>;
 type F05SourceObservationFailure = { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1';
   mode: 'SOURCE_OBSERVATIONS_ONLY'; status: 'HOLD' | 'APPLY_UNCERTAIN'; reasonCode: string;
@@ -692,6 +780,8 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
   master?: () => Promise<unknown>;
   persist?: (input: { capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
     claimEffect: NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']> }) => Promise<F05SourceObservationReport>;
+  /** APPLY_UNCERTAIN 되읽기 증명용 읽기 전용 소스 접근(운영 기본 = Firestore 읽기). persist 를 바꿔 끼운 시험은 이것도 주지 않으면 자동 해소를 건너뛴다. */
+  readSource?: Parameters<typeof settleSourceObservationUncertainty>[0]['readSource'];
 }) {
   if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') return null;
   const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(k => k.trim()).filter(Boolean);
@@ -703,8 +793,16 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
   const release = await ports.acquire('F05_SOURCE_ROWS');
   if (!release) throw new Error('F05_SOURCE_ROWS_LOCKED');
   try {
-    const state = await ports.control.load('F05_SOURCE_ROWS');
-    if (state.error === 'APPLY_UNCERTAIN') throw new Error('F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK');
+    let state = await ports.control.load('F05_SOURCE_ROWS');
+    // 되읽기로 «이 intent 의 run 은 승격되지 않았다(FAILED·head 다른 run)» 가 증명되면 자동으로 재시도 가능 상태로 되돌린다(데드락 방지).
+    // 반영됨 확정(APPLIED)·증명 불가는 그대로 막고 사람이 --reconcile-source-rows 로 본다.
+    const readSource = ports.readSource ?? (ports.persist ? undefined : defaultProofReader);
+    const settle = (): Promise<SourceObservationSettlement | null> => readSource
+      ? settleSourceObservationUncertainty({ control: ports.control!, readSource }, { mode: 'AUTO', save: true }).catch(() => null) : Promise.resolve(null);
+    if (state.error === 'APPLY_UNCERTAIN') {
+      if ((await settle())?.status !== 'CLEARED') throw new Error('F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK');
+      state = await ports.control.load('F05_SOURCE_ROWS');
+    }
     const capture = ports.capture ?? (async (sheetId: string) => { assertCurrentSharedSheetSource(sheetId); return captureSharedSheetReadOnly(sheetId); });
     const first = await ports.observedCapture();
     const master = await (ports.master ?? captureVehicleMasterSnapshotReadOnly)().catch(() => undefined);
@@ -720,7 +818,13 @@ export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selec
       state.sourceObservationIntent = intent;
       await ports.control!.save('F05_SOURCE_ROWS', state); claimed = true;
     };
-    const report = await persist({ capture: first, liveCapture: live, claimEffect });
+    let report: F05SourceObservationReport;
+    try { report = await persist({ capture: first, liveCapture: live, claimEffect }); }
+    catch (error) {
+      // 쓰기가 실패로 끝났어도(예: 60초 DEADLINE_EXCEEDED, run=FAILED) 승격 0 이 되읽기로 증명되면 다음 회차가 막히지 않게 바로 풀어 둔다. 이번 회차는 그대로 실패로 보고한다.
+      if (claimed) await settle();
+      throw error;
+    }
     if (!claimed) throw new Error('F05_SOURCE_ROWS_EFFECT_JOURNAL_REQUIRED');
     state.stopped = false; state.error = null; state.lastCompleteAt = report.verifiedAt;
     state.readCount = report.rawRows; state.heldCount = report.heldCandidateRows;
@@ -853,13 +957,23 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
 
 export async function runtimeCli(args: string[], env = process.env) {
   const get = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
+  // 해소 명령은 다른 명령 모드와 섞지 않는다(무인 회차·계획·적용·롤백·원천 선택과 혼합하면 거부): 증명 요청이 무인 실행으로 새지 않게 가장 먼저 검사한다.
+  if (args.includes('--reconcile-source-rows') && args.some(a => ['--unattended', '--plan', '--rollback', '--source', '--accept-drift', '--only-when-synced', '--watch-sync'].includes(a)))
+    throw new Error('RECONCILE_ARGS_INVALID');
   const acceptDrift = (get('--accept-drift') ?? '').split(',').map(x => x.trim()).filter(Boolean);
   if (acceptDrift.some(c => !/^RP\d{3}$/.test(c))) throw new Error('ACCEPT_DRIFT_CODE_INVALID');
   // 무인 회차(스케줄러용): 명시 env 옵트인 + 플래그 둘 다 있어야 하며, 수동 승인 인자와 섞지 않는다.
   if (args.includes('--unattended')) {
+    if (args.includes('--reconcile-source-rows')) throw new Error('RECONCILE_ARGS_INVALID');
     if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
     if (args.includes('--apply') || get('--plan') || get('--rollback')) throw new Error('UNATTENDED_ARGS_INVALID');
     return runUnattended(args, env, acceptDrift);
+  }
+  // F05 원천 관측 «적용 불확실» 해소: 기본은 되읽기 증명만(쓰기 없음), --apply 일 때만 증명된 경우에 한해 control 상태를 닫는다.
+  if (args.includes('--reconcile-source-rows')) {
+    const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+    const control = fileCycleControl(directory, async () => {});
+    return reconcileF05SourceObservations(env, args, { acquire: id => control.acquire(id), control });
   }
   const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
   const key = get('--rollback');

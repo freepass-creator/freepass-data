@@ -1,0 +1,144 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json",
+    "title": "FreePass Catalog V1",
+    "$defs": {
+        "money": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["amount", "currency"],
+            "properties": { "amount": { "type": "integer", "minimum": 0 }, "currency": { "const": "KRW" } }
+        },
+        "meta": {
+            "type": "object",
+            "required": ["schemaVersion", "revision", "validationStatus"],
+            "properties": {
+                "schemaVersion": { "type": "string" },
+                "revision": { "type": "integer", "minimum": 1 },
+                "validationStatus": { "enum": ["VALID", "WARNING", "INVALID"] }
+            }
+        },
+        "priceTerm": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["termKey", "termMonths", "monthlyRent", "depositState"],
+            "properties": {
+                "termKey": { "type": "string", "minLength": 1 },
+                "termMonths": { "type": "integer", "minimum": 1, "maximum": 120 },
+                "monthlyRent": { "$ref": "#/$defs/money" },
+                "deposit": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/money" }] },
+                "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"] },
+                "mileageLimitKmPerYear": { "type": ["integer", "null"], "minimum": 0 }
+            }
+        },
+        "termAmountCalculation": {
+            "oneOf": [
+                { "type": "object", "additionalProperties": false, "required": ["kind", "amount"], "properties": { "kind": { "const": "FIXED" }, "amount": { "$ref": "#/$defs/money" } } },
+                { "type": "object", "additionalProperties": false, "required": ["kind", "base", "multiplier"], "properties": { "kind": { "const": "MULTIPLY" }, "base": { "const": "MONTHLY_RENT" }, "multiplier": { "type": "number", "minimum": 0 } } },
+                { "type": "object", "additionalProperties": false, "required": ["kind", "base", "rate"], "properties": { "kind": { "const": "RATE" }, "base": { "enum": ["MONTHLY_RENT_X_TERM", "VEHICLE_PRICE"] }, "rate": { "type": "number", "minimum": 0 }, "adjustmentAmount": { "type": "object", "additionalProperties": false, "required": ["amount", "currency"], "properties": { "amount": { "type": "integer" }, "currency": { "const": "KRW" } } } } }
+            ]
+        },
+        "termEconomicAmount": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "sourceRefs"],
+            "properties": {
+                "priceSourceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                "referenceRentBasis": { "type": "object", "additionalProperties": false, "required": ["termKey", "termMonths", "monthlyRent", "multiplier"], "properties": { "termKey": { "type": "string", "minLength": 1 }, "termMonths": { "enum": [12, 36] }, "monthlyRent": { "$ref": "#/$defs/money" }, "multiplier": { "enum": [1, 0.8] } } },
+                "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
+                "vatAmount": { "type": ["integer", "null"], "minimum": 0 },
+                "totalAmount": { "type": ["integer", "null"], "minimum": 0 },
+                "state": { "enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"] },
+                "amount": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/money" }] },
+                "calculation": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/termAmountCalculation" }] },
+                "ruleId": { "type": ["string", "null"] },
+                "policyId": { "type": "string", "minLength": 1 },
+                "reasonCode": { "type": ["string", "null"] },
+                "approximate": { "type": "boolean" },
+                "note": { "type": ["string", "null"] },
+                "sourceRefs": { "type": "array", "minItems": 0, "items": { "type": "string", "minLength": 1 } }
+            },
+            "allOf": [
+                { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE"] } } }, "then": { "properties": { "sourceRefs": { "type": "array", "maxItems": 0 } } } },
+                { "if": { "properties": { "state": { "enum": ["KNOWN", "ZERO"] } } }, "then": { "properties": { "sourceRefs": { "type": "array", "minItems": 1 } } } }
+            ]
+        },
+        "offerTermEconomics": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["termKey", "depositCalculation", "supplierBillingFee", "channelPayoutFee"],
+            "properties": {
+                "termKey": { "type": "string", "minLength": 1 },
+                "termMonths": { "type": "integer", "minimum": 1, "maximum": 120 },
+                "monthlyRent": { "$ref": "#/$defs/money" },
+                "depositCalculation": { "$ref": "#/$defs/termEconomicAmount" },
+                "supplierBillingFee": { "$ref": "#/$defs/termEconomicAmount", "description": "공급사 청구수수료: 공급사 → FreePass. 공급사 연동의 수수료이며 영업채널 지급수수료와 구분한다." },
+                "channelPayoutFee": { "$ref": "#/$defs/termEconomicAmount", "description": "프리패스 수수료 = 지급수수료: FreePass → 영업채널. 기본 연동 수수료. 수취수수료나 내부 마진을 뜻하지 않는다." }
+            }
+        },
+        "vehicleModel": {
+            "allOf": [{ "$ref": "#/$defs/meta" }, { "type": "object", "required": ["id", "maker", "model", "displayName"], "properties": {
+                        "id": { "type": "string" }, "maker": { "type": "string" }, "model": { "type": "string" },
+                        "generation": { "type": ["string", "null"] }, "subModel": { "type": ["string", "null"] }, "trim": { "type": ["string", "null"] },
+                        "fuel": { "type": ["string", "null"] }, "drive": { "type": ["string", "null"] },
+                        "seats": { "type": ["integer", "null"] }, "displayName": { "type": "string" }
+                    } }]
+        },
+        "sourceVehicleFacts": {
+            "type": "object", "additionalProperties": false,
+            "required": ["ruleVersion", "fields", "reasons"],
+            "properties": {
+                "ruleVersion": { "type": "string", "minLength": 1 },
+                "reasons": { "type": "array", "items": { "type": "string" } },
+                "fields": { "type": "object", "additionalProperties": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["value", "state", "evidence", "ruleVersion", "reasons"],
+                        "properties": {
+                            "value": { "type": ["string", "number", "null"] },
+                            "state": { "enum": ["KNOWN", "MISSING", "REVIEW_REQUIRED"] },
+                            "evidence": { "type": "string" }, "ruleVersion": { "type": "string", "minLength": 1 },
+                            "reasons": { "type": "array", "items": { "type": "string" } }
+                        }
+                    } }
+            }
+        },
+        "vehicleAsset": {
+            "allOf": [{ "$ref": "#/$defs/meta" }, { "type": "object", "required": ["id", "vehicleModelId", "status"], "properties": {
+                        "id": { "type": "string" }, "vehicleModelId": { "type": "string" },
+                        "plateNumber": { "type": ["string", "null"] }, "vin": { "type": ["string", "null"] },
+                        "odometerKm": { "type": ["integer", "null"], "minimum": 0 },
+                        "sourceVehicleFacts": { "$ref": "#/$defs/sourceVehicleFacts" },
+                        "sourceFirstObservedAt": { "type": "string", "format": "date-time" },
+                        "sourceFirstRunId": { "type": "string", "minLength": 1 },
+                        "status": { "enum": ["AVAILABLE", "RESERVED", "IN_USE", "RETURNED", "MAINTENANCE", "ACCIDENT", "SOLD", "RETIRED"] }
+                    } }]
+        },
+        "product": {
+            "allOf": [{ "$ref": "#/$defs/meta" }, { "type": "object", "required": ["id", "vehicleModelId", "commercialType", "status", "displayName"], "properties": {
+                        "id": { "type": "string" }, "vehicleModelId": { "type": "string" },
+                        "vehicleAssetId": { "type": ["string", "null"] },
+                        "commercialType": { "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"] },
+                        "status": { "enum": ["ACTIVE", "HOLD", "SOLD", "ARCHIVED"] },
+                        "displayName": { "type": "string" }
+                    } }]
+        },
+        "offer": {
+            "allOf": [{ "$ref": "#/$defs/meta" }, { "type": "object", "required": ["id", "productId", "supplierId", "status", "priceTerms"], "properties": {
+                        "id": { "type": "string" }, "productId": { "type": "string" }, "supplierId": { "type": "string" },
+                        "status": { "enum": ["ACTIVE", "SUSPENDED", "EXPIRED"] },
+                        "validFrom": { "type": ["string", "null"] }, "validUntil": { "type": ["string", "null"] },
+                        "policyId": { "type": ["string", "null"] },
+                        "priceTerms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/priceTerm" } },
+                        "internalEconomicsTerms": { "type": "array", "items": { "$ref": "#/$defs/offerTermEconomics" } }
+                    } }]
+        },
+        "policy": {
+            "allOf": [{ "$ref": "#/$defs/meta" }, { "type": "object", "required": ["id", "kind", "version", "effectiveFrom", "facts"], "properties": {
+                        "id": { "type": "string" },
+                        "kind": { "enum": ["INSURANCE", "MILEAGE", "RETURN", "EARLY_TERMINATION", "OTHER"] },
+                        "version": { "type": "string" }, "effectiveFrom": { "type": "string" },
+                        "effectiveTo": { "type": ["string", "null"] }, "facts": { "type": "object" }
+                    } }]
+        }
+    }
+}

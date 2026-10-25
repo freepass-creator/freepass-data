@@ -1,0 +1,1083 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://freepass.teamjpk.com/contracts/admin-catalog-view-v1.schema.json",
+    "title": "FreePass Data Admin Catalog Consumer Response V1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema",
+        "data",
+        "meta"
+    ],
+    "properties": {
+        "schema": {
+            "const": "freepass-data.admin-catalog/v1"
+        },
+        "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "dataDigest",
+                "inputDigest",
+                "manifestId",
+                "authority",
+                "projectionId",
+                "consumerId",
+                "schemaVersion",
+                "releaseId",
+                "revision",
+                "generatedAt",
+                "policyParity",
+                "missingPolicyOfferIds",
+                "invalidPolicyFactRefs",
+                "commercialCoverage",
+                "commercialMissingOfferIds",
+                "economicsCoverage",
+                "economicsTermCounts"
+            ],
+            "properties": {
+                "schemaVersion": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "releaseId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "generatedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "activatedAt": {
+                    "anyOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "type": "string",
+                            "format": "date-time"
+                        }
+                    ]
+                },
+                "policyParity": {
+                    "enum": [
+                        "COMPLETE",
+                        "INCOMPLETE"
+                    ]
+                },
+                "missingPolicyOfferIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "invalidPolicyFactRefs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "consumerId": {
+                    "const": "freepass-admin-catalog"
+                },
+                "projectionId": {
+                    "const": "admin-catalog"
+                },
+                "authority": {
+                    "const": "CANONICAL_ACTIVE"
+                },
+                "manifestId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "inputDigest": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "dataDigest": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "commercialCoverage": {
+                    "enum": [
+                        "COMPLETE",
+                        "INCOMPLETE"
+                    ]
+                },
+                "commercialMissingOfferIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "economicsCoverage": {
+                    "enum": [
+                        "COMPLETE",
+                        "INCOMPLETE"
+                    ]
+                },
+                "economicsTermCounts": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "supplierBillingFee",
+                        "channelPayoutFee"
+                    ],
+                    "properties": {
+                        "supplierBillingFee": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "KNOWN",
+                                "ZERO",
+                                "UNKNOWN",
+                                "NOT_APPLICABLE"
+                            ],
+                            "properties": {
+                                "KNOWN": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "ZERO": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "UNKNOWN": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "NOT_APPLICABLE": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                }
+                            }
+                        },
+                        "channelPayoutFee": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "KNOWN",
+                                "ZERO",
+                                "UNKNOWN",
+                                "NOT_APPLICABLE"
+                            ],
+                            "properties": {
+                                "KNOWN": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "ZERO": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "UNKNOWN": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                "NOT_APPLICABLE": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "data": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/product"
+            },
+            "minItems": 1
+        }
+    },
+    "$defs": {
+        "money": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "amount",
+                "currency"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "currency": {
+                    "const": "KRW"
+                }
+            }
+        },
+        "signedMoney": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "amount",
+                "currency"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "integer"
+                },
+                "currency": {
+                    "const": "KRW"
+                }
+            }
+        },
+        "policyValue": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "policyId",
+                        "type",
+                        "value"
+                    ],
+                    "properties": {
+                        "policyId": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "type": {
+                            "const": "BOOLEAN"
+                        },
+                        "value": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "policyId",
+                        "type",
+                        "value"
+                    ],
+                    "properties": {
+                        "policyId": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "type": {
+                            "enum": [
+                                "NUMBER",
+                                "MONEY",
+                                "PERCENTAGE"
+                            ]
+                        },
+                        "value": {
+                            "type": "number"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "policyId",
+                        "type",
+                        "value"
+                    ],
+                    "properties": {
+                        "policyId": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "type": {
+                            "enum": [
+                                "SINGLE_SELECT",
+                                "TEXT",
+                                "DATE"
+                            ]
+                        },
+                        "value": {
+                            "type": "string"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "policyId",
+                        "type",
+                        "value"
+                    ],
+                    "properties": {
+                        "policyId": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "type": {
+                            "const": "MULTI_SELECT"
+                        },
+                        "value": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "priceTerm": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "termKey",
+                "termMonths",
+                "monthlyRent",
+                "depositState",
+                "supplierBillingFee",
+                "channelPayoutFee"
+            ],
+            "properties": {
+                "termKey": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "termMonths": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120
+                },
+                "monthlyRent": {
+                    "$ref": "#/$defs/money"
+                },
+                "deposit": {
+                    "anyOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/money"
+                        }
+                    ]
+                },
+                "depositState": {
+                    "enum": [
+                        "KNOWN",
+                        "ZERO",
+                        "UNKNOWN",
+                        "NOT_APPLICABLE"
+                    ]
+                },
+                "mileageLimitKmPerYear": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "supplierBillingFee": {
+                    "$ref": "#/$defs/termEconomicAmount"
+                },
+                "channelPayoutFee": {
+                    "$ref": "#/$defs/termEconomicAmount"
+                }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "depositState": {
+                                "const": "KNOWN"
+                            }
+                        },
+                        "required": [
+                            "depositState"
+                        ]
+                    },
+                    "then": {
+                        "required": [
+                            "deposit"
+                        ],
+                        "properties": {
+                            "deposit": {
+                                "$ref": "#/$defs/money"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "depositState": {
+                                "const": "ZERO"
+                            }
+                        },
+                        "required": [
+                            "depositState"
+                        ]
+                    },
+                    "then": {
+                        "required": [
+                            "deposit"
+                        ],
+                        "properties": {
+                            "deposit": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                    "amount",
+                                    "currency"
+                                ],
+                                "properties": {
+                                    "amount": {
+                                        "const": 0
+                                    },
+                                    "currency": {
+                                        "const": "KRW"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "depositState": {
+                                "enum": [
+                                    "UNKNOWN",
+                                    "NOT_APPLICABLE"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "depositState"
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "deposit": {
+                                "type": "null"
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "offer": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "offerId",
+                "offerRevision",
+                "supplierId",
+                "policyValues",
+                "priceTerms",
+                "policyState",
+                "invalidPolicyFactRefs"
+            ],
+            "properties": {
+                "offerId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "offerRevision": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "supplierId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "policyId": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "policyValues": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/policyValue"
+                    }
+                },
+                "priceTerms": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/$defs/priceTerm"
+                    }
+                },
+                "policyState": {
+                    "enum": [
+                        "COMPLETE",
+                        "MISSING",
+                        "INVALID"
+                    ]
+                },
+                "invalidPolicyFactRefs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "commercial": {
+                    "$ref": "https://freepass.teamjpk.com/contracts/commercial-offer-view-v1.schema.json"
+                }
+            }
+        },
+        "vehicleModel": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "id",
+                "maker",
+                "model"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "origin": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "maker": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "model": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "generation": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "trim": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "fuel": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "drive": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "seats": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 1
+                },
+                "modelYear": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 1900
+                },
+                "displacementCc": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "batteryKwh": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "subModel": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "vehicleAsset": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+                "id",
+                "status"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "status": {
+                    "enum": [
+                        "AVAILABLE",
+                        "RESERVED",
+                        "IN_USE",
+                        "RETURNED",
+                        "MAINTENANCE",
+                        "ACCIDENT",
+                        "SOLD",
+                        "RETIRED"
+                    ]
+                },
+                "plateNumber": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "vin": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "odometerKm": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "firstRegistrationDate": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "product": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "productId",
+                "productRevision",
+                "displayName",
+                "commercialType",
+                "vehicleModel",
+                "offers"
+            ],
+            "properties": {
+                "productId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "productRevision": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "sourceProductKey": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "displayName": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "commercialType": {
+                    "enum": [
+                        "NEW_RENT",
+                        "USED_RENT",
+                        "NEW_SUBSCRIPTION",
+                        "USED_SUBSCRIPTION",
+                        "PICKUP_SUBSCRIPTION",
+                        "OGONG_SUBSCRIPTION"
+                    ]
+                },
+                "vehicleModel": {
+                    "$ref": "#/$defs/vehicleModel"
+                },
+                "vehicleAsset": {
+                    "$ref": "#/$defs/vehicleAsset"
+                },
+                "offers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/$defs/offer"
+                    }
+                },
+                "vehiclePrice": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+        "termAmountCalculation": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "kind",
+                        "amount"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "FIXED"
+                        },
+                        "amount": {
+                            "$ref": "#/$defs/money"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "kind",
+                        "base",
+                        "multiplier"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "MULTIPLY"
+                        },
+                        "base": {
+                            "const": "MONTHLY_RENT"
+                        },
+                        "multiplier": {
+                            "type": "number",
+                            "minimum": 0
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "kind",
+                        "base",
+                        "rate"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "RATE"
+                        },
+                        "base": {
+                            "enum": [
+                                "MONTHLY_RENT_X_TERM",
+                                "VEHICLE_PRICE"
+                            ]
+                        },
+                        "rate": {
+                            "type": "number",
+                            "minimum": 0
+                        },
+                        "adjustmentAmount": {
+                            "$ref": "#/$defs/signedMoney"
+                        }
+                    }
+                }
+            ]
+        },
+        "termEconomicAmount": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "state",
+                "amount",
+                "sourceRefs"
+            ],
+            "properties": {
+                "vatTreatment": {
+                    "enum": [
+                        "EXCLUDED",
+                        "INCLUDED",
+                        "UNKNOWN"
+                    ]
+                },
+                "vatAmount": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "totalAmount": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 0
+                },
+                "state": {
+                    "enum": [
+                        "KNOWN",
+                        "ZERO",
+                        "UNKNOWN",
+                        "NOT_APPLICABLE"
+                    ]
+                },
+                "amount": {
+                    "anyOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/money"
+                        }
+                    ]
+                },
+                "calculation": {
+                    "anyOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/termAmountCalculation"
+                        }
+                    ]
+                },
+                "ruleId": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "policyId": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "reasonCode": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "sourceRefs": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "priceSourceRefs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "referenceRentBasis": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "termKey",
+                        "termMonths",
+                        "monthlyRent",
+                        "multiplier"
+                    ],
+                    "properties": {
+                        "termKey": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "termMonths": {
+                            "enum": [
+                                12,
+                                36
+                            ]
+                        },
+                        "monthlyRent": {
+                            "$ref": "#/$defs/money"
+                        },
+                        "multiplier": {
+                            "enum": [
+                                1,
+                                0.8
+                            ]
+                        }
+                    }
+                },
+                "approximate": {
+                    "type": "boolean"
+                },
+                "note": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "const": "KNOWN"
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "amount": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/$defs/money"
+                                    },
+                                    {
+                                        "properties": {
+                                            "amount": {
+                                                "minimum": 1,
+                                                "type": "integer"
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                ]
+                            },
+                            "calculation": {
+                                "$ref": "#/$defs/termAmountCalculation"
+                            }
+                        },
+                        "required": [
+                            "calculation"
+                        ]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "const": "ZERO"
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "amount": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/$defs/money"
+                                    },
+                                    {
+                                        "properties": {
+                                            "amount": {
+                                                "const": 0,
+                                                "type": "integer"
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                ]
+                            },
+                            "calculation": {
+                                "$ref": "#/$defs/termAmountCalculation"
+                            }
+                        },
+                        "required": [
+                            "calculation"
+                        ]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "const": "UNKNOWN"
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "amount": {
+                                "type": "null"
+                            },
+                            "calculation": {
+                                "type": "null"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "const": "NOT_APPLICABLE"
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "amount": {
+                                "type": "null"
+                            },
+                            "calculation": {
+                                "type": "null"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "enum": [
+                                    "UNKNOWN",
+                                    "NOT_APPLICABLE"
+                                ]
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "sourceRefs": {
+                                "type": "array",
+                                "maxItems": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "state": {
+                                "enum": [
+                                    "KNOWN",
+                                    "ZERO"
+                                ]
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "sourceRefs": {
+                                "type": "array",
+                                "minItems": 1
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

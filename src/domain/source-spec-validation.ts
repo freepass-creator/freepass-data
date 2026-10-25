@@ -13,6 +13,18 @@ const calendar = (v: string): boolean => {
   const d = Number(m[3]), leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
   return d >= 1 && d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]!;
 };
+/** 색상 칸의 자리표 값(대시·«없음»·«확인필요» 등)은 색상이 아니다. 2026-10-23: 아이언(RP006) 원천이 내부색상에 «-» 를 주는 차가 13대이고 이미 노출 문서 6건에 «-» 가 채워져 있었다.
+ * 구두점·기호만인 값과 흔한 «값 없음» 표기를 거른다. 실제 색상 이름(검정·화이트펄 등)은 건드리지 않는다. */
+const COLOR_PLACEHOLDER_WORD = /^(?:없음|해당\s*없음|미상|미정|미확인|확인\s*필요|n\.?\/?a\.?|null|none|unknown|nan)$/iu;
+/** 자리표인가: 앞뒤 기호·공백을 걷어 낸 뒤 비었거나(-, --, ?, ***) «값 없음» 낱말이면(없음, (미정), N.A., 확인 필요!). 실제 색상 이름은 건드리지 않는다. */
+export const colorPlaceholder = (v: string): boolean => {
+  const core = v.normalize('NFKC').replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, '');
+  return core === '' || COLOR_PLACEHOLDER_WORD.test(core);
+};
+export const validColorValue = (v: string): boolean => {
+  const t = v.normalize('NFKC').trim();
+  return t.length >= 1 && t.length <= 20 && !/\d{4,}/.test(t) && !colorPlaceholder(t);
+};
 /** 칸별 값 형식(문자열 값 기준). 허용 값 밖이면 그 칸만 보류. */
 export const SPEC_FORMAT_RULES: Readonly<Record<string, (v: string) => boolean>> = {
   fuel_type: v => SPEC_FUEL_VALUES.has(v),
@@ -22,8 +34,8 @@ export const SPEC_FORMAT_RULES: Readonly<Record<string, (v: string) => boolean>>
   engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
   mileage: v => /^\d{1,7}$/.test(v),
   seats: v => /^\d{1,2}$/.test(v) && Number(v) >= 1,
-  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
-  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  ext_color: validColorValue,
+  int_color: validColorValue,
 };
 export const DEPOSIT_MIN_POSITIVE_KRW = 10_000;
 export const DEPOSIT_MAX_KRW = 100_000_000;

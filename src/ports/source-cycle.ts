@@ -139,6 +139,10 @@ export type CyclePlan = {
 export type CycleState = { failures: number; stopped: boolean; lastSyncedAt: string | null;
   /** Existing F05 producer's write-ahead reconciliation pointer; never source values or credentials. */
   sourceObservationIntent?: { sourceId: string; runId: string; sourceDigest: string; observedAt: string };
+  /** APPLY_UNCERTAIN 을 Firestore 되읽기 증명으로 닫은 이력(해소 시각·결과·이전 intent·증거 요약). 번호·원문·열쇠는 담지 않는다. 마지막 한 번만 남는다. */
+  sourceObservationReconciliation?: { reconciledAt: string; outcome: 'NOT_PROMOTED' | 'APPLIED_CONFIRMED'; mode: 'AUTO' | 'MANUAL';
+    previousIntent: { sourceId: string; runId: string; sourceDigest: string; observedAt: string };
+    evidence: { headRunId: string | null; runStatus: string; runHeadStatus: string | null; rawCount: number | null; completedAt?: string | null; warningCount?: number | null } };
   /** Most recent clock diagnosis, retained on success. checkedAt is history, never the current health status. */
   lastReadClockDiagnostic?: SourceClockDiagnostic;
   observationOnlyCount?: number;

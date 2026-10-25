@@ -1,0 +1,845 @@
+import { refreshOfferEconomicsForChangedInputs, selectOfferFeeEconomics } from './resolve-offer-commercial-terms.js';
+import { KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
+import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import { buildCommercialOfferView } from './build-commercial-offer-view.js';
+import { assertFieldAuthority } from '../domain/authority.js';
+import { assertCatalogWriterOwnership, resolveExecutionWriter } from '../domain/writer-ownership.js';
+export class RevisionConflictError extends Error {
+    expectedRevision;
+    actualRevision;
+    code = 'REVISION_CONFLICT';
+    constructor(expectedRevision, actualRevision) {
+        super(`Expected revision ${expectedRevision}, actual ${actualRevision}`);
+        this.expectedRevision = expectedRevision;
+        this.actualRevision = actualRevision;
+    }
+}
+export class EntityNotFoundError extends Error {
+    code = 'ENTITY_NOT_FOUND';
+}
+export class InvalidCommandError extends Error {
+    code = 'INVALID_COMMAND';
+}
+export class IdempotencyConflictError extends Error {
+    idempotencyKey;
+    code = 'IDEMPOTENCY_CONFLICT';
+    constructor(idempotencyKey) {
+        super(`Idempotency key ${idempotencyKey} was already used with a different request payload`);
+        this.idempotencyKey = idempotencyKey;
+    }
+}
+function revisionRecordId(commandId, entityType, entityId, revision) {
+    return 'rev_' + createHash('sha256')
+        .update([commandId, entityType, entityId, String(revision)].join('|'))
+        .digest('hex')
+        .slice(0, 32);
+}
+function updateOfferPriceDigest(input, writerId) {
+    return orderedJsonDigest({
+        commandType: 'UPDATE_OFFER_PRICE',
+        offerId: input.offerId,
+        expectedRevision: input.expectedRevision,
+        termKey: input.termKey,
+        monthlyRent: {
+            amount: input.monthlyRent.amount,
+            currency: input.monthlyRent.currency
+        },
+        reason: input.reason,
+        actor: {
+            id: input.actor.id,
+            kind: input.actor.kind,
+            organizationId: input.actor.organizationId ?? null
+        },
+        writerId
+    });
+}
+function replacePriceTerm(offer, termKey, monthlyRent) {
+    if (!offer.priceTerms.some((term) => term.termKey === termKey)) {
+        throw new InvalidCommandError(`Offer ${offer.id} has no PriceTerm key ${termKey}; adding a commercial condition is a separate command.`);
+    }
+    return { ...offer, priceTerms: offer.priceTerms.map((term) => term.termKey === termKey ? { ...term, monthlyRent } : term) };
+}
+export async function updateOfferPrice(store, input, now = new Date().toISOString()) {
+    if (input.monthlyRent.currency !== 'KRW' || !Number.isInteger(input.monthlyRent.amount) || input.monthlyRent.amount < 0) {
+        throw new InvalidCommandError('monthlyRent must be a non-negative integer KRW amount');
+    }
+    if (!input.reason.trim())
+        throw new InvalidCommandError('reason is required');
+    const authority = assertFieldAuthority({
+        aggregate: 'offer',
+        fieldPath: `priceTerms.${input.termKey}.monthlyRent`,
+        command: 'UPDATE_OFFER_PRICE',
+        actor: input.actor
+    });
+    const writer = resolveExecutionWriter(input.actor, input.writer);
+    const requestDigest = updateOfferPriceDigest(input, writer.id);
+    return store.transact(async (tx) => {
+        assertCatalogWriterOwnership(await tx.getCatalogWriterOwnership(), writer);
+        const existingReceipt = await tx.getCommandReceipt(input.idempotencyKey);
+        if (existingReceipt) {
+            if (!existingReceipt.requestDigest || existingReceipt.requestDigest !== requestDigest) {
+                throw new IdempotencyConflictError(input.idempotencyKey);
+            }
+            return existingReceipt;
+        }
+        const current = await tx.getOffer(input.offerId);
+        if (!current)
+            throw new EntityNotFoundError(`Offer not found: ${input.offerId}`);
+        if (current.revision !== input.expectedRevision)
+            throw new RevisionConflictError(input.expectedRevision, current.revision);
+        const next = {
+            ...replacePriceTerm(current, input.termKey, input.monthlyRent),
+            revision: current.revision + 1, updatedAt: now, updatedBy: input.actor
+        };
+        const product = await tx.getProduct(next.productId);
+        const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
+        next.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(current, next, false, product?.commercialType, model?.fuel);
+        const receipt = {
+            idempotencyKey: input.idempotencyKey, commandId: input.commandId,
+            status: 'CANONICAL_COMMITTED', entityType: 'offer', entityId: current.id,
+            revision: next.revision, committedAt: now, requestDigest,
+            writerId: writer.id,
+            authorityRuleId: authority.ruleId
+        };
+        await tx.putOffer(next);
+        await tx.appendRevision({
+            revisionRecordId: revisionRecordId(input.commandId, 'offer', current.id, next.revision),
+            entityType: 'offer',
+            entityId: current.id,
+            revision: next.revision,
+            previousRevision: current.revision,
+            snapshot: next,
+            actor: input.actor,
+            reason: input.reason,
+            origin: 'MANUAL_COMMAND',
+            commandId: input.commandId,
+            occurredAt: now
+        });
+        await tx.appendAudit({
+            eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
+            entityType: 'offer', entityId: current.id, action: 'OFFER_PRICE_UPDATED',
+            before: current, after: next, reason: input.reason,
+            writerId: writer.id,
+            authorityRuleId: authority.ruleId,
+            revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now
+        });
+        await tx.appendOutbox({
+            eventId: randomUUID(), eventType: 'catalog.offer.changed', entityType: 'offer', entityId: current.id,
+            sourceRevision: current.revision, targetRevision: next.revision, commandId: input.commandId,
+            correlationId: input.commandId, causationId: input.commandId, occurredAt: now, status: 'PENDING', attempts: 0
+        });
+        await tx.putCommandReceipt(receipt);
+        return receipt;
+    });
+}
+/** Pins all calculation inputs, including missing Product/Model and their revisions. */
+export function offerEconomicsInputDigest(offer, product, model) {
+    return stableDigest({ offer, product, model });
+}
+/** The same source/policy fence is used by readonly planning and the canonical transaction. */
+export async function assertOfferFeeSubsetEvidence(reader, offer, evidence, now = new Date().toISOString()) {
+    if (!evidence)
+        throw new InvalidCommandError('FEE_SUBSET_SOURCE_POLICY_EVIDENCE_REQUIRED');
+    const binding = await reader.getSourceBinding(evidence.bindingId);
+    if (!binding || binding.offerId !== offer.id || binding.productId !== offer.productId || binding.sourceSupplierCode !== offer.supplierId ||
+        binding.sourceRunId !== evidence.runId || stableDigest(binding) !== evidence.bindingDigest)
+        throw new InvalidCommandError('FEE_SUBSET_BINDING_DRIFT');
+    const [head, run, source] = await Promise.all([reader.getSourceHead(binding.sourceId), reader.getSourceRun(evidence.runId), reader.getSourceDefinition(binding.sourceId)]);
+    if (!head || head.sourceId !== binding.sourceId || head.runId !== evidence.runId || !run || run.sourceId !== binding.sourceId || run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT' ||
+        !run.checkpoint || !head.checkpoint || head.checkpoint.sourceId !== binding.sourceId ||
+        head.coverage.completeness !== 'COMPLETE' || stableDigest(run.coverage) !== stableDigest(head.coverage) ||
+        stableDigest(run.checkpoint ?? null) !== stableDigest(head.checkpoint) ||
+        stableDigest(head.checkpoint) !== evidence.checkpointDigest)
+        throw new InvalidCommandError('FEE_SUBSET_SOURCE_NOT_CURRENT');
+    const maxAge = source?.expectedFreshnessSeconds;
+    if (!source?.enabled || !maxAge || maxAge <= 0 || !Number.isFinite(maxAge))
+        throw new InvalidCommandError('FEE_SUBSET_FRESHNESS_POLICY_REQUIRED');
+    const age = Date.parse(now) - Date.parse(head.observedAt);
+    if (!Number.isFinite(age) || age < 0 || age > maxAge * 1000)
+        throw new InvalidCommandError('FEE_SUBSET_SOURCE_STALE');
+    if (stableDigest(KAKAO_COMMISSION_POLICY) !== evidence.policyDigest)
+        throw new InvalidCommandError('FEE_SUBSET_POLICY_EVIDENCE_REQUIRED');
+}
+export async function recomputeOfferEconomics(store, input, now = new Date().toISOString()) {
+    if (input.policyId !== KAKAO_COMMISSION_POLICY.policyId || !input.reason.trim() ||
+        !input.commandId.trim() || !input.idempotencyKey.trim() || !/^[a-f0-9]{64}$/.test(input.inputDigest) ||
+        !/^[a-f0-9]{64}$/.test(input.expectedEconomicsDigest) || typeof input.approvalRef !== 'string' || !input.approvalRef.trim() || input.approvalRef.length > 512 || /[\r\n]/.test(input.approvalRef) ||
+        !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+        throw new InvalidCommandError('Pinned policy, input digest, revision and command identity are required');
+    }
+    const authority = assertFieldAuthority({ aggregate: 'offer', fieldPath: 'internalEconomicsTerms',
+        command: 'RECOMPUTE_OFFER_ECONOMICS', actor: input.actor });
+    const writer = resolveExecutionWriter(input.actor, input.writer);
+    const requestDigest = stableDigest({ ...input, commandId: undefined, writer,
+        commandType: 'RECOMPUTE_OFFER_ECONOMICS' });
+    return store.transact(async (tx) => {
+        const ownership = await tx.getCatalogWriterOwnership();
+        if (!ownership)
+            throw new InvalidCommandError('WRITER_OWNERSHIP_REQUIRED: no implicit migration writer for recompute');
+        assertCatalogWriterOwnership(ownership, writer);
+        const previous = await tx.getCommandReceipt(input.idempotencyKey);
+        if (previous) {
+            if (previous.requestDigest !== requestDigest)
+                throw new IdempotencyConflictError(input.idempotencyKey);
+            return { status: 'ALREADY_APPLIED', changed: false, revision: previous.revision };
+        }
+        const current = await tx.getOffer(input.offerId);
+        if (!current)
+            throw new EntityNotFoundError(`Offer not found: ${input.offerId}`);
+        if (current.revision !== input.expectedRevision)
+            throw new RevisionConflictError(input.expectedRevision, current.revision);
+        const product = await tx.getProduct(current.productId);
+        const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
+        if (offerEconomicsInputDigest(current, product, model) !== input.inputDigest) {
+            throw new InvalidCommandError('INPUT_DRIFT: regenerate and approve the dry-run plan');
+        }
+        if (input.feeSubset)
+            await assertOfferFeeSubsetEvidence(tx, current, input.feeSubset.evidence, now);
+        const economics = selectOfferFeeEconomics(current, product?.commercialType, model?.fuel, input.feeSubset?.termKeys);
+        if (stableDigest(economics) !== input.expectedEconomicsDigest) {
+            throw new InvalidCommandError('REVIEWED_ECONOMICS_DRIFT: regenerate and review the dry-run plan');
+        }
+        if (stableDigest(current.internalEconomicsTerms ?? []) === stableDigest(economics)) {
+            return { status: 'NO_CHANGE', changed: false, revision: current.revision };
+        }
+        const next = { ...current, internalEconomicsTerms: economics,
+            revision: current.revision + 1, updatedAt: now, updatedBy: input.actor };
+        await tx.putOffer(next);
+        await tx.appendRevision({ revisionRecordId: revisionRecordId(input.commandId, 'offer', current.id, next.revision),
+            entityType: 'offer', entityId: current.id, revision: next.revision, previousRevision: current.revision,
+            snapshot: next, actor: input.actor, reason: `${input.reason}; approval ${input.approvalRef}`, origin: 'MANUAL_COMMAND',
+            commandId: input.commandId, occurredAt: now });
+        // Atomic before-image: retained even if the caller loses its response.
+        await tx.appendAudit({ eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
+            entityType: 'offer', entityId: current.id, action: 'RECOMPUTE_OFFER_ECONOMICS',
+            before: current, after: next, reason: `${input.reason}; approval ${input.approvalRef}`, writerId: writer.id, authorityRuleId: authority.ruleId,
+            revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now });
+        await tx.appendOutbox({ eventId: randomUUID(), eventType: 'catalog.offer.changed', entityType: 'offer',
+            entityId: current.id, sourceRevision: current.revision, targetRevision: next.revision,
+            commandId: input.commandId, correlationId: input.commandId, causationId: input.commandId,
+            occurredAt: now, status: 'PENDING', attempts: 0 });
+        await tx.putCommandReceipt({ idempotencyKey: input.idempotencyKey, commandId: input.commandId,
+            status: 'CANONICAL_COMMITTED', entityType: 'offer', entityId: current.id, revision: next.revision,
+            committedAt: now, requestDigest, writerId: writer.id, authorityRuleId: authority.ruleId });
+        return { status: 'CANONICAL_COMMITTED', changed: true, revision: next.revision };
+    });
+}
+function activeOffer(offer, now) {
+    if (offer.status !== 'ACTIVE' || offer.validationStatus === 'INVALID')
+        return false;
+    if (offer.validFrom && offer.validFrom > now)
+        return false;
+    if (offer.validUntil && offer.validUntil <= now)
+        return false;
+    return true;
+}
+function activePolicy(policy, now) {
+    if (policy.validationStatus === 'INVALID')
+        return false;
+    if (policy.effectiveFrom && policy.effectiveFrom > now)
+        return false;
+    if (policy.effectiveTo && policy.effectiveTo <= now)
+        return false;
+    return true;
+}
+function publicPriceTerms(offer) {
+    return offer.priceTerms
+        .filter((term) => term.depositState === 'KNOWN' ||
+        term.depositState === 'ZERO' ||
+        term.depositState === 'NOT_APPLICABLE')
+        .sort((a, b) => a.termMonths - b.termMonths ||
+        (a.mileageLimitKmPerYear ?? -1) - (b.mileageLimitKmPerYear ?? -1) ||
+        a.termKey.localeCompare(b.termKey));
+}
+function canonicalInputKey(entityType, entityId, revision) {
+    return `${entityType}|${entityId}|${revision}`;
+}
+function fieldEvidenceKey(entityType, entityId, revision, fieldPath) {
+    return `${canonicalInputKey(entityType, entityId, revision)}|${fieldPath}`;
+}
+function sameEvidenceValue(a, b) {
+    return JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
+}
+export function buildProjectionEvidenceContext(input) {
+    const lineageByField = new Map();
+    for (const item of input.sourceLineage) {
+        const canonical = item.canonical;
+        if (!canonical || item.stage !== 'NORMALIZED_TO_CANONICAL')
+            continue;
+        const key = fieldEvidenceKey(canonical.entityType, canonical.entityId, canonical.revision, canonical.fieldPath);
+        const list = lineageByField.get(key) ?? [];
+        list.push(item);
+        lineageByField.set(key, list);
+    }
+    const revisionByEntity = new Map();
+    for (const record of input.revisionHistory) {
+        revisionByEntity.set(canonicalInputKey(record.entityType, record.entityId, record.revision), record);
+    }
+    const canonicalInputs = new Map();
+    const evidence = [];
+    const requireRevision = (entityType, entity) => {
+        const key = canonicalInputKey(entityType, entity.id, entity.revision);
+        const record = revisionByEntity.get(key);
+        if (!record) {
+            throw new Error(`Projection release cannot use ${entityType} ${entity.id} r${entity.revision} without a revision snapshot`);
+        }
+        if (!sameEvidenceValue(record.snapshot, entity)) {
+            throw new Error(`Projection release detected snapshot drift for ${entityType} ${entity.id} r${entity.revision}`);
+        }
+        canonicalInputs.set(key, {
+            entityType,
+            entityId: entity.id,
+            revision: entity.revision,
+            validationStatus: entity.validationStatus
+        });
+        return record;
+    };
+    const addField = (inputField) => {
+        const key = fieldEvidenceKey(inputField.entityType, inputField.entityId, inputField.revision, inputField.fieldPath);
+        const parent = (lineageByField.get(key) ?? []).find((item) => sameEvidenceValue(item.canonical?.value, inputField.canonicalValue));
+        const revisionRecord = revisionByEntity.get(canonicalInputKey(inputField.entityType, inputField.entityId, inputField.revision));
+        if (!parent && !revisionRecord) {
+            throw new Error(`Projection field has no Canonical evidence: ${key}`);
+        }
+        const lineageRecordId = 'plin_' + stableDigest([
+            input.releaseId,
+            key,
+            inputField.projectionFieldPath
+        ]).slice(0, 40);
+        evidence.push({
+            lineageRecordId,
+            stage: 'CANONICAL_TO_PROJECTION',
+            projectionId: input.projectionId,
+            releaseId: input.releaseId,
+            canonical: {
+                entityType: inputField.entityType,
+                entityId: inputField.entityId,
+                revision: inputField.revision,
+                fieldPath: inputField.fieldPath,
+                value: structuredClone(inputField.canonicalValue)
+            },
+            projection: {
+                fieldPath: inputField.projectionFieldPath,
+                value: structuredClone(inputField.projectionValue)
+            },
+            evidenceOrigin: parent ? 'SOURCE_LINEAGE' : 'REVISION_HISTORY',
+            ...(parent ? { parentLineageRecordId: parent.lineageRecordId } : {}),
+            ...(revisionRecord ? { revisionRecordId: revisionRecord.revisionRecordId } : {})
+        });
+    };
+    return { canonicalInputs, evidence, requireRevision, addField };
+}
+export async function assertCatalogSourceFreshness(catalog, now, requireFreshSources = false) {
+    const current = Date.parse(now);
+    if (!Number.isFinite(current))
+        throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    const lineage = await catalog.listLineageByStage('NORMALIZED_TO_CANONICAL');
+    const sources = [...new Set(lineage.map(item => item.sourceId))];
+    const witnesses = [];
+    if (requireFreshSources && !sources.length)
+        throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    for (const sourceId of sources) {
+        const definition = await catalog.getSourceDefinition(sourceId);
+        const threshold = definition?.expectedFreshnessSeconds;
+        // Unscheduled local/static fixtures retain their existing behavior. The
+        // operational worker requires an explicit policy for every source.
+        if (threshold == null) {
+            if (requireFreshSources)
+                throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+            continue;
+        }
+        if (!definition?.enabled || !Number.isSafeInteger(threshold) || threshold <= 0) {
+            throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+        }
+        const head = await catalog.getSourceHead(sourceId);
+        const run = head ? await catalog.getSourceRun(head.runId) : null;
+        if (!head || head.sourceId !== sourceId || !run || run.sourceId !== sourceId ||
+            run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT' ||
+            run.coverage.mode !== 'FULL' || run.coverage.completeness !== 'COMPLETE' ||
+            head.coverage.mode !== 'FULL' || head.coverage.completeness !== 'COMPLETE') {
+            throw new Error('PROJECTION_SOURCE_HEAD_UNVERIFIED');
+        }
+        const observed = Date.parse(head.observedAt);
+        if (!Number.isFinite(observed) || observed > current)
+            throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+        if (current - observed > threshold * 1000)
+            throw new Error('PROJECTION_SOURCE_STALE');
+        witnesses.push({ sourceId, runId: head.runId, digest: stableDigest([definition, head, run]),
+            expiresAt: observed + threshold * 1000 });
+    }
+    return witnesses.sort((a, b) => a.sourceId.localeCompare(b.sourceId));
+}
+export async function buildErpPublicProjection(catalog, projections, now = new Date().toISOString(), options = {}) {
+    const started = performance.now();
+    const currentTime = options.publishGuard?.now ?? (() => new Date(Date.parse(now) + Math.floor(performance.now() - started)).toISOString());
+    const sources = await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
+    if (options.publishGuard && stableDigest(sources) !== stableDigest(options.publishGuard.sources))
+        throw new Error('PROJECTION_SOURCE_CHANGED');
+    const guard = { now: currentTime, sources,
+        ...(options.publishGuard?.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.publishGuard.expectedActiveReleaseId } : {}),
+        ...(options.publishGuard?.claim ? { claim: options.publishGuard.claim } : {}) };
+    const deliveryGuard = (release) => ({ ...guard,
+        ...(options.publishGuard?.delivery ? { receipt: { ...options.publishGuard.delivery,
+                projectionId: release.projectionId, releaseId: release.releaseId,
+                inputDigest: release.inputDigest, dataDigest: release.dataDigest } } : {}) });
+    const releaseId = `rel_${randomUUID()}`;
+    const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
+        catalog.listVehicleModels(),
+        catalog.listVehicleAssets(),
+        catalog.listProducts(),
+        catalog.listOffers(),
+        catalog.listPolicies(),
+        catalog.listLineageByStage('NORMALIZED_TO_CANONICAL'),
+        catalog.listRevisionHistory()
+    ]);
+    const modelById = new Map(models.map((x) => [x.id, x]));
+    const assetById = new Map(assets.map((x) => [x.id, x]));
+    const policyById = new Map(policies.map((x) => [x.id, x]));
+    const offersByProduct = new Map();
+    for (const offer of offers.filter((x) => activeOffer(x, now)).sort((a, b) => a.id.localeCompare(b.id))) {
+        const list = offersByProduct.get(offer.productId) ?? [];
+        list.push(offer);
+        offersByProduct.set(offer.productId, list);
+    }
+    const evidenceContext = buildProjectionEvidenceContext({
+        releaseId,
+        projectionId: 'erp-public',
+        sourceLineage,
+        revisionHistory
+    });
+    const data = [];
+    for (const product of [...products].sort((a, b) => a.id.localeCompare(b.id))) {
+        if (product.status !== 'ACTIVE' || product.validationStatus === 'INVALID')
+            continue;
+        const model = modelById.get(product.vehicleModelId);
+        if (!model || model.validationStatus === 'INVALID')
+            continue;
+        const asset = product.vehicleAssetId ? assetById.get(product.vehicleAssetId) : undefined;
+        if (product.vehicleAssetId && !asset)
+            continue;
+        if (asset && asset.status !== 'AVAILABLE')
+            continue;
+        const productOffers = (offersByProduct.get(product.id) ?? [])
+            .map((offer) => {
+            const terms = publicPriceTerms(offer);
+            const linked = offer.policyId ? policyById.get(offer.policyId) : undefined;
+            const policy = linked && activePolicy(linked, now) ? linked : undefined;
+            return { offer, terms, policy };
+        })
+            .filter(({ terms }) => terms.length > 0);
+        if (!productOffers.length)
+            continue;
+        evidenceContext.requireRevision('product', product);
+        evidenceContext.requireRevision('vehicle_model', model);
+        if (asset)
+            evidenceContext.requireRevision('vehicle_asset', asset);
+        for (const { offer, policy } of productOffers) {
+            evidenceContext.requireRevision('offer', offer);
+            if (policy)
+                evidenceContext.requireRevision('policy', policy);
+        }
+        const productPath = `products.${product.id}`;
+        evidenceContext.addField({
+            entityType: 'product',
+            entityId: product.id,
+            revision: product.revision,
+            fieldPath: 'id',
+            canonicalValue: product.id,
+            projectionFieldPath: `${productPath}.productId`,
+            projectionValue: product.id
+        });
+        evidenceContext.addField({
+            entityType: 'product',
+            entityId: product.id,
+            revision: product.revision,
+            fieldPath: 'revision',
+            canonicalValue: product.revision,
+            projectionFieldPath: `${productPath}.productRevision`,
+            projectionValue: product.revision
+        });
+        evidenceContext.addField({
+            entityType: 'product',
+            entityId: product.id,
+            revision: product.revision,
+            fieldPath: 'vehicleModelId',
+            canonicalValue: product.vehicleModelId,
+            projectionFieldPath: `${productPath}.vehicleModelId`,
+            projectionValue: model.id
+        });
+        if (product.vehicleAssetId) {
+            evidenceContext.addField({
+                entityType: 'product',
+                entityId: product.id,
+                revision: product.revision,
+                fieldPath: 'vehicleAssetId',
+                canonicalValue: product.vehicleAssetId,
+                projectionFieldPath: `${productPath}.vehicleAssetId`,
+                projectionValue: product.vehicleAssetId
+            });
+        }
+        evidenceContext.addField({
+            entityType: 'product',
+            entityId: product.id,
+            revision: product.revision,
+            fieldPath: 'displayName',
+            canonicalValue: product.displayName,
+            projectionFieldPath: `${productPath}.displayName`,
+            projectionValue: product.displayName
+        });
+        evidenceContext.addField({
+            entityType: 'product',
+            entityId: product.id,
+            revision: product.revision,
+            fieldPath: 'commercialType',
+            canonicalValue: product.commercialType,
+            projectionFieldPath: `${productPath}.commercialType`,
+            projectionValue: product.commercialType
+        });
+        const vehiclePath = `${productPath}.vehicle`;
+        const modelFields = [
+            ['maker', model.maker, 'maker'],
+            ['model', model.model, 'model']
+        ];
+        if (model.generation !== undefined)
+            modelFields.push(['generation', model.generation, 'generation']);
+        if (model.subModel !== undefined)
+            modelFields.push(['subModel', model.subModel, 'subModel']);
+        if (model.trim !== undefined)
+            modelFields.push(['trim', model.trim, 'trim']);
+        if (model.fuel !== undefined)
+            modelFields.push(['fuel', model.fuel, 'fuel']);
+        if (model.drive !== undefined)
+            modelFields.push(['drive', model.drive, 'drive']);
+        if (model.seats !== undefined)
+            modelFields.push(['seats', model.seats, 'seats']);
+        for (const [fieldPath, value, projected] of modelFields) {
+            evidenceContext.addField({
+                entityType: 'vehicle_model',
+                entityId: model.id,
+                revision: model.revision,
+                fieldPath,
+                canonicalValue: value,
+                projectionFieldPath: `${vehiclePath}.${projected}`,
+                projectionValue: value
+            });
+        }
+        if (asset) {
+            const assetFields = [
+                ['status', asset.status, 'assetStatus']
+            ];
+            if (asset.plateNumber !== undefined)
+                assetFields.push(['plateNumber', asset.plateNumber, 'plateNumber']);
+            if (asset.odometerKm !== undefined)
+                assetFields.push(['odometerKm', asset.odometerKm, 'odometerKm']);
+            for (const [fieldPath, value, projected] of assetFields) {
+                evidenceContext.addField({
+                    entityType: 'vehicle_asset',
+                    entityId: asset.id,
+                    revision: asset.revision,
+                    fieldPath,
+                    canonicalValue: value,
+                    projectionFieldPath: `${vehiclePath}.${projected}`,
+                    projectionValue: value
+                });
+            }
+        }
+        const projectedOffers = [];
+        for (const { offer, terms, policy } of productOffers) {
+            const offerPath = `${productPath}.offers.${offer.id}`;
+            const offerFields = [
+                ['id', offer.id, 'offerId'],
+                ['supplierId', offer.supplierId, 'supplierId'],
+                ['revision', offer.revision, 'offerRevision']
+            ];
+            if (offer.policyId !== undefined)
+                offerFields.push(['policyId', offer.policyId, 'policyId']);
+            for (const [fieldPath, value, projected] of offerFields) {
+                evidenceContext.addField({
+                    entityType: 'offer',
+                    entityId: offer.id,
+                    revision: offer.revision,
+                    fieldPath,
+                    canonicalValue: value,
+                    projectionFieldPath: `${offerPath}.${projected}`,
+                    projectionValue: value
+                });
+            }
+            for (const term of terms) {
+                const canonicalPrefix = `priceTerms.${term.termKey}`;
+                const projectionPrefix = `${offerPath}.priceTerms.${term.termKey}`;
+                const termFields = [
+                    [`${canonicalPrefix}.termKey`, term.termKey, `${projectionPrefix}.termKey`, term.termKey],
+                    [`${canonicalPrefix}.termMonths`, term.termMonths, `${projectionPrefix}.termMonths`, term.termMonths],
+                    [`${canonicalPrefix}.monthlyRent.amount`, term.monthlyRent.amount, `${projectionPrefix}.monthlyRent.amount`, term.monthlyRent.amount],
+                    [`${canonicalPrefix}.monthlyRent.currency`, term.monthlyRent.currency, `${projectionPrefix}.monthlyRent.currency`, term.monthlyRent.currency],
+                    [`${canonicalPrefix}.depositState`, term.depositState, `${projectionPrefix}.depositState`, term.depositState]
+                ];
+                if (term.deposit) {
+                    termFields.push([`${canonicalPrefix}.deposit.amount`, term.deposit.amount, `${projectionPrefix}.deposit.amount`, term.deposit.amount], [`${canonicalPrefix}.deposit.currency`, term.deposit.currency, `${projectionPrefix}.deposit.currency`, term.deposit.currency]);
+                }
+                if (term.mileageLimitKmPerYear !== undefined && term.mileageLimitKmPerYear !== null) {
+                    termFields.push([
+                        `${canonicalPrefix}.mileageLimitKmPerYear`,
+                        term.mileageLimitKmPerYear,
+                        `${projectionPrefix}.mileageLimitKmPerYear`,
+                        term.mileageLimitKmPerYear
+                    ]);
+                }
+                for (const [canonicalFieldPath, canonicalValue, projectionFieldPath, projectionValue] of termFields) {
+                    evidenceContext.addField({
+                        entityType: 'offer',
+                        entityId: offer.id,
+                        revision: offer.revision,
+                        fieldPath: canonicalFieldPath,
+                        canonicalValue,
+                        projectionFieldPath,
+                        projectionValue
+                    });
+                }
+            }
+            const publicOffer = { ...offer, priceTerms: structuredClone(terms) };
+            const commercial = buildCommercialOfferView({
+                product,
+                vehicleModel: model,
+                ...(asset ? { vehicleAsset: asset } : {}),
+                offer: publicOffer,
+                ...(policy ? { policy } : {}),
+            });
+            evidenceContext.addField({
+                entityType: 'offer',
+                entityId: offer.id,
+                revision: offer.revision,
+                fieldPath: 'priceTerms',
+                canonicalValue: offer.priceTerms,
+                projectionFieldPath: `${offerPath}.commercial.basisRows`,
+                projectionValue: commercial.basisRows,
+            });
+            if (policy) {
+                evidenceContext.addField({
+                    entityType: 'policy',
+                    entityId: policy.id,
+                    revision: policy.revision,
+                    fieldPath: 'facts',
+                    canonicalValue: policy.facts,
+                    projectionFieldPath: `${offerPath}.commercial.dataCatalog`,
+                    projectionValue: commercial.dataCatalog,
+                });
+            }
+            projectedOffers.push({
+                offerId: offer.id,
+                supplierId: offer.supplierId,
+                offerRevision: offer.revision,
+                ...(offer.policyId !== undefined ? { policyId: offer.policyId } : {}),
+                priceTerms: terms,
+                commercial,
+            });
+        }
+        data.push({
+            productId: product.id,
+            productRevision: product.revision,
+            vehicleModelId: model.id,
+            ...(product.vehicleAssetId ? { vehicleAssetId: product.vehicleAssetId } : {}),
+            displayName: product.displayName,
+            commercialType: product.commercialType,
+            vehicle: {
+                maker: model.maker, model: model.model,
+                ...(model.generation !== undefined ? { generation: model.generation } : {}),
+                ...(model.subModel !== undefined ? { subModel: model.subModel } : {}),
+                ...(model.trim !== undefined ? { trim: model.trim } : {}),
+                ...(model.fuel !== undefined ? { fuel: model.fuel } : {}),
+                ...(model.drive !== undefined ? { drive: model.drive } : {}),
+                ...(model.seats !== undefined ? { seats: model.seats } : {}),
+                ...(asset ? {
+                    assetStatus: asset.status,
+                    ...(asset.plateNumber !== undefined ? { plateNumber: asset.plateNumber } : {}),
+                    ...(asset.odometerKm !== undefined ? { odometerKm: asset.odometerKm } : {})
+                } : {})
+            },
+            offers: projectedOffers
+        });
+    }
+    const canonicalInputs = [...evidenceContext.canonicalInputs.values()]
+        .sort((a, b) => a.entityType.localeCompare(b.entityType) ||
+        a.entityId.localeCompare(b.entityId) ||
+        a.revision - b.revision);
+    const inputDigest = stableDigest(canonicalInputs);
+    const dataDigest = stableDigest(data);
+    const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
+    const currentEvidence = await readActiveProjectionEvidence(projections, 'erp-public');
+    const currentActive = currentEvidence.release;
+    // Canonical/evidence reads can outlast or observe changes after preflight.
+    // Recheck before accepting an existing ACTIVE as delivery evidence.
+    if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+        throw new Error('PROJECTION_SOURCE_CHANGED');
+    if (options.publishGuard?.expectedActiveReleaseId !== undefined && (currentActive?.releaseId ?? null) !== options.publishGuard.expectedActiveReleaseId)
+        throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+    if (options.activate !== false && currentActive &&
+        currentActive.status === 'ACTIVE' &&
+        currentActive.inputDigest === inputDigest &&
+        currentActive.dataDigest === dataDigest &&
+        currentEvidence.manifest) {
+        const integrity = verifyProjectionReleaseIntegrity(currentActive, currentEvidence.manifest, currentEvidence.lineage);
+        if (integrity.valid) {
+            const existingGuard = deliveryGuard(currentActive);
+            if (existingGuard.receipt)
+                await projections.putDeliveryReceipt(existingGuard.receipt, existingGuard);
+            return currentActive;
+        }
+    }
+    const fieldEvidenceDigest = stableRecordSetDigest(evidenceContext.evidence);
+    const manifestId = `manifest_${releaseId}`;
+    const manifest = {
+        manifestId,
+        releaseId,
+        projectionId: 'erp-public',
+        schemaVersion: '1.0.0',
+        generatedAt: now,
+        canonicalInputs,
+        productCount: data.length,
+        offerCount: data.reduce((sum, product) => sum + product.offers.length, 0),
+        fieldEvidenceCount: evidenceContext.evidence.length,
+        fieldEvidenceDigest,
+        inputDigest,
+        dataDigest
+    };
+    const release = {
+        releaseId,
+        projectionId: 'erp-public',
+        schemaVersion: '1.0.0',
+        canonicalRevision,
+        manifestId,
+        inputDigest,
+        dataDigest,
+        status: 'BUILDING',
+        generatedAt: now,
+        data
+    };
+    await projections.stage(release);
+    await projections.stageEvidence({
+        manifest,
+        lineage: evidenceContext.evidence
+    });
+    await projections.markReady(release.releaseId);
+    // Preparation stages validated evidence only. Use an in-memory ProjectionStore
+    // for a read-only production dry-run; preparation alone is not a cutover.
+    // READY persistence is separate from source ingestion. Keep last-good ACTIVE
+    // if the source became ineligible or stale while persisting this release.
+    if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+        throw new Error('PROJECTION_SOURCE_CHANGED');
+    if (options.activate === false)
+        return { ...release, status: 'READY' };
+    await projections.activate(release.releaseId, deliveryGuard(release));
+    const active = await projections.getActive('erp-public');
+    if (!active)
+        throw new Error('Projection activation failed');
+    return active;
+}
+function backoffMs(base, attempts) {
+    const capped = Math.min(attempts, 8);
+    return base * 2 ** capped + Math.floor(base * 0.2 * Math.random());
+}
+const HOLD_RETRY_DELAY_MS = 30_000;
+function holdNextAttemptAt(now) {
+    return new Date(now.getTime() + HOLD_RETRY_DELAY_MS).toISOString();
+}
+export async function processOneOutboxEvent(catalog, outbox, projections, options, now = new Date()) {
+    if (options.eventId !== undefined && (!/^[A-Za-z0-9:_-]{1,200}$/.test(options.eventId) || !options.expiresAt))
+        return 'HOLD';
+    const started = performance.now();
+    const currentTime = () => {
+        const time = new Date(now.getTime() + Math.floor(performance.now() - started)).toISOString();
+        if (options.expiresAt && (!Number.isFinite(Date.parse(options.expiresAt)) || Date.parse(time) >= Date.parse(options.expiresAt)))
+            throw new Error('PROJECTION_SOURCE_EXECUTION_EXPIRED');
+        return time;
+    };
+    // A source outage is not an event failure: preserve PENDING, attempts and
+    // the old ACTIVE release instead of claiming and exhausting the retry budget.
+    try {
+        await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
+    }
+    catch (error) {
+        if (error instanceof Error && error.message.startsWith('PROJECTION_SOURCE_'))
+            return 'HOLD';
+        throw error;
+    }
+    const claimTime = currentTime();
+    const lease = { leaseOwner: options.workerId,
+        leaseUntil: new Date(Date.parse(claimTime) + (options.leaseMs ?? 30000)).toISOString() };
+    const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil, ...(options.eventId ? { eventId: options.eventId } : {}), ...(options.expiresAt ? { expiresAt: options.expiresAt } : {}), ...(options.expectedEventDigest ? { expectedEventDigest: options.expectedEventDigest } : {}) });
+    if (!event)
+        return 'IDLE';
+    const attempts = event.attempts + 1;
+    try {
+        const publishGuard = { now: currentTime,
+            ...(options.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.expectedActiveReleaseId } : {}),
+            sources: await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources),
+            claim: { eventId: event.eventId, lease },
+            delivery: { eventId: event.eventId, eventType: event.eventType,
+                targetRevision: event.targetRevision, processedAt: currentTime() } };
+        if (event.eventType.startsWith('catalog.')) {
+            const existingDelivery = await projections.getDeliveryReceipt(event.eventId);
+            if (existingDelivery) {
+                const active = await projections.getActive('erp-public');
+                if (active?.releaseId !== existingDelivery.releaseId || active.inputDigest !== existingDelivery.inputDigest ||
+                    active.dataDigest !== existingDelivery.dataDigest || existingDelivery.eventType !== event.eventType ||
+                    existingDelivery.targetRevision !== event.targetRevision)
+                    return 'HOLD';
+            }
+            if (!existingDelivery) {
+                const activeBeforePublish = await projections.getActive('erp-public');
+                const shouldActivate = Boolean(publishGuard.claim && publishGuard.delivery) &&
+                    (options.eventId !== undefined || options.expectedActiveReleaseId !== undefined || activeBeforePublish !== null);
+                await buildErpPublicProjection(catalog, projections, now.toISOString(), {
+                    activate: shouldActivate,
+                    requireFreshSources: options.requireFreshSources ?? false,
+                    publishGuard: {
+                        ...publishGuard,
+                        ...(options.expectedActiveReleaseId === undefined && activeBeforePublish
+                            ? { expectedActiveReleaseId: activeBeforePublish.releaseId }
+                            : {})
+                    }
+                });
+                if (!shouldActivate) {
+                    await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+                        nextAttemptAt: event.nextAttemptAt ?? holdNextAttemptAt(now), error: 'PROJECTION_ACTIVATION_REQUIRES_APPROVED_EVENT_OR_ACTIVE_RELEASE' });
+                    return 'HOLD';
+                }
+            }
+        }
+        currentTime();
+        await outbox.markDone(event.eventId, lease);
+        return 'DONE';
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'OUTBOX_LEASE_LOST' || message === 'PROJECTION_SOURCE_EXECUTION_EXPIRED')
+            return 'HOLD';
+        try {
+            if (error instanceof Error && message.startsWith('PROJECTION_SOURCE_')) {
+                // The source can change between the preflight and claim. Release the
+                // claim without spending an event retry or replacing the old ACTIVE.
+                await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+                    nextAttemptAt: event.nextAttemptAt ?? holdNextAttemptAt(now), error: message });
+                return 'HOLD';
+            }
+            if (attempts >= (options.maxAttempts ?? 8)) {
+                await outbox.moveToDeadLetter({ eventId: event.eventId, attempts, error: message, lease });
+                return 'DEAD_LETTER';
+            }
+            await outbox.markRetry({
+                eventId: event.eventId, attempts, lease,
+                nextAttemptAt: new Date(now.getTime() + backoffMs(options.baseBackoffMs ?? 500, attempts)).toISOString(),
+                error: message
+            });
+            return 'RETRY';
+        }
+        catch (updateError) {
+            if (updateError instanceof Error && updateError.message === 'OUTBOX_LEASE_LOST')
+                return 'HOLD';
+            throw updateError;
+        }
+    }
+}

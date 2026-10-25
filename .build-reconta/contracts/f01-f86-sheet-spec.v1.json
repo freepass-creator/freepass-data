@@ -1,0 +1,191 @@
+{
+    "version": "1.3",
+    "effectiveDate": "2026-10-17",
+    "owner": "freepass-data",
+    "status": "F01_ONLY_PUBLICATION_MERGED_LIVE_READBACK_PENDING",
+    "publication": {
+        "activeWorkbooks": ["F01"],
+        "inactiveWorkbooks": ["F86"],
+        "decisionDate": "2026-10-08",
+        "authority": "REPRESENTATIVE_DIRECT_ORDER",
+        "workflowRepository": "freepass-creator/freepasserp4",
+        "workflowPath": ".github/workflows/erp5-ssot-refresh.yml",
+        "workflowCommit": "c9fcf96b272ba5a89f5a36a28189fa2b716b212c",
+        "verificationRun": "37703068220",
+        "verificationStatus": "PENDING",
+        "preserveInactiveWorkbook": true
+    },
+    "timezone": "Asia/Seoul",
+    "f01PriceSelection": {
+        "version": "f01-return-terms/1",
+        "scope": "F01_ONLY",
+        "allowedMonths": [1, 6, 12, 24, 36, 48, 60],
+        "settlement": "RETURN",
+        "requireExplicitSourceSettlement": true,
+        "requireSourceRefAndObservedAt": true,
+        "autoplusSupplierId": "RP023",
+        "autoplusAnnualMileageKm": 20000,
+        "missingCell": null,
+        "duplicateMonth": "HOLD",
+        "currency": "KRW",
+        "preserveCanonicalAndErp5AllTerms": true,
+        "operationalStatus": "PREPARED_NOT_PUBLISHED"
+    },
+    "supplierInputTransition": {
+        "decisionDate": "2026-10-03",
+        "targetWorkbook": "F86",
+        "desiredRole": "MANUAL_SUPPLIER_INPUT_SOURCE",
+        "operationalState": "DEFERRED_UNTIL_EXISTING_SUPPLIER_INPUT_WORKBOOK_COMPLETE",
+        "templateAuthority": "VERIFIED_COMPLETED_EXISTING_SUPPLIER_INPUT_WORKBOOK",
+        "templateLayout": "supplier-input-sheet-spec.v1.json#layoutVersion=2026-10-03",
+        "preserveCurrentF86UntilSourceWorkbookComplete": true,
+        "f01AutomaticPublication": "PRESERVE",
+        "f86AutomaticPublication": "STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08",
+        "preserveOriginalWorkbooks": true,
+        "preserveTypedValuesAndUnmappedRawColumns": true,
+        "automaticOverwriteAllowedAfterCutover": false,
+        "requiredEvidence": [
+            "PRIVATE_BACKUP",
+            "ALL_F86_WRITERS_STOPPED_EXACT_REVISION_AND_RUN",
+            "SOURCE_TO_F86_TYPED_VALUE_PARITY",
+            "SUPPLIER_EDIT_AND_SUMMARY_READBACK",
+            "F01_PUBLICATION_PRESERVED",
+            "AUTHORIZED_SUPPLIER_EDITOR_BINDING_READBACK"
+        ]
+    },
+    "workbooks": {
+        "F01": { "spreadsheetIdEnv": "FREEPASS_SHEET_F01_ID", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713], "retiredSheetIds": [1902102714] },
+        "F86": { "spreadsheetIdEnv": "FREEPASS_SHEET_F86_ID", "primarySheetIds": [2029374993, 115390002, 1357913579, 891725079] }
+    },
+    "naming": {
+        "catalog": "MM.DD HH:mm 상품리스트 N대",
+        "other": "탭명 N대",
+        "separator": " ",
+        "count": "actual_unique_vehicle_rows",
+        "timestamp": "explicit_publication_run_timestamp_not_source_freshness",
+        "noMiddleDot": true
+    },
+    "primaryTabs": [
+        {
+            "key": "catalog",
+            "label": "상품리스트",
+            "color": "#4A86E8"
+        },
+        {
+            "key": "sonogong",
+            "label": "손오공상품",
+            "color": "#8E7CC3"
+        },
+        {
+            "key": "pickup",
+            "label": "픽업구독",
+            "color": "#45818E"
+        },
+        {
+            "key": "autoplus",
+            "label": "오플구독",
+            "color": "#6AA84F"
+        }
+    ],
+    "supplierTabs": {
+        "workbook": "F86",
+        "placement": "after_primary_tabs",
+        "color": "#7F8C8D",
+        "preserveExistingOrder": true
+    },
+    "retiredTab": "오공구독",
+    "photoNavigation": {
+        "scope": "RP012_non_pickup_and_RP031",
+        "directVehiclePhotoFields": ["image_urls", "images", "photos"],
+        "destination": "existing_erp_full_gallery",
+        "origin": "explicit_approved_runtime_configuration",
+        "identity": "existing_product_share_token_no_new_identifier",
+        "exclude": ["doc_images"],
+        "preserveRawPhotoEvidence": true,
+        "preservePickupTcarAndOtherSupplierLinks": true,
+        "missingFieldIsNotMissingPhoto": true,
+        "verification": "same_snapshot_vehicle_identity_photo_array_parity_and_rendered_gallery_readback",
+        "operationalStatus": "PENDING_PIN_AND_APPROVED_PUBLICATION_READBACK"
+    },
+    "sourceClassification": {
+        "sonogong": "RP012/SON_NO_KONG: 중고렌트 + 오공구독",
+        "pickup": "RP012/TCAR_EXTERNAL",
+        "autoplus": "RP023"
+    },
+    "appearance": {
+        "columnWidthsPx": { "차명(원문)": 260, "옵션(원문)": 360, "세부트림": 100 },
+        "columnWidthsByTabPx": {
+            "pickup": { "반납형보증금": 180, "인수형보증금": 180 }
+        },
+        "F01": "preserve_existing_standard_table",
+        "F86": "preserve_existing_retro_supplier_view",
+        "F86TextFormat": {
+            "fontFamily": "Malgun Gothic",
+            "fontSize": 9,
+            "italic": true
+        },
+        "F86MinimumVisibleFeeMonths": 24,
+        "F86FeeVisibility": "long_term_rent_and_deposit_hide_short_term_through_12_months",
+        "headerRowsFrozen": 1,
+        "filter": "entire_populated_rectangle",
+        "alignment": {
+            "names": "LEFT",
+            "money": "RIGHT",
+            "other": "preserve_existing_semantic_rules"
+        },
+        "money": "preserve_numeric_values_and_period_specific_deposit_pairs",
+        "missingValues": "preserve_unknown_do_not_invent_zero",
+        "semanticColors": {
+            "policy": "one_freepass_data_palette_for_all_google_sheets",
+            "consumerOverridesForbidden": true,
+            "productTypeText": {
+                "신차렌트": "#FF00FF",
+                "중고렌트": "#0D706B",
+                "중고구독": "#6B3DB3",
+                "신차구독": "#474D57",
+                "픽업구독": "#C2185B",
+                "오공구독": "#5B21B6",
+                "오플구독": "#A16207"
+            },
+            "availabilityText": {
+                "즉시출고": "#0000FF",
+                "출고가능": "#0000FF",
+                "상품화중": "#FF9900",
+                "출고협의": "#FF9900",
+                "계약중": "#999999",
+                "출고불가": "#999999"
+            },
+            "missingText": "#B7B7B7",
+            "linkText": "#1155CC",
+            "defaultText": "#000000",
+            "periodBackground": {
+                "단기보증": "#EAF7F8",
+                "1개월": "#DCF0F2",
+                "6개월": "#CDE9EC",
+                "12개월": "#BFE2E6",
+                "장기보증": "#EDF0FE",
+                "24개월": "#DFE5FD",
+                "36개월": "#D1DAFC",
+                "48개월": "#C3CFFB",
+                "60개월": "#B5C4FA",
+                "보증금 반납형": "#EDF0FE",
+                "보증금 인수형": "#F1EBFD"
+            }
+        }
+    },
+    "safety": {
+        "stableSheetIds": true,
+        "hiddenAdminTabsExcluded": true,
+        "noSourceDataCorrectionByPresentation": true,
+        "noDoubleCountSupplierViews": true
+    },
+    "publisherAcceptance": [
+        "use_logical_tab_key_or_sheetId_not_title_startsWith",
+        "apply_same_name_order_color_rules_in_F01_F86",
+        "enforce_F86_Malgun_Gothic_9pt_italic_on_every_populated_cell",
+        "do_not_recreate_retired_ogong_tab",
+        "verify_vehicle_keys_counts_and_readback",
+        "back_up_before_consolidation",
+        "one_verified_snapshot_per_publication"
+    ]
+}

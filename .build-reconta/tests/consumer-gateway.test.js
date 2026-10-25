@@ -1,0 +1,1720 @@
+import { PassThrough } from 'node:stream';
+import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from '../src/api/photo-request-limit.js';
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
+import { createHash } from 'node:crypto';
+import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
+import { vehiclePhotoKey } from '../src/domain/consumer-output-contract.js';
+import { isPublicIancarPhotoProduct, createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
+import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
+import { updateOfferPrice } from '../src/application/catalog.js';
+import { describe, expect, it, vi } from 'vitest';
+import { createConsumerGateway, parseConsumerBindings } from '../src/api/consumer-gateway.js';
+import { MemoryDataStore } from '../src/infra/memory-store.js';
+import { seedDemoCatalog } from '../src/demo-seed.js';
+import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { DataAccessGateway } from '../src/application/data-access-gateway.js';
+import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
+import { buildKakaoCatalogReference } from '../src/application/kakao-catalog-reference.js';
+const token = 'test-service-token-0123456789abcdef';
+const binding = { id: 'erp-com', projectionId: 'erp-public', token };
+const url = '/v1/consumers/erp-com/catalog';
+const headers = { authorization: `Bearer ${token}` };
+describe('direct Firestore migration signal', () => {
+    it('signals only legacy product read routes without bypassing authentication', async () => {
+        const { app } = withAccess(new MemoryDataStore(), [binding]);
+        for (const route of ['catalog', 'catalog-compat', 'catalog-reference', 'internal-ai-reference']) {
+            const response = await app.inject({ url: `/v1/consumers/erp-com/${route}` });
+            expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+            expect(response.headers['x-freepass-migration-status']).toBe('LEGACY_READ_PENDING_RETIREMENT');
+            expect(response.statusCode).not.toBe(200);
+        }
+        const unrelated = await app.inject({ url: '/missing' });
+        expect(unrelated.headers['x-freepass-read-mode']).toBeUndefined();
+        await app.close();
+    });
+});
+describe('approved Drive original-byte adapter (offline only)', () => {
+    const bytes = Buffer.from([255, 216, 255, 1]);
+    const product = { listable: true, status_kind: '가용', provider_company_code: 'TEST', supplier_vehicle_id: 'fixture' };
+    const ref = { driveFileId: 'fixture-file', sha256: createHash('sha256').update(bytes).digest('hex'), mediaType: 'image/jpeg',
+        role: 'VEHICLE_PHOTO', zone: '차량사진', approvedAt: '2026-10-10T00:00:00Z', vehicleKey: vehiclePhotoKey(product),
+        vehiclePhotoVerifiedBy: 'fixture', vehiclePhotoVerificationMethod: 'fixture', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' };
+    const metadata = (patch = {}) => Response.json({ id: ref.driveFileId, mimeType: ref.mediaType, size: String(bytes.length), trashed: false, ...patch });
+    const image = (value = bytes, type = ref.mediaType) => new Response(value, { headers: { 'content-type': type } });
+    const adapter = (responses) => {
+        const fetchImpl = vi.fn(async () => responses.shift());
+        return { read: createApprovedDrivePhotoReader({ token: async () => 'private-fixture-token', fetchImpl }), fetchImpl };
+    };
+    it('reads only the approved ID via GET and never exposes its token or calls Drive listing', async () => {
+        const { read, fetchImpl } = adapter([metadata(), image()]);
+        expect(await read(ref)).toEqual({ bytes, contentType: ref.mediaType });
+        expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(['/drive/v3/files/fixture-file', '/drive/v3/files/fixture-file']);
+        for (const [url, init] of fetchImpl.mock.calls) {
+            expect(String(url)).not.toContain('private-fixture-token');
+            expect(init).toMatchObject({ method: 'GET', redirect: 'error', cache: 'no-store' });
+        }
+    });
+    it.each([401, 403, 404])('sanitizes HTTP %s without response-body/token leakage', async (status) => {
+        const { read } = adapter([new Response('private-fixture-token upstream secret', { status })]);
+        await expect(read(ref)).rejects.toThrow(status === 404 ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+    });
+    it.each([{ id: 'other-file' }, { trashed: true }, { mimeType: 'text/html' }, { size: '8388609' }, { size: '-1' }])('rejects unsafe metadata %j before downloading', async (patch) => {
+        const { read, fetchImpl } = adapter([metadata(patch)]);
+        await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    it('rejects path injection before auth/transport', async () => {
+        const { read, fetchImpl } = adapter([]);
+        await expect(read({ ...ref, driveFileId: '../files?alt=media' })).rejects.toThrow('VEHICLE_PHOTO_REQUEST_INVALID');
+        expect(fetchImpl).not.toHaveBeenCalled();
+    });
+    it.each(['size', 'signature', 'media', 'length'])('rejects %s mismatch in downloaded bytes', async (mode) => {
+        const response = mode === 'media' ? new Response(bytes, { headers: { 'content-type': 'text/html' } })
+            : mode === 'length' ? new Response(bytes, { headers: { 'content-type': ref.mediaType, 'content-length': '99' } })
+                : image(mode === 'size' ? Buffer.concat([bytes, bytes]) : Buffer.from([0, 0, 0, 0]));
+        const { read } = adapter([metadata(), response]);
+        await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    });
+    it('retains common byte hash and approval revocation checks', async () => {
+        let current = { ...product, photo_original_refs: [ref] };
+        const { read } = adapter([metadata(), image(Buffer.from([255, 216, 255, 2]))]);
+        const common = createVehiclePhotoReader(async () => current, undefined, read);
+        await expect(common('erp-com', 'fixture', 0)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+        const good = adapter([metadata(), image()]);
+        const pipeline = createVehiclePhotoReader(async () => current, undefined, good.read);
+        expect((await pipeline('erp-com', 'fixture', 0)).bytes).toEqual(bytes);
+        current = { ...current, listable: false };
+        await expect(pipeline('erp-com', 'fixture', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+        expect(good.fetchImpl).toHaveBeenCalledTimes(2);
+    });
+    it('sanitizes credential and network exception diagnostics without logging', async () => {
+        const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            const read = createApprovedDrivePhotoReader({ token: async () => { throw new Error('private-fixture-token'); } });
+            await expect(read(ref)).rejects.toThrow(/^VEHICLE_PHOTO_UNAVAILABLE$/);
+            const network = createApprovedDrivePhotoReader({ token: async () => 'private-fixture-token',
+                fetchImpl: async () => { throw new Error('upstream private-fixture-token'); } });
+            await expect(network(ref)).rejects.toThrow(/^VEHICLE_PHOTO_UNAVAILABLE$/);
+            expect(log).not.toHaveBeenCalled();
+        }
+        finally {
+            log.mockRestore();
+        }
+    });
+    it('cancels a stream that crosses the common 8MiB bound', async () => {
+        const cancel = vi.fn();
+        const body = new ReadableStream({ start(controller) {
+                controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+                controller.enqueue(new Uint8Array(1));
+            }, cancel });
+        const { read } = adapter([metadata({ size: '8388608' }), new Response(body, { headers: { 'content-type': ref.mediaType } })]);
+        await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+        expect(cancel).toHaveBeenCalledTimes(1);
+    });
+});
+const healthUrl = '/v1/consumers/erp-com/catalog-health';
+const compatUrl = '/v1/consumers/erp-com/catalog-compat';
+const healthBinding = {
+    ...binding,
+    capabilities: ['catalog', 'catalog-health']
+};
+const withAccess = (store, bindings, healthStore, compatReader) => {
+    const logs = new MemoryDataAccessLogStore();
+    const access = new DataAccessGateway(logs);
+    return {
+        logs,
+        app: createConsumerGateway(store, bindings, access, healthStore, compatReader)
+    };
+};
+describe('read-only consumer gateway', () => {
+    it('delivers source displacement and explicit missing HOLD through both reference HTTP schemas', async () => {
+        for (const [consumerId, capability, route] of [
+            ['kakao-ops', 'catalog-reference', 'catalog-reference'],
+            ['internal-ai-test', 'internal-ai-reference', 'internal-ai-reference'],
+        ]) {
+            const product = { listable: true, provider_company_code: 'RP013', engine_cc: '1,998',
+                fuel_type: '가솔린', drive_type: 'AWD', price: { '36': { rent: 500000, deposit: null } } };
+            const source = { consumerId, observedAt: '2026-10-10T00:00:00Z', products: {
+                    knownCc: product, missingCc: { ...product, engine_cc: null, fuel_type: '', drive_type: '' },
+                } };
+            const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: [capability] }], undefined, {
+                read: async () => { throw new Error('unused'); },
+                readKakaoReferenceSource: async () => source,
+                readInternalAiReferenceSource: async () => source,
+            });
+            const response = await app.inject({ url: `/v1/consumers/${consumerId}/${route}`, headers });
+            expect(response.statusCode).toBe(200);
+            const rows = response.json().data;
+            expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+            expect(response.headers.link).toContain('/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration');
+            expect(rows).toHaveLength(2);
+            expect(rows.find((row) => row.sourceProductId === 'knownCc').vehicle)
+                .toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN', fuel: '가솔린', drive: 'AWD' });
+            const missing = rows.find((row) => row.sourceProductId === 'missingCc');
+            expect(missing.vehicle).toMatchObject({ engineCc: null, engineCcState: 'HOLD', fuel: null, drive: null });
+            expect(missing.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+            expect(missing.offers[0].priceTerms[0].termKey).toBe('source:36');
+            await app.close();
+        }
+    });
+    it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
+        const consumerId = 'internal-ai-test';
+        const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+            원문: { 전체: { 장기보증: '무보증' } },
+            price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
+        const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
+            read: async () => { throw new Error('unused'); },
+            readInternalAiReferenceSource: async () => ({ consumerId, observedAt: '2026-10-09T00:00:00Z', products: { mixed: product } }),
+        });
+        const endpoint = `/v1/consumers/${consumerId}/internal-ai-reference`;
+        const any = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36', headers });
+        expect(any.statusCode).toBe(200);
+        expect(any.json().schema).toBe('freepass-data.internal-ai-reference/v1');
+        expect(any.json().data[0].vehicleMediaEvidence).toMatchObject({ verdict: 'HOLD', consumerReadback: 'NOT_CHECKED' });
+        expect(any.json().data[0].offers[0].priceTerms.map((t) => t.depositState)).toEqual(['ZERO', 'UNKNOWN']);
+        expect(any.json().data[0].offers[0].priceTerms[1]).toMatchObject({ termKey: 'source:48', depositAmount: null, deposit: null });
+        const all = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+        expect(all.statusCode).toBe(200);
+        expect(all.json().data).toEqual([]);
+        expect(all.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=61', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&termMonths=48', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO&depositScope=ALL_TERMS&depositScope=ALL_TERMS', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+        await app.close();
+    });
+    it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
+        const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+        const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
+        const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
+            read: async () => { throw new Error('unused'); },
+            readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
+                    free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+                    unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
+                } }),
+        });
+        const endpoint = '/v1/consumers/kakao-ops/catalog-reference';
+        const complete = await app.inject({ url: endpoint, headers });
+        expect(complete.statusCode).toBe(200);
+        expect(complete.json().data).toHaveLength(2);
+        for (const q of ['supplierId=RP013&termMonths=36&monthlyRentMin=500000', 'depositState=UNKNOWN']) {
+            const found = await app.inject({ url: endpoint + '?' + q, headers });
+            expect(found.statusCode).toBe(200);
+            expect(found.json().data.length).toBeGreaterThan(0);
+        }
+        const missing = await app.inject({ url: endpoint + '?supplierId=absent', headers });
+        expect(missing.statusCode).toBe(200);
+        expect(missing.json().data).toEqual([]);
+        for (const q of ['limit=1', 'cursor=x', 'model=A&model=B', 'monthlyRentMin=bad', 'mileageKm=1000'])
+            expect((await app.inject({ url: endpoint + '?' + q, headers })).statusCode).toBe(400);
+        const result = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.json().data.map((p) => p.sourceProductId)).toEqual(['free']);
+        expect(result.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+        const none = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=48', headers });
+        expect(none.statusCode).toBe(200);
+        expect(none.json().data).toEqual([]);
+        expect(none.json().meta.projectedCount).toBe(0);
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=0', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36' })).statusCode).toBe(401);
+        await app.close();
+    });
+    it('delivers gallery, representative and color with unverified diagnostics and excludes documents', async () => {
+        const image = 'https://supplier.example/car.jpg', document = 'https://supplier.example/document.jpg';
+        const product = { listable: true, provider_company_code: 'RP013', provider_name: 'Supplier Name', car_number: '000\uac000000', price: { '36': { rent: 500000, deposit: null } }, image_urls: [document, image], doc_images: [document], ext_color: 'black', photo_link: 'https://supplier.example/tcar' };
+        const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
+            read: async () => { throw new Error('unused'); }, readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: { withPhotos: product, withoutPhotos: { ...product, image_urls: [], ext_color: null } } })
+        });
+        const result = await app.inject({ url: '/v1/consumers/kakao-ops/catalog-reference', headers });
+        expect(result.statusCode).toBe(200);
+        const row = result.json().data.find((p) => p.sourceProductId === 'withPhotos');
+        expect(row.vehiclePhotos).toMatchObject({ imageUrls: [image], representativeUrl: image, sourceLinkCount: 1, accessVerification: 'NOT_CHECKED' });
+        expect(row.vehicle.exteriorColor).toBe('black');
+        expect(row.vehicleMediaEvidence).toMatchObject({ verdict: 'HOLD', typedColorVerification: 'NOT_CHECKED', visualVehicleIdentity: 'NOT_CHECKED', consumerReadback: 'NOT_CHECKED', imageBytes: 'NOT_CHECKED' });
+        expect(row.vehicleMediaEvidence.issues).toContain('SOURCE_EVIDENCE_MISSING');
+        expect(result.json().meta.dataDigest).toBe(createHash('sha256').update(JSON.stringify(result.json().data)).digest('hex'));
+        expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({ state: 'DOCUMENT_IMAGE_EXCLUDED', status: null }), expect.objectContaining({ state: 'HEAD_NOT_CHECKED', status: null })]);
+        expect(result.json().data).toHaveLength(2);
+        const lookup = await app.inject({ url: '/v1/consumers/kakao-ops/catalog-reference?' + new URLSearchParams({ supplierName: 'SupplierName', plateNumber: '000 \uac00-0000' }), headers });
+        expect(lookup.statusCode).toBe(200);
+        expect(lookup.json().data).toHaveLength(2);
+        expect(lookup.json().meta.queryResolution.state).toBe('HOLD');
+        expect((await app.inject({ url: '/v1/consumers/kakao-ops/catalog-reference?plateNumber=3456', headers })).statusCode).toBe(400);
+        expect(result.json().data.find((p) => p.sourceProductId === 'withoutPhotos').vehicle.exteriorColor).toBeNull();
+        expect(product.photo_link).toBe('https://supplier.example/tcar');
+        await app.close();
+    });
+    it('caps public photo manifests at 50 and rejects ordinal 50 before reading while retaining smaller albums', async () => {
+        for (const count of [0, 1, 49, 50, 51, 201]) {
+            const reads = [];
+            const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer, _product, index) => {
+                    reads.push(index);
+                    return { count, bytes: index === undefined ? null : Buffer.from([255, 216, 255]), contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true };
+                } };
+            const { app } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+            const url = compatUrl + '/products/P1/photos';
+            const manifest = await app.inject({ url, headers });
+            expect(manifest.statusCode).toBe(200);
+            expect(manifest.json().count).toBe(Math.min(50, count));
+            expect((await app.inject({ url: url + '/50', headers })).statusCode).toBe(400);
+            expect(reads).toEqual([undefined]);
+            if (count >= 50)
+                expect((await app.inject({ url: url + '/49', headers })).statusCode).toBe(200);
+            await app.close();
+        }
+    });
+    it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
+        let reads = 0;
+        const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer, product, index) => {
+                reads++;
+                if (product === 'gone')
+                    throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+                if (product === 'busy')
+                    throw new Error('VEHICLE_PHOTO_BUSY');
+                if (product === 'failed')
+                    throw new Error('private provider error with credentials');
+                return { revalidate: async () => true, count: 2, bytes: index === undefined ? null : Buffer.from([255, 216, 255]), contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+            } };
+        const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+        const photoUrl = compatUrl + '/products/P1/photos';
+        expect((await app.inject({ url: photoUrl })).statusCode).toBe(401);
+        expect((await app.inject({ url: photoUrl, headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+        expect(reads).toBe(0);
+        const manifest = await app.inject({ url: photoUrl, headers });
+        expect(manifest.json()).toEqual({ schema: 'freepass-data.product-photos/v1', productId: 'P1', count: 2 });
+        const binary = await app.inject({ url: photoUrl + '/0', headers });
+        expect(binary.statusCode).toBe(200);
+        expect(binary.rawPayload).toEqual(Buffer.from([255, 216, 255]));
+        expect(binary.headers['content-type']).toBe('image/jpeg');
+        expect(binary.headers['cache-control']).toBe('private, no-store');
+        expect(binary.headers['x-content-type-options']).toBe('nosniff');
+        expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_PRODUCT_PHOTO', phase: 'SUCCEEDED' });
+        for (const index of ['-1', '200', '1e1', '01', 'NaN'])
+            expect((await app.inject({ url: photoUrl + '/' + index, headers })).statusCode).toBe(400);
+        expect(reads).toBe(2);
+        expect((await app.inject({ url: compatUrl + '/products/gone/photos/0', headers })).statusCode).toBe(404);
+        const failure = await app.inject({ url: compatUrl + '/products/failed/photos/0', headers });
+        expect(failure.statusCode).toBe(503);
+        expect(failure.body).not.toContain('credentials');
+        const busy = await app.inject({ url: compatUrl + '/products/busy/photos/0', headers });
+        expect(busy.statusCode).toBe(429);
+        expect(busy.headers['retry-after']).toBe('2');
+        await app.close();
+        const noCatalog = withAccess(new MemoryDataStore(), [{ id: 'internal-ai-test', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, reader);
+        expect((await noCatalog.app.inject({ url: '/v1/consumers/internal-ai-test/catalog-compat/products/P1/photos/0', headers })).statusCode).toBe(403);
+        await noCatalog.app.close();
+    });
+    it('isolates internal AI project credentials, capabilities and audited typed responses', async () => {
+        const ai = { id: 'internal-ai-test-project', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] };
+        for (const capabilities of [undefined, ['catalog'], ['internal-ai-reference', 'admin-workflow']]) {
+            expect(() => parseConsumerBindings(JSON.stringify([{ ...ai, capabilities }]))).toThrow();
+        }
+        expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['internal-ai-reference'] }]))).toThrow();
+        let reads = 0;
+        const compat = { read: async () => { throw new Error('raw bridge must not be used'); },
+            readInternalAiReferenceSource: async (consumerId) => {
+                reads++;
+                return { consumerId, observedAt: '2026-09-30T01:54:45.805Z',
+                    products: { P1: { listable: true, provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '무보증',
+                            bank_account: 'must-not-leak', price: { '12': { rent: 900000, deposit: 0 } } } } };
+            } };
+        const { app, logs } = withAccess({ getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] }, [ai], undefined, compat);
+        const aiUrl = `/v1/consumers/${ai.id}/internal-ai-reference`;
+        expect((await app.inject({ url: aiUrl })).statusCode).toBe(401);
+        expect((await app.inject({ url: aiUrl, headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+        expect(reads).toBe(0);
+        const result = await app.inject({ url: aiUrl, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.json()).toMatchObject({ schema: 'freepass-data.internal-ai-reference/v1', meta: { consumerId: ai.id, authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' } });
+        expect(result.body).not.toContain('must-not-leak');
+        expect(result.json().data[0].offers[0].priceTerms[0].depositState).toBe('UNKNOWN');
+        expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_INTERNAL_AI_REFERENCE', phase: 'SUCCEEDED' });
+        for (const endpoint of ['catalog', 'catalog-compat', 'catalog-reference', 'catalog-health']) {
+            expect((await app.inject({ url: `/v1/consumers/${ai.id}/${endpoint}`, headers })).statusCode).toBe(403);
+        }
+        expect(reads).toBe(1);
+        expect((await app.inject({ method: 'POST', url: aiUrl, headers })).statusCode).toBe(404);
+        await app.close();
+    });
+    it('does not read storage before authenticating the registered consumer', async () => {
+        let reads = 0;
+        const { app, logs } = withAccess({ getActive: async () => { reads++; return null; }, getManifest: async () => null, listProjectionLineage: async () => [] }, [binding]);
+        for (const request of [{ url }, { url, headers: { authorization: 'Bearer wrong' } }, { url: '/v1/consumers/admin/catalog', headers }]) {
+            expect((await app.inject(request)).statusCode).toBe(401);
+        }
+        expect(reads).toBe(0);
+        expect(logs.events).toHaveLength(3);
+        expect(logs.events.every((event) => event.mode === 'READ' &&
+            event.phase === 'DENIED' &&
+            event.reasonCode === 'UNAUTHORIZED')).toBe(true);
+        await app.close();
+    });
+    it('keeps the compatibility bridge behind consumer authentication and Data Access audit', async () => {
+        let reads = 0;
+        const compat = {
+            read: async (consumerId) => {
+                reads += 1;
+                return {
+                    schema: 'freepass-data.catalog-compat/v1',
+                    data: {
+                        products: { P1: { _key: 'P1', product_code: 'P1' } },
+                        policies: { POL1: { _key: 'POL1', policy_code: 'POL1' } },
+                        partners: {},
+                        users: {},
+                    },
+                    meta: {
+                        consumerId,
+                        authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+                        sourceProject: 'freepasserp5',
+                        observedAt: '2026-09-27T00:00:00.000Z',
+                        collectionCounts: { products: 1, policy: 1, partner: 0, user: 0 },
+                        depositEvidenceVersion: 'catalog-compat-deposit/1',
+                    },
+                };
+            },
+        };
+        const { app, logs } = withAccess({ getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] }, [binding], undefined, compat);
+        expect((await app.inject({ url: compatUrl })).statusCode).toBe(401);
+        expect(reads).toBe(0);
+        const result = await app.inject({ url: compatUrl, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.json()).toMatchObject({
+            schema: 'freepass-data.catalog-compat/v1',
+            meta: {
+                consumerId: 'erp-com',
+                authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+                sourceProject: 'freepasserp5',
+            },
+        });
+        expect(reads).toBe(1);
+        expect(logs.events.at(-1)).toMatchObject({
+            mode: 'READ',
+            phase: 'SUCCEEDED',
+            operation: 'READ_CONSUMER_CATALOG_COMPAT',
+            result: { count: 1 },
+        });
+        await app.close();
+    });
+    it('serves Kakao typed reference facts only to its dedicated identity', async () => {
+        let reads = 0;
+        const reference = buildKakaoCatalogReference({
+            consumerId: 'kakao-ops',
+            observedAt: '2026-09-28T00:00:00.000Z',
+            products: {
+                P1: {
+                    listable: true,
+                    maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
+                    provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+                    price: { '36': { rent: 800000, deposit: 0 } },
+                },
+            },
+        });
+        const compat = {
+            read: async () => { throw new Error('not used'); },
+            readKakaoReferenceSource: async () => {
+                reads += 1;
+                return {
+                    consumerId: 'kakao-ops',
+                    observedAt: reference.meta.observedAt,
+                    products: {
+                        P1: {
+                            listable: true,
+                            maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
+                            provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+                            image_urls: ['https://photos.example.test/소나타 사진.jpg', 'https://photos.example.test/interior.jpg'],
+                            doc_images: ['https://photos.example.test/registration.jpg'],
+                            price: { '36': { rent: 800000, deposit: 0 } },
+                        },
+                    },
+                };
+            },
+        };
+        const kakaoBinding = {
+            id: 'kakao-ops', projectionId: 'erp-public', token,
+            capabilities: ['catalog-reference'],
+        };
+        const { app, logs } = withAccess({ getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] }, [kakaoBinding], undefined, compat);
+        const referenceUrl = '/v1/consumers/kakao-ops/catalog-reference';
+        expect((await app.inject({ url: referenceUrl })).statusCode).toBe(401);
+        expect(reads).toBe(0);
+        const result = await app.inject({ url: referenceUrl, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.json()).toMatchObject({
+            schema: 'freepass-data.kakao-catalog-reference/v1',
+            data: [{ vehicle: { exteriorColor: '화이트' }, vehiclePhotos: {
+                        state: 'URLS_PRESENT', imageUrls: ['https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', 'https://photos.example.test/interior.jpg'],
+                        representativeUrl: 'https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', accessVerification: 'NOT_CHECKED',
+                    }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
+            meta: { consumerId: 'kakao-ops', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' },
+        });
+        expect(reads).toBe(1);
+        expect(logs.events.at(-1)).toMatchObject({
+            mode: 'READ', phase: 'SUCCEEDED', operation: 'READ_KAKAO_CATALOG_REFERENCE', result: { count: 1 },
+        });
+        await app.close();
+    });
+    it('returns HOLD instead of demo data when the operational release is absent', async () => {
+        const { app } = withAccess(new MemoryDataStore(), [binding]);
+        const result = await app.inject({ url, headers });
+        expect(result.statusCode).toBe(503);
+        expect(result.json()).toEqual({ code: 'NO_ACTIVE_RELEASE' });
+        expect((await app.inject({ method: 'POST', url: '/v1/commands/offers/1/price', payload: {} })).statusCode).toBe(404);
+        await app.close();
+    });
+    it('returns the actual release identity to each separately registered consumer', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const release = await buildErpPublicProjection(store, store);
+        const { app, logs } = withAccess(store, [binding, { id: 'whitelabel-test', projectionId: 'erp-public', token: token + '2' }]);
+        const result = await app.inject({ url, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.headers['cache-control']).toBe('no-store');
+        expect(result.json().meta.releaseId).toBe(release.releaseId);
+        expect(result.json().meta.authority).toBe('CANONICAL_ACTIVE');
+        expect(result.json().meta.dataDigest).toBe(release.dataDigest);
+        expect(result.json().meta.commercialCoverage).toBe('COMPLETE');
+        expect(result.json().meta.commercialMissingOfferIds).toEqual([]);
+        expect(result.json().data[0]?.offers[0]?.commercial?.basisRows[0]?.termKey).toBe('36@20000');
+        expect(logs.events.slice(0, 2).map((event) => event.phase)).toEqual(['STARTED', 'SUCCEEDED']);
+        expect(logs.events[1]).toMatchObject({
+            mode: 'READ',
+            operation: 'READ_CONSUMER_CATALOG',
+            result: {
+                count: release.data.length,
+                digest: release.dataDigest,
+                inputDigest: release.inputDigest,
+                releaseId: release.releaseId,
+                manifestId: release.manifestId,
+                revision: release.canonicalRevision
+            }
+        });
+        expect((await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers })).statusCode).toBe(401);
+        const other = await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers: { authorization: `Bearer ${token}2` } });
+        expect(other.json().meta.releaseId).toBe(release.releaseId);
+        await app.close();
+    });
+    it('rejects modified data, missing evidence and cross-projection release pointers', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const release = await buildErpPublicProjection(store, store);
+        for (const altered of [
+            { ...release, data: [] },
+            { ...release, status: 'READY' },
+            { ...release, projectionId: 'admin-catalog' },
+            { ...release, activatedAt: null },
+            { ...release, schemaVersion: 'unreviewed-version' },
+            { ...release, data: release.data.map((row) => ({ ...row, privateCustomer: 'must-not-be-returned' })) },
+        ]) {
+            const { app } = withAccess({ getActive: async () => altered, getManifest: (id) => store.getManifest(id), listProjectionLineage: (id) => store.listProjectionLineage(id) }, [binding]);
+            expect((await app.inject({ url, headers })).statusCode).toBe(503);
+            await app.close();
+        }
+        const { app } = withAccess({ getActive: async () => release, getManifest: async () => null, listProjectionLineage: (id) => store.listProjectionLineage(id) }, [binding]);
+        expect((await app.inject({ url, headers })).statusCode).toBe(503);
+        await app.close();
+    });
+    it('fails closed when release lineage is missing or evidence cannot be read atomically', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const release = await buildErpPublicProjection(store, store);
+        const missingLineage = {
+            getActive: (projectionId) => store.getActive(projectionId),
+            getManifest: (releaseId) => store.getManifest(releaseId),
+            listProjectionLineage: async () => []
+        };
+        const { app } = withAccess(missingLineage, [binding]);
+        const result = await app.inject({ url, headers });
+        expect(result.statusCode).toBe(503);
+        expect(result.json()).toEqual({ code: 'RELEASE_EVIDENCE_MISMATCH' });
+        await app.close();
+        const atomicSnapshot = await store.getActiveEvidenceSnapshot('erp-public');
+        const tamperedEvidence = {
+            ...atomicSnapshot,
+            lineage: []
+        };
+        const { app: atomicApp } = withAccess({
+            getActive: (projectionId) => store.getActive(projectionId),
+            getManifest: (releaseId) => store.getManifest(releaseId),
+            listProjectionLineage: (releaseId) => store.listProjectionLineage(releaseId),
+            getActiveEvidenceSnapshot: async () => tamperedEvidence
+        }, [binding]);
+        const atomicResult = await atomicApp.inject({ url, headers });
+        expect(atomicResult.statusCode).toBe(503);
+        expect(atomicResult.json().code).toBe('RELEASE_EVIDENCE_MISMATCH');
+        expect(atomicResult.json().failures).toEqual(expect.arrayContaining([
+            'EVIDENCE_COUNT_MISMATCH',
+            'EVIDENCE_DIGEST_MISMATCH'
+        ]));
+        expect(release.releaseId).toBe(atomicSnapshot.release?.releaseId);
+        await atomicApp.close();
+    });
+    it('authenticates before touching the Data Health reader', async () => {
+        let healthReads = 0;
+        const healthStore = {
+            listVehicleModels: async () => { healthReads++; return []; },
+            listVehicleAssets: async () => [],
+            listProducts: async () => [],
+            listOffers: async () => [],
+            listPolicies: async () => [],
+            listRevisionHistory: async () => [],
+            getActive: async () => null,
+            getManifest: async () => null,
+            listProjectionLineage: async () => []
+        };
+        const { app } = withAccess({ getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] }, [healthBinding], healthStore);
+        for (const request of [
+            { url: healthUrl },
+            { url: healthUrl, headers: { authorization: 'Bearer wrong' } }
+        ]) {
+            expect((await app.inject(request)).statusCode).toBe(401);
+        }
+        expect(healthReads).toBe(0);
+        await app.close();
+    });
+    it('requires an explicit catalog-health capability', async () => {
+        const store = new MemoryDataStore();
+        const { app } = withAccess(store, [binding], store);
+        const result = await app.inject({ url: healthUrl, headers });
+        expect(result.statusCode).toBe(403);
+        expect(result.json()).toEqual({ code: 'FORBIDDEN' });
+        await app.close();
+    });
+    it('returns DEGRADED as HTTP 200 because the diagnostic read itself succeeded', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        const { app } = withAccess(store, [healthBinding], store);
+        const result = await app.inject({ url: healthUrl, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.json()).toMatchObject({
+            contractVersion: 'catalog-data-health-v1',
+            status: 'DEGRADED'
+        });
+        await app.close();
+    });
+    it('returns 503 and audits denial when a health-capable registration has no Health reader', async () => {
+        const store = new MemoryDataStore();
+        const { app, logs } = withAccess(store, [healthBinding]);
+        const result = await app.inject({ url: healthUrl, headers });
+        expect(result.statusCode).toBe(503);
+        expect(result.json()).toEqual({ code: 'HEALTH_READER_UNAVAILABLE' });
+        expect(logs.events).toHaveLength(1);
+        expect(logs.events[0]).toMatchObject({
+            mode: 'READ',
+            phase: 'DENIED',
+            operation: 'READ_CATALOG_HEALTH',
+            reasonCode: 'HEALTH_READER_UNAVAILABLE'
+        });
+        await app.close();
+    });
+    it('returns a schema-valid HEALTHY report to an explicitly authorized health reader', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store);
+        const { app } = withAccess(store, [healthBinding], store);
+        const result = await app.inject({ url: healthUrl, headers });
+        expect(result.statusCode).toBe(200);
+        expect(result.headers['cache-control']).toBe('no-store');
+        expect(result.json()).toMatchObject({
+            contractVersion: 'catalog-data-health-v1',
+            schemaVersion: '1.1.0',
+            scope: 'catalog-v1',
+            status: 'HEALTHY'
+        });
+        await app.close();
+    });
+    it('returns HTTP 503 with the report body when Catalog Data Health is BLOCKED', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store);
+        const product = await store.getProduct('prod_gv70_demo');
+        await store.seed({
+            products: [{
+                    ...product,
+                    vehicleModelId: 'vm_missing'
+                }]
+        });
+        const { app } = withAccess(store, [healthBinding], store);
+        const result = await app.inject({ url: healthUrl, headers });
+        expect(result.statusCode).toBe(503);
+        expect(result.json()).toMatchObject({
+            contractVersion: 'catalog-data-health-v1',
+            status: 'BLOCKED'
+        });
+        expect(result.json().issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                code: 'MISSING_PRODUCT_VEHICLE_MODEL',
+                severity: 'ERROR'
+            })
+        ]));
+        await app.close();
+    });
+    it('allows a health-only registration without granting catalog data access', async () => {
+        const store = new MemoryDataStore();
+        await seedDemoCatalog(store);
+        await buildErpPublicProjection(store, store);
+        const healthOnly = {
+            ...binding,
+            capabilities: ['catalog-health']
+        };
+        const { app } = withAccess(store, [healthOnly], store);
+        expect((await app.inject({ url, headers })).statusCode).toBe(403);
+        expect((await app.inject({ url: healthUrl, headers })).statusCode).toBe(200);
+        await app.close();
+    });
+    it('does not silently reuse the ERP contract for Sheets or Admin, or share credentials', () => {
+        for (const id of ['f01', 'f86', 'admin']) {
+            expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, id }]))).toThrow('not implemented');
+        }
+        expect(() => parseConsumerBindings(JSON.stringify([binding, { ...binding, id: 'whitelabel-test' }]))).toThrow('shared service token');
+        expect(() => parseConsumerBindings(undefined)).toThrow('required');
+        expect(parseConsumerBindings(JSON.stringify([{ ...binding, id: 'kakao-ops' }]))[0]?.id).toBe('kakao-ops');
+        expect(parseConsumerBindings(JSON.stringify([{ ...binding, id: 'kakao-ops' }]))[0]?.capabilities)
+            .toEqual(['catalog']);
+        expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['catalog-reference'] }])))
+            .toThrow('requires kakao-ops');
+        for (const entries of [
+            [],
+            [{ ...binding, token: 'short' }],
+            [{ ...binding, token: token + ' ' }],
+            [{ ...binding, projectionId: 'admin-catalog' }],
+            [{ ...binding, capabilities: [] }],
+            [{ ...binding, capabilities: ['unknown'] }],
+            [{ ...binding, capabilities: ['catalog', 'catalog'] }]
+        ]) {
+            expect(() => parseConsumerBindings(JSON.stringify(entries))).toThrow();
+        }
+    });
+});
+it('serves Admin stored fees and coverage with an isolated grant, and no public fee leakage', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await updateOfferPrice(store, { commandId: 'fees', idempotencyKey: 'fees-admin-unknown',
+        offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',
+        monthlyRent: { amount: 500000, currency: 'KRW' }, reason: 'test missing supplier policy', actor: { id: 'user:test', kind: 'USER' } });
+    const admin = await buildAdminCatalogProjection(store, store);
+    await buildErpPublicProjection(store, store);
+    const { app } = withAccess(store, [binding, { id: 'freepass-admin-catalog', projectionId: 'admin-catalog', token: token + '-admin' }]);
+    const adminUrl = '/v1/consumers/freepass-admin-catalog/catalog';
+    expect((await app.inject({ url: adminUrl, headers })).statusCode).toBe(401);
+    const response = await app.inject({ url: adminUrl, headers: { authorization: `Bearer ${token}-admin` } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().meta).toMatchObject({ ...admin.economics, economicsCoverage: 'INCOMPLETE' });
+    expect(response.json().meta.economicsTermCounts.supplierBillingFee.UNKNOWN).toBe(1);
+    expect(response.json().data[0].offers[0].priceTerms[0].channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null });
+    const publicResponse = await app.inject({ url, headers });
+    expect(publicResponse.statusCode).toBe(200);
+    expect(publicResponse.body).not.toContain('supplierBillingFee');
+    expect(publicResponse.body).not.toContain('economicsCoverage');
+    await app.close();
+});
+describe('approved vehicle photo proxy', () => {
+    const bytes = Buffer.from([255, 216, 255, 1, 2, 3]);
+    const ref = { driveFileId: 'fake-file', sha256: createHash('sha256').update(bytes).digest('hex'), mediaType: 'image/jpeg',
+        vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic visual review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z',
+        role: 'VEHICLE_PHOTO', zone: '차량사진', approvedAt: '2026-10-10T00:00:00Z', vehicleKey: vehiclePhotoKey({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-a' }) };
+    const product = () => ({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-a', listable: true, status_kind: '가용', photo_original_refs: [{ ...ref }] });
+    it.each(['vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt'])('requires independent content verification: %s', async (field) => {
+        for (const source of ['approved', 'one']) {
+            let current = product();
+            const sourceReader = vi.fn(async () => ({ count: 1, bytes, contentType: ref.mediaType }));
+            const read = createVehiclePhotoReader(async () => current, source === 'one' ? { eligible: () => true, connection: () => 'synthetic-one', read: sourceReader } : undefined, sourceReader);
+            for (const missing of [undefined, '', '   ']) {
+                current = { ...product(), photo_original_refs: [{ ...ref, [field]: missing }] };
+                expect(isApprovedVehiclePhotoProduct(current)).toBe(false);
+                await expect(read('erp-com', 'synthetic', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+                await expect(read('erp-com', 'synthetic')).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+            }
+            expect(sourceReader).not.toHaveBeenCalled();
+            current = product();
+            expect((await read('erp-com', 'synthetic', 0)).bytes).toEqual(bytes);
+            const response = await read('erp-com', 'synthetic');
+            current = { ...product(), photo_original_refs: [{ ...ref, [field]: undefined }] };
+            expect(await response.revalidate()).toBe(false);
+        }
+    });
+    it.each(['finish', 'error', 'close'])('holds response slots through onSend and releases once on %s', async (terminal) => {
+        const { app } = withAccess(new MemoryDataStore(), [binding], undefined, {
+            read: async () => { throw new Error('unused'); },
+            readVehiclePhoto: async () => ({ count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true }),
+        });
+        let unblock;
+        const gate = new Promise(resolve => { unblock = resolve; });
+        let ready;
+        const eight = new Promise(resolve => { ready = resolve; });
+        const responses = [];
+        app.addHook('onSend', async (_request, reply, payload) => {
+            if (reply.statusCode === 200 && responses.length < 8) {
+                responses.push(reply.raw);
+                if (responses.length === 8)
+                    ready();
+                await gate;
+            }
+            return payload;
+        });
+        const url = compatUrl + '/products/synthetic/photos/0';
+        const pending = Array.from({ length: 8 }, () => app.inject({ url, headers }).then(value => value.statusCode, () => 0));
+        try {
+            await eight;
+            expect((await app.inject({ url, headers })).statusCode).toBe(429);
+            if (terminal !== 'finish') {
+                // Transport terminal events while payload delivery is still paused.
+                responses[0].emit(terminal);
+                responses[0].emit('close');
+                expect((await app.inject({ url, headers })).statusCode).toBe(200);
+            }
+            unblock();
+            expect(await Promise.all(pending)).toEqual(terminal === 'finish' ? Array(8).fill(200) : [0, ...Array(7).fill(200)]);
+            expect((await app.inject({ url, headers })).statusCode).toBe(200);
+        }
+        finally {
+            unblock();
+            await Promise.all(pending);
+            await app.close();
+        }
+    });
+    it('holds all slots until response streams complete', async () => {
+        const { app } = withAccess(new MemoryDataStore(), [binding], undefined, {
+            read: async () => { throw new Error('unused'); },
+            readVehiclePhoto: async () => ({ count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true }),
+        });
+        const streams = [];
+        let ready;
+        const eight = new Promise(resolve => { ready = resolve; });
+        app.addHook('onSend', async (_request, reply, payload) => {
+            if (reply.statusCode !== 200 || streams.length >= 8)
+                return payload;
+            const stream = new PassThrough();
+            streams.push(stream);
+            if (streams.length === 8)
+                ready();
+            return stream;
+        });
+        const url = compatUrl + '/products/synthetic/photos/0';
+        const pending = Array.from({ length: 8 }, () => app.inject({ url, headers }).then(value => value));
+        try {
+            await eight;
+            expect((await app.inject({ url, headers })).statusCode).toBe(429);
+            streams.forEach(stream => stream.end(bytes));
+            for (const response of await Promise.all(pending))
+                expect(response.rawPayload).toEqual(bytes);
+            expect((await app.inject({ url, headers })).statusCode).toBe(200);
+        }
+        finally {
+            streams.forEach(stream => stream.end());
+            await Promise.all(pending);
+            await app.close();
+        }
+    });
+    it('releases response slots after reader and audit errors', async () => {
+        let fail = true;
+        const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, {
+            read: async () => { throw new Error('unused'); },
+            readVehiclePhoto: async () => {
+                if (fail)
+                    throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+                return { count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true };
+            },
+        });
+        const url = compatUrl + '/products/synthetic/photos/0';
+        try {
+            for (let i = 0; i < 9; i++)
+                expect((await app.inject({ url, headers })).statusCode).toBe(503);
+            fail = false;
+            const append = vi.spyOn(logs, 'appendDataAccessEvent').mockRejectedValue(new Error('synthetic audit error'));
+            for (let i = 0; i < 9; i++)
+                expect((await app.inject({ url, headers })).statusCode).toBe(503);
+            append.mockRestore();
+            expect((await app.inject({ url, headers })).statusCode).toBe(200);
+        }
+        finally {
+            await app.close();
+        }
+    });
+    it('rejects copied approval refs from another vehicle and derives fallback keys privately', async () => {
+        const other = { ...product(), supplier_vehicle_id: 'vehicle-b' };
+        expect(isApprovedVehiclePhotoProduct(other)).toBe(false);
+        const read = createVehiclePhotoReader(async () => other, undefined, async () => { throw new Error('must not read'); });
+        await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+        const fallback = { ...product(), supplier_vehicle_id: '', car_number: 'synthetic-plate-token' };
+        const key = createHash('sha256').update(JSON.stringify(['plate', 'TEST', fallback.car_number])).digest('hex');
+        expect(vehiclePhotoKey(fallback)).toBe(key);
+        expect(key).not.toContain(fallback.car_number);
+        expect(isApprovedVehiclePhotoProduct({ ...fallback, photo_original_refs: [{ ...ref, vehicleKey: key }] })).toBe(true);
+        expect(isApprovedVehiclePhotoProduct({ ...fallback, provider_company_code: 'OTHER', photo_original_refs: [{ ...ref, vehicleKey: key }] })).toBe(false);
+        expect(isApprovedVehiclePhotoProduct({ ...fallback, car_number: '' })).toBe(false);
+        expect(vehiclePhotoKey({ ...product(), car_number: 'synthetic-plate-token' })).toBe(ref.vehicleKey);
+    });
+    it.each(['product', 'file', 'both', 'approval', 'vehicle'])('isolates byte cache by %s and verifies its own reader bytes', async (change) => {
+        let current = product();
+        let calls = 0;
+        const read = createVehiclePhotoReader(async () => current, undefined, async () => {
+            calls++;
+            return { bytes: calls === 1 ? bytes : Buffer.from('different-source-bytes'), contentType: ref.mediaType };
+        });
+        await read('erp-com', 'fake-product', 0);
+        if (change === 'file' || change === 'both')
+            current.photo_original_refs[0].driveFileId = 'fake-other-file';
+        if (change === 'approval')
+            current.photo_original_refs[0].approvedAt = '2026-10-10T01:00:00Z';
+        if (change === 'vehicle') {
+            current.supplier_vehicle_id = 'vehicle-b';
+            current.photo_original_refs[0].vehicleKey = vehiclePhotoKey({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-b' });
+        }
+        const id = change === 'product' || change === 'both' ? 'fake-other-product' : 'fake-product';
+        await expect(read('erp-com', id, 0)).rejects.toThrow('UNAVAILABLE');
+        await expect(read('erp-com', id, 0)).rejects.toThrow('UNAVAILABLE');
+        expect(calls).toBe(3);
+    });
+    it.each(['refs', 'listable', 'file', 'sha256', 'approvedAt', 'vehicleKey'])('returns 404 without caching when %s changes during source read', async (change) => {
+        let current = product();
+        let calls = 0;
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        let started;
+        const ready = new Promise(resolve => { started = resolve; });
+        const readVehiclePhoto = createVehiclePhotoReader(async () => current, undefined, async () => {
+            calls++;
+            started();
+            await gate;
+            return { bytes, contentType: ref.mediaType };
+        });
+        const { app } = withAccess(new MemoryDataStore(), [binding], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+        try {
+            const pending = app.inject({ url: compatUrl + '/products/fake-product/photos/0', headers }).then(value => value);
+            await ready;
+            if (change === 'refs')
+                current = { ...product(), photo_original_refs: [] };
+            else if (change === 'listable')
+                current = { ...product(), listable: false };
+            else {
+                const patch = change === 'file' ? { driveFileId: 'fake-other-file' }
+                    : change === 'sha256' ? { sha256: 'a'.repeat(64) }
+                        : change === 'approvedAt' ? { approvedAt: '2026-10-10T01:00:00Z' }
+                            : { vehicleKey: vehiclePhotoKey({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-b' }) };
+                current = { ...product(), ...(change === 'vehicleKey' ? { supplier_vehicle_id: 'vehicle-b' } : {}), photo_original_refs: [{ ...ref, ...patch }] };
+            }
+            release();
+            expect((await pending).statusCode).toBe(404);
+            current = product();
+            expect((await readVehiclePhoto('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+            expect(calls).toBe(2);
+        }
+        finally {
+            release();
+            await app.close();
+        }
+    });
+    it.each(['count', 'bytes', 'cached'])('revalidates %s after delayed success audit and records denial on revocation', async (mode) => {
+        let current = product();
+        const readVehiclePhoto = createVehiclePhotoReader(async () => current, undefined, async () => ({ bytes, contentType: ref.mediaType }));
+        if (mode === 'cached')
+            await readVehiclePhoto('erp-com', 'synthetic', 0);
+        const logs = new MemoryDataAccessLogStore();
+        const append = logs.appendDataAccessEvent.bind(logs);
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        let started;
+        const ready = new Promise(resolve => { started = resolve; });
+        vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async (event) => {
+            await append(event);
+            if (event.phase === 'SUCCEEDED') {
+                started();
+                await gate;
+            }
+        });
+        const app = createConsumerGateway(new MemoryDataStore(), [binding], new DataAccessGateway(logs), undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+        const url = compatUrl + '/products/synthetic/photos' + (mode === 'count' ? '' : '/0');
+        try {
+            const pending = app.inject({ url, headers }).then(value => value);
+            await ready;
+            current = { ...product(), listable: false };
+            release();
+            const denied = await pending;
+            expect(denied.statusCode).toBe(404);
+            expect(denied.json()).toEqual({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
+            expect(logs.events.slice(-2).map(event => event.phase)).toEqual(['SUCCEEDED', 'DENIED']);
+            expect(logs.events.at(-1)?.reasonCode).toBe('VEHICLE_PHOTO_NOT_FOUND');
+            current = product();
+            const normal = await app.inject({ url, headers });
+            expect(normal.statusCode).toBe(200);
+            if (mode === 'count')
+                expect(normal.json().count).toBe(1);
+            else
+                expect(normal.rawPayload).toEqual(bytes);
+        }
+        finally {
+            release();
+            await app.close();
+        }
+    });
+    it('shares count slots with byte reads and releases them after success or failure', async () => {
+        let started = 0;
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        let ready;
+        const eight = new Promise(resolve => { ready = resolve; });
+        let fail = false;
+        const readVehiclePhoto = createVehiclePhotoReader(async () => ({ ...product(), eligible: true }), {
+            eligible: value => value?.eligible === true,
+            connection: () => 'synthetic-connection',
+            read: async (_product, index) => {
+                if (++started === 8)
+                    ready();
+                await gate;
+                if (fail)
+                    throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+                return { count: 1, bytes: index === undefined ? null : bytes, contentType: ref.mediaType };
+            },
+        });
+        const { app } = withAccess(new MemoryDataStore(), [binding], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+        const url = compatUrl + '/products/synthetic/photos';
+        try {
+            const pending = Array.from({ length: 8 }, () => app.inject({ url, headers }).then(value => value));
+            await eight;
+            for (const suffix of ['', '/0']) {
+                const ninth = await app.inject({ url: url + suffix, headers });
+                expect(ninth.statusCode).toBe(429);
+                expect(ninth.json().code).toBe('VEHICLE_PHOTO_BUSY');
+                expect(ninth.headers['retry-after']).toBe('2');
+            }
+            expect(started).toBe(8);
+            release();
+            for (const response of await Promise.all(pending))
+                expect(response.statusCode).toBe(200);
+            fail = true;
+            for (let i = 0; i < 9; i++)
+                await expect(readVehiclePhoto('erp-com', 'synthetic')).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+            fail = false;
+            expect((await app.inject({ url, headers })).statusCode).toBe(200);
+        }
+        finally {
+            release();
+            await app.close();
+        }
+    });
+    it('rejects the entire product when any reference or eligibility field is invalid', () => {
+        expect(isApprovedVehiclePhotoProduct(product())).toBe(true);
+        for (const patch of [{ role: 'DOCUMENT' }, { role: 'doc_images' }, { zone: '원문' }, { zone: 'doc_images' },
+            { sha256: ref.sha256.toUpperCase() }, { sha256: 'bad' }, { driveFileId: 'https://example.invalid/file' },
+            { driveFileId: '../doc_images' }, { vehicleKey: '' }, { approvedAt: '2026-02-30T00:00:00Z' }, { mediaType: 'text/html' }]) {
+            expect(isApprovedVehiclePhotoProduct({ ...product(), photo_original_refs: [ref, { ...ref, ...patch }] })).toBe(false);
+        }
+        for (const patch of [{ listable: false }, { _deleted: true }, { deletedAt: 'fake' }, { publication_withdrawal: {} },
+            { status_kind: 'unavailable' }, { photo_original_refs: [] }, { photo_original_refs: Array(201).fill(ref) }]) {
+            expect(isApprovedVehiclePhotoProduct({ ...product(), ...patch })).toBe(false);
+        }
+    });
+    it('serves approved bytes/count and rechecks revocation before cache on every request', async () => {
+        let current = product();
+        let calls = 0;
+        let reads = 0;
+        const read = createVehiclePhotoReader(async () => { reads++; return current; }, undefined, async () => { calls++; return { bytes, contentType: ref.mediaType }; });
+        expect((await read('erp-com', 'fake-product')).count).toBe(1);
+        expect((await read('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+        await read('erp-com', 'fake-product', 0);
+        expect(calls).toBe(1);
+        current = { ...product(), photo_original_refs: [] };
+        await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+        current = { ...product(), listable: false };
+        await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+        expect(reads).toBe(8);
+        expect(calls).toBe(1);
+    });
+    it.each(['count', 'cached'])('rechecks approval immediately before returning %s responses', async (mode) => {
+        let reads = 0;
+        let calls = 0;
+        let revokeAt = Infinity;
+        const read = createVehiclePhotoReader(async () => {
+            reads++;
+            return reads >= revokeAt ? { ...product(), listable: false } : product();
+        }, undefined, async () => { calls++; return { bytes, contentType: ref.mediaType }; });
+        if (mode === 'cached')
+            await read('erp-com', 'fake-product', 0);
+        revokeAt = reads + 2;
+        await expect(read('erp-com', 'fake-product', mode === 'count' ? undefined : 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+        expect(calls).toBe(mode === 'cached' ? 1 : 0);
+    });
+    it('never caches invalid hashes, oversized bytes or mismatched media', async () => {
+        for (const result of [{ bytes: Buffer.from('wrong'), contentType: ref.mediaType },
+            { bytes, contentType: 'image/png' }, { bytes: Buffer.alloc(8 * 1024 * 1024 + 1), contentType: ref.mediaType }]) {
+            let calls = 0;
+            const read = createVehiclePhotoReader(async () => product(), undefined, async () => { calls++; return result; });
+            await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('UNAVAILABLE');
+            await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('UNAVAILABLE');
+            expect(calls).toBe(2);
+        }
+    });
+    it('expires cache and does not let callers mutate cached bytes', async () => {
+        let now = 0;
+        let calls = 0;
+        const read = createVehiclePhotoReader(async () => product(), undefined, async () => { calls++; return { bytes, contentType: ref.mediaType }; }, () => now);
+        (await read('erp-com', 'fake-product', 0)).bytes.fill(0);
+        expect((await read('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+        now = VEHICLE_PHOTO_CACHE_TTL_MS;
+        await read('erp-com', 'fake-product', 0);
+        expect(calls).toBe(2);
+    });
+    it('retains authentication, audit and rejects the ninth concurrent read with Retry-After', async () => {
+        let started = 0;
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        let ready;
+        const eight = new Promise(resolve => { ready = resolve; });
+        const readVehiclePhoto = createVehiclePhotoReader(async () => product(), undefined, async () => {
+            if (++started === 8)
+                ready();
+            await gate;
+            return { bytes, contentType: ref.mediaType };
+        });
+        const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto };
+        const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+        const photoUrl = compatUrl + '/products/fake-product/photos/0';
+        expect((await app.inject({ url: photoUrl })).statusCode).toBe(401);
+        const requests = Array.from({ length: 8 }, () => app.inject({ url: photoUrl, headers }).then(r => r));
+        await eight;
+        const ninth = await app.inject({ url: photoUrl, headers });
+        expect(ninth.statusCode).toBe(429);
+        expect(ninth.headers['retry-after']).toBe('2');
+        release();
+        for (const result of await Promise.all(requests)) {
+            expect(result.statusCode).toBe(200);
+            expect(result.rawPayload).toEqual(bytes);
+        }
+        expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_PRODUCT_PHOTO', phase: 'SUCCEEDED', resource: { name: 'vehicle-product-photo', entityId: 'fake-product' } });
+        const count = await app.inject({ url: compatUrl + '/products/fake-product/photos', headers });
+        expect(count.json().count).toBe(1);
+        expect(count.body).not.toContain('fake-file');
+        await app.close();
+        const forbidden = withAccess(new MemoryDataStore(), [{ id: 'internal-ai-test', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, reader);
+        expect((await forbidden.app.inject({ url: '/v1/consumers/internal-ai-test/catalog-compat/products/fake-product/photos/0', headers })).statusCode).toBe(403);
+        await forbidden.app.close();
+    });
+    it('evicts least recently used bytes at the 64 MiB cap', async () => {
+        const buffers = Array.from({ length: 9 }, (_, i) => Buffer.concat([Buffer.from([255, 216, 255]), Buffer.alloc(8 * 1024 * 1024 - 3, i)]));
+        const refs = buffers.map((value, i) => ({ ...ref, driveFileId: `fake-file-${i}`, sha256: createHash('sha256').update(value).digest('hex') }));
+        let calls = 0;
+        const read = createVehiclePhotoReader(async () => ({ ...product(), photo_original_refs: refs }), undefined, async (value) => {
+            calls++;
+            return { bytes: buffers[refs.findIndex(item => item.sha256 === value.sha256)], contentType: ref.mediaType };
+        });
+        for (let i = 0; i < 8; i++)
+            await read('erp-com', 'fake-product', i);
+        await read('erp-com', 'fake-product', 0);
+        await read('erp-com', 'fake-product', 8);
+        expect(calls).toBe(9);
+        await read('erp-com', 'fake-product', 0);
+        expect(calls).toBe(9);
+        await read('erp-com', 'fake-product', 1);
+        expect(calls).toBe(10);
+    });
+    it('returns 503 when the approved byte port is disconnected', async () => {
+        const readVehiclePhoto = createVehiclePhotoReader(async () => product());
+        const { app } = withAccess(new MemoryDataStore(), [binding], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+        const result = await app.inject({ url: compatUrl + '/products/fake-product/photos/0', headers });
+        expect(result.statusCode).toBe(503);
+        expect(result.json().code).toBe('VEHICLE_PHOTO_READER_UNAVAILABLE');
+        await app.close();
+    });
+});
+describe('photo request budgets and opaque keys', () => {
+    it('hashes tagged tuples without delimiter or source collisions', () => {
+        const key = (supplier, id) => vehiclePhotoKey({ provider_company_code: supplier, supplier_vehicle_id: id });
+        expect(key('A_B', 'C')).not.toBe(key('A', 'B_C'));
+        expect(key('A__', 'B')).not.toBe(key('A_', '_B'));
+        expect(key('A_B', 'C')).toBe(key('A_B', 'C'));
+        expect(key('A', 'B')).not.toBe(vehiclePhotoKey({ provider_company_code: 'A', car_number: 'B' }));
+        expect(key('A', 'B')).toMatch(/^[a-f0-9]{64}$/);
+    });
+    it('refills by injected clock, isolates keys and bounds memory without evicting active budgets', () => {
+        let now = 0;
+        const bucket = createPhotoRequestBucket({ capacity: 1, refillPerSecond: 1 }, () => now);
+        expect(bucket.take('a')).toBe(0);
+        expect(bucket.take('a')).toBe(1);
+        expect(bucket.take('b')).toBe(0);
+        now = 1000;
+        expect(bucket.take('a')).toBe(0);
+        now = 500;
+        expect(bucket.take('a')).toBe(1);
+        for (let i = 2; i < PHOTO_REQUEST_LIMITS.maxKeys; i++)
+            bucket.take(String(i));
+        expect(bucket.size).toBe(PHOTO_REQUEST_LIMITS.maxKeys);
+        expect(bucket.take('overflow')).toBeGreaterThan(0);
+        expect(bucket.take('a')).toBeGreaterThan(0);
+        expect(bucket.take('x'.repeat(201))).toBeGreaterThan(0);
+        now = PHOTO_REQUEST_LIMITS.idleMs + 1000;
+        expect(bucket.take('fresh')).toBe(0);
+        expect(bucket.size).toBe(1);
+    });
+    it.each([[undefined, '0'], ['0', '0'], ['0', '3']])('limits only failed tokens and ignores spoofed forwarding with photo hops=%s public hops=%s', async (hops, publicHops) => {
+        vi.stubEnv('FREEPASS_PUBLIC_TRUST_PROXY_HOPS', publicHops);
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+        vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', hops);
+        const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async () => ({ count: 0, bytes: null, contentType: 'application/json', revalidate: async () => true }) };
+        const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+        const url = compatUrl + '/products/synthetic/photos';
+        for (let i = 0; i < PHOTO_REQUEST_LIMITS.failedAuth.capacity; i++)
+            expect((await app.inject({ url, headers: { authorization: 'Bearer wrong' }, remoteAddress: '192.0.2.1' })).statusCode).toBe(401);
+        const before = logs.events.length;
+        const denied = await app.inject({ url, headers: { authorization: 'Bearer wrong' }, remoteAddress: '192.0.2.1' });
+        expect(denied.statusCode).toBe(429);
+        expect(Number(denied.headers['retry-after'])).toBeGreaterThan(0);
+        expect(logs.events.length).toBe(before);
+        expect((await app.inject({ url, headers, remoteAddress: '192.0.2.1' })).statusCode).toBe(200);
+        expect((await app.inject({ url, headers: { authorization: 'Bearer wrong', 'x-forwarded-for': '198.51.100.1' }, remoteAddress: '192.0.2.1' })).statusCode).toBe(429);
+        expect((await app.inject({ url, remoteAddress: '192.0.2.2' })).statusCode).toBe(401);
+        await app.close();
+        clock.mockRestore();
+        vi.unstubAllEnvs();
+    });
+    it.each(['1', '2', '3'])('uses only the configured trusted proxy boundary at hops=%s', async (hops) => {
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+        vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', hops);
+        const { app } = withAccess(new MemoryDataStore(), [binding]);
+        const url = compatUrl + '/products/synthetic/photos';
+        const forwarded = (client, spoof) => [spoof, client,
+            ...Array.from({ length: Number(hops) - 1 }, (_, i) => `192.0.2.${i + 10}`)].join(', ');
+        try {
+            for (let i = 0; i < PHOTO_REQUEST_LIMITS.failedAuth.capacity; i++)
+                expect((await app.inject({ url, remoteAddress: '192.0.2.1', headers: { 'x-forwarded-for': forwarded('198.51.100.1', '203.0.113.1') } })).statusCode).toBe(401);
+            expect((await app.inject({ url, remoteAddress: '192.0.2.1', headers: { 'x-forwarded-for': forwarded('198.51.100.1', '203.0.113.2') } })).statusCode).toBe(429);
+            expect((await app.inject({ url, remoteAddress: '192.0.2.1', headers: { 'x-forwarded-for': forwarded('198.51.100.2', '203.0.113.1') } })).statusCode).toBe(401);
+        }
+        finally {
+            await app.close();
+            clock.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    });
+    it.each(['0', '1'])('keeps public proxy trust at %s when photo trust is three hops', async (publicHops) => {
+        vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', '3');
+        vi.stubEnv('FREEPASS_PUBLIC_TRUST_PROXY_HOPS', publicHops);
+        const { app } = withAccess(new MemoryDataStore(), [binding]);
+        try {
+            let response;
+            for (let i = 0; i < 121; i++) {
+                const forwarded = publicHops === '0' ? `198.51.100.${i}` : `198.51.100.${i}, 203.0.113.10`;
+                response = await app.inject({ url: '/v1/public/catalog/feed', remoteAddress: '192.0.2.250', headers: { 'x-forwarded-for': forwarded } });
+            }
+            expect(response.statusCode).toBe(429);
+        }
+        finally {
+            await app.close();
+            vi.unstubAllEnvs();
+        }
+    });
+    it.each(['-1', '4', '1.5', 'true', '', '01'])('rejects invalid trusted proxy hops %s', value => {
+        vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', value);
+        try {
+            expect(() => withAccess(new MemoryDataStore(), [binding])).toThrow('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID');
+        }
+        finally {
+            vi.unstubAllEnvs();
+        }
+    });
+    it('shares authenticated consumer budgets across IPs but not consumers', async () => {
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+        let reads = 0;
+        const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async () => { reads++; return { count: 0, bytes: null, contentType: 'application/json', revalidate: async () => true }; } };
+        const { app } = withAccess(new MemoryDataStore(), [binding, { ...binding, id: 'whitelabel-test', token: 'different-test-token-12345678901234567890' }], undefined, reader);
+        const url = compatUrl + '/products/synthetic/photos';
+        for (let i = 0; i < PHOTO_REQUEST_LIMITS.consumer.capacity; i++)
+            expect((await app.inject({ url, headers, remoteAddress: `192.0.2.${i + 1}` })).statusCode).toBe(200);
+        const denied = await app.inject({ url, headers, remoteAddress: '192.0.2.200' });
+        expect(denied.statusCode).toBe(429);
+        expect(Number(denied.headers['retry-after'])).toBeGreaterThan(0);
+        expect(reads).toBe(PHOTO_REQUEST_LIMITS.consumer.capacity);
+        expect((await app.inject({ url: url.replace('erp-com', 'whitelabel-test'), headers: { authorization: 'Bearer different-test-token-12345678901234567890' } })).statusCode).toBe(200);
+        await app.close();
+        clock.mockRestore();
+    });
+});
+it('serves Admin contract fee links in request order with one catalog read pass', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const adminBinding = {
+        id: 'freepass-admin-catalog',
+        projectionId: 'admin-catalog',
+        token: token + '-admin',
+        capabilities: ['contract-fee-link-read'],
+    };
+    const calls = { assets: 0, products: 0, offers: 0, writes: 0 };
+    const feeStore = {
+        listVehicleAssets: async () => { calls.assets++; return store.listVehicleAssets(); },
+        listProducts: async () => { calls.products++; return store.listProducts(); },
+        listOffers: async () => { calls.offers++; return store.listOffers(); },
+        transact: async () => { calls.writes++; throw new Error('write must not be called'); },
+    };
+    const { app, logs } = withAccess(store, [binding, adminBinding], feeStore);
+    const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+    const payload = { items: [
+            { key: 'row-2', assetId: 'va_gv70_demo', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 },
+            { key: 'row-1', plate: '00가0000', supplierId: 'supplier_demo', termMonths: 60, monthlyRent: 690000 },
+        ] };
+    const response = await app.inject({
+        method: 'POST',
+        url: endpoint,
+        headers: { authorization: `Bearer ${token}-admin` },
+        payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().contract).toBe('contract-fee-links/v1');
+    expect(response.json().results.map((item) => item.key)).toEqual(['row-2', 'row-1']);
+    expect(response.json().results[0]).toMatchObject({ key: 'row-2', status: 'LINKED', offerId: 'offer_gv70_demo' });
+    expect(response.json().results[0].fees.supplierBillingFee.status).toBe('CONFIRMED');
+    expect(response.json().results[1]).toMatchObject({ key: 'row-1', status: 'FAILED', failure: 'NO_TERM' });
+    expect(calls).toEqual({ assets: 1, products: 1, offers: 1, writes: 0 });
+    expect(logs.events.at(-1)).toMatchObject({
+        mode: 'READ',
+        phase: 'SUCCEEDED',
+        operation: 'READ_CONTRACT_FEE_LINKS',
+        result: { count: 2 },
+    });
+    await app.close();
+});
+it('serves Admin-only contract fee ledger approximation when the optional ledger port is injected', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const adminBinding = {
+        id: 'freepass-admin-catalog',
+        projectionId: 'admin-catalog',
+        token: token + '-admin',
+        capabilities: ['contract-fee-link-read'],
+    };
+    const logs = new MemoryDataAccessLogStore();
+    const feeStore = {
+        listVehicleAssets: async () => store.listVehicleAssets(),
+        listProducts: async () => store.listProducts(),
+        listOffers: async () => store.listOffers(),
+    };
+    const ledgerPort = {
+        listContractFeeLedgerRows: async () => [{
+                schemaVersion: 'period-fee-ledger/v1',
+                snapshotId: 'period-fee-2026-10-09',
+                snapshotDateKst: '2026-10-09',
+                computedAt: '2026-10-09T00:00:00.000Z',
+                valueBasis: 'CURRENT_AT_SNAPSHOT',
+                valueAsOf: '2026-10-09',
+                evidenceScope: 'OBSERVED_AT_SNAPSHOT',
+                engineRevision: 'test',
+                sourceDigest: 'digest',
+                documentKey: 'doc',
+                applyState: 'READY',
+                holdReasonCode: null,
+                vehicleUid: 'va_gv70_demo',
+                assetId: 'va_gv70_demo',
+                plateLookupKey: null,
+                plateLast4ForReport: null,
+                supplierId: 'supplier_demo',
+                productId: 'product_gv70_demo',
+                offerId: 'offer_gv70_demo',
+                offerRevision: 1,
+                productUpdateTime: null,
+                termKey: 'm36_demo',
+                termMonths: 36,
+                monthlyRent: { amount: 690000, currency: 'KRW', state: 'KNOWN', reasonCode: null },
+                deposit: { state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' }, reasonCode: null, sourceRefs: [], depositEvidence: { kind: 'SOURCE_AMOUNT', ruleCode: null, noteField: null, noteText: null, sourcePriceKey: 'm36_demo', calculationBasis: null, policyCode: null } },
+                vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: 12345678, differenceAmount: 1000 },
+                supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 9000, totalAmount: 99000, reasonCode: 'VEHICLE_VALUE_APPROX', ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+                channelPayoutFee: { state: 'CALCULATED', amount: { amount: 40000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 4000, totalAmount: 44000, reasonCode: null, ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+                ruleIds: ['rule'],
+                policyIds: ['policy'],
+                priceSourceRefs: [],
+                inputRefs: { productPath: 'products/p', offerPath: 'products/p/offers/o', priceTermRef: 'terms/m36', internalEconomicsRef: null },
+            }],
+    };
+    const app = createConsumerGateway(store, [binding, adminBinding], new DataAccessGateway(logs), feeStore, undefined, undefined, undefined, ledgerPort);
+    const response = await app.inject({
+        method: 'POST',
+        url: '/v1/consumers/freepass-admin-catalog/contract-fee-links',
+        headers: { authorization: `Bearer ${token}-admin` },
+        payload: { items: [{ key: 'row', assetId: 'va_gv70_demo', contractDate: '2026-10-10', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 }] },
+    });
+    expect(response.statusCode).toBe(200);
+    const row = response.json().results[0];
+    expect(row.ledgerFee).toMatchObject({
+        status: 'CONFIRMED',
+        evidenceScope: 'OBSERVED_AT_SNAPSHOT',
+        supplierBillingFee: { state: 'CALCULATED_APPROX' },
+        vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
+    });
+    expect(row.ledgerFee.vehicleValueEvidence).not.toHaveProperty('amount');
+    expect(row.ledgerFee).not.toHaveProperty('differenceAmount');
+    await app.close();
+});
+it('rejects invalid contract fee link requests before reading catalog data', async () => {
+    const adminBinding = {
+        id: 'freepass-admin-catalog',
+        projectionId: 'admin-catalog',
+        token: token + '-admin',
+        capabilities: ['contract-fee-link-read'],
+    };
+    let reads = 0;
+    const feeStore = {
+        listVehicleAssets: async () => { reads++; return []; },
+        listProducts: async () => { reads++; return []; },
+        listOffers: async () => { reads++; return []; },
+    };
+    const { app } = withAccess(new MemoryDataStore(), [adminBinding], feeStore);
+    const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+    const auth = { authorization: `Bearer ${token}-admin` };
+    const validItem = { key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 };
+    expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: Array.from({ length: 501 }, (_, i) => ({ ...validItem, key: `row-${i}` })) } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, key: 'dup' }, { ...validItem, key: 'dup' }] } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, termMonths: 0 }] } })).statusCode).toBe(400);
+    expect(reads).toBe(0);
+    await app.close();
+});
+it('keeps contract fee links internal to Admin identity and rejects bad auth', async () => {
+    const adminBinding = {
+        id: 'freepass-admin-catalog',
+        projectionId: 'admin-catalog',
+        token: token + '-admin',
+        capabilities: ['contract-fee-link-read'],
+    };
+    let reads = 0;
+    const feeStore = {
+        listVehicleAssets: async () => { reads++; return []; },
+        listProducts: async () => { reads++; return []; },
+        listOffers: async () => { reads++; return []; },
+    };
+    const { app } = withAccess(new MemoryDataStore(), [binding, adminBinding], feeStore);
+    const adminUrl = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+    const erpUrl = '/v1/consumers/erp-com/contract-fee-links';
+    const payload = { items: [{ key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 }] };
+    expect((await app.inject({ method: 'POST', url: adminUrl, payload })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: adminUrl, headers: { authorization: 'Bearer wrong' }, payload })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: erpUrl, headers, payload })).statusCode).toBe(403);
+    expect(reads).toBe(0);
+    await app.close();
+});
+describe('authenticated exact reference product ID', () => {
+    it.each([false, true])('uses the existing route and schema (internal=%s) without widening grants', async (internal) => {
+        const consumerId = internal ? 'internal-ai-query-test' : 'kakao-ops';
+        const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+        const source = { consumerId, observedAt: '2026-10-11T00:00:00Z', products: {
+                a: { listable: true, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123가4567', price: { '36': { rent: 500000, deposit: 1000000 }, '48': { rent: 400000, deposit: null } } },
+                hidden: { listable: false, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123나4567', price: {} },
+            } };
+        const readSource = vi.fn(async () => source);
+        const reader = { read: async () => { throw new Error('unused'); }, readKakaoReferenceSource: readSource, readInternalAiReferenceSource: readSource };
+        const registration = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+        const { app } = withAccess(new MemoryDataStore(), [registration], undefined, reader);
+        try {
+            expect((await app.inject({ url: endpoint + '?productId=reference_a', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+            expect(readSource).not.toHaveBeenCalled();
+            const all = (await app.inject({ url: endpoint, headers })).json();
+            const exact = await app.inject({ url: endpoint + '?' + new URLSearchParams({ productId: 'reference_a', supplierId: 'RP013', supplierName: 'Synthetic Supplier', plateNumber: '123가4567', termMonths: '36' }), headers });
+            expect(exact.statusCode).toBe(200);
+            expect(exact.json().data).toEqual(all.data);
+            expect(exact.json().data[0].offers[0].priceTerms).toHaveLength(2);
+            expect(exact.json().meta).toMatchObject({ authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', queryResolution: { state: 'MATCHED', matchedProductCount: 1 } });
+            for (const id of ['reference_missing', 'a', 'RP013', '123가4567']) {
+                const empty = await app.inject({ url: endpoint + '?' + new URLSearchParams({ productId: id }), headers });
+                expect(empty.statusCode).toBe(200);
+                expect(empty.json().data).toEqual([]);
+                expect(empty.json().meta.queryResolution.state).toBe('NO_MATCH');
+            }
+            const conflict = await app.inject({ url: endpoint + '?productId=reference_a&plateNumber=123나4567', headers });
+            expect(conflict.statusCode).toBe(200);
+            expect(conflict.json().meta.queryResolution).toMatchObject({ state: 'HOLD', reasonCode: 'PRODUCT_ID_IDENTITY_CONFLICT' });
+            for (const q of ['productId=', 'productId=%20reference_a', 'productId=reference_a&productId=reference_hidden'])
+                expect((await app.inject({ url: endpoint + '?' + q, headers })).statusCode).toBe(400);
+            readSource.mockClear();
+            expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED&productId=reference_hidden', headers })).statusCode).toBe(403);
+            expect(readSource).not.toHaveBeenCalled();
+        }
+        finally {
+            await app.close();
+        }
+        const { app: granted } = withAccess(new MemoryDataStore(), [{ ...registration, referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+        try {
+            const hidden = await granted.inject({ url: endpoint + '?sourceScope=COLLECTED&productId=reference_hidden', headers });
+            expect(hidden.statusCode).toBe(200);
+            expect(hidden.json().data).toHaveLength(1);
+            expect(hidden.json().data[0].sourceRecord).toMatchObject({ listable: false, conditionState: 'HOLD' });
+            expect(hidden.json().data[0].offers[0].priceTerms).toEqual([]);
+        }
+        finally {
+            await granted.close();
+        }
+    });
+});
+describe('authenticated collected source scope', () => {
+    it('adapts source row products into the actual ERP compatibility Record map only with opt-in grant', async () => {
+        const at = '2026-10-11T00:00:00Z', sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+        const raws = ['500000', '무보증'].map((deposit, index) => ({ rawRecordId: `raw-${index}`, sourceId,
+            runId: 'fixture-run', sourceRecordId: `row-${index}`, sourceFingerprint: `fingerprint-${index}`, observedAt: at,
+            payload: { tab: '렌트존', row: index + 2, supplierCode: 'TEMP', values: sheetSpec.inputHeaders.map(h => ({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의', 상품구분: '신차렌트', 제조사: '기아', 모델: '레이',
+                    장기보증: deposit, '48개월': '300000', '60개월': '280000', 비고: 'PRIVATE_CUSTOMER' }[h] ?? '')) } }));
+        const head = { sourceId, runId: 'fixture-run', observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' } };
+        const sourceStore = { getSourceHead: vi.fn(async () => head), getRun: async () => ({ ...head, status: 'COMPLETED', headStatus: 'CURRENT', startedAt: at, rawCount: 2, candidateCount: 2, warningCount: 2 }),
+            listRaw: async () => raws, listCandidates: async () => raws.map(raw => normalizeSharedSheet(raw).record) };
+        const read = vi.fn(async (consumerId) => ({ schema: 'freepass-data.catalog-compat/v1',
+            data: { products: { legacy: { product_code: 'legacy', listable: true } }, policies: {} },
+            meta: { consumerId, authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE', sourceProject: 'freepasserp5',
+                observedAt: at, collectionCounts: { products: 1, policy: 0 }, depositEvidenceVersion: 'catalog-compat-deposit/1' } }));
+        const reader = { read, sourceStore }, endpoint = '/v1/consumers/erp-com/catalog-compat';
+        const { app: denied } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+        try {
+            expect((await denied.inject({ url: endpoint + '?sourceScope=COLLECTED', headers })).statusCode).toBe(403);
+            expect(read).not.toHaveBeenCalled();
+            expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+            const normal = await denied.inject({ url: endpoint, headers });
+            expect(normal.statusCode).toBe(200);
+            expect(Object.keys(normal.json().data.products)).toEqual(['legacy']);
+            expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+        }
+        finally {
+            await denied.close();
+        }
+        const { app } = withAccess(new MemoryDataStore(), [{ ...binding, capabilities: ['catalog'], referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+        try {
+            const result = await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers });
+            expect(result.statusCode).toBe(200);
+            const body = result.json(), rows = Object.entries(body.data.products).filter(([id]) => id.startsWith('source_row_')).map(([, row]) => row);
+            expect(rows).toHaveLength(2);
+            expect(body.meta).toMatchObject({ legacyProductCount: 1, sourceRowCoverage: { currentProductRowCount: 2, returnedProductRowCount: 2 } });
+            expect(rows.every(row => row.car_number === null && row.vehicle_uid === null && row.vehicle_status === '출고협의' && row.listable === false)).toBe(true);
+            expect(rows.map(row => row.price['48'].depositState)).toEqual(['KNOWN', 'ZERO']);
+            expect(rows.map(row => Object.keys(row.price))).toEqual([['48', '60'], ['48', '60']]);
+            expect(rows.every(row => row.price['48'].supplierBillingFee.state === 'UNKNOWN'
+                && row.price['48'].supplierBillingFee.amount === null && row.price['48'].channelPayoutFee.amount === null)).toBe(true);
+            expect(result.body).not.toContain('PRIVATE_CUSTOMER');
+            expect(rows[0]._source_row_product.facts.some((f) => f.fieldKey === 'deposit:m48')).toBe(true);
+            expect(rows[0].product_code).not.toBe(rows[1].product_code);
+        }
+        finally {
+            await app.close();
+        }
+    });
+    it.each([false, true])('reads existing source evidence only after a grant, with schema and atom/condition output (internal=%s)', async (internal) => {
+        const consumerId = internal ? 'internal-ai-observation-test' : 'kakao-ops';
+        const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+        const at = '2026-10-11T00:00:00Z', sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+        const values = sheetSpec.inputHeaders.map(h => ({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의',
+            상품구분: '신차렌트', 제조사: '기아', 모델: '레이', 장기보증: '무보증', '48개월': '300000', '60개월': '280000', '옵션 원문': 'PRIVATE_PII' }[h] ?? ''));
+        const raw = { rawRecordId: 'fixture-raw', runId: 'fixture-run', sourceId, sourceRecordId: 'fixture-source-record', sourceFingerprint: 'fixture-fingerprint', observedAt: at,
+            payload: { values, supplierCode: 'TEMP', tab: '렌트존', row: 2, captureDigest: 'a'.repeat(64), token: 'PRIVATE_TOKEN' } };
+        const candidate = normalizeSharedSheet(raw).record;
+        const head = { sourceId, runId: raw.runId, observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' } };
+        const sourceStore = { getSourceHead: vi.fn(async () => head), getRun: async () => ({ ...head, status: 'COMPLETED', headStatus: 'CURRENT', startedAt: at, rawCount: 1, candidateCount: 1, warningCount: 1 }),
+            listRaw: async () => [raw], listCandidates: async () => [candidate] };
+        const reader = { sourceStore, read: async () => { throw new Error('unused'); },
+            readKakaoReferenceSource: async () => ({ consumerId, observedAt: at, products: {} }),
+            readInternalAiReferenceSource: async () => ({ consumerId, observedAt: at, products: {} }) };
+        const registration = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+        const { app: denied } = withAccess(new MemoryDataStore(), [registration], undefined, reader);
+        try {
+            expect((await denied.inject({ url: endpoint + '?sourceScope=COLLECTED', headers })).statusCode).toBe(403);
+            expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+        }
+        finally {
+            await denied.close();
+        }
+        const { app, logs } = withAccess(new MemoryDataStore(), [{ ...registration, referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+        try {
+            const response = await app.inject({ url: endpoint + '?' + new URLSearchParams({ sourceScope: 'COLLECTED', supplierName: '렌트존', model: '레이', termMonths: '48' }), headers });
+            expect(response.statusCode).toBe(200);
+            const body = response.json(), observation = body.data[0];
+            expect(body.sourceObservations.observations).toBeUndefined();
+            expect(body.meta.queryResolution).toMatchObject({ state: 'MATCHED', matchedProductCount: 1, matchedObservationCount: 1, matchedLegacyProductCount: 0 });
+            expect(observation).toMatchObject({ representationKind: 'CURRENT_SOURCE_ROW_PRODUCT', vehicleAssetId: null, source: { candidateStatus: 'REJECTED', row: 2 }, normalized: { plateNumber: null } });
+            expect(body.data).toEqual([observation]);
+            expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'deposit:m48', rawValue: '무보증', normalizedValue: 0, state: 'ZERO' }));
+            expect(observation.normalized.priceConditions).toHaveLength(2);
+            expect(observation.normalized.priceConditions.every((term) => term.supplierBillingFee.state === 'UNKNOWN' && term.supplierBillingFee.amount === null
+                && term.channelPayoutFee.state === 'UNKNOWN' && term.channelPayoutFee.amount === null
+                && term.priceSourceRefs.some((ref) => ref.field === `${term.termMonths}개월`))).toBe(true);
+            expect(response.body).not.toMatch(/PRIVATE_PII|PRIVATE_TOKEN/);
+            expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'sourceColumn:옵션 원문', rawValue: null, reasons: ['RAW_FREE_TEXT_WITHHELD'] }));
+            const exact = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceObservationId=' + observation.observationId, headers });
+            expect(exact.statusCode).toBe(200);
+            expect(exact.json().data).toEqual([observation]);
+            const empty = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceObservationId=missing', headers });
+            expect(empty.statusCode).toBe(200);
+            expect(empty.json().meta.queryResolution).toMatchObject({ state: 'NO_MATCH', matchedObservationCount: 0 });
+            const digestBefore = body.meta.dataDigest;
+            values[sheetSpec.inputHeaders.indexOf('48개월')] = '330000';
+            const changed = await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers });
+            expect(changed.statusCode).toBe(200);
+            expect(changed.json().meta.dataDigest).not.toBe(digestBefore);
+            expect(logs.events.some(e => e.phase === 'SUCCEEDED')).toBe(true);
+        }
+        finally {
+            await app.close();
+        }
+    });
+    it.each(['kakao-ops', 'internal-ai-fixture'])('requires explicit %s scope grant before source reads and keeps default scope unchanged', async (consumerId) => {
+        const internal = consumerId.startsWith('internal-ai-');
+        const source = { consumerId, sourceScope: 'COLLECTED', observedAt: '2026-10-10T00:00:00Z', products: {
+                listed: { listable: true, provider_company_code: 'TEMP', provider_name: 'Fixture', car_number: '123가4567', price: { '36': { rent: 500000, deposit: null } } },
+                hidden: { listable: false, provider_company_code: 'TEMP', provider_name: 'Fixture', car_number: '123가4567', price: null },
+            } };
+        const readSource = vi.fn(async () => source);
+        const reader = { read: async () => { throw new Error('unused'); }, readKakaoReferenceSource: readSource, readInternalAiReferenceSource: readSource };
+        const registration = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+        const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+        for (const granted of [false, true]) {
+            const { app, logs } = withAccess(new MemoryDataStore(), [{ ...registration, ...(granted ? { referenceSourceScopes: ['COLLECTED'] } : {}) }], undefined, reader);
+            try {
+                readSource.mockClear();
+                const collected = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&plateNumber=123가4567', headers });
+                expect(collected.statusCode).toBe(granted ? 200 : 403);
+                if (!granted) {
+                    expect(collected.json()).toEqual({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+                    expect(readSource).not.toHaveBeenCalled();
+                    expect(logs.events.at(-1)?.phase).toBe('DENIED');
+                }
+                else {
+                    expect(collected.json().data.map((p) => p.sourceProductId)).toEqual(['hidden', 'listed']);
+                    expect(collected.json().data[0].sourceRecord).toMatchObject({ listable: false, conditionState: 'HOLD', reasonCode: 'SOURCE_PRICE_CONDITIONS_MISSING' });
+                    expect(collected.json().meta).toMatchObject({ authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', queryResolution: { state: 'HOLD' } });
+                }
+                const normal = await app.inject({ url: endpoint, headers });
+                expect(normal.statusCode).toBe(200);
+                expect(normal.json().data.map((p) => p.sourceProductId)).toEqual(['listed']);
+                expect(normal.json().data[0]).not.toHaveProperty('sourceRecord');
+                readSource.mockClear();
+                expect((await app.inject({ url: endpoint + '?sourceScope=UNKNOWN', headers })).statusCode).toBe(400);
+                expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceScope=LISTABLE', headers })).statusCode).toBe(400);
+                expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+                expect(readSource).not.toHaveBeenCalled();
+            }
+            finally {
+                await app.close();
+            }
+        }
+    });
+    it('does not allow a public registration to request collected grants or unsupported/duplicate scope grants', () => {
+        for (const scopes of [['COLLECTED'], [], ['COLLECTED', 'COLLECTED'], ['LISTABLE'], 'COLLECTED']) {
+            expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, id: 'whitelabel-fixture', referenceSourceScopes: scopes }]))).toThrow();
+        }
+        expect(parseConsumerBindings(JSON.stringify([{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+        expect(parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['catalog'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+    });
+});
+describe('ERP5 dedicated RP031 media consumer', () => {
+    const mediaToken = 'synthetic-erp5-media-token-0123456789abcdef';
+    const media = { id: 'erp5-public-media', projectionId: 'erp-public', token: mediaToken, capabilities: ['photos'] };
+    const mediaHeaders = { authorization: `Bearer ${mediaToken}` };
+    const prefix = '/v1/consumers/erp5-public-media';
+    const photoUrl = prefix + '/catalog-compat/products/synthetic/photos';
+    const bytes = Buffer.from([255, 216, 255, 1]);
+    const product = () => ({ provider_company_code: 'RP031', listable: true, status_kind: '가용',
+        iancar_one_vehicle_id: 'synthetic-one-id', car_number: 'synthetic-plate',
+        photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'offline-test',
+                vehiclePhotoVerifiedAt: '2026-10-11T00:00:00.000Z' }] });
+    it('requires exact dedicated capability and distinct tokens without expanding legacy registrations', () => {
+        expect(parseConsumerBindings(JSON.stringify([binding, media]))[1]).toMatchObject(media);
+        expect(parseConsumerBindings(JSON.stringify([binding]))[0]?.capabilities).toEqual(['catalog']);
+        for (const patch of [{ capabilities: undefined }, { capabilities: [] }, { capabilities: ['catalog'] },
+            { capabilities: ['photos', 'catalog'] }, { capabilities: ['photos', 'photos'] }, { token },
+            { projectionId: 'admin-catalog' }, { id: 'erp5-public-media-other' }, { token: 'short' }])
+            expect(() => parseConsumerBindings(JSON.stringify([binding, { ...media, ...patch }]))).toThrow();
+        for (const id of ['erp-com', 'whitelabel-synthetic', 'kakao-ops', 'internal-ai-synthetic'])
+            expect(() => parseConsumerBindings(JSON.stringify([{ ...media, id }]))).toThrow();
+    });
+    it('authorizes only count/index routes and audits the dedicated caller with no token disclosure', async () => {
+        const read = vi.fn(async (_consumer, _id, index) => ({ count: 2,
+            bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true }));
+        const catalogRead = vi.fn(async () => { throw new Error('must not read catalog'); });
+        const store = new MemoryDataStore();
+        const active = vi.spyOn(store, 'getActive');
+        const { app, logs } = withAccess(store, [binding, media], undefined, { read: catalogRead, readVehiclePhoto: read });
+        for (const suffix of ['', '/0']) {
+            const response = await app.inject({ url: photoUrl + suffix, headers: mediaHeaders });
+            expect(response.statusCode).toBe(200);
+            expect(response.headers['cache-control']).toBe('private, no-store');
+            expect(response.headers['x-content-type-options']).toBe('nosniff');
+        }
+        expect(read.mock.calls[0]?.[0]).toBe('erp5-public-media');
+        expect(logs.events.at(-1)).toMatchObject({ phase: 'SUCCEEDED', operation: 'READ_PRODUCT_PHOTO',
+            actor: { id: 'consumer:erp5-public-media' }, clientId: 'erp5-public-media' });
+        for (const suffix of ['/catalog', '/catalog-compat', '/catalog-health', '/estimate-newcar-master',
+            '/catalog-reference', '/internal-ai-reference', '/issued-quotes/synthetic', '/share-envelopes/synthetic'])
+            expect((await app.inject({ url: prefix + suffix, headers: mediaHeaders })).statusCode, suffix).toBe(403);
+        for (const suffix of ['/settlement-ledger/read', '/contract-fee-links', '/admin-workflow/read', '/admin-workflow/commit'])
+            expect((await app.inject({ method: 'POST', url: prefix + suffix, headers: mediaHeaders, payload: {} })).statusCode, suffix).toBe(403);
+        expect(catalogRead).not.toHaveBeenCalled();
+        expect(active).not.toHaveBeenCalled();
+        expect(read).toHaveBeenCalledTimes(2);
+        expect((await app.inject({ url: compatUrl + '/products/synthetic/photos/0', headers: mediaHeaders })).statusCode).toBe(401);
+        expect((await app.inject({ url: photoUrl, headers })).statusCode).toBe(401);
+        for (const index of ['200', '-1', '01'])
+            expect((await app.inject({ url: photoUrl + '/' + index, headers: mediaHeaders })).statusCode).toBe(400);
+        expect(JSON.stringify(logs.events)).not.toContain(mediaToken);
+        await app.close();
+    });
+    it.each([undefined, 0])('limits RP031 source and revalidation before %s delivery without Drive fallback', async (index) => {
+        let current = product();
+        const sourceRead = vi.fn(async () => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }));
+        const drive = vi.fn(async () => ({ bytes, contentType: 'image/jpeg' }));
+        const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+            connection: p => JSON.stringify([p.provider_company_code, p.iancar_one_vehicle_id, p.car_number]), read: sourceRead }, drive);
+        for (const patch of [{ provider_company_code: 'RP013' }, { listable: false }, { publication_withdrawal: {} },
+            { status_kind: '출고불가' }, { iancar_one_vehicle_id: '' }, { car_number: '' }, { photo_original_refs: [] }]) {
+            current = { ...product(), ...patch };
+            await expect(reader(media.id, 'synthetic', index)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+        }
+        expect(sourceRead).not.toHaveBeenCalled();
+        expect(drive).not.toHaveBeenCalled();
+        current = product();
+        const result = await reader(media.id, 'synthetic', index);
+        for (const patch of [{ publication_withdrawal: {} }, { provider_company_code: 'RP013' },
+            { iancar_one_vehicle_id: 'changed' }, { car_number: 'changed' }, { listable: false }]) {
+            current = { ...product(), ...patch };
+            expect(await result.revalidate()).toBe(false);
+        }
+        expect(sourceRead).toHaveBeenCalledTimes(1);
+        expect(drive).not.toHaveBeenCalled();
+    });
+    it.each(['count', 'bytes'])('rejects dedicated %s delivery revoked during success audit', async (mode) => {
+        let current = product();
+        const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+            connection: p => JSON.stringify([p.iancar_one_vehicle_id, p.car_number]),
+            read: async (_p, index) => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }) });
+        const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+            read: async () => { throw new Error('unused'); }, readVehiclePhoto: reader
+        });
+        const append = logs.appendDataAccessEvent.bind(logs);
+        vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async (event) => {
+            await append(event);
+            if (event.phase === 'SUCCEEDED')
+                current = { ...current, publication_withdrawal: {} };
+        });
+        const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+        expect(response.statusCode).toBe(404);
+        expect(response.rawPayload).not.toEqual(bytes);
+        expect(logs.events.at(-1)).toMatchObject({ phase: 'DENIED', reasonCode: 'VEHICLE_PHOTO_NOT_FOUND',
+            actor: { id: 'consumer:erp5-public-media' } });
+        await app.close();
+    });
+    it.each(['count', 'bytes'])('withholds dedicated %s response if success audit cannot persist', async (mode) => {
+        const read = vi.fn(async (_consumer, _id, index) => ({ count: 1,
+            bytes: index === undefined ? null : bytes, contentType: 'image/jpeg', revalidate: vi.fn(async () => true) }));
+        const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+            read: async () => { throw new Error('unused'); }, readVehiclePhoto: read
+        });
+        const append = logs.appendDataAccessEvent.bind(logs);
+        vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async (event) => {
+            if (event.phase === 'SUCCEEDED')
+                throw new Error('offline success-audit failure');
+            await append(event);
+        });
+        const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+        expect(response.statusCode).toBe(503);
+        expect(response.rawPayload).not.toEqual(bytes);
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false);
+        await app.close();
+    });
+    it('fails closed before supplier reads when audit persistence is unavailable', async () => {
+        const read = vi.fn(async () => { throw new Error('must not call supplier'); });
+        const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto: read });
+        vi.spyOn(logs, 'appendDataAccessEvent').mockRejectedValue(new Error('offline audit failure'));
+        expect((await app.inject({ url: photoUrl + '/0', headers: mediaHeaders })).statusCode).toBe(503);
+        expect(read).not.toHaveBeenCalled();
+        await app.close();
+    });
+});
