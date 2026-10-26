@@ -125,6 +125,8 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         },
         getOffer: async (id) => catalogEntity<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
         putOffer: async (offer) => { native.set(this.db.collection(C.offers).doc(offer.id), offer); },
+        getPolicy: async (id) => catalogEntity<Policy>(await native.get(this.db.collection(C.policies).doc(id))),
+        putPolicy: async (policy) => { native.create(this.db.collection(C.policies).doc(policy.id), policy); },
 
         getSourceDefinition: async (sourceId) =>
           data<SourceDefinition>(

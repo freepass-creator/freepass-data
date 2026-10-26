@@ -92,6 +92,16 @@ describe('trusted bounded single-product runtime readback', () => {
     expect(() => helper.validateProduct(value, new Headers(headers))).toThrow();
     expect(() => helper.validateProduct(snapshot(), new Headers({ ...headers, 'cache-control': 'no-store' }))).toThrow();
   });
+  it('accepts bounded stored insurance facts from the registered single-product policy link', () => {
+    const value = snapshot() as any;
+    value.data.products[id].policy_code = 'P1';
+    value.data.policies.P1 = { _key: 'P1', policy_code: 'P1', property_compensation_limit: 200000000,
+      own_damage_repair_ratio: 0.2, injury_deductible: '50만원' };
+    value.meta.collectionCounts.policies = 1;
+    value.meta.documentVersions.policies = [{ id: 'P1', updateTime: iso, updateTimeExact: { ...pair } }];
+    value.meta.linkedFacts.policy = { state: 'KNOWN', reasonCode: null };
+    expect(helper.validateProduct(value, new Headers(headers))).toBe(true);
+  });
   it.each([1, 2, 3])('unexpected status in request %i stops without retry', async at => {
     const input = options(); const original = input.fetchImpl.getMockImplementation()!;
     input.fetchImpl.mockImplementation(async (url, init) => input.fetchImpl.mock.calls.length === at
@@ -134,6 +144,15 @@ describe('trusted bounded single-product runtime readback', () => {
     expect(helper.POLICY_FIELDS).toEqual([...SINGLE_POLICY_FACT_FIELDS]);
     expect(helper.PARTNER_FIELDS).toEqual([...SINGLE_PARTNER_FACT_FIELDS]);
     expect(helper.PRICE_FIELDS).toEqual([...SINGLE_PRODUCT_PRICE_FIELDS]);
+  });
+  it('keeps registered insurance facts in the bounded supplier-policy detail read', () => {
+    expect(SINGLE_POLICY_FACT_FIELDS).toEqual(expect.arrayContaining([
+      'injury_compensation_limit', 'injury_deductible', 'property_compensation_limit', 'property_deductible',
+      'self_body_accident', 'self_body_deductible', 'personal_injury_compensation_limit', 'personal_injury_deductible',
+      'uninsured_damage', 'uninsured_compensation_limit', 'uninsured_deductible', 'own_damage_compensation',
+      'own_damage_repair_ratio', 'own_damage_compensation_rate', 'own_damage_min_deductible', 'own_damage_max_deductible',
+      'annual_roadside_assistance', 'roadside_assistance', 'insurer_name', 'designated_garage', 'self_damage_exclusions',
+    ]));
   });
   it('preserves trusted helper before checkout and reads the deploy secret once', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8');

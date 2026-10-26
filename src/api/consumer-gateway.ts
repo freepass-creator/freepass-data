@@ -1,3 +1,5 @@
+import type { ContractStandardEdition } from '../application/contract-standard-catalog.js';
+import { isSupplierContractStandard } from '../domain/supplier-contract-standard.js';
 import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
 import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
@@ -388,6 +390,7 @@ export function createConsumerGateway(
   compatReader?: {
     sourceStore?: Parameters<typeof readCurrentReferenceObservations>[0];
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
+    readContractStandards?(): Promise<ContractStandardEdition[]>;
     readProductCompat?(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot>;
     readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
@@ -901,6 +904,25 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
     }
   });
+  app.get<{Params:{consumerId:string}}>('/v1/consumers/:consumerId/contract-standards',async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');
+    const binding=registered.get(request.params.consumerId);
+    const matches=timingSafeEqual(hash(request.headers.authorization??''),hash(binding?`Bearer ${binding.token}`:'unregistered-consumer'));
+    const spec={context:consumerContext(binding?.id??'unregistered-consumer','read registered supplier standard contract facts',request.id),
+      operation:'READ_SUPPLIER_CONTRACT_STANDARDS',resource:{kind:'CATALOG' as const,name:'supplier-contract-standards'}};
+    try{
+      if(!binding||!matches){await access.deny('READ',spec,'UNAUTHORIZED');return reply.code(401).send({code:'UNAUTHORIZED'});}
+      if(!binding.capabilities.includes('catalog')){await access.deny('READ',spec,'FORBIDDEN');return reply.code(403).send({code:'FORBIDDEN'});}
+      if(Object.keys(request.query as object).length)return reply.code(400).send({code:'INVALID_STANDARD_SELECTION'});
+      if(!compatReader?.readContractStandards)return reply.code(503).send({code:'STANDARD_READER_UNAVAILABLE'});
+      const standards=await access.read({...spec,summarize:(v:ContractStandardEdition[])=>({count:v.length,digest:stableDigest(v)})},()=>compatReader.readContractStandards!());
+      if(!Array.isArray(standards)||standards.length>2000||standards.some(s=>!s||Object.keys(s).sort().join(',')!=='effectiveFrom,policyId,standard,supplierBindingState,version'
+        ||!isSupplierContractStandard(s.standard)||s.version!==s.standard.version||!/^std_[0-9a-f]{40}$/.test(s.policyId)
+        ||!Number.isFinite(Date.parse(s.effectiveFrom))||s.supplierBindingState!==(s.standard.supplierCodes.length?'BOUND':'UNLINKED_SUPPLIER')))
+        throw new Error('STANDARD_RESPONSE_INVALID');
+      return {schema:'freepass-data.contract-standards/v1',consumerId:binding.id,observedAt:new Date().toISOString(),standards};
+    }catch(error){logRouteError('/v1/consumers/:consumerId/contract-standards','contract_standards',error);return reply.code(503).send({code:'STANDARD_READ_FAILED'});}
+  });
   app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
@@ -944,7 +966,7 @@ export function createConsumerGateway(
           && stamp(iso) && Date.parse(iso) === (pair.seconds as number) * 1000 + Math.floor((pair.nanoseconds as number) / 1e6);
         const scalar = (v: unknown) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
           || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
-        const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && scalar(row[k]));
+        const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && (k==='standard_contract' ? allowed===SINGLE_POLICY_FACT_FIELDS && isSupplierContractStandard(row[k]) : scalar(row[k])));
         const priceFields = (row: unknown) => object(row) && Object.keys(row).every(k => (SINGLE_PRODUCT_PRICE_FIELDS as readonly string[]).includes(k)
           && (k === 'depositEvidenceBasis' ? fields(row[k], ['field', 'text', 'source', 'at'])
             : k === 'depositRuleDifference' ? fields(row[k], ['ruleAmount', 'ruleCode', 'differs']) : scalar(row[k])));

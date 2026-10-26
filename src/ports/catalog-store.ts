@@ -50,6 +50,8 @@ export interface CatalogTransaction {
   putProduct(product: Product): Promise<void>;
   getOffer(id: string): Promise<Offer | null>;
   putOffer(offer: Offer): Promise<void>;
+  getPolicy(id: string): Promise<Policy | null>;
+  putPolicy(policy: Policy): Promise<void>;
 
   getSourceDefinition(sourceId: string): Promise<SourceDefinition | null>;
   putSourceDefinition(source: SourceDefinition): Promise<void>;

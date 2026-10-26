@@ -246,3 +246,9 @@ FreePass Data는 다음 질문에는 답하지 않는다.
 
 현재 소비처 전환 중이므로 commercial block의 listing/preview/conditionSummary는 당분간 호환용으로 유지한다.
 정본 의미는 dataCatalog와 basisRows에 두고, 이후 소비처가 안정적으로 dataCatalog를 사용하면 호환 필드 제거 여부를 별도로 결정한다.
+
+### Held supplier contract facts (2026-10-27)
+
+The existing policy dictionary remains the field authority. supplier-contract-standard/v1 is its source-fact transport: immutable version, source catalog/profile digests, registered supplier codes, SUPPLIER or FREEPASS_STANDARD fact origin, explicit cleared fields and source-labelled conditional options. It does not choose a customer's age/class/profile or compute a quote. The representative-adopted held company contract is the baseline; actual issue-time selection and supplier preapproval remain with esign.
+
+Catalog-capability consumers may read /v1/consumers/:consumerId/contract-standards using their existing authentication. freepass-data.contract-standards/v1 returns policyId/version/effectiveFrom/supplierBindingState/standard only. UNLINKED_SUPPLIER means no vehicle or supplier-code association is authorized. Selected-product compatibility returns the same validated native business bundle; original files, customer/account data and internal entity metadata are excluded. ERP uses the Data projector and preserves conditional/source-standard labels. Existing direct policy references remain exact; a missing reference may select only its explicitly registered same-supplier standard default. This publication is not a whole-catalog transport or ACTIVE-release cutover.
