@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 7,
-      "CHANGED": 49,
+      "ADDED": 0,
+      "CHANGED": 12,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 2342
+      "UNCHANGED": 2388
     },
     "current": {
-      "count": 2398,
-      "digest": "3390aaeee39c5934e2d35eff7176e94b1a945182a7ca6a1d27bb013b64b8280e",
-      "readTime": "2026-10-26T06:55:55.981305Z"
+      "count": 2400,
+      "digest": "acd330c0b2b23a2e668202f7955301e25b9922cfc7160ab503f36b444ad82d94",
+      "readTime": "2026-10-26T14:31:40.697692Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "d1146d19afb13bbacc56d85ca28bf4f28824f03b22b3138bf22cfcf966b2df8c",
-    "inventoryTransitionCount": 6,
+    "digest": "c523a01ea32d176ddb5fa2257d21226ea4d6d3f25aa107ac591b355497f4a32a",
+    "inventoryTransitionCount": 0,
     "previous": {
-      "count": 2391,
-      "digest": "12bdc194c985b5ddd39f08cf8124e1994337eb17cb7174ff38a04aeb3a06e146",
-      "readTime": "2026-10-26T04:37:33.672269Z"
+      "count": 2400,
+      "digest": "295f2e3d810d3e7948f9b1274285afbd74ce65d6209ed51434030b9fd6302275",
+      "readTime": "2026-10-26T10:46:42.806263Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 6,
+    "inventoryTransitionCount": 0,
     "mappedForReview": 129,
-    "mappingHold": 2269,
+    "mappingHold": 2271,
     "productFieldPathCount": 1299
   },
-  "runId": "40282650453-1",
+  "runId": "40340299948-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 2398
+      "products": 2400
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "3390aaeee39c5934e2d35eff7176e94b1a945182a7ca6a1d27bb013b64b8280e",
+    "digest": "acd330c0b2b23a2e668202f7955301e25b9922cfc7160ab503f36b444ad82d94",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-26T06:55:55.981305Z"
+    "readTime": "2026-10-26T14:31:40.697692Z"
   },
   "version": "erp5-source-inventory/1"
 }
