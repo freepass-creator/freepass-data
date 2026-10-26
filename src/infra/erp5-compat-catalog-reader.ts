@@ -1,4 +1,4 @@
-import { isSupplierContractStandard, isRegisteredSupplierStandardDefault } from '../domain/supplier-contract-standard.js';
+import { isSupplierContractStandard, isRegisteredSupplierStandardDefault, projectSupplierContractStandard } from '../domain/supplier-contract-standard.js';
 import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
@@ -306,7 +306,9 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
         || !facts.standard_contract.supplierCodes.includes(partnerId??''))) return selectionUnavailable();
       const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
       if (codes.some(code => facts[code] != null && facts[code] !== '' && facts[code] !== id)) return selectionUnavailable();
-      return { rows: { [id]: { ...pickSelectedFacts(facts, fields.filter(f=>f!=='standard_contract')), ...(kind==='policy' && Object.hasOwn(facts,'standard_contract') ? {standard_contract:facts.standard_contract} : {}), _key: id } },
+      const standardProjection=kind==='policy'?projectSupplierContractStandard(facts.standard_contract,{supplierCode:partnerId??'',productType:raw.product_type,baseDriverAge:facts.basic_driver_age}):null;
+      const projectedFacts=standardProjection?{...facts,...Object.fromEntries(Object.entries(standardProjection.values).filter(([k])=>fields.includes(k)).map(([k,v])=>[k,typeof v==='string'&&(v.length>300||/[\u0000-\u001f\u007f]/.test(v))?null:v]))}:facts;
+      return { rows: { [id]: { ...pickSelectedFacts(projectedFacts, fields.filter(f=>f!=='standard_contract')), ...(kind==='policy' && Object.hasOwn(facts,'standard_contract') ? {standard_contract:facts.standard_contract} : {}), _key: id } },
         versions: [{ id, updateTime, updateTimeExact: { seconds: doc.updateTime!.seconds, nanoseconds: doc.updateTime!.nanoseconds } }], evidence: { state: 'KNOWN' as const, reasonCode: null } };
     };
     const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);

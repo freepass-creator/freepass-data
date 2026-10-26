@@ -119,7 +119,9 @@ export function projectSupplierContractStandard(value:unknown,input:{supplierCod
   if(allFields.has('driver_scope')){managed.add('personal_driver_scope');managed.add('business_driver_scope');}
   output.managedKeys=[...managed];
   for(const key of managed)output.values[key]=null;
-  if(!profiles.length){output.notes.push('등록된 표준 계약의 상품 유형 확인이 필요합니다.');return output;}
+  if(!profiles.length){output.notes.push('등록된 표준 계약의 상품 유형 확인이 필요합니다.');
+    output.displayValues.standard_contract_basis='상품 유형별 계약 조건 확인 필요 · 보유 계약: '+[...new Set(value.profiles.flatMap(p=>p.kinds))].map(k=>k==='RENT'?'렌트':'구독').join('/');
+    output.displayValues.standard_contract_options=output.notes.join('\n');return output;}
   const age=typeof input.baseDriverAge==='string'?input.baseDriverAge.match(/^만\s*(\d+)세\s*이상$/)?.[1]:undefined;
   const collected=new Map<string,Array<{scope:string;fact:StandardFact|null}>>();
   for(const p of profiles){
