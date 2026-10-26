@@ -244,6 +244,18 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
+
+- Representative authorization: PC3 remains the Data main owner; PC0 executes remotely on PC3 under the bounded child of C1026-827079b8. The currently held final supplier contract is the company standard, not an individually issued customer contract. Existing per-contract supplier preapproval remains in esign.
+- Source: supplier numeric catalog 2026-10-26.1 + freepass-complete-20261026-v1, held-source commit 5eb4cd64d19ac6b812124a7730c4850e7786ed16. Original supplier facts, FreePass standard supplementation, conditional variants and explicit blanks remain distinguishable. No original files, customer/account fields or private paths are included in the public business bundle.
+- PERSISTENCE VERIFIED on PC3: 23 immutable Canonical policies through CatalogStore, existing writer ownership, command receipt and audit. Source registration plan digest e9bf2ff243a5eb4a27430edcb2193efce2e425510fa2e6d708747c85898d4e61. Legacy policy corrector: 31 existing policies +17 explicitly registered supplier-code defaults;443 changes/readbacks/audits, aggregate plan digest 8da1465ee2dd9d4163e252b3a3421f474affe8e5de4e5ed627e7f251fd09ddea. Private before-images and per-plan receipts are retained on PC3 under .codex/private/policy-link-20261026 and the existing corrector backup folders.
+- Read contract: authenticated catalog-capability GET /v1/consumers/:consumerId/contract-standards returns validated immutable business editions. Existing selected-product compatibility reads include the validated native standard bundle. A missing product policy reference can use only the exact registered STD-<supplierCode> default with corrector ownership and matching supplier scope; broken explicit references are not repaired by guessing.
+- ERP renders the Data-owned projector, including staged annual late fees, source age/vehicle-class alternatives and the KH explicit blank general self-damage rate. Prices/deposits, offers, ACTIVE releases, sheet values, Firebase/IAM bindings and esign execution are not changed by this packet. The optional data-api catalog-mode experiment remains inactive and outside the release.
+- Local validation: architecture/data-access boundaries and TypeScript pass; focused policy/correction/point-read/consumer tests pass. ERP full suite1180 passed/1 skipped. Windows Data full run4445 passed/17 failed/19 skipped (shell execution/environment and temporary-directory cleanup); Linux CI must confirm the release. Standards checker retains the pre-existing PARTIAL capability list.
+- Remaining until final evidence: Linux CI, merge/existing-runtime deployment, authenticated standard/point readback, all110 public target details and rendered UI. Tago has no verified registered supplier code; its source profile is registered UNLINKED_SUPPLIER and is not assigned another company's code. Original117 /125호8983 HOLD and unrelated work are outside this child.
+
+
+
 ### 2026-10-24 계약 원본 단일 기준 — 남은 구형 수치 정정
 
 - 대표는 ERP5의 기존 값이 잘못된 데이터이며 계약서 원본이 항상 기준이라고 재확정했다. 기존 정책 정정기에서 구형 지연 이율·단일 초과주행 요금·보증금 연체 회차 세 칸을 근거와 함께 정정하도록 확장한다.

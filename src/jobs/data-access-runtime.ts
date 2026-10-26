@@ -781,3 +781,9 @@ export async function createContractLockRuntime() {
     }, () => releaseContractLock(input)),
   };
 }
+
+export async function createContractStandardsRuntime() {
+  return { store: await createFirestoreDataStore(),
+    readAccess: new DataAccessGateway(new MemoryDataAccessLogStore()),
+    access: new DataAccessGateway(createFirestoreDataAccessLogStore()) };
+}
