@@ -104,6 +104,15 @@ describe('B) 아이카 시트 제원 → raw.spec', () => {
     const f = fixture([row(o)]);
     return aicaNativeCapture(f.tables, time, f.meta, on ? { sheetSpec: true } : undefined).rows[0]!.record.raw;
   };
+  it('모델연도(MY)가 차종분류·트림에 명시되면 year 로 넘기고, 없거나 둘 이상 다르면 만들지 않는다', () => {
+    expect(spec({ 차종분류: '아반떼 CN7 26MY', 트림: 'Modern' }).spec).toHaveProperty('year', '2026');
+    expect(spec({ 차종분류: '레이 (레이 26MY)', 트림: '프레스티지' }).spec).toHaveProperty('year', '2026');
+    expect(spec({ 차종분류: 'K5', 트림: '트렌디 6 25MY' }).spec).toHaveProperty('year', '2025');
+    expect(spec({ 차종분류: 'K5 25MY', 트림: '25MY' }).spec).toHaveProperty('year', '2025');
+    expect(spec({ 차종분류: 'K5 25MY', 트림: '26MY' }).spec).not.toHaveProperty('year');
+    expect(spec({ 차종분류: 'K5 EMY5', 트림: 'A3MY' }).spec).not.toHaveProperty('year');
+    expect(spec({ 차종분류: '합성모델', 최초등록: '2023-05-12' }).spec).not.toHaveProperty('year');
+  });
   it('연료·외장·내장·Km·최초등록·배기량을 넘기고 연식은 만들지 않는다(최초등록에서 연식 추정 금지)', async () => {
     expect(spec().spec).toEqual({ fuel_type: '가솔린', ext_color: '흰색', int_color: '검정', mileage: '12345', first_registration_date: '2023-05-12', engine_cc: '1598' });
     expect(spec().spec).not.toHaveProperty('year');
