@@ -25,6 +25,20 @@ export const SPEC_FORMAT_RULES: Readonly<Record<string, (v: string) => boolean>>
   ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
   int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
 };
+/** 공급사 차명에 독립된 «N인승»이 명시된 경우만 읽는다. 모델로 추정하지 않으며 범위·대안·부정·변경 표기는 보류한다. */
+export function explicitSeatCount(vehicleText: unknown): string | null {
+  if (typeof vehicleText !== 'string') return null;
+  const text = vehicleText.normalize('NFKC');
+  if (/(?:아님|아닌|제외|개조|변경|예정|추정|미확인|확인\s*필요|미정|모름|선택|이상|이하|부터|까지|약\s*\d+\s*인승|인승\s*[?？])/u.test(text)) return null;
+  // «7/9인승», «7~9인승», «7인승/9인승»은 뒤 숫자 하나로 읽지 않는다.
+  if (/\d\s*(?:[~～∼–—\-/,+·]+|또는|및)\s*\d+\s*인승|인승\s*[~～∼–—\-/,+·]/u.test(text)) return null;
+  const mentions = [...text.matchAll(/\d+\s*인승/gu)];
+  const tokens = [...text.matchAll(/(?<![\p{L}\p{N}.,/~～∼–—+\-])([1-9]\d?)\s*인승(?![\p{L}\p{N}])/gu)];
+  if (!tokens.length || tokens.length !== mentions.length) return null;
+  const values = new Set(tokens.map(m => m[1]!));
+  const value = tokens[0]![1]!;
+  return values.size === 1 && SPEC_FORMAT_RULES.seats!(value) ? value : null;
+}
 export const DEPOSIT_MIN_POSITIVE_KRW = 10_000;
 export const DEPOSIT_MAX_KRW = 100_000_000;
 
