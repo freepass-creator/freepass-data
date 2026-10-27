@@ -377,8 +377,9 @@ export function precomputeOfferEconomics(
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
           rule.id.startsWith('STANDARD_RERENT_') && 'rateBasisPoints' in rule);
+        const pickupRule = policy.rules.find(rule => rule.id === 'SONOKONG_PICKUP_60_RENT_X_TERM')!;
         const sonokongPickup60Rate = result.ruleId === `SONOKONG_PICKUP_60_${side}_RENT_X_TERM`
-          ? side === 'BILLING' ? 275 : 200
+          ? side === 'BILLING' ? pickupRule.billingBasisPoints : pickupRule.payoutBasisPoints
           : null;
         const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === term.termMonths) : payout;
         const rate = sonokongPickup60Rate ?? (row && 'rateBasisPoints' in row ? row.rateBasisPoints : null);

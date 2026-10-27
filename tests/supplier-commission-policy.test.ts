@@ -80,6 +80,16 @@ describe('one shared commission policy per supplier', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it('reads supplier fixed exceptions from the same policy table without a second amount in the engine', () => {
+    const rule = KAKAO_COMMISSION_POLICY.rules.find(r => r.id === 'IANCAR_RERENT_6_MONTH_FIXED')! as unknown as { fixedAmount: number };
+    const old = rule.fixedAmount;
+    try {
+      rule.fixedAmount = 310000;
+      expect(resolveSalesCommission({ supplierId: 'RP004', productType: '중고렌트', fuel: '가솔린',
+        termMonths: 6, monthlyRent: 800000 })).toMatchObject({ state: 'CALCULATED', amount: 310000 });
+    } finally { rule.fixedAmount = old; }
+  });
+
   it('freezes supplier scope in the reviewed plan and rejects later policy drift', async () => {
     const { store } = await fixture();
     const report = await planOfferEconomicsRecompute(store,'memory-test',{ supplierIds: ['RP013'] });
