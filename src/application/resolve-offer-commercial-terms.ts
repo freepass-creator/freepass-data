@@ -1,7 +1,7 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
-import { KAKAO_COMMISSION_POLICY, matchesReferenceRentBasisCandidate, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis, truncWon, validateSonokongQ12Basis } from './kakao-catalog-reference.js';
+import { KAKAO_COMMISSION_POLICY, getSupplierCommissionPolicy, matchesReferenceRentBasisCandidate, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis, truncWon, validateSonokongQ12Basis } from './kakao-catalog-reference.js';
 import { parseErp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
@@ -261,6 +261,7 @@ export function precomputeOfferEconomics(
     USED_SUBSCRIPTION: '중고구독', OGONG_SUBSCRIPTION: '오공구독', PICKUP_SUBSCRIPTION: '픽업구독',
   } as const)[commercialType] : '';
   const policy = KAKAO_COMMISSION_POLICY;
+  const supplierPolicy = getSupplierCommissionPolicy(offer.supplierId);
   return offer.priceTerms.filter(term=>termKeys===undefined || termKeys.includes(term.termKey)).map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
     const explicitEvidence = evidenceByTerm[term.termKey];
@@ -318,7 +319,8 @@ export function precomputeOfferEconomics(
       // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
       if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE' &&
           !isDeprecatedSonokongPickupVehiclePriceFee(offer.supplierId, commercialType, saved)) return structuredClone(saved);
-      const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
+      const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'supplierPolicyDigest' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
+        ...(supplierPolicy ? { supplierPolicyDigest: supplierPolicy.digest } : {}),
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
       if (result.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && basis36.length === 1) {

@@ -66,6 +66,8 @@ export type TermEconomicAmount = {
   referenceRentBasis?: { termKey: string; termMonths: 12 | 36; monthlyRent: Money; multiplier: number };
   ruleId?: string | null;
   policyId?: string;
+  /** Reference to the shared supplier policy; rules are never copied into a vehicle. */
+  supplierPolicyDigest?: string;
   reasonCode?: string | null;
   approximate?: boolean;
   note?: string | null;

@@ -53,6 +53,7 @@
         "calculation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/termAmountCalculation"}]},
         "ruleId": {"type": ["string", "null"]},
         "policyId": {"type": "string", "minLength": 1},
+        "supplierPolicyDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "reasonCode": {"type": ["string", "null"]},
         "approximate": {"type": "boolean"},
         "note": {"type": ["string", "null"]},

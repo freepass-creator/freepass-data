@@ -499,6 +499,50 @@ export const KAKAO_COMMISSION_POLICY = {
 } as const;
 
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
+
+/** One supplier assignment over the existing authority. Never a policy per vehicle. */
+export function getSupplierCommissionPolicy(supplierId: string) {
+  const p = KAKAO_COMMISSION_POLICY;
+  const includes = (ids: readonly string[]) => ids.includes(supplierId);
+  const standard = includes(p.standardSupplierIds);
+  const group = includes(p.exceptionSupplierIds.excludedMindcar) ? 'EXCLUDED'
+    : supplierId === p.mewcar.supplierId ? 'MEWCAR'
+    : includes(p.exceptionSupplierIds.sonokong) ? 'SONOKONG'
+    : includes(p.exceptionSupplierIds.star) ? 'STAR'
+    : includes(p.exceptionSupplierIds.autoplus) ? 'AUTOPLUS'
+    : includes(p.exceptionSupplierIds.switchplan) ? 'SWITCH'
+    : includes(p.exceptionSupplierIds.iancar) ? 'AICAR'
+    : includes(p.exceptionSupplierIds.pacific) ? 'PACIFIC'
+    : standard ? 'STANDARD' : null;
+  if (!group) return null;
+  const basicSubscription = includes(p.supplierPolicyAssignments.basicSupplierIds);
+  const billinSubscription = includes(p.supplierPolicyAssignments.billinProposal.supplierIds);
+  // Existing representative decision 2026-10-12; explicit matching delivery still wins.
+  const newRentDefaultSubtype = ['RP006', 'RP020'].includes(supplierId) ? 'NEW_PREDELIVERY' as const : undefined;
+  const groups = new Set(['STANDARD', ...(supplierId === 'RP006' ? ['IRON'] : []),
+    ...(group === 'AICAR' ? ['IANCAR'] : [group])]);
+  const definition = {
+    supplierId, policyId: p.policyId, assignmentId: `supplier-fee:${supplierId}`,
+    engineRevision: 'supplier-policy-2026-10-28', group, basicSubscription, billinSubscription,
+    newRentDefaultSubtype: newRentDefaultSubtype ?? null,
+    standardLadder: standard || ['SONOKONG', 'STAR', 'AICAR', 'PACIFIC'].includes(group),
+    rules: p.rules.filter(rule => ('supplierGroup' in rule && groups.has(rule.supplierGroup)) ||
+      (group === 'AUTOPLUS' && rule.id.startsWith('AUTOPLUS_')) ||
+      (group === 'SONOKONG' && rule.id.startsWith('SONOKONG_'))),
+    oneMonthBasic: p.oneMonthBasic,
+    ...(billinSubscription ? { subscription: p.supplierPolicyAssignments.billinProposal } : {}),
+    ...(group === 'SONOKONG' ? { sonokongAdditions: p.sonokongAdditions } : {}),
+    ...(group === 'PACIFIC' ? { pacificRates: p.pacificRates } : {}),
+    ...(group === 'MEWCAR' ? { mewcar: p.mewcar } : {}),
+  };
+  return { ...definition, digest: stableDigest(definition) };
+}
+
+export function listSupplierCommissionPolicies() {
+  const p = KAKAO_COMMISSION_POLICY;
+  const ids = [...new Set([...p.standardSupplierIds, ...Object.values(p.exceptionSupplierIds).flat(), p.mewcar.supplierId])].sort();
+  return ids.map(id => getSupplierCommissionPolicy(id)!);
+}
 // Supplier IDs from local supplierChannels and ERP4 origin/main partner-code/cleanup-partners.
 const supplierFirstRow: Readonly<Record<string, number>> = {
   RP012: 3, RP013: 15, RP031: 22, RP016: 29, RP015: 36, RP019: 43,
@@ -633,11 +677,7 @@ const unknownCommission = (reasonCode: string): CommissionResolution => ({
 });
 
 const standardLadderSupplier = (supplierId: string) =>
-  KAKAO_COMMISSION_POLICY.standardSupplierIds.includes(supplierId as never)
-  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012')
-  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018')
-  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')
-  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022');
+  getSupplierCommissionPolicy(supplierId)?.standardLadder === true;
 
 const resolveTermLadder = (
   termMonths: number,
@@ -646,7 +686,6 @@ const resolveTermLadder = (
   prefix = 'STANDARD_RERENT',
   rounding: RoundingMode = 'ROUND',
 ): CommissionResolution => {
-  const fixed = side === 'BILLING' ? 600000 : 500000;
   const ruleId = (term: number, suffix: 'FIXED' | 'RENT_X_TERM') => {
     if (prefix === 'STANDARD_RERENT' && side === 'PAYOUT') {
       return term === 12 ? 'STANDARD_RERENT_12_FIXED' : `STANDARD_RERENT_${term}_RENT_X_TERM`;
@@ -657,11 +696,15 @@ const resolveTermLadder = (
     return calculatedCommission(`STANDARD_RERENT_1_${side}_RENT_5_PERCENT`,
       monthlyRent * KAKAO_COMMISSION_POLICY.oneMonthBasic.monthlyRentBasisPoints / 10000, 'EXCLUDED', rounding);
   }
-  if (termMonths === 12) return calculatedCommission(ruleId(12, 'FIXED'), fixed, 'EXCLUDED', rounding);
-  const rates = side === 'BILLING'
-    ? new Map([[24, 475], [36, 375], [48, 325], [60, 225]])
-    : new Map([[24, 400], [36, 300], [48, 250], [60, 175]]);
-  const basisPoints = rates.get(termMonths);
+  const policy = KAKAO_COMMISSION_POLICY;
+  const billing = policy.rules.find(rule => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
+  const payout = policy.rules.find(rule => rule.id.startsWith('STANDARD_RERENT_') &&
+    'termMonths' in rule && rule.termMonths === termMonths && 'supplierGroup' in rule && rule.supplierGroup === 'STANDARD' &&
+    'basis' in rule && (rule.basis === 'FIXED' || rule.basis === 'MONTHLY_RENT_X_TERM'));
+  const selected = side === 'BILLING' ? billing.termRules.find(rule => rule.termMonths === termMonths) : payout;
+  if (selected && 'fixedAmount' in selected && typeof selected.fixedAmount === 'number')
+    return calculatedCommission(ruleId(termMonths, 'FIXED'), selected.fixedAmount, 'EXCLUDED', rounding);
+  const basisPoints = selected && 'rateBasisPoints' in selected ? selected.rateBasisPoints : null;
   if (!basisPoints) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
   return calculatedCommission(
     ruleId(termMonths, 'RENT_X_TERM'),
@@ -802,6 +845,9 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (inferredSubtype && input.newProductSubtype && inferredSubtype !== input.newProductSubtype) return unknownCommission('CONFLICTING_NEW_PRODUCT_SUBTYPE');
   if (inferredSubtype && !input.newProductSubtype) input = { ...input, newProductSubtype: inferredSubtype };
   const productType = inferredSubtype ? '신차렌트' : rawProduct === '장기렌트' ? '재렌트' : rawProduct;
+  const supplierPolicy = getSupplierCommissionPolicy(supplierId);
+  if (productType === '신차렌트' && !input.newProductSubtype && supplierPolicy?.newRentDefaultSubtype)
+    input = { ...input, newProductSubtype: supplierPolicy.newRentDefaultSubtype };
   const billing = side === 'BILLING';
   const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat, rounding);
   const agreement = input.individualAgreement;
@@ -839,7 +885,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
       ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', rounding)
       : approximateCommission('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', rounding);
   }
-  if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
+  if (supplierPolicy?.billinSubscription && subscription) {
     const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);
     if (!Number.isSafeInteger(basis) || basis! <= 0) return unknownCommission('BILLIN_36_MONTH_RENT_REQUIRED');
     if (termMonths === 36 && basis !== monthlyRent) return unknownCommission('BILLIN_36_MONTH_RENT_CONFLICT');
@@ -876,7 +922,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
-  if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
+  if (subscription && supplierPolicy?.basicSubscription) {
     return resolveTermLadder(termMonths, monthlyRent, side);
   }
   // 손오공 재렌트·중고렌트는 F04 기간표 값 그대로(보험료 −100,000 차감은 오공구독 청구에만 — 지휘통제실 2026-10-12).
@@ -1031,7 +1077,7 @@ export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVE
   const stated = statedNewProductSubtype(source);
   // 대표 2026-10-12: 아이언(RP006)·우리캐피탈렌더카(RP020)는 시트의 신차렌트를 차량가액 기준 선출고 규칙(F04 139·50행)으로 읽는다.
   // 원문에 견적출고가 명시되면 그것이 우선(위 stated).
-  return stated ?? (['RP006', 'RP020'].includes(text(source.provider_company_code)) ? 'NEW_PREDELIVERY' : undefined);
+  return stated ?? getSupplierCommissionPolicy(text(source.provider_company_code))?.newRentDefaultSubtype ?? undefined;
 }
 
 export function statedNewProductSubtype(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
