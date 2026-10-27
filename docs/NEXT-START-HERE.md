@@ -136,7 +136,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 질문 | 먼저 볼 정본/안내 | 확인할 증거와 경계 |
 |---|---|---|
 | FreePass Data 전체 업무는 누가 배정하고 담당은 어디서 확인하는가? | 아래 「현행 단일 담당 책임맵 — 2026-10-09」 | 지휘가 파일 owner·통합 순서를 확정. 기존 Work/PR를 RESUME하고 공유파일·운영 writer를 중복 생성하지 않음 |
-| 기간별 선계산과 Admin 수수료 coverage는 어디서 읽는가? | [Admin 내부 기간별 경제조건](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03) | Canonical 저장 시 계산, Admin 읽기만; 운영 backfill/재발행 미실행 |
+| 공급사 정책을 전체 상품·기간에 적용하고 수수료 coverage는 어디서 읽는가? | [공급사 단위 일괄 적용](READ-RUNTIME.md#공급사-정책-한-번-정의--상품기간-전체-적용-2026-10-28), [Admin 내부 기간별 경제조건](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03) | 기존 확정 규칙 한 곳·공급사 배정 공통화; 공급사 범위 계획→검토→저장 되읽기. 소비처는 저장값 읽기 |
 | 프리패스 수수료와 공급사/영업채널 연동은 어떻게 다른가? | [수수료 연동 기준](READ-RUNTIME.md#수수료-연동-기준--사용자-결정-2026-09-30) | 기본은 지급수수료. 상대별 helper PREPARED, 외부 API와 scope 연결은 미구현 |
 | 상품·정책의 숫자와 문구가 무슨 뜻인가? | [Commercial Data Catalog](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 72항목 의미. 공급사별 실제 값·예외·효력일은 원천으로 대조 |
 | 접수·계약·인도·수수료 정산은 어떻게 연결되는가? | [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | ID/버전/스냅샷 관계와 업무 소유권. 실제 계약 확정·수금·지급을 별도로 확인 |
@@ -243,6 +243,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-28 공급사 정책 공통 적용과 공급사별 일괄 갱신
+
+- 대표 직접 지시: 차량별 규칙을 만들지 않고 공급사별 정책 하나를 해당 공급사 상품·기간 전체에 적용한다. 구현 source `b9ae9c523575ed5b4cd1513b9009f17597f610fa`, 기준 main `10993057e71ea0254708553d7bada4a1a091c6b4`, PR #798.
+- 기존 `KAKAO_COMMISSION_POLICY`를 정본으로 `getSupplierCommissionPolicy`/`listSupplierCommissionPolicies` 배정표를 제공한다. 표준 기간별 요율을 실행 함수에 중복 기재하지 않고 같은 규칙에서 읽는다. 공급사 기본값 선택을 원천·Canonical에 공통 적용하며 명시적 출고 유형·개별 합의는 우선한다. 새 정책 DB·계산기·예약 없음.
+- `recompute-offer-economics.ts`에 `--supplier-ids`, `--changed-only`, `--out`을 연결했다. 같은 공급사 모든 상품·기간을 한 계획으로 고정하고 적용 시 범위 변경을 거부한다. 기존 writer 소유권·revision·감사·멱등성·가격 보존·되읽기를 유지한다. 저장 수수료에는 규칙 사본 대신 공급사 정책 digest를 붙인다.
+- 검증: 공급사 공통 변경→여러 상품·기간 갱신→다른 공급사·가격 보존→재계획 0건을 포함한 관련 249 PASS. TypeScript·architecture·data-access boundary PASS. PC3 운영 계획은 28 공급사 배정 중 정본에 있는 13 공급사·174 상품·613 기간·청구/지급 1,226 정책 참조, 금액·확정 상태 변경 0을 확인했다. 실제 PC3 일괄 적용 174/174·저장 되읽기 174/174, 정책 참조 1,226/1,226·반복 변경 계획 0건을 확인했다(2026-10-27T23:53:06Z). 금액 확정 520/미확정 93은 보존했다. source의 Core CI 40604633573 SUCCESS: 전체 4,476 PASS/13 SKIP, frozen photo 3,170 PASS/12 SKIP; Canon 40604629140 SUCCESS. main 병합·상시 수집기 배포는 PR 검토 대기이며 실행 완료로 확대하지 않는다.
+- 남음 구분: 미확정 정책·입력 93기간과 아이카/손오공/뮤카 최신 원문 차이, 전체 period fee ledger 최신화, GNA 다른 owner의 소비처 연결을 이번 공통 구조 구현만으로 완료라 하지 않는다. PC3 `fd-cycle`의 기존 dirty/다른 owner 변경을 보존하며 상시 수집기 코드·배포와 수동 일괄 적용은 구분한다.
+- 증거: PC3 private `supplier-fee-policy-20261028`와 PC0 `D:/dev-artifacts/freepass-data/supplier-fee-policy-20261028`. `reviewed-plan.json`은 상품 before-image가 있어 비공개 보관한다. next_start_here: PR #798의 같은 source와 적용 영수증을 확인하고 공급사 정책 변경 때 기존 일괄 경로를 사용한다. 차량 ID별 정책이나 새 상시 writer를 만들지 않는다.
 
 ### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
 
