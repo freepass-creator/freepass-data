@@ -1,12 +1,5 @@
 # FreePass Data — NEXT START HERE
 
-## 2026-10-27 PC3 — 원천 명시 인승을 기존 spec-refill로 전달
-
-- 원건 `Mmvq7z9p8-81b743`, 기준 main `e2b07c99d327ec860325b0c0d42dac5258da56e4`. RP004 장기 차명과 RP031 완전한 현재 ONE 상세의 독립된 단일 `N인승`을 `raw.spec.seats`로 전달한다. 모델 추정·범위/대안/부정/개조/미확정 표기는 제외한다. 이안카 구조화 원천의 기존 인승(해석 불가 값 포함)과 원문 spec은 보존한다.
-- 기존 spec-refill의 빈칸·계약 잠금·회차 상한·CAS/백업/되읽기 경로만 사용한다. 새 writer/DB 통로/수집기/예약은 없다. F01은 대표 결정으로 폐기 상태를 유지하며 이 변경은 내부 정제/ERP 소비용이다.
-- 검증: 관련 9파일 276 PASS / 1 기존 조건부 SKIP, build/architecture/data-access-boundary PASS. 현재 단계는 CODED/TESTED이며 운영 적용/실제 인승 반영 완료가 아니다.
-- next_start_here: 기존 Claude PC3의 독립 검토 → exact-head CI/기존 통합 담당 병합 → dirty 13개를 보존한 기존 fd-cycle 런타임의 제한적 적용 및 실제 dist 검증 → 현재 원천의 새 계획/빈칸·잠금 검증/기존 writer 적용/ERP 되읽기. private 후보 4건은 자동 쓰기 허용 목록이 아니며, 원천의 현재성·충돌을 다시 확인한다. 사진 복사 진행 작업과 겹치지 않으며 공유 Drive 폴더 이름 변경은 별도 실제 사용자 응답 대기다.
-
 ## 2026-10-19 PC3 original117 — reviewed archived physical facts, default off
 
 - `SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS` accepts only explicit UID/supplier/current whole-correction digest/physical field allowlists (max 100). The current correction must remain verbatim in existing history and match its original reviewed binding. Nothing is inferred from names or registration dates. Plan-time conflict checks read exact current RAW cells/headers through the existing shared-sheet fact parsers, before master/spec gates can hide assertions. Missing or duplicated headers exclude that field.
@@ -250,6 +243,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-27 PC3 — 원천 명시 인승을 기존 spec-refill로 전달
+
+- 원건 `Mmvq7z9p8-81b743`, 기준 main `e2b07c99d327ec860325b0c0d42dac5258da56e4`. RP004 장기 차명과 RP031 완전한 현재 ONE 상세의 독립된 단일 `N인승`을 `raw.spec.seats`로 전달한다. 모델 추정·범위/대안/부정/개조/미확정 표기는 제외한다. 이안카 구조화 원천의 기존 인승(해석 불가 값 포함)과 원문 spec은 보존한다.
+- 기존 spec-refill의 빈칸·계약 잠금·회차 상한·CAS/백업/되읽기 경로만 사용한다. 새 writer/DB 통로/수집기/예약은 없다. F01은 대표 결정으로 폐기 상태를 유지하며 이 변경은 내부 정제/ERP 소비용이다.
+- 검증: 관련 9파일 276 PASS / 1 기존 조건부 SKIP, build/architecture/data-access-boundary PASS. 기존 Claude PC3 독립 검토 `Mmvqj7yry-d63e0d` 수령. 현재 단계는 CODED/TESTED이며 운영 적용/실제 인승 반영 완료가 아니다. 첫 병합 시도는 자동 승인 검토가 검토 근거 없음을 이유로 차단했으며, 미적용 상태로 정확한 선행조건을 확인 중이다.
+- next_start_here: PR #797의 exact-head 검토/CI 및 정상 통합 절차 → dirty 13개를 보존한 기존 fd-cycle 런타임의 제한적 적용 및 실제 dist 검증 → 현재 원천의 새 계획/빈칸·잠금 검증/기존 writer 적용/ERP 되읽기. private 후보 4건은 자동 쓰기 허용 목록이 아니며, 원천의 현재성·충돌을 다시 확인한다. 사진 복사 진행 작업과 겹치지 않으며 공유 Drive 폴더 이름 변경은 별도 실제 사용자 응답 대기다.
 
 ### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
 
