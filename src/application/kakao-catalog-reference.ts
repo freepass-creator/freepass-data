@@ -608,7 +608,9 @@ type MarginResolution = {
 };
 
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
-const integer = (value: unknown): number | null => {
+/** 연료 글자에서 공백을 지운 뒤 정확히 «전기»인지(부분 일치 금지: «가솔린+전기»는 하이브리드). */
+const isExactElectricFuel = (value: unknown) => text(value).replace(/\s+/g, '') === '전기';
+const integer =(value: unknown): number | null => {
   if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? value : null;
   const raw = text(value);
   if (!/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(raw)) return null;
@@ -1007,7 +1009,8 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return fixed(id, monthlyRent * rule.rateBasisPoints / 10000, rule.vatTreatment);
   }
   // F04 161행 계약기간 「기간 무관」(123행 일반 구독과 같음): 기간 검증 없이 정액.
-  if (supplierId === 'RP023' && subscription && /전기/.test(input.fuel ?? '')) {
+  // 전기 구독(161행)은 연료가 정확히 «전기»일 때만 — «가솔린+전기» 같은 하이브리드는 일반 구독(123행).
+  if (supplierId === 'RP023' && subscription && isExactElectricFuel(input.fuel)) {
     const rule = KAKAO_COMMISSION_POLICY.rules.find(rule => rule.id === 'AUTOPLUS_EV_SUBSCRIPTION')!;
     return fixed(`AUTOPLUS_EV_SUBSCRIPTION_${side}`, billing ? rule.billing : rule.payout);
   }
@@ -1070,7 +1073,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
   else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = input.termMonths === 60 ? [191] : input.termMonths === 12 ? [5] : input.termMonths === 24 ? [6] : input.termMonths === 36 ? [7] : input.termMonths === 48 ? [8] : [];
   else if (input.supplierId === 'RP012' && /구독/.test(product)) rows = [({12:10,24:11,36:12,48:13,60:14} as Record<number, number>)[input.termMonths] ?? 183, 173, 191];
-  else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
+  else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = isExactElectricFuel(input.fuel) ? [161] : [123, 161];
   else if (['RP021', 'PT-0026'].includes(input.supplierId) && /구독/.test(product)) rows = [162];
   else if (input.supplierId === 'RP014') rows = /구독/.test(product) ? ([12,24,36,48,60].includes(appliedTerm) ? [124 + [12,24,36,48,60].indexOf(appliedTerm)] : [183,184,185,186,187,188,189]) : [175,176];
   else if (/구독/.test(product) && first && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(supplierId => supplierId === input.supplierId)) {
