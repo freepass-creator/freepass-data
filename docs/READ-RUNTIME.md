@@ -82,6 +82,12 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
 
+### 상품별·기간별 영업자 지급수수료 일 박제
+
+`snapshot:payout-fees`는 기존 products 가격행 해석과 `precomputeOfferEconomics`를 직접 재사용해, 지급수수료만 비공개 `product_payout_fee_snapshots`에 일 단위로 박제한다. 공개 `products`·`catalog_offers`와 분리하는 이유는 청구수수료·마진을 섞지 않고 영업채널 지급 사실만 내부 보존하기 위해서다. 문서 ID는 `${YYYY-MM-DD}__${productId}`이며 기본 실행은 `npm run snapshot:payout-fees -- --evidence <증거.json>`처럼 공급사별 상태 건수와 `planDigest`만 내는 쓰기 0 계획이다. 적용은 `--apply --expected-digest=<64hex>`와 `PAYOUT_FEE_SNAPSHOT_APPROVED=true`가 모두 필요하고, 기존 문서는 같은 digest·같은 내용만 멱등 재실행으로 인정한다.
+
+증거 JSON은 productId 또는 차량번호로 한 상품을 지정하고 `confidence: "high"`인 차량가액·신차 subtype·뮤카 납입 방식/추가보증금·퍼시픽 보증금 등급만 사용한다. 증거가 없거나 신뢰도가 낮으면 엔진의 `UNKNOWN`과 사유를 그대로 보존하며 0원으로 대체하지 않는다. 이 박제는 계약 당시 지급 확정이나 실제 지급·정산 사건을 뜻하지 않고, 실행일 현재 상품 가격과 정책으로 계산한 내부 스냅샷이다.
+
 | 연동 대상 | 제공할 수수료 | 지급 방향 |
 |---|---|---|
 | 영업채널 / 기본 수수료 연동 | `channelPayoutFee` — 프리패스 수수료 | FreePass → 해당 영업채널 |
