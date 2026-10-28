@@ -39,6 +39,8 @@ export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
   /** 원천에 없는 노출 문서를 내릴 때 남기는 사유. 기본은 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN. */
   absenceReason?: string;
+  /** 대표 결정으로 노출하지 않는 상품 구분(CycleConfig.decisionWithdrawnProductTypes). */
+  decisionWithdrawnProductTypes?: readonly string[];
   /** 이번 한 회차 한정 신규 편입 상한 상향(최초 대량 편입). 원천 잠금 안에서 «적용 전에» 표식을 원자적으로 기록해 소진시키고(claimEnrollCapOnce), 기록 실패 시 올리지 않는다. */
   enrollCapOnce?: number; enrollCapOnceMarker?: string;
   optionsRewriteCap?: number;

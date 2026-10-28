@@ -20,9 +20,9 @@ import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
-import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, SONOGONG_WITHDRAWN_PRODUCT_TYPES, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { parseDetailCache, waitForUpstreamRefresh, type DetailCache } from '../adapters/sonogong-detail-cache.js';
-import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
+import { judgeSonogongApiRead, claimEnrollCapOnce, sonogongExposedUnlockedCount, parseSonogongCountState, SONOGONG_COUNT_TAB_SCOPE } from '../adapters/sonogong-api-guards.js';
 import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
@@ -518,22 +518,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const read = await readSonogongApi(client, cacheOn ? { detailCache } : {});
           if (cacheOn && unattended && read.detailCacheOut) await writeJsonAtomic(cacheFile, read.detailCacheOut);
           // 행 수 하한(부분 읽기 방어): 잠금 제외 노출 문서 80%·직전 정상 회차 목록 수 80% 중 큰 값. 기준 파일 손상은 이번 회차만 불인정 후 복구.
-          const exposedDocs = (await commands.documents('RP012')).filter(d => {
-            const f = decodeFields(d.fields as never) as Record<string, unknown>;
-            const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
-              || f.status === '계약중' || f.status_kind === '계약중';
-            return f.listable === true && !locked;
-          }).length;
-          let previous = 0, stateError: string | null = null;
-          try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'API_COUNT_STATE_INVALID';
-          } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'API_COUNT_STATE_INVALID'; }
+          // 읽지 않는 탭의 상품 구분(픽업구독, 대표 2026-10-28) 문서는 노출 문서 수에서 뺀다(결정 하향은 계획이 따로 한다).
+          const exposedDocs = sonogongExposedUnlockedCount((await commands.documents('RP012')).map(d => decodeFields(d.fields as never) as Record<string, unknown>));
+          // 기준 파일은 «읽은 탭 범위»와 함께 저장한다. 범위가 다른 옛 기준(세 탭 전부)은 «기준 없음»(파일 없음과 같은 동작)으로 본다.
+          let countText: string | null = null, countReadError = false;
+          try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+          const { previous, stateError } = parseSonogongCountState(countText, countReadError);
           // 판정은 순수 함수(시험 가능): 축소·불완전 읽기는 기준 파일에 저장하지 않고, 하한은 고유 차량번호 수 기준이다(#601 독립 검토).
           const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
           let complete = verdict.complete, reason = verdict.incompleteReason;
           if (verdict.saveCount !== null) {
-            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
+            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt, tabs: SONOGONG_COUNT_TAB_SCOPE })) &&
               (!verdict.complete || !unattended || await writeJsonAtomic(passFile, { at: observedAt }));
             if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
           }
@@ -564,6 +559,8 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
+        // 픽업구독 결정 하향(대표 2026-10-28): 노출된 픽업구독 문서를 매 회차 DECISION_WITHDRAWN 으로 내린다. 읽기가 불완전해도 이 하향만은 적용된다(계획 DECISION_ONLY).
+        apiPlugin.decisionWithdrawnProductTypes = SONOGONG_WITHDRAWN_PRODUCT_TYPES;
         // 규격 검증(기본 꺼짐): SOURCE_CYCLE_SPEC_VALIDATION_SOURCES 에 RP012 가 있을 때만.
         if ((env.SOURCE_CYCLE_SPEC_VALIDATION_SOURCES ?? '').split(',').map(x => x.trim()).includes('RP012')) apiPlugin.specValidation = true;
         { const optCap = Number(env.SOURCE_CYCLE_API_OPTIONS_CAP ?? ''); if (Number.isSafeInteger(optCap) && optCap > 100 && optCap <= 400) apiPlugin.optionsRewriteCap = optCap; }
