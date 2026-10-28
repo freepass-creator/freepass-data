@@ -4,7 +4,8 @@ import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
-export type PayoutFeeState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+import type { PayoutFeeSnapshotDocument, PayoutFeeSnapshotTerm, PayoutFeeState } from '../ports/payout-fee-snapshot-store.js';
+export type { PayoutFeeSnapshotDocument, PayoutFeeSnapshotTerm, PayoutFeeState };
 
 export type PayoutFeeEvidence = {
   productId?: string;
@@ -18,37 +19,6 @@ export type PayoutFeeEvidence = {
   extraDeposit?: number;
   contractDate?: string;
   depositTierPercent?: 5 | 10;
-};
-
-export type PayoutFeeSnapshotTerm = {
-  productId: string;
-  supplierId: string;
-  termKey: string;
-  termMonths: number;
-  state: PayoutFeeState;
-  amount: number | null;
-  vatAmount: number | null;
-  totalAmount: number | null;
-  ruleId: string | null;
-  policyId: string;
-  reasonCode: string | null;
-  evidenceRefs: string[];
-  computedFrom: {
-    rent: { amount: number | null; currency: 'KRW'; sourceRef: string };
-    deposit: { state: string; amount: number | null; currency: 'KRW'; sourceRef: string };
-  };
-};
-
-export type PayoutFeeSnapshotDocument = {
-  schema: 'product-payout-fee-snapshot/v1';
-  snapshotDate: string;
-  productId: string;
-  supplierId: string;
-  listable: boolean;
-  policyId: string;
-  terms: PayoutFeeSnapshotTerm[];
-  contentDigest: string;
-  planDigest: string;
 };
 
 type StateCounts = Record<PayoutFeeState, number>;
