@@ -16,6 +16,10 @@ const product = (supplierId: string, overrides: Record<string, unknown> = {}) =>
 const plan = (products: Record<string, Record<string, unknown>>, evidence: PayoutFeeEvidence[] = []) =>
   planPayoutFeeSnapshots({ snapshotDate: '2026-10-28', products, policies: {}, evidence });
 
+const inferredPlan = (products: Record<string, Record<string, unknown>>, options: {
+  inferProductTypeByMileage?: boolean; stockNewAsPredelivery?: boolean; evidence?: PayoutFeeEvidence[];
+} = {}) => planPayoutFeeSnapshots({ snapshotDate: '2026-10-28', products, policies: {}, ...options });
+
 describe('영업자 지급수수료 박제 계획', () => {
   it('공급사별 KNOWN/UNKNOWN을 집계하고 증거 없음은 UNKNOWN으로 둔다', () => {
     const result = plan({ known: product('RP013'), unknown: product('XX-9999') });
@@ -89,6 +93,75 @@ describe('영업자 지급수수료 박제 계획', () => {
     const first = plan(products), second = plan({ a: products.a, b: products.b });
     expect(first.planDigest).toBe(second.planDigest);
     expect(JSON.stringify(first)).not.toMatch(/supplierBillingFee|expectedGrossMargin|margin/i);
+  });
+
+  it('추정 옵션을 끄면 생략한 기존 계획과 digest가 동일하다', () => {
+    const products = { iancar: product('RP031', { product_type: '', mileage: '1,001 km' }) };
+    const baseline = inferredPlan(products);
+    const explicitlyOff = inferredPlan(products, { inferProductTypeByMileage: false, stockNewAsPredelivery: false });
+    expect(explicitlyOff.planDigest).toBe(baseline.planDigest);
+    expect(explicitlyOff.documents).toEqual(baseline.documents);
+    expect(explicitlyOff.inferredCounts).toEqual({});
+  });
+
+  it('빈 상품유형만 주행거리 1,000 경계로 추정하고 기존 상품유형은 덮지 않는다', () => {
+    const result = inferredPlan({
+      boundaryNew: product('RP031', { product_type: '', mileage: '1,000' }),
+      boundaryUsed: product('RP031', { product_type: '', mileage: '1,001km' }),
+      explicitNew: product('RP031', { product_type: '신차렌트', mileage: '9,999' }),
+    }, { inferProductTypeByMileage: true });
+    const byId = Object.fromEntries(result.documents.map(document => [document.productId, document.terms[0]!]));
+    expect(byId.boundaryNew!.evidenceRefs).toContain('INFERRED_PRODUCT_TYPE_BY_MILEAGE');
+    expect(byId.boundaryUsed!.evidenceRefs).toContain('INFERRED_PRODUCT_TYPE_BY_MILEAGE');
+    expect(byId.explicitNew!.evidenceRefs).not.toContain('INFERRED_PRODUCT_TYPE_BY_MILEAGE');
+    expect(byId.boundaryNew!.reasonCode).toBe('NEW_PRODUCT_SUBTYPE_REQUIRED');
+    expect(byId.boundaryUsed!.reasonCode).not.toBe('PRODUCT_TYPE_REQUIRED');
+    expect(result.inferredCounts.RP031).toEqual({ productType: 2, subtype: 0 });
+  });
+
+  it('주행거리가 없거나 해석 불가하면 상품유형을 추정하지 않는다', () => {
+    const result = inferredPlan({
+      missing: product('RP031', { product_type: '', mileage: undefined }),
+      invalid: product('RP031', { product_type: '', mileage: '알 수 없음' }),
+    }, { inferProductTypeByMileage: true });
+    expect(result.documents.flatMap(document => document.terms).every(term => term.reasonCode === 'PRODUCT_TYPE_REQUIRED')).toBe(true);
+    expect(result.documents.flatMap(document => document.terms).every(term => !term.evidenceRefs.includes('INFERRED_PRODUCT_TYPE_BY_MILEAGE'))).toBe(true);
+    expect(result.inferredCounts).toEqual({});
+  });
+
+  it('선출고 추정은 차량번호 있는 신차만 쓰고 명시 subtype 증거를 우선한다', () => {
+    const products = {
+      stock: product('RP031', { product_type: '신차렌트' }),
+      noPlate: product('RP031', { product_type: '신차렌트', car_number: '' }),
+      explicit: product('RP031', { product_type: '신차렌트' }),
+    };
+    const result = inferredPlan(products, { stockNewAsPredelivery: true, evidence: [
+      { productId: 'explicit', confidence: 'high', newProductSubtype: 'NEW_MATCHING' },
+    ] });
+    const byId = Object.fromEntries(result.documents.map(document => [document.productId, document.terms[0]!]));
+    expect(byId.stock!.evidenceRefs).toContain('INFERRED_SUBTYPE_STOCK_NEW_PREDELIVERY');
+    expect(byId.noPlate!.evidenceRefs).not.toContain('INFERRED_SUBTYPE_STOCK_NEW_PREDELIVERY');
+    expect(byId.noPlate!.reasonCode).toBe('NEW_PRODUCT_SUBTYPE_REQUIRED');
+    expect(byId.explicit!.evidenceRefs).not.toContain('INFERRED_SUBTYPE_STOCK_NEW_PREDELIVERY');
+    expect(result.inferredCounts.RP031).toEqual({ productType: 0, subtype: 1 });
+  });
+
+  it('job의 두 명시 플래그가 계획 출력 inferredCounts에 연결된다', async () => {
+    const products = { stock: product('RP031', { product_type: '', mileage: '1,000' }) };
+    const store: PayoutFeeSnapshotStore = { readInputs: async () => ({ products, policies: {} }), readDocument: async () => null, createDocument: async () => {} };
+    const access = { read: async <T>(_spec: unknown, run: () => Promise<T>) => run(), write: async <T>(_spec: unknown, run: () => Promise<T>) => run() };
+    const result = await runPayoutFeeSnapshotJob({ store, access, argv: [
+      '--snapshot-date', '2026-10-28', '--infer-product-type-by-mileage', '--stock-new-as-predelivery',
+    ] });
+    expect(result).toMatchObject({ status: 'PLANNED', inferredCounts: { RP031: { productType: 1, subtype: 1 } } });
+  });
+
+  it('이안카 12개월 미만은 추정 옵션으로 풀지 않고 UNKNOWN을 유지한다', () => {
+    const result = inferredPlan({ short: product('RP031', {
+      product_type: '', mileage: '1,001', price: { '1': { rent: 600000, deposit: 1000000 } },
+    }) }, { inferProductTypeByMileage: true, stockNewAsPredelivery: true });
+    expect(result.documents[0]!.terms[0]).toMatchObject({ state: 'UNKNOWN', reasonCode: 'IANCAR_SHORT_TERM_BASIS_REQUIRED' });
+    expect(result.documents[0]!.terms[0]!.evidenceRefs).toContain('INFERRED_PRODUCT_TYPE_BY_MILEAGE');
   });
 
   it('같은 날은 동일 digest 문서를 보존하고 충돌은 거부한다', async () => {
