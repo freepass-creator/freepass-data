@@ -20,7 +20,7 @@ import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
-import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, SONOGONG_WITHDRAWN_PRODUCT_TYPES, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, SONOGONG_API_TABS, SONOGONG_WITHDRAWN_PRODUCT_TYPES, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { parseDetailCache, waitForUpstreamRefresh, type DetailCache } from '../adapters/sonogong-detail-cache.js';
 import { judgeSonogongApiRead, claimEnrollCapOnce, sonogongExposedUnlockedCount, parseSonogongCountState, SONOGONG_COUNT_TAB_SCOPE } from '../adapters/sonogong-api-guards.js';
 import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
@@ -514,14 +514,15 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
             const maxWaitMin = Number(env.SOURCE_CYCLE_SONOGONG_WAIT_MAX_MIN ?? '5');
             const maxWaitMs = Number.isFinite(maxWaitMin) && maxWaitMin >= 0 && maxWaitMin <= 20 ? maxWaitMin * 60_000 : 5 * 60_000;
             await waitForUpstreamRefresh(async () => {
-              const first = await client.get('/vehicles', { tab: 'rent', page: 1, pageSize: 1 });
+              // 갱신 확인도 읽는 탭(sub)으로 한다 — 중고렌트 탭은 대표 2026-10-28 결정으로 요청하지 않는다.
+              const first = await client.get('/vehicles', { tab: SONOGONG_API_TABS[0]!, page: 1, pageSize: 1 });
               return typeof first.attrs.generatedAt === 'string' ? first.attrs.generatedAt : null;
             }, { lastGeneratedAt: detailCache.lastGeneratedAt, maxWaitMs, pollMs: 60_000, sleep: ms => new Promise(r => setTimeout(r, ms)) });
           }
           const read = await readSonogongApi(client, cacheOn ? { detailCache } : {});
           if (cacheOn && unattended && read.detailCacheOut) await writeJsonAtomic(cacheFile, read.detailCacheOut);
           // 행 수 하한(부분 읽기 방어): 잠금 제외 노출 문서 80%·직전 정상 회차 목록 수 80% 중 큰 값. 기준 파일 손상은 이번 회차만 불인정 후 복구.
-          // 읽지 않는 탭의 상품 구분(픽업구독, 대표 2026-10-28) 문서는 노출 문서 수에서 뺀다(결정 하향은 계획이 따로 한다).
+          // 읽지 않는 탭의 상품 구분(중고렌트·픽업구독, 대표 2026-10-28) 문서는 노출 문서 수에서 뺀다(결정 하향은 계획이 따로 한다).
           const exposedDocs = sonogongExposedUnlockedCount((await commands.documents('RP012')).map(d => decodeFields(d.fields as never) as Record<string, unknown>));
           // 기준 파일은 «읽은 탭 범위»와 함께 저장한다. 범위가 다른 옛 기준(세 탭 전부)은 «기준 없음»(파일 없음과 같은 동작)으로 본다.
           let countText: string | null = null, countReadError = false;
@@ -562,7 +563,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
-        // 픽업구독 결정 하향(대표 2026-10-28): 노출된 픽업구독 문서를 매 회차 DECISION_WITHDRAWN 으로 내린다. 읽기가 불완전해도 이 하향만은 적용된다(계획 DECISION_ONLY).
+        // 결정 하향(대표 2026-10-28 «손오공 구독은 연동하고 나머지는 다 내리고»): 노출된 중고렌트·픽업구독 문서를 매 회차 DECISION_WITHDRAWN 으로 내린다. 읽기가 불완전해도 이 하향만은 적용된다(계획 DECISION_ONLY).
         apiPlugin.decisionWithdrawnProductTypes = SONOGONG_WITHDRAWN_PRODUCT_TYPES;
         // 규격 검증(기본 꺼짐): SOURCE_CYCLE_SPEC_VALIDATION_SOURCES 에 RP012 가 있을 때만.
         if ((env.SOURCE_CYCLE_SPEC_VALIDATION_SOURCES ?? '').split(',').map(x => x.trim()).includes('RP012')) apiPlugin.specValidation = true;

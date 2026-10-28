@@ -19,9 +19,9 @@ export const SONOGONG_API_POLICY = Object.freeze({
 /** 명세의 전체 탭. 읽는 탭은 SONOGONG_API_TABS 뿐이다. */
 export const SONOGONG_API_ALL_TABS = ['rent', 'sub', 'pick'] as const;
 export type SonogongApiTab = typeof SONOGONG_API_ALL_TABS[number];
-/** 읽는 탭(우선순위 순): 중고렌트·오공구독만. 픽업구독(pick)은 읽지 않는다 — 대표 2026-10-28 «손오공은 중고렌트랑 중고구독만», «픽업구독 일단 다 내려».
- * 이미 노출된 픽업구독 문서는 엔진 계획이 SONOGONG_WITHDRAWN_PRODUCT_TYPES 로 내린다(DECISION_WITHDRAWN). */
-export const SONOGONG_API_TABS: readonly SonogongApiTab[] = ['rent', 'sub'];
+/** 읽는 탭: 오공구독(sub)만. 중고렌트(rent)·픽업구독(pick)은 읽지 않는다 — 대표 2026-10-28 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»
+ * (같은 날 앞선 «중고렌트랑 중고구독만»·«픽업구독 일단 다 내려»를 대체). 이미 노출된 중고렌트·픽업구독 문서는 엔진 계획이 SONOGONG_WITHDRAWN_PRODUCT_TYPES 로 내린다(DECISION_WITHDRAWN). */
+export const SONOGONG_API_TABS: readonly SonogongApiTab[] = ['sub'];
 /** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
@@ -121,8 +121,10 @@ export type SonogongApiRead = {
   notes: string[];
 };
 
-export async function readSonogongApi(client: SonogongApiClient, opts: { now?: () => string; detailCache?: DetailCache | null } = {}): Promise<SonogongApiRead> {
+/** opts.tabs 는 시험용(여러 탭 우선순위·중복 판정 고정) — 운영 경로는 넘기지 않고 SONOGONG_API_TABS 를 읽는다. */
+export async function readSonogongApi(client: SonogongApiClient, opts: { now?: () => string; detailCache?: DetailCache | null; tabs?: readonly SonogongApiTab[] } = {}): Promise<SonogongApiRead> {
   const clock = opts.now ?? (() => new Date().toISOString());
+  const tabs = opts.tabs ?? SONOGONG_API_TABS;
   const rowsByTab = new Map<SonogongApiTab, Record<string, unknown>[]>();
   let generatedAt: string | null = null, incomplete: string | undefined;
   // 탭 안에서 페이지마다 온 상류 생성 시각(ms)·총수. 한 탭 안에서 둘 이상이면 읽는 도중 스냅숏이 바뀐 것이다(페이지가 서로 다른 판에서 왔다).
@@ -161,7 +163,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
     }
     return { rows, total, done, overlap, gens, totals, unique: seenIds.size };
   };
-  for (const tab of SONOGONG_API_TABS) {
+  for (const tab of tabs) {
     // 읽는 동안 이 탭의 판이 바뀌었으면(생성 시각·총수가 페이지마다 다름) 그 탭만 처음부터 다시 읽는다(최대 2회 — 목록 읽기는 1분 안쪽이라 값싸다).
     // 그래도 섞여 있으면 받지 않는다(SNAPSHOT_CHANGED_DURING_READ).
     let read = await readTab(tab);
@@ -198,7 +200,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   let detailsCached = 0, uncachedFailures = 0;
   let listed = 0, detailsRead = 0, crossTabDuplicates = 0, generationDifferences = 0, amountUnparseable = 0, fuelUnresolved = 0;
   let depositRuleDiffers = 0, depositPlaceholderZero = 0;
-  for (const tab of SONOGONG_API_TABS) {
+  for (const tab of tabs) {
     const inTab = new Set<string>();
     for (const row of rowsByTab.get(tab) ?? []) {
       listed++;
@@ -362,7 +364,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
   if (fuelUnresolved) notes.push(`FUEL_UNRESOLVED:${fuelUnresolved}`);
   if (depositRuleDiffers) notes.push(`DEPOSIT_RULE_DIFFERS:${depositRuleDiffers}`);
   if (depositPlaceholderZero) notes.push(`DEPOSIT_PLACEHOLDER_ZERO:${depositPlaceholderZero}`);
-  return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...SONOGONG_API_TABS],
+  return { observedAt, generatedAt, complete: !incomplete, ...(incomplete ? { incompleteReason: incomplete } : {}), tabsRead: [...tabs],
     records, held, duplicatePlates: [...duplicates], listed, detailsRead, notes,
     ...(cacheOn ? { detailsCached, detailCacheOut: {
       version: DETAIL_CACHE_VERSION, writtenAt: observedAt,

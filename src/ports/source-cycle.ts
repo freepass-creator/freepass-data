@@ -126,7 +126,7 @@ export type CycleConfig = { sourceId: string; family: SourceFamily; maxDowngrade
   /** 규격 검증(대표 2026-10-16 승인, 기본 꺼짐·원천별): 쓰기 직전 위반 칸만 보류하고 SPEC_VIOLATION 경고를 남긴다. 위반이 읽은 차의 20% 를 넘으면 SPEC_FORMAT_DRIFT 로 회차 보류. */
   specValidation?: boolean;
   /** 원천에 없는 노출 문서를 내릴 때의 사유 코드(기본 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN). */ absenceReason?: string;
-  /** 대표 결정으로 노출하지 않는 상품 구분(저장 기록 raw.product_type, 예: 손오공 «픽업구독» 대표 2026-10-28). 그 구분의 노출 문서는 DECISION_WITHDRAWN 으로 내리고
+  /** 대표 결정으로 노출하지 않는 상품 구분(저장 기록 raw.product_type, 예: 손오공 «중고렌트»·«픽업구독» 대표 2026-10-28). 그 구분의 노출 문서는 DECISION_WITHDRAWN 으로 내리고
    * (비율 가드 제외, 계약 잠금은 보호), 그 구분의 원천 행은 편입·재노출하지 않는다. 원천 읽기가 불완전해도 이 하향만은 계획한다(결정이지 부재 추론이 아니다). */
   decisionWithdrawnProductTypes?: readonly string[] };
 export type CycleEvidence = { records: SourceProductRecord[]; complete: boolean; observedAt: string | null; heldCount: number;

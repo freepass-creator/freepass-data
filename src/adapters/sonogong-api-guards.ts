@@ -6,7 +6,7 @@ import type { SonogongApiRead } from './sonogong-api.js';
 import { sonogongApiRowFloor, SONOGONG_API_TABS, SONOGONG_WITHDRAWN_PRODUCT_TYPES } from './sonogong-api.js';
 
 /** 하한 계산용 «잠금 제외 노출 문서 수»(decode 된 문서 칸). 계약 잠금·계약중은 원천에서 내려가도 정산 전 노출을 유지하므로 빼고,
- * 읽지 않는 탭의 상품 구분(픽업구독, 대표 2026-10-28) 문서는 이 읽기와 비교 대상이 아니므로 뺀다(문서 칸 product_type 또는 저장 기록 raw.product_type). */
+ * 읽지 않는 탭의 상품 구분(중고렌트·픽업구독, 대표 2026-10-28 «손오공 구독은 연동하고 나머지는 다 내리고») 문서는 이 읽기와 비교 대상이 아니므로 뺀다(문서 칸 product_type 또는 저장 기록 raw.product_type). */
 export function sonogongExposedUnlockedCount(docs: ReadonlyArray<Record<string, unknown>>): number {
   return docs.filter(f => {
     const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')

@@ -7,7 +7,7 @@ import { stableDigest } from '../src/shared/stable-digest.js';
 import type { SourceProductRecord } from '../src/domain/source-engine.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
 
-// 대표 2026-10-28 «손오공은 중고렌트랑 중고구독만», «픽업구독 일단 다 내려»: 저장 기록 raw.product_type «픽업구독» 노출 문서는 결정 하향(DECISION_WITHDRAWN).
+// 대표 2026-10-28 «픽업구독 일단 다 내려» → 같은 날 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»: 저장 기록 raw.product_type «픽업구독»·«중고렌트» 노출 문서는 결정 하향(DECISION_WITHDRAWN).
 const OBSERVED = '2026-10-28T06:00:00.000Z';
 const now = Date.parse('2026-10-28T06:05:00.000Z');
 const rec = (plate: string, productType: string, status = '출고가능'): SourceProductRecord => ({ sourceId: 'RP012', uid: plate, plate, vehicleText: 'x',
@@ -21,35 +21,37 @@ const cfg = { sourceId: 'RP012', family: 'OTHER' as const, maxDowngradeRatio: 0.
   decisionWithdrawnProductTypes: SONOGONG_WITHDRAWN_PRODUCT_TYPES };
 const evidence = (records: SourceProductRecord[], complete = true, observedAt = OBSERVED) => ({ records, complete, observedAt, heldCount: 0 });
 const picks = Array.from({ length: 30 }, (_, i) => doc(`12가${1000 + i}`, '픽업구독'));
-const subs = [doc('34나2000', '오공구독'), doc('34나2001', '오공구독'), doc('56다3000', '중고렌트')];
+const subs = [doc('34나2000', '오공구독'), doc('34나2001', '오공구독')];
+const rents = [doc('56다3000', '중고렌트')];
 const downs = (entries: Array<{ kind: string; after: CycleProduct }>, reason: string) =>
   entries.filter(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason === reason);
 
-describe('손오공 픽업구독 결정 하향(대표 2026-10-28)', () => {
-  it('완전 읽기: 노출 픽업구독 문서를 전부 DECISION_WITHDRAWN 으로 내린다 — 비율 가드·이월 없음, 하드 삭제 없음, 부재 하향(NOT_IN_API)과 겹치지 않음', () => {
-    const plan = planSourceCycle(cfg, evidence([rec('34나2000', '오공구독'), rec('34나2001', '오공구독'), rec('56다3000', '중고렌트')]),
-      { products: [...picks, ...subs], complete: true }, now).plan;
+describe('손오공 중고렌트·픽업구독 결정 하향(대표 2026-10-28)', () => {
+  it('완전 읽기: 노출 픽업구독·중고렌트 문서를 전부 DECISION_WITHDRAWN 으로 내린다 — 비율 가드·이월 없음, 하드 삭제 없음, 부재 하향(NOT_IN_API)과 겹치지 않음', () => {
+    const plan = planSourceCycle(cfg, evidence([rec('34나2000', '오공구독'), rec('34나2001', '오공구독')]),
+      { products: [...picks, ...subs, ...rents], complete: true }, now).plan;
     expect(plan.blockers).toEqual([]);
     const withdrawn = downs(plan.entries, 'DECISION_WITHDRAWN');
-    expect(withdrawn).toHaveLength(30);                                                        // 노출 33 중 30 = 91% (비율 20% 가드였다면 막힘)
+    expect(withdrawn).toHaveLength(31);                                                        // 노출 33 중 31 = 94% (비율 20% 가드였다면 막힘)
+    expect(withdrawn.map(e => e.after.record.raw.product_type).filter(t => t === '중고렌트')).toHaveLength(1);
     expect(withdrawn.every(e => e.after.listable === false && e.after.publication_withdrawal?.deleteAuthorized === false)).toBe(true);
     expect(downs(plan.entries, 'NOT_IN_API')).toHaveLength(0);
-    expect(plan.entries).toHaveLength(30);                                                      // 문서당 항목 하나(중복 하향 없음)
-    expect(plan.warnings).toContain('DECISION_WITHDRAWN_TYPE:30');
+    expect(plan.entries).toHaveLength(31);                                                      // 문서당 항목 하나(중복 하향 없음)
+    expect(plan.warnings).toContain('DECISION_WITHDRAWN_TYPE:31');
     expect(plan.warnings.some(w => w.startsWith('DOWNGRADE_DEFERRED'))).toBe(false);
-    expect(plan.config.decisionWithdrawnProductTypes).toEqual(['픽업구독']);                     // 적용 재계획(replay)이 같은 결과
+    expect(plan.config.decisionWithdrawnProductTypes).toEqual(['중고렌트', '픽업구독']);         // 적용 재계획(replay)이 같은 결과
   });
 
   it('불완전 읽기(API_SHRUNK 등): 결정 하향만 계획하고 막힘을 푼다 — 원천 값으로 쓰는 편입·갱신·부재 하향은 하나도 넣지 않는다', () => {
-    const partial = [rec('34나2000', '오공구독', '계약중'), rec('78라4000', '중고렌트')];       // 기존 문서 갱신 1 + 새 차 1 → 둘 다 빠져야 한다
-    const plan = planSourceCycle(cfg, evidence(partial, false), { products: [...picks, ...subs], complete: true }, now).plan;
+    const partial = [rec('34나2000', '오공구독', '계약중'), rec('78라4000', '오공구독')];       // 기존 문서 갱신 1 + 새 차 1 → 둘 다 빠져야 한다
+    const plan = planSourceCycle(cfg, evidence(partial, false), { products: [...picks, ...subs, ...rents], complete: true }, now).plan;
     expect(plan.blockers).toEqual([]);
     expect(plan.warnings).toContain('DECISION_ONLY:SOURCE_INCOMPLETE');
-    expect(plan.entries).toHaveLength(30);
+    expect(plan.entries).toHaveLength(31);
     expect(plan.entries.every(e => e.kind === 'DOWNGRADE' && e.after.publication_withdrawal?.reason === 'DECISION_WITHDRAWN')).toBe(true);
   });
 
-  it('불완전 읽기인데 내릴 픽업구독이 없으면 지금처럼 SOURCE_INCOMPLETE 로 멈춘다', () => {
+  it('불완전 읽기인데 내릴 중고렌트·픽업구독이 없으면 지금처럼 SOURCE_INCOMPLETE 로 멈춘다', () => {
     const plan = planSourceCycle(cfg, evidence([rec('34나2000', '오공구독')], false), { products: subs, complete: true }, now).plan;
     expect(plan.blockers).toEqual(['SOURCE_INCOMPLETE']);
   });
@@ -80,8 +82,10 @@ describe('손오공 픽업구독 결정 하향(대표 2026-10-28)', () => {
   });
 
   it('픽업구독이던 차가 이번 원천에 오공구독으로 나오면 결정 하향하지 않고 보통 경로가 갱신한다', () => {
-    const plan = planSourceCycle(cfg, evidence([rec('12가1000', '오공구독'), ...subs.map(s => s.record)]),
-      { products: [picks[0]!, ...subs], complete: true }, now).plan;
+    const plan = planSourceCycle(cfg, evidence([rec('12가1000', '오공구독'), rec('56다3000', '오공구독'), ...subs.map(s => s.record)]),
+      { products: [picks[0]!, ...subs, ...rents], complete: true }, now).plan;
+    // 중고렌트로 노출돼 있던 차가 구독 탭에도 있으면(예전엔 rent 우선 채택) 이제 오공구독으로 갱신되고 내려가지 않는다
+    expect(plan.entries.find(e => e.after.record.uid === '56다3000')).toMatchObject({ kind: 'UPDATE', after: { listable: true, record: { raw: { product_type: '오공구독' } } } });
     const entry = plan.entries.find(e => e.after.record.uid === '12가1000')!;
     expect(entry.kind).toBe('UPDATE');
     expect(entry.after.listable).toBe(true);
@@ -89,16 +93,16 @@ describe('손오공 픽업구독 결정 하향(대표 2026-10-28)', () => {
     expect(downs(plan.entries, 'DECISION_WITHDRAWN')).toHaveLength(0);
   });
 
-  it('비율 가드 기준에서 픽업구독을 뺀다: 남은 3건 중 2건 부재는 픽업구독 30건이 있어도 가드에 걸린다', () => {
+  it('비율 가드 기준에서 결정 구분을 뺀다: 남은 오공구독 2건 중 1건 부재는 픽업구독·중고렌트 31건이 있어도 가드에 걸린다', () => {
     const { downgradeFloor: _f, ...ratioOnly } = cfg;                                         // 절대 하한 없이 비율만(옛 합산 비율)
-    const plan = planSourceCycle(ratioOnly, evidence([rec('34나2000', '오공구독')]), { products: [...picks, ...subs], complete: true }, now).plan;
-    expect(plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');                               // 2/3 > 0.2 (기준이 33 이었다면 2/33 로 통과)
+    const plan = planSourceCycle(ratioOnly, evidence([rec('34나2000', '오공구독')]), { products: [...picks, ...subs, ...rents], complete: true }, now).plan;
+    expect(plan.blockers).toContain('DOWNGRADE_RATIO_EXCEEDED');                               // 1/2 > 0.2 (기준이 33 이었다면 1/33 으로 통과)
   });
 
   it('Codex P1: 픽업 264 + 비픽업 9, 완전 읽기에 신규 8대만 있으면 비픽업 부재 하향은 비픽업 기준 허용분(3)까지만', () => {
     const many = Array.from({ length: 264 }, (_, i) => doc(`12가${2000 + i}`, '픽업구독'));
     const nine = Array.from({ length: 9 }, (_, i) => doc(`34나${3000 + i}`, '오공구독'));
-    const fresh = Array.from({ length: 8 }, (_, i) => rec(`56다${4000 + i}`, '중고렌트'));
+    const fresh = Array.from({ length: 8 }, (_, i) => rec(`56다${4000 + i}`, '오공구독'));
     const plan = planSourceCycle(cfg, evidence(fresh), { products: [...many, ...nine], complete: true }, now).plan;
     expect(downs(plan.entries, 'DECISION_WITHDRAWN')).toHaveLength(264);
     expect(downs(plan.entries, 'NOT_IN_API')).toHaveLength(3);                                  // max(floor 3, floor(9×0.2)=1)
@@ -129,7 +133,7 @@ describe('손오공 픽업구독 결정 하향(대표 2026-10-28)', () => {
   });
 });
 
-describe('무인 회차: 읽기가 불완전해도 픽업구독 하향은 적용된다', () => {
+describe('무인 회차: 읽기가 불완전해도 중고렌트·픽업구독 하향은 적용된다', () => {
   function memory(initial: CycleProduct[]) {
     const data = new Map(initial.map(p => [p.record.uid, structuredClone(p)]));
     const backups = new Map<string, CycleProduct | null>();
@@ -160,17 +164,17 @@ describe('무인 회차: 읽기가 불완전해도 픽업구독 하향은 적용
     return p;
   };
 
-  it('픽업구독 30건만 쓰고(되읽기 검증), 오공구독·중고렌트 문서는 그대로, 회차는 불완전 읽기로 실패를 센다', async () => {
-    const m = memory([...picks, ...subs]), c = control();
+  it('픽업구독 30건·중고렌트 1건만 쓰고(되읽기 검증), 오공구독 문서는 그대로, 회차는 불완전 읽기로 실패를 센다', async () => {
+    const m = memory([...picks, ...subs, ...rents]), c = control();
     const result = await runUnattendedSourceCycle(apiPlugin(), m.commands, c.ctrl, { now: () => now });
     expect(result.stage).toBe('APPLY');
-    expect(result.writes).toBe(30);
-    expect(result.verified).toBe(30);
+    expect(result.writes).toBe(31);
+    expect(result.verified).toBe(31);
     expect(result.status).toBe('HOLD');                                                        // SOURCE_INCOMPLETE: 원천 회복 전까지 실패로 남는다
     expect(c.state().error).toBe('SOURCE_INCOMPLETE');
     const after = [...m.data.values()];
-    expect(after.filter(p => p.record.raw.product_type === '픽업구독' && p.listable)).toHaveLength(0);
-    expect(after.filter(p => p.publication_withdrawal?.reason === 'DECISION_WITHDRAWN')).toHaveLength(30);
+    expect(after.filter(p => ['픽업구독', '중고렌트'].includes(String(p.record.raw.product_type)) && p.listable)).toHaveLength(0);
+    expect(after.filter(p => p.publication_withdrawal?.reason === 'DECISION_WITHDRAWN')).toHaveLength(31);
     for (const s of subs) expect(m.data.get(s.record.uid)).toEqual(s);                         // 원천 값으로 쓰는 항목 없음
     expect(m.data.size).toBe(33);                                                              // 삭제 없음
     // 다음 회차: 더 내릴 것이 없어 지금처럼 SOURCE_INCOMPLETE 로 멈추고 쓰기 0
@@ -179,9 +183,9 @@ describe('무인 회차: 읽기가 불완전해도 픽업구독 하향은 적용
   });
 
   it('승인 계획 재적용(apply)도 같은 계획을 다시 만든다(재계획 불일치 없음)', async () => {
-    const m = memory([...picks.slice(0, 3), ...subs]);
+    const m = memory([...picks.slice(0, 3), ...subs, ...rents]);
     const built = planSourceCycle(cfg, evidence([rec('34나2000', '오공구독')], false), await m.commands.list('RP012'), now);
     const applied = await applySourceCycle(m.commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
-    expect(applied).toMatchObject({ status: 'APPLIED', writes: 3, verified: 3 });
+    expect(applied).toMatchObject({ status: 'APPLIED', writes: 4, verified: 4 });
   });
 });

@@ -13,8 +13,8 @@ type Rec = Record<string, unknown>;
 export const FUEL_ALLOWED: ReadonlySet<string> = SPEC_FUEL_VALUES;
 const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
 const rule = (field: keyof typeof SPEC_FORMAT_RULES) => SPEC_FORMAT_RULES[field]!;
-/** 손오공 노출 상품 구분: 중고렌트·오공구독(대표 2026-10-28 «손오공은 중고렌트랑 중고구독만»). 픽업구독은 결정 하향 대상이라 노출돼 있으면 위반. */
-const SONOGONG_LISTED_PRODUCT_TYPES: readonly string[] = ['중고렌트', '오공구독'];
+/** 손오공 노출 상품 구분: 오공구독만(대표 2026-10-28 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»). 중고렌트·픽업구독은 결정 하향 대상이라 노출돼 있으면 위반. */
+const SONOGONG_LISTED_PRODUCT_TYPES: readonly string[] = ['오공구독'];
 const last4 = (f: Rec): string => String(f.car_number ?? '').replace(/\D/g, '').slice(-4);
 const short = (v: string): string => (v.length > 30 ? `${v.slice(0, 29)}…` : v);
 
@@ -56,7 +56,7 @@ export const SONOGONG_CHECKS: readonly Check[] = [
       return bad ? `${bad.months}개월 보증금이 원 단위 정수 범위 밖(0~1억, 양수는 1만원 이상)` : null;
     } },
   { field: 'product_type', label: '상품 구분', read: f => text(f.product_type) || null, valid: v => (SONOGONG_LISTED_PRODUCT_TYPES.includes(v) ? null
-      : SONOGONG_WITHDRAWN_PRODUCT_TYPES.includes(v) ? '결정 하향 대상 구분(픽업구독, 대표 10-28)이 노출 중' : '손오공 상품 구분(중고렌트·오공구독) 밖') },
+      : SONOGONG_WITHDRAWN_PRODUCT_TYPES.includes(v) ? `결정 하향 대상 구분(${v}, 대표 10-28)이 노출 중` : '손오공 상품 구분(오공구독) 밖') },
   { field: 'status', label: '상태', read: f => text(f.status_kind) || text(f.status) || null, valid: () => null },
   { field: 'api_options_state', label: '옵션 확인', read: f => text(f.api_options_state) || null, valid: v => (['PRESENT', 'NONE', 'NO_DETAIL'].includes(v) ? null : '옵션 상태 값 밖') },
   { field: 'image_urls', label: '사진', read: f => ((Array.isArray(f.image_urls) && f.image_urls.length) || (Array.isArray(f.photo_original_refs) && f.photo_original_refs.length) ? 'present' : null),

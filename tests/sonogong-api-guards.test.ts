@@ -78,31 +78,34 @@ describe('한 회차 한정 편입 상한 표식(#601 독립 검토 결함 ③)'
   });
 });
 
-describe('픽업구독 제외 뒤 하한·기준(대표 2026-10-28 «손오공은 중고렌트랑 중고구독만»)', () => {
+describe('결정 하향 구분(중고렌트·픽업구독) 제외 뒤 하한·기준(대표 2026-10-28 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»)', () => {
   const exposed = (productType: string, over: Record<string, unknown> = {}) => ({ listable: true, status: '출고가능', product_type: productType,
     source_cycle_record: { raw: { product_type: productType } }, ...over });
-  it('노출 문서 수에서 픽업구독(문서 칸 또는 저장 기록)·계약 잠금·계약중·비노출을 뺀다', () => {
+  it('노출 문서 수에서 중고렌트·픽업구독(문서 칸 또는 저장 기록)·계약 잠금·계약중·비노출을 뺀다', () => {
     const docs = [
       ...Array.from({ length: 264 }, () => exposed('픽업구독')),
-      ...Array.from({ length: 9 }, () => exposed('오공구독')),
-      exposed('중고렌트'),
+      ...Array.from({ length: 10 }, () => exposed('오공구독')),
+      ...Array.from({ length: 3 }, () => exposed('중고렌트')),                                              // 노출 중고렌트(결정 하향 대상)도 뺀다
+      { listable: true, status: '출고가능', source_cycle_record: { raw: { product_type: '중고렌트' } } },
       exposed('중고렌트', { status: '계약중' }), exposed('오공구독', { locked_by_contract: 'LEDGER' }), exposed('오공구독', { listable: false }),
       { listable: true, status: '출고가능', product_type: '픽업구독' },                                   // 저장 기록 없는 옛 문서도 칸으로 뺀다
       { listable: true, status: '출고가능', source_cycle_record: { raw: { product_type: '픽업구독' } } }, // 칸이 비어도 저장 기록으로 뺀다
     ];
     expect(sonogongExposedUnlockedCount(docs)).toBe(10);
-    // 하한은 남은 10 기준(80% = 8): 픽업구독 264 가 남아 있어도 중고렌트·오공구독 읽기를 API_SHRUNK 로 막지 않는다
+    // 하한은 남은 오공구독 10 기준(80% = 8): 중고렌트·픽업구독이 남아 있어도 오공구독 읽기를 API_SHRUNK 로 막지 않는다
     expect(judgeSonogongApiRead(read(8), { exposedUnlockedDocs: sonogongExposedUnlockedCount(docs), previousCount: 0, stateError: null }).complete).toBe(true);
     expect(judgeSonogongApiRead(read(7), { exposedUnlockedDocs: sonogongExposedUnlockedCount(docs), previousCount: 0, stateError: null }).incompleteReason).toBe('API_SHRUNK');
   });
-  it('기준 파일: 같은 탭 범위만 기준으로 쓰고, 옛 형식(세 탭 전부)은 «기준 없음», 깨진 파일은 손상', () => {
-    expect(SONOGONG_COUNT_TAB_SCOPE).toBe('rent,sub');
-    expect(parseSonogongCountState(JSON.stringify({ count: 40, at: 'x', tabs: 'rent,sub' }), false)).toEqual({ previous: 40, stateError: null });
+  it('기준 파일: 같은 탭 범위(sub)만 기준으로 쓰고, 옛 형식(세 탭 전부·rent,sub)은 «기준 없음», 깨진 파일은 손상', () => {
+    expect(SONOGONG_COUNT_TAB_SCOPE).toBe('sub');
+    expect(parseSonogongCountState(JSON.stringify({ count: 40, at: 'x', tabs: 'sub' }), false)).toEqual({ previous: 40, stateError: null });
+    // 지금 운영 기준 파일(중고렌트+오공구독 66)은 범위가 달라 기준 없음 — 노출 오공구독 문서 하한만 남고 다음 완전 읽기가 sub 범위로 다시 쓴다
+    expect(parseSonogongCountState(JSON.stringify({ count: 66, at: 'x', tabs: 'rent,sub' }), false)).toEqual({ previous: 0, stateError: null });
     expect(parseSonogongCountState(JSON.stringify({ count: 330, at: 'x' }), false)).toEqual({ previous: 0, stateError: null });
     expect(parseSonogongCountState(JSON.stringify({ count: 330, at: 'x', tabs: 'rent,sub,pick' }), false)).toEqual({ previous: 0, stateError: null });
     expect(parseSonogongCountState(null, false)).toEqual({ previous: 0, stateError: null });
     expect(parseSonogongCountState('{bad', false)).toEqual({ previous: 0, stateError: 'API_COUNT_STATE_INVALID' });
-    expect(parseSonogongCountState(JSON.stringify({ count: 0, tabs: 'rent,sub' }), false)).toEqual({ previous: 0, stateError: 'API_COUNT_STATE_INVALID' });
+    expect(parseSonogongCountState(JSON.stringify({ count: 0, tabs: 'sub' }), false)).toEqual({ previous: 0, stateError: 'API_COUNT_STATE_INVALID' });
     expect(parseSonogongCountState(null, true)).toEqual({ previous: 0, stateError: 'API_COUNT_STATE_INVALID' });
   });
 });
