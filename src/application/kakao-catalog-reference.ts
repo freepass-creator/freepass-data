@@ -471,8 +471,13 @@ export const KAKAO_COMMISSION_POLICY = {
     policyKind: 'BASIC',
     policyRef: 'FREEPASS_BASIC',
     subscriptionUsesBasicTermLadder: true,
-    unspecifiedNewDeliveryForm: 'REQUIRES_EVIDENCE',
+    // 대표 10-28 «우리가 계약서 써주는 업체는 우리 표준 수수료 적용하면 돼 심플하게»: 기본 회사는 공급사별 특칙 없이 표준표.
+    // 표준표의 신차는 선출고(차량가격 3%)뿐이라, 출고 방식이 적히지 않은 신차렌트는 선출고로 본다(견적출고 명시는 그대로 합의 요율 필요).
+    // 표준표에 없는 2~11개월은 계속 근거 필요(표에 값이 없다).
+    unspecifiedNewDeliveryForm: 'STANDARD_PREDELIVERY',
     unspecifiedShortTerms: 'REQUIRES_EVIDENCE',
+    contractWriterStandard: { decisionDate: '2026-10-28', authority: 'USER_DIRECT_DECISION', sourceRef: 'ledger:2026-10-28-contract-writer-standard-fee',
+      newRentDefaultSubtype: 'NEW_PREDELIVERY', nonstandardTermNearestShorterStandard: 'BILLING_AND_PAYOUT' },
     billinProposal: { supplierIds: ['RP021', 'PT-0026'], state: 'CONFIRMED', termMonths: 36,
       billingBasis: 'MONTHLY_RENT_AT_36_MONTHS', billingPercent: 100, payoutPercentOfBilling: 80,
       authority: 'USER_DIRECT_DECISION_2026_10_09', appliesTo: 'SUBSCRIPTION',
@@ -517,8 +522,8 @@ export function getSupplierCommissionPolicy(supplierId: string) {
   if (!group) return null;
   const basicSubscription = includes(p.supplierPolicyAssignments.basicSupplierIds);
   const billinSubscription = includes(p.supplierPolicyAssignments.billinProposal.supplierIds);
-  // Existing representative decision 2026-10-12; explicit matching delivery still wins.
-  const newRentDefaultSubtype = ['RP006', 'RP020'].includes(supplierId) ? 'NEW_PREDELIVERY' as const : undefined;
+  // Existing representative decision 2026-10-12 (RP006·RP020) + 2026-10-28 basic companies standard table; explicit matching delivery still wins.
+  const newRentDefaultSubtype = supplierId === 'RP006' || basicSubscription ? 'NEW_PREDELIVERY' as const : undefined;
   const groups = new Set(['STANDARD', ...(supplierId === 'RP006' ? ['IRON'] : []),
     ...(group === 'AICAR' ? ['IANCAR'] : [group])]);
   const definition = {
@@ -530,6 +535,7 @@ export function getSupplierCommissionPolicy(supplierId: string) {
       (group === 'AUTOPLUS' && rule.id.startsWith('AUTOPLUS_')) ||
       (group === 'SONOKONG' && rule.id.startsWith('SONOKONG_'))),
     oneMonthBasic: p.oneMonthBasic,
+    ...(basicSubscription ? { contractWriterStandard: p.supplierPolicyAssignments.contractWriterStandard } : {}),
     ...(billinSubscription ? { subscription: p.supplierPolicyAssignments.billinProposal } : {}),
     ...(group === 'SONOKONG' ? { sonokongAdditions: p.sonokongAdditions } : {}),
     ...(group === 'PACIFIC' ? { pacificRates: p.pacificRates } : {}),
@@ -959,12 +965,13 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
+  // 기본 회사(대표 10-28 표준표)는 청구도 지급과 같이 비정형 기간을 가까운 짧은 표준 기간으로 본다 — 아이언(RP006)은 #801.
+  const nonstandardBilling = side === 'BILLING' && (supplierId === 'RP006' || supplierPolicy?.basicSubscription === true);
   if (subscription && supplierPolicy?.basicSubscription) {
-    return resolveTermLadder(termMonths, monthlyRent, side);
+    return resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding, nonstandardBilling);
   }
   // 손오공 재렌트·중고렌트는 F04 기간표 값 그대로(보험료 −100,000 차감은 오공구독 청구에만 — 지휘통제실 2026-10-12).
-  if (rerent) return resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding,
-    supplierId === 'RP006' && side === 'BILLING');
+  if (rerent) return resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', rounding, nonstandardBilling);
   if (/^신차/.test(productType) && !subscription) {
     if (supplierId === 'RP022' && input.depositTierPercent !== 5 && input.depositTierPercent !== 10) return unknownCommission('DEPOSIT_TIER_REQUIRED');
     const subtype = input.newProductSubtype;
@@ -981,6 +988,17 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return fixed(`${supplierId === 'RP006' ? 'IRON' : 'STANDARD'}_NEW_PREDELIVERY_${side}`, input.vehicleValue! * rule.rateBasisPoints / 10000, rule.vatTreatment);
   }
   return unknownCommission(subscription ? 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' : 'NO_MATCHING_RULE');
+}
+
+/**
+ * 대표 10-28 표준표 결정이 근거인 결과 표시: 기본 회사의 신차 선출고(출고 방식 미기재 기본값은 원천 투영에서 이미 채워져 오므로
+ * 명시·기본값을 가르지 않는다)와 청구 비정형 기간.
+ */
+function contractWriterStandardApplied(input: CommissionInput, side: 'BILLING' | 'PAYOUT', result: CommissionResolution): boolean {
+  if (!KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === input.supplierId)) return false;
+  const newPredelivery = result.ruleId?.includes('NEW_PREDELIVERY') === true;
+  const nonstandardBilling = side === 'BILLING' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') === true;
+  return newPredelivery || nonstandardBilling;
 }
 
 function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
@@ -1022,6 +1040,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     ...(result.note ? [result.note] : []),
     ...(side === 'PAYOUT' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
     ...(side === 'BILLING' && input.supplierId === 'RP006' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
+    ...(contractWriterStandardApplied(input, side, result) ? [KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.contractWriterStandard.sourceRef] : []),
     ...(side === 'PAYOUT' && input.supplierId === 'RP004' && input.depositState === 'ZERO'
       ? ['ledger:2026-10-28-rp004-payout-equals-billing'] : []),
   ];
@@ -1123,7 +1142,7 @@ export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVE
   if (text(source.product_type) !== '신차렌트') return undefined;
   const stated = statedNewProductSubtype(source);
   // 대표 2026-10-12: 아이언(RP006)·우리캐피탈렌더카(RP020)는 시트의 신차렌트를 차량가액 기준 선출고 규칙(F04 139·50행)으로 읽는다.
-  // 원문에 견적출고가 명시되면 그것이 우선(위 stated).
+  // 대표 2026-10-28: 기본 회사(계약서를 프리패스가 써 주는 곳)도 표준표의 선출고로 읽는다. 원문에 견적출고가 명시되면 그것이 우선(위 stated).
   return stated ?? getSupplierCommissionPolicy(text(source.provider_company_code))?.newRentDefaultSubtype ?? undefined;
 }
 

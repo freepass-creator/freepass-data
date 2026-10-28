@@ -1,5 +1,11 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-28 PC3 기본 회사 표준 수수료표 (대표 10-28 «계약서 써주는 업체는 우리 표준 수수료»)
+
+- 기본 회사 8곳(`supplierPolicyAssignments.basicSupplierIds`)은 공급사별 특칙 없이 표준표: 출고 방식 미기재 신차렌트 = 선출고(차량가격 3%, 견적출고 명시는 그대로 합의 요율 필요), 비정형 기간은 청구도 지급처럼 가까운 짧은 표준 기간. 근거 표시 `ledger:2026-10-28-contract-writer-standard-fee`.
+- 그대로 UNKNOWN: 차량가격 없음(VEHICLE_VALUE_REQUIRED), 표에 없는 2~11개월(RP030 6개월 4건), 웰릭스 발주. 역마진 가드(지급 ≤ 청구) 그대로.
+- 10-28 지급 스냅샷 계획(쓰기 0) 전후: 기본 회사 UNKNOWN 88 → 88, 금액·상태 변경 0, 사유만 17건 «신차 유형 필요» → «차량가액 필요». 남은 UNKNOWN 은 차량가격 증거가 들어와야 풀린다.
+
 ## 2026-10-19 PC3 original117 — reviewed archived physical facts, default off
 
 - `SOURCE_CYCLE_REVIEWED_SPEC_CORRECTIONS` accepts only explicit UID/supplier/current whole-correction digest/physical field allowlists (max 100). The current correction must remain verbatim in existing history and match its original reviewed binding. Nothing is inferred from names or registration dates. Plan-time conflict checks read exact current RAW cells/headers through the existing shared-sheet fact parsers, before master/spec gates can hide assertions. Missing or duplicated headers exclude that field.

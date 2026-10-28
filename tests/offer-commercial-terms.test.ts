@@ -280,6 +280,9 @@ describe('canonical per-term economics precompute', () => {
     expect(zeroFee.sourceRefs.some(ref => ref.startsWith('catalog_offers/'))).toBe(false);
     expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 }, reasonCode: null });
     input.priceTerms[0]!.termMonths = 18;
+    // 기본 회사(RP013)는 대표 10-28 표준표로 비정형 청구 기간도 가까운 짧은 표준 기간(12개월 정액), 그 밖의 공급사는 그대로 미지원.
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 600000 } });
+    input.supplierId = 'RP008';
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
   it('preserves fixed fees, rejects ambiguous fuel and rounds fractional won', () => {
