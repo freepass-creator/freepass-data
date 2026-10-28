@@ -79,6 +79,7 @@
     "plan:vehicle-uid-migration": "tsx src/jobs/plan-vehicle-uid-migration.ts",
     "apply:vehicle-uid-migration": "tsx src/jobs/apply-vehicle-uid-migration.ts",
     "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts",
+    "snapshot:payout-fees": "tsx src/jobs/snapshot-payout-fees.ts",
     "apply:period-fee-ledger": "tsx src/jobs/apply-period-fee-ledger.ts",
     "test:source-cycle-ci": "node --test tests/source-cycle-dry-run-ci.node.mjs",
     "export:identity-snapshot": "tsx src/jobs/export-identity-snapshot.ts",

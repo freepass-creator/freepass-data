@@ -25,6 +25,31 @@ async function prepare(store: MemoryDataStore) {
 }
 
 describe('offer economics recompute', () => {
+  it.each([
+    ['지급>청구는 UNKNOWN', 100, 200, 'UNKNOWN'],
+    ['지급=청구는 KNOWN', 100, 100, 'KNOWN'],
+    ['지급<청구는 KNOWN', 200, 100, 'KNOWN'],
+  ] as const)('역마진 가드: %s', (_name, billing, payout, state) => {
+    const agreement = { agreementId: 'private:test_guard', sourceRow: 160 as const, status: 'APPROVED' as const,
+      contractRef: 'opaque:test_guard_123456', matchedContractRef: 'opaque:test_guard_123456', billing, payout };
+    const offer = { id: 'guard', supplierId: 'RP013', priceTerms: [{ termKey: 'm12', termMonths: 12,
+      monthlyRent: { amount: 600000, currency: 'KRW' as const }, deposit: { amount: 1000000, currency: 'KRW' as const }, depositState: 'KNOWN' as const }] };
+    const term = precomputeOfferEconomics(offer, 'USED_RENT', '가솔린', { m12: { individualAgreement: agreement } })[0]!;
+    expect(term.channelPayoutFee.state).toBe(state);
+    expect(term.channelPayoutFee.reasonCode).toBe(state === 'UNKNOWN' ? 'PAYOUT_EXCEEDS_BILLING' : null);
+    expect(term.supplierBillingFee.amount?.amount).toBe(billing);
+  });
+
+  it('역마진 가드는 청구나 지급이 UNKNOWN이면 개입하지 않는다', () => {
+    const agreement = { agreementId: 'private:test_guard', sourceRow: 160 as const, status: 'PAYOUT_CONFIRMED' as const,
+      contractRef: 'opaque:test_guard_123456', matchedContractRef: 'opaque:test_guard_123456', billing: null, payout: 200 };
+    const offer = { id: 'guard-unknown', supplierId: 'RP013', priceTerms: [{ termKey: 'm12', termMonths: 12,
+      monthlyRent: { amount: 600000, currency: 'KRW' as const }, deposit: null, depositState: 'UNKNOWN' as const }] };
+    const term = precomputeOfferEconomics(offer, 'USED_RENT', '가솔린', { m12: { individualAgreement: agreement } })[0]!;
+    expect(term.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'INDIVIDUAL_BILLING_BASIS_UNCONFIRMED' });
+    expect(term.channelPayoutFee).toMatchObject({ state: 'KNOWN', amount: { amount: 200 } });
+  });
+
   it('applies a reviewed subset with current evidence and blocks source drift atomically', async () => {
     const store=await fixture(),offer=(await store.listOffers())[0]!, now=new Date().toISOString();
     const product=(await store.getProduct(offer.productId))!;

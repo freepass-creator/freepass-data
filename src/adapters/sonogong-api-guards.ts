@@ -3,7 +3,33 @@
  * ② 하한은 «고유 차량번호 수» 로 계산한다(탭 간 중복 행은 제외).
  * ③ 한 회차 한정 편입 상한 표식은 잠금 안에서 «적용 전에» 원자적으로 기록하고, 기록에 실패하면 상한을 올리지 않는다(보수적으로 원복값). */
 import type { SonogongApiRead } from './sonogong-api.js';
-import { sonogongApiRowFloor } from './sonogong-api.js';
+import { sonogongApiRowFloor, SONOGONG_API_TABS, SONOGONG_WITHDRAWN_PRODUCT_TYPES } from './sonogong-api.js';
+
+/** 하한 계산용 «잠금 제외 노출 문서 수»(decode 된 문서 칸). 계약 잠금·계약중은 원천에서 내려가도 정산 전 노출을 유지하므로 빼고,
+ * 읽지 않는 탭의 상품 구분(픽업구독, 대표 2026-10-28) 문서는 이 읽기와 비교 대상이 아니므로 뺀다(문서 칸 product_type 또는 저장 기록 raw.product_type). */
+export function sonogongExposedUnlockedCount(docs: ReadonlyArray<Record<string, unknown>>): number {
+  return docs.filter(f => {
+    const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
+      || f.status === '계약중' || f.status_kind === '계약중';
+    const recordType = (f.source_cycle_record as { raw?: { product_type?: unknown } } | null | undefined)?.raw?.product_type;
+    const withdrawnType = [f.product_type, recordType].some(t => typeof t === 'string' && SONOGONG_WITHDRAWN_PRODUCT_TYPES.includes(t));
+    return f.listable === true && !locked && !withdrawnType;
+  }).length;
+}
+
+/** 기준 파일에 함께 남기는 «읽은 탭 범위». */
+export const SONOGONG_COUNT_TAB_SCOPE = SONOGONG_API_TABS.join(',');
+/** 기준 파일(직전 정상 건수) 해석. 파일 없음 = 기준 없음. 형식이 깨졌으면 API_COUNT_STATE_INVALID.
+ * 읽은 탭 범위가 다른 기준(옛 형식 = 세 탭 전부, 대표 2026-10-28 전)은 지금 읽기와 비교할 수 없어 «기준 없음»으로 본다 — 노출 문서 하한만 남고, 다음 완전 읽기가 새 범위로 다시 쓴다. */
+export function parseSonogongCountState(text: string | null, readError: boolean): { previous: number; stateError: string | null } {
+  if (readError) return { previous: 0, stateError: 'API_COUNT_STATE_INVALID' };
+  if (text === null) return { previous: 0, stateError: null };
+  try {
+    const parsed = JSON.parse(text) as { count?: unknown; tabs?: unknown };
+    if (!(typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0)) return { previous: 0, stateError: 'API_COUNT_STATE_INVALID' };
+    return { previous: parsed.tabs === SONOGONG_COUNT_TAB_SCOPE ? parsed.count : 0, stateError: null };
+  } catch { return { previous: 0, stateError: 'API_COUNT_STATE_INVALID' }; }
+}
 
 export type ApiReadVerdict = {
   complete: boolean; incompleteReason?: string;

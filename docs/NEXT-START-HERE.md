@@ -244,6 +244,21 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-28 영업자 지급수수료 박제 규칙 확장 — ledger 59c7c3ba
+
+- 목적 / 대상 revision: `work/freepass-data/payout-nonstandard-terms-20261028` @ `2e612b3fb1339247ed7c533db367bfca39ce933c` 기준. 대표 2026-10-28 「제안대로 채워」 결정을 기존 F04 수수료 엔진·`precomputeOfferEconomics`·지급수수료 박제 job에 확장한다.
+- 변경: 사다리 공급사의 영업자 `PAYOUT`에만 12·24·36·48·60 중 가장 가까운 짧은 표준 기간 요율을 적용하고 `ledger:59c7c3ba`·`NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(원기간→적용기간)`을 남긴다. 12개월 미만·이안카 단기·구독 예외·청구는 기존 경계를 유지한다. 뮤카 60개월 선납은 48개월과 같은 120만원 + 추가보증금 10%(최대 40만원)으로 확장했다.
+- 박제 job: Firestore `products` 전체 입력·`provider_company_code` 우선·`listable` 표시 보존을 재확인했다. 기존 `PayoutFeeEvidence[]`와 `plate/가격원/확신도/근거URL/carName/연식` 신차 가격 배열을 받고, 낮음은 제외하며 일치 `NEW_RENT` 차량에만 `NEW_PREDELIVERY`를 준다. `--mewcar-prepaid-default`는 명시한 때만 PREPAID·추가보증금 0을 증거로 취급한다. 계획 출력에 증거 종류별·공급사별 비정형 기간 적용 건수를 ID 없이 추가했다.
+- 검증: `npx tsc --noEmit -p .` PASS; `vitest` 관련 181 PASS; `check-data-access-boundary` PASS; `check-architecture` PASS; `git diff --check` PASS. 네트워크·Firestore 읽기/쓰기·커밋 없음.
+- 남음 / next_start_here: 운영 증거 파일 경로로 dry-run 계획을 만들 때 `docs/READ-RUNTIME.md#상품별·기간별-영업자-지급수수료-일-박제`를 따라 증거 적용 건수·UNKNOWN 사유·planDigest를 대조한다. 이 작업은 실제 운영 데이터와 apply를 수행하지 않았다.
+
+### 2026-10-27 PC3 — 원천 명시 인승을 기존 spec-refill로 전달
+
+- 원건 `Mmvq7z9p8-81b743`, 기준 main `e2b07c99d327ec860325b0c0d42dac5258da56e4`. RP004 장기 차명과 RP031 완전한 현재 ONE 상세의 독립된 단일 `N인승`을 `raw.spec.seats`로 전달한다. 모델 추정·범위/대안/부정/개조/미확정 표기는 제외한다. 이안카 구조화 원천의 기존 인승(해석 불가 값 포함)과 원문 spec은 보존한다.
+- 기존 spec-refill의 빈칸·계약 잠금·회차 상한·CAS/백업/되읽기 경로만 사용한다. 새 writer/DB 통로/수집기/예약은 없다. F01은 대표 결정으로 폐기 상태를 유지하며 이 변경은 내부 정제/ERP 소비용이다.
+- 검증: 관련 9파일 276 PASS / 1 기존 조건부 SKIP, build/architecture/data-access-boundary PASS. 기존 Claude PC3 독립 검토 `Mmvqj7yry-d63e0d` 수령. 현재 단계는 CODED/TESTED이며 운영 적용/실제 인승 반영 완료가 아니다. 첫 병합 시도는 자동 승인 검토가 검토 근거 없음을 이유로 차단했으며, 미적용 상태로 정확한 선행조건을 확인 중이다.
+- next_start_here: PR #797의 exact-head 검토/CI 및 정상 통합 절차 → dirty 13개를 보존한 기존 fd-cycle 런타임의 제한적 적용 및 실제 dist 검증 → 현재 원천의 새 계획/빈칸·잠금 검증/기존 writer 적용/ERP 되읽기. private 후보 4건은 자동 쓰기 허용 목록이 아니며, 원천의 현재성·충돌을 다시 확인한다. 사진 복사 진행 작업과 겹치지 않으며 공유 Drive 폴더 이름 변경은 별도 실제 사용자 응답 대기다.
+
 ### 2026-10-28 공급사 정책 공통 적용과 공급사별 일괄 갱신
 
 - 대표 직접 지시: 차량별 규칙을 만들지 않고 공급사별 정책 하나를 해당 공급사 상품·기간 전체에 적용한다. 구현 source `b9ae9c523575ed5b4cd1513b9009f17597f610fa`, 기준 main `10993057e71ea0254708553d7bada4a1a091c6b4`, PR #798.
@@ -3453,3 +3468,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: 기존 `leaseConfigFromEnv`·`writerLeaseStore`를 조합한 기본 꺼짐 공용 관문을 추가하고, 사진 일일·사진 캐시·승인 사진 등록·AICA/Iron/손오공/이안카 RAW 적용·이안카 사진 적용/복원과 5분 source request 처리의 쓰기 전에 연결했다. 레인과 비쓰기 대상은 `WRITER-LEASE.md` 표에 고정했다.
 - 검증: `npx.cmd tsc --noEmit -p .` PASS; `npx.cmd vitest run tests/writer-lease.test.ts tests/writer-lease-ensure.test.ts tests/iancar-photo-daily.test.ts tests/supplier-iron-capture.test.ts tests/sonogong-api-runtime.test.ts` 39 PASS; `node scripts/check-data-access-boundary.mjs` PASS.
 - 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 운영 env에서 각 레인을 claim하고 `WRITER_LEASE_ENFORCE=1`, `WRITER_LEASE_PC`를 켜는 일은 별도 운영 전환이다. 기존 dirty 문서 한 줄과 `_ipt.mjs`, `_ms.mjs`, `_why2.mjs`는 보존했다.
+
+## 2026-10-28 RP004 지급=청구·역마진 차단·RP006 비정형 청구
+
+- 목적 / 대상 revision: `work/freepass-data/payout-margin-guard-20261028`, 기준 `0d54833648eb6ca7f100c8a0a1c0dbc49ba2ae3c`; 커밋·네트워크·Firestore 읽기/쓰기 없음.
+- 변경: RP004 지급을 같은 조건 청구 전액으로 바꾸고 무보증 500,000원 및 `ledger:2026-10-28-rp004-payout-equals-billing`을 연결했다. `precomputeOfferEconomics` 한 곳에서 지급>청구를 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 차단한다. RP006 재렌트 청구에도 12개월 이상 가장 가까운 짧은 표준 기간을 적용하고, 지급 박제 계획에 공급사별 `payoutExceedsBillingCounts`를 추가했다.
+- 검증: 관련 10파일 370 PASS; 전체 Vitest 4,461 PASS/24 FAIL/19 SKIP이며 24건은 샌드박스 자원·권한(`uv_os_get_passwd ENOMEM`, 사용자 홈/jq 권한, bash timeout/로컬 서버 기동) 실패다. `npx tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
+- 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 전체 시험의 환경성 24 FAIL은 권한·자원이 허용된 동일 revision 환경에서 재확인한다. 제품 규칙 관련 알려진 실패는 0건이다.

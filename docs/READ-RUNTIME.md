@@ -103,7 +103,17 @@ node --import tsx src/jobs/recompute-offer-economics.ts --firestore --supplier-i
 
 `sourceRefs`는 KNOWN·ZERO 금액의 규칙·실사용 계산 근거만 담고 UNKNOWN·NOT_APPLICABLE이면 비운다. 가격 출처는 수수료·보증금 모두 별도 `priceSourceRefs`에 둔다.
 
+2026-10-28 수수료 결정(같은 날 정정): 아이카(RP004)는 보증금 상태가 `ZERO`인 무보증 상품만 청구·지급 공급가액을 500,000원으로 같게 적용한다(`ledger:2026-10-28-rp004-payout-equals-billing`). 보증금이 있거나 상태가 `UNKNOWN`이면 무보증으로 단정하지 않고 기존 지급 사다리를 따른다. 모든 공급사는 한 기간의 계산된 지급이 계산된 청구보다 크면 지급만 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 막고, 어느 한쪽이 UNKNOWN이면 개입하지 않는다. 아이언(RP006) 재렌트 청구와 지급은 12개월 이상 비정형 기간에 가장 가까운 짧은 표준 기간(12/24/36/48/60) 규칙을 함께 적용하며, 다른 공급사 청구에는 확장하지 않는다.
+
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
+
+### 상품별·기간별 영업자 지급수수료 일 박제
+
+`snapshot:payout-fees`는 기존 products 가격행 해석과 `precomputeOfferEconomics`를 직접 재사용해, 지급수수료만 비공개 `product_payout_fee_snapshots`에 일 단위로 박제한다. 공개 `products`·`catalog_offers`와 분리하는 이유는 청구수수료·마진을 섞지 않고 영업채널 지급 사실만 내부 보존하기 위해서다. 문서 ID는 `${YYYY-MM-DD}__${productId}`이며 기본 실행은 `npm run snapshot:payout-fees -- --evidence <증거.json>`처럼 공급사별 상태 건수와 `planDigest`만 내는 쓰기 0 계획이다. 적용은 `--apply --expected-digest=<64hex>`와 `PAYOUT_FEE_SNAPSHOT_APPROVED=true`가 모두 필요하고, 기존 문서는 같은 digest·같은 내용만 멱등 재실행으로 인정한다.
+
+증거 JSON은 productId 또는 차량번호로 한 상품을 지정하고 `confidence: "high" | "medium"`인 차량가액·신차 subtype·뮤카 납입 방식/추가보증금·퍼시픽 보증금 등급을 사용한다. 또한 `plate`, `가격원`, `확신도`, `근거URL`, `carName`, `연식`이 있는 신차 가격 배열을 경로 인자로 받으며, `확신도: "낮음"`은 제외하고 `높음`·`중간`만 쓴다. 이 파일의 차량번호와 일치하는 `NEW_RENT` 상품에만 `NEW_PREDELIVERY`를 함께 증거로 준다. 증거가 없거나 신뢰도가 낮으면 엔진의 `UNKNOWN`과 사유를 그대로 보존하며 0원으로 대체하지 않는다. `--mewcar-prepaid-default`를 명시한 경우에만 뮤카(RP035)에 `depositPayment=PREPAID`, `extraDeposit=0`을 증거로 취급하며 기본값은 꺼짐이다. 계획 출력은 차량가액·subtype·뮤카 증거 적용 건수와 공급사별 비정형 기간 규칙 적용 건수를 상품 ID 없이 보여 준다. 이 박제는 계약 당시 지급 확정이나 실제 지급·정산 사건을 뜻하지 않고, 실행일 현재 상품 가격과 정책으로 계산한 내부 스냅샷이다.
+
+박제 job의 `--infer-product-type-by-mileage`와 `--stock-new-as-predelivery`는 모두 **추정 옵션이며 기본 꺼짐**이다. 첫 옵션은 원천 `product_type`이 빈 상품만 기존 products 누적 주행거리 해석으로 1,000km 이하는 신차렌트, 1,000km 초과는 중고렌트(재렌트) 계산 입력으로 사용한다. 주행거리가 없거나 해석 불가하면 추정하지 않는다. 둘째 옵션은 신차렌트이면서 차량번호가 있고 명시 subtype 증거가 없을 때만 계산 입력을 `NEW_PREDELIVERY`로 보완하며, 증거 파일의 subtype이 우선한다. 두 옵션 모두 원천 products를 수정하지 않고 기간 행 `evidenceRefs`에 각각 `INFERRED_PRODUCT_TYPE_BY_MILEAGE`, `INFERRED_SUBTYPE_STOCK_NEW_PREDELIVERY`를 남긴다. 계획의 `inferredCounts`는 공급사별 적용 기간 행 수만 `{ productType, subtype }`으로 집계하며 상품 ID를 내보내지 않는다. 이안카 단기·구독 범위·12개월 미만 조건을 완화하지 않고 기존 `UNKNOWN`을 유지한다.
 
 | 연동 대상 | 제공할 수수료 | 지급 방향 |
 |---|---|---|
@@ -457,8 +467,8 @@ AI 상황실 결정(10-05 ㉢): F04 정산원장 «접수» 탭의 AE 판매수�
 
 Registration fields:
 
-- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, `whitelabel-<slug>`, or `internal-ai-<project-slug>`
-- `projectionId`: currently only `erp-public`
+- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, `gna-channel-payout`, `whitelabel-<slug>`, or `internal-ai-<project-slug>`
+- `projectionId`: 일반 소비처는 `erp-public`; Admin과 GNA 지급수수료 전용 등록은 호환용 `admin-catalog`
 - `token`: unique backend token, minimum 32 characters
 - `capabilities`: optional
 
@@ -469,6 +479,7 @@ Capability rules:
 - `catalog-reference` => Kakao-only, typed `REFERENCE_ONLY` ERP5 facts; it never means Canonical ACTIVE
 - `internal-ai-reference` => internal-project-only typed reference facts. Explicit capability required; no other capability may be combined. This identity cannot read raw compatibility, public catalog, customer/admin workflows or settlement ledgers.
 - `catalog-health` => Catalog Data Health read
+- `channel-payout-read` => `gna-channel-payout` 전용 지급수수료 조회. 이 소비처는 이 capability 하나만 등록한다.
 - health-only registration is allowed and does not grant catalog payload access
 
 ## Routes
@@ -494,6 +505,26 @@ Capability rules:
 - 503 BLOCKED with the versioned Health report body
 
 Both responses use `Cache-Control: no-store`.
+
+### GNA 지급수수료 조회
+
+`GET /v1/consumers/gna-channel-payout/channel-payout?vehicleId=<id>`
+
+`FREEPASS_DATA_CONSUMERS_JSON`에 `{"id":"gna-channel-payout","projectionId":"admin-catalog","token":"<32자 이상 별도 서버 토큰>","capabilities":["channel-payout-read"]}` 한 항목으로 등록한다. 다른 capability와 섞지 않으며 토큰은 브라우저·저장소·채팅에 두지 않는다.
+
+응답은 가장 최근 `product_payout_fee_snapshots` 지급 스냅샷만 읽고 청구수수료·마진·계산 근거를 내보내지 않는다. `products` 문서 ID가 정확히 맞으면 그 상품을 쓰고, 아니면 `car_number`가 하나로 일치할 때만 연결한다. 같은 차량번호가 둘 이상이면 추정하지 않고 빈 `terms`를 반환한다. `iancar_<hex>`는 이안카 문서 ID로 직접 조회하며 형식이 어긋난 `iancar_` 값은 문서 ID로 처리하지 않는다.
+
+기간 키 대응은 다음으로 고정한다.
+
+| 지급 스냅샷 `termKey` | 조건 | GNA `terms[].key` |
+|---|---|---|
+| `48` | `termMonths=48` | `48` |
+| `12_2만` | 기존 가격키 파서로 연 20,000km가 확정되고 `termMonths=12` | `12_연20000km` |
+| `12_연20000km` | 기간·연 주행거리가 일치 | `12_연20000km` |
+| `1_월2000km` | 기간·월 주행거리가 일치 | `1_월2000km` |
+| 인수형, 알 수 없는 형식, 키의 개월과 `termMonths` 불일치 | 대응 불확실 | 해당 term 제외 |
+
+응답은 최대 80개 term이며 저장 스냅샷에 `vatTreatment`가 없으면 금액이 있어도 `EXCLUDED`로 추정하지 않고 `null`이다. 스냅샷 부재·차량번호 모호성은 `snapshotDate:null, terms:[]`이다.
 
 ### Kakao catalog reference
 
