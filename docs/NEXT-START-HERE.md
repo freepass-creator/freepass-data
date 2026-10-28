@@ -1,5 +1,12 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-28 PC3 뮤카(RP035) 영업 GA 지급 — 잔가표 6차 차종 구분 (대표 10-28 «프로모션 차종은 150»)
+
+- 선납: 국산 12개월 90만·24~60개월 120만 / 제네시스·수입·테슬라·카니발 하이리무진 12개월 100만·24~60개월 150만, + min(추가보증금×10%, 50만). 근거 `ledger:2026-10-28-mewcar-ga-fee-brands`, gnafit `pricing/policy-config-sixth·fifth-20261015.js`·`policy-20261011.js latestBrandPolicy`.
+- 차종 구분은 `mewcarBrandClassFromSource`(maker·origin·sub_model/trim_name·model/car_name)로만. 테슬라·제네시스는 origin 이 비어도 PREMIUM(어느 쪽이든 같은 값), 그 밖에 origin 없음·국산/수입 아닌 값·maker 와 어긋남·차명 없음·이름 충돌은 `MEWCAR_BRAND_CLASS_REQUIRED`. 증거 입력으로 넘긴 구분은 버린다.
+- 계약일이 2026-10-15(포함) 이전인 선납은 `MEWCAR_PREPAID_PRE_BRAND_RULE_CONFIRM_REQUIRED`(어느 차수 값인지 확인 필요). 분납(10-05 폐지 전 계약)은 옛 정액·상한 40만 그대로. 청구 1%·역마진 가드 그대로.
+- 10-28 지급 계획(쓰기 0): products 에 RP035 상품 0건 → 전후 digest 동일(`3c555fad…`). 뮤카 상품이 products 에 들어오면 origin 칸이 있어야 계산된다.
+
 ## 2026-10-28 PC3 기본 회사 표준 수수료표 (대표 10-28 «계약서 써주는 업체는 우리 표준 수수료»)
 
 - 기본 회사 8곳(`supplierPolicyAssignments.basicSupplierIds`)은 공급사별 특칙 없이 표준표: 출고 방식 미기재 신차렌트 = 선출고(차량가격 3%, 견적출고 명시는 그대로 합의 요율 필요), 비정형 기간은 청구도 지급처럼 가까운 짧은 표준 기간. 근거 표시 `ledger:2026-10-28-contract-writer-standard-fee`.

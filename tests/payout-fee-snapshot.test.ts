@@ -61,7 +61,7 @@ describe('영업자 지급수수료 박제 계획', () => {
   });
 
   it('계획 출력은 역마진 차단 건수를 공급사별로만 집계한다', () => {
-    const products = { mew: product('RP035', { product_type: '구독', price: { '12': { rent: 600000, deposit: 1000000 } } }) };
+    const products = { mew: product('RP035', { product_type: '구독', maker: '현대', origin: '국산', model: '아반떼', price: { '12': { rent: 600000, deposit: 1000000 } } }) };
     const result = plan(products, [{ productId: 'mew', confidence: 'high', vehicleValue: 1000000,
       depositPayment: 'PREPAID', extraDeposit: 0 }]);
     expect(result.payoutExceedsBillingCounts).toEqual({ RP035: 1 });
@@ -69,7 +69,7 @@ describe('영업자 지급수수료 박제 계획', () => {
   });
 
   it('뮤카 선납 0원 추가보증금은 명시 옵션일 때만 기본 증거로 쓴다', async () => {
-    const products = { mew: product('RP035', { product_type: '구독', price: { '60': { rent: 600000, deposit: 1000000 } } }) };
+    const products = { mew: product('RP035', { product_type: '구독', maker: '현대', origin: '국산', model: '아반떼', price: { '60': { rent: 600000, deposit: 1000000 } } }) };
     const store: PayoutFeeSnapshotStore = { readInputs: async () => ({ products, policies: {} }), readDocument: async () => null, createDocument: async () => {} };
     const access = { read: async <T>(_spec: unknown, run: () => Promise<T>) => run(), write: async <T>(_spec: unknown, run: () => Promise<T>) => run() };
     const off = await runPayoutFeeSnapshotJob({ store, access, argv: ['--snapshot-date', '2026-10-28'] });
@@ -80,11 +80,11 @@ describe('영업자 지급수수료 박제 계획', () => {
   });
 
   it('뮤카 PREPAID와 과거 계약 INSTALLMENT 지급 규칙 차이를 기존 엔진에서 받는다', () => {
-    const products = { mew: product('RP035', { product_type: '구독', price: { '12': { rent: 600000, deposit: 1000000 } } }) };
+    const products = { mew: product('RP035', { product_type: '구독', maker: '현대', origin: '국산', model: '아반떼', price: { '12': { rent: 600000, deposit: 1000000 } } }) };
     const common = { productId: 'mew', confidence: 'high' as const, extraDeposit: 2000000 };
     const prepaid = plan(products, [{ ...common, depositPayment: 'PREPAID' }]);
     const installment = plan(products, [{ ...common, depositPayment: 'INSTALLMENT', contractDate: '2026-10-04' }]);
-    expect(prepaid.documents[0]!.terms[0]).toMatchObject({ state: 'KNOWN', ruleId: 'MEWCAR_GA_PREPAID_12_PAYOUT', amount: 1200000 });
+    expect(prepaid.documents[0]!.terms[0]).toMatchObject({ state: 'KNOWN', ruleId: 'MEWCAR_GA_PREPAID_DOMESTIC_12_PAYOUT', amount: 1100000 });
     expect(installment.documents[0]!.terms[0]).toMatchObject({ state: 'KNOWN', ruleId: 'MEWCAR_GA_INSTALLMENT_12_PAYOUT', amount: 1000000 });
   });
 
