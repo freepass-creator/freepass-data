@@ -9,6 +9,7 @@ import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifact
 import { createIancarOneApiClient, createIancarPhotoByteCache, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
 import { logPhotoMetadataFailure } from './vehicle-photo-metadata-diagnostic.js';
 import { createVehiclePhotoReadFailureObserver } from './vehicle-photo-read-diagnostic.js';
+import { PayoutFeeSnapshotFirestoreStore } from '../infra/payout-fee-snapshot-firestore.js';
 export { isPublicIancarPhotoProduct } from '../infra/erp5-compat-catalog-reader.js';
 
 /**
@@ -88,6 +89,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       return { count: ids.length, photoIds: ids, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
     }, approvedPhotoReader, { photoReadFailureObserver: createVehiclePhotoReadFailureObserver() }),
     workflow: createFirestoreAdminWorkflowStore(),
-    estimateArtifacts: createFirestoreEstimateArtifactStore()
+    estimateArtifacts: createFirestoreEstimateArtifactStore(),
+    channelPayout: new PayoutFeeSnapshotFirestoreStore()
   };
 }
