@@ -309,3 +309,25 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
     expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'VIN', value: 'TEST-FAKE-VIN-NEW' })]));
   });
 });
+
+describe('상품 단건 쓰기는 조건부(10-25, CAS 없는 쓰기 금지)', () => {
+  it('setProductVehicleUid·deleteProductVehicleUid 는 트랜잭션으로 읽은 updateTime 을 전제로 쓰고, 예상 시각이 다르면 쓰지 않는다', async () => {
+    const db = new FakeFirestore();
+    const path = `${FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products}/p1`;
+    db.docs.set(path, product('12가3456'));
+    const seen: unknown[] = [];
+    const original = db.runTransaction.bind(db);
+    db.runTransaction = (async (fn: Parameters<FakeFirestore['runTransaction']>[0]) => original(async (tx) => fn({ ...tx,
+      update: (ref: { path: string }, patch: Record<string, unknown>, pre?: unknown) => { seen.push(pre); tx.update(ref, patch); } } as never))) as never;
+    const writer = fakeWriter(db);
+    await writer.setProductVehicleUid('p1', 'uid-1', { seconds: 1, nanoseconds: 0 });
+    expect(db.docs.get(path)?.vehicle_uid).toBe('uid-1');
+    await expect(writer.setProductVehicleUid('p1', 'uid-2', { seconds: 9, nanoseconds: 0 })).rejects.toThrow('CAS_CONFLICT');
+    expect(db.docs.get(path)?.vehicle_uid).toBe('uid-1');
+    await writer.deleteProductVehicleUid('p1');
+    expect(db.docs.get(path)).not.toHaveProperty('vehicle_uid');
+    await expect(writer.setProductVehicleUid('missing', 'uid-3')).rejects.toThrow('PRODUCT_NOT_FOUND');
+    expect(seen).toHaveLength(2);
+    expect(seen.every(pre => (pre as { lastUpdateTime?: unknown })?.lastUpdateTime !== undefined)).toBe(true);
+  });
+});

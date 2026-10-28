@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 // In-memory Firestore stand-in: enough of getAll/runTransaction/update/create/FieldValue for the repair path.
@@ -12,8 +12,10 @@ const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${i
 // Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
 const sortKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])])) : v;
 // A snapshot is fixed at read time, like Firestore's DocumentSnapshot (later writes do not show through it).
-const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { ref: r, exists: at !== undefined, updateTime: updateTimes.get(r.path), data: () => (at === undefined ? undefined : structuredClone(at)) }; };
+const snap = (r: Ref) => { const at = store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined; return { ref: r, exists: at !== undefined, updateTime: updateTimes.get(r.path) ?? (at !== undefined ? IMPLICIT_UPDATE_TIME : undefined), data: () => (at === undefined ? undefined : structuredClone(at)) }; };
 // 문서별 updateTime(백업 시점 고정 검증용)과 쓰기 때 걸린 precondition 기록.
+// 실제 Firestore 는 있는 문서마다 updateTime 을 준다 — 따로 정하지 않은 문서는 고정된 합성 시각을 준다(조건부 쓰기 검증용).
+const IMPLICIT_UPDATE_TIME = { seconds: 1, nanoseconds: 0, implicit: true };
 const updateTimes = new Map<string, unknown>();
 const preconditions: Array<[string, unknown]> = [];
 const applyUpdate = (path: string, update: Record<string, unknown>) => {
@@ -74,6 +76,13 @@ vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => 
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: vi.fn(async () => undefined) }));
 
 const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents, vehicleNameRepairPlanDigest } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+
+// 조건부 쓰기(10-25): 어떤 시나리오에서도 precondition 없는 update 가 나가면 안 된다(백업 시각 또는 트랜잭션에서 읽은 시각).
+afterEach(() => {
+  const blind = preconditions.filter(([, pre]) => !pre || (pre as { lastUpdateTime?: unknown }).lastUpdateTime === undefined);
+  preconditions.length = 0;
+  expect(blind).toEqual([]);
+});
 
 // 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
 const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
@@ -644,6 +653,21 @@ describe('product identity applier guards (Codex 적용기 검토 5건)', () => 
     const original = db.runTransaction;
     db.runTransaction = async (fn) => { store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'changed by engine' }); return original(fn); };
     try { await expect(applyApproved(plan())).rejects.toThrow(/product changed since backup/); } finally { db.runTransaction = original; }
+  });
+
+  it('(d2) 이력 shadow: 정정·되읽기 뒤 상품마다 리비전 1건(off 면 기록 없음), 정정 결과는 그대로', async () => {
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'before' });
+    const revisionsOf = (result: object) => ('revisions' in result ? result.revisions : undefined) as Array<{ status: string }> | undefined;
+    const off = await applyApproved(plan());
+    expect(revisionsOf(off)).toEqual([{ status: 'OFF' }]);
+    store.set('products/p-guard', { maker: '', model: '', sub_model: '', note: 'before' });
+    process.env.PRODUCT_REVISIONS = 'shadow';
+    try {
+      const shadow = await applyApproved(plan());
+      expect(shadow).toMatchObject({ productIdentityCount: 1 });
+      expect(revisionsOf(shadow)).toHaveLength(1);
+      expect(revisionsOf(shadow)![0]!.status).not.toBe('OFF');
+    } finally { delete process.env.PRODUCT_REVISIONS; }
   });
 
   it('(e) the applier itself compares the approved plan digest', async () => {

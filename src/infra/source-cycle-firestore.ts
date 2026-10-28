@@ -19,6 +19,9 @@ import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-
 import { photoLinkFillState, sheetPhotoLinkFields } from '../domain/sheet-photo-link.js';
 import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
 import { sheetFactFields, sheetFactState, isBlankFact, SHEET_FACT_KEYS, type SheetFactKey } from '../domain/sheet-facts.js';
+import { hostname } from 'node:os';
+import { productRevisionModeOf, type ProductRevisionActor } from '../domain/product-revision.js';
+import { recordProductRevision, productRevisionSinkOf, localProductRevisionSink, restProductRevisionSink, type ProductRevisionRecordResult } from './product-revision-writer.js';
 
 type Fields = Record<string, unknown>;
 type Doc = { name: string; updateTime: string; fields: Fields };
@@ -707,6 +710,16 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     return response.json();
   };
   const getDoc = async (uid: string): Promise<Doc | null> => request(docPath(uid));
+  // 상품 변경 이력(대표 10-25 «모든 정정은 이력»): 기본 off. shadow 는 쓰기·되읽기 확인 뒤 비공식 리비전을 따로 남긴다(기본 로컬 파일 — 운영 DB 쓰기 0).
+  const revisionMode = productRevisionModeOf(options.env);
+  const revisionSink = () => productRevisionSinkOf(options.env, {
+    local: () => localProductRevisionSink(join(options.directory, 'revisions')),
+    firestore: () => restProductRevisionSink({ request, encodeFields: v => encodeFields(v as never), decodeFields: f => decodeFields(f as Doc['fields']) }),
+  });
+  // 작성자 정보는 기록할 때만(지연) 만든다 — off 에서는 호스트 조회도 하지 않는다.
+  const engineActor = (): ProductRevisionActor => ({ kind: 'ENGINE', id: 'source-cycle', role: 'SERVICE', via: 'source-cycle', host: hostname(),
+    ...(options.env?.SOURCE_CYCLE_GIT_SHA ? { gitSha: options.env.SOURCE_CYCLE_GIT_SHA } : {}) });
+  const revisionResults: ProductRevisionRecordResult[] = [];
   const path = (key: string) => join(options.directory, `${stableDigest(key)}.backup.json`);
   const load = async (key: string): Promise<Backup> => {
     const b = JSON.parse(await readFile(path(key), 'utf8')) as Backup;
@@ -883,6 +896,15 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         }
       }
       await immutable(join(options.directory, `${stableDigest(key)}.receipt.json`), { project, key, after: reread });
+      // 재시도해도 같은 작업 id(백업 키 digest)라 같은 리비전 하나만 남는다. shadow 실패는 결과로만 남고 쓰기를 막지 않는다.
+      revisionResults.push(await recordProductRevision(revisionMode, revisionSink, () => ({
+        uid: after.record.uid, operationId: `source-cycle:${stableDigest(key)}`,
+        kind: !current ? 'CREATE' : after.identityOnly === true ? 'IDENTITY_CORRECTION' : 'UPDATE',
+        actor: engineActor(), tool: { name: 'source-cycle', planDigest: beforeDigest }, reason: `원천 회차 반영(${after.record.sourceId})`,
+        evidence: { sourceId: after.record.sourceId, backupKeyDigest: stableDigest(key), sourceObservedAt: after.record.observedAt ?? null },
+        before: current ? decodeFields(current.fields) : null, after: fields,
+        expectedUpdateTime: current?.updateTime ?? null, committedUpdateTime: reread.updateTime ?? null, at: new Date().toISOString(),
+      })));
     },
   };
   return { ...commands,
@@ -902,8 +924,18 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       const result = await request(docPath(uid) + '?currentDocument.updateTime=' + encodeURIComponent(current.updateTime), 'PATCH', { fields });
       const reread = await getDoc(uid);
       if (!reread || result.updateTime !== reread.updateTime || stableDigest(reread.fields) !== stableDigest(fields)) throw new Error('ROLLBACK_READBACK_UNCERTAIN');
+      // 롤백은 updateMask 없는 전체 교체 — 교체로 사라진 칸도 이력에 남긴다(replace).
+      revisionResults.push(await recordProductRevision(revisionMode, revisionSink, () => ({
+        uid, operationId: `source-cycle-rollback:${stableDigest(key)}`, kind: 'ROLLBACK', replace: true,
+        actor: engineActor(), tool: { name: 'source-cycle-rollback', planDigest: approval },
+        reason: '원천 회차 반영 되돌림(승인 digest)', evidence: { backupKeyDigest: stableDigest(key) },
+        before: decodeFields(current.fields), after: decodeFields(fields as Doc['fields']),
+        expectedUpdateTime: current.updateTime ?? null, committedUpdateTime: reread.updateTime ?? null, at: new Date().toISOString(),
+      })));
       return { status: 'ROLLED_BACK' };
     },
+    /** 이번 실행에서 남긴 이력 결과(shadow 대사용). */
+    revisionResults: () => [...revisionResults],
     async rollbackDigest(key: string) { const backup = await load(key);
       const receipt = JSON.parse(await readFile(join(options.directory, `${stableDigest(key)}.receipt.json`), 'utf8'));
       return stableDigest({ backup, receipt }); },
