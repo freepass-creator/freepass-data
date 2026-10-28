@@ -9,6 +9,7 @@ export type PayoutFeeSnapshotTerm = {
   amount: number | null;
   vatAmount: number | null;
   totalAmount: number | null;
+  vatTreatment?: 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN' | null;
   ruleId: string | null;
   policyId: string;
   reasonCode: string | null;
@@ -18,6 +19,10 @@ export type PayoutFeeSnapshotTerm = {
     deposit: { state: string; amount: number | null; currency: 'KRW'; sourceRef: string };
   };
 };
+
+export interface ChannelPayoutReader {
+  readLatestChannelPayout(vehicleId: string): Promise<PayoutFeeSnapshotDocument | null>;
+}
 
 export type PayoutFeeSnapshotDocument = {
   schema: 'product-payout-fee-snapshot/v1';

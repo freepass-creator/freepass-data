@@ -444,8 +444,8 @@ AI 상황실 결정(10-05 ㉢): F04 정산원장 «접수» 탭의 AE 판매수�
 
 Registration fields:
 
-- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, `whitelabel-<slug>`, or `internal-ai-<project-slug>`
-- `projectionId`: currently only `erp-public`
+- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, `gna-channel-payout`, `whitelabel-<slug>`, or `internal-ai-<project-slug>`
+- `projectionId`: 일반 소비처는 `erp-public`; Admin과 GNA 지급수수료 전용 등록은 호환용 `admin-catalog`
 - `token`: unique backend token, minimum 32 characters
 - `capabilities`: optional
 
@@ -456,6 +456,7 @@ Capability rules:
 - `catalog-reference` => Kakao-only, typed `REFERENCE_ONLY` ERP5 facts; it never means Canonical ACTIVE
 - `internal-ai-reference` => internal-project-only typed reference facts. Explicit capability required; no other capability may be combined. This identity cannot read raw compatibility, public catalog, customer/admin workflows or settlement ledgers.
 - `catalog-health` => Catalog Data Health read
+- `channel-payout-read` => `gna-channel-payout` 전용 지급수수료 조회. 이 소비처는 이 capability 하나만 등록한다.
 - health-only registration is allowed and does not grant catalog payload access
 
 ## Routes
@@ -481,6 +482,26 @@ Capability rules:
 - 503 BLOCKED with the versioned Health report body
 
 Both responses use `Cache-Control: no-store`.
+
+### GNA 지급수수료 조회
+
+`GET /v1/consumers/gna-channel-payout/channel-payout?vehicleId=<id>`
+
+`FREEPASS_DATA_CONSUMERS_JSON`에 `{"id":"gna-channel-payout","projectionId":"admin-catalog","token":"<32자 이상 별도 서버 토큰>","capabilities":["channel-payout-read"]}` 한 항목으로 등록한다. 다른 capability와 섞지 않으며 토큰은 브라우저·저장소·채팅에 두지 않는다.
+
+응답은 가장 최근 `product_payout_fee_snapshots` 지급 스냅샷만 읽고 청구수수료·마진·계산 근거를 내보내지 않는다. `products` 문서 ID가 정확히 맞으면 그 상품을 쓰고, 아니면 `car_number`가 하나로 일치할 때만 연결한다. 같은 차량번호가 둘 이상이면 추정하지 않고 빈 `terms`를 반환한다. `iancar_<hex>`는 이안카 문서 ID로 직접 조회하며 형식이 어긋난 `iancar_` 값은 문서 ID로 처리하지 않는다.
+
+기간 키 대응은 다음으로 고정한다.
+
+| 지급 스냅샷 `termKey` | 조건 | GNA `terms[].key` |
+|---|---|---|
+| `48` | `termMonths=48` | `48` |
+| `12_2만` | 기존 가격키 파서로 연 20,000km가 확정되고 `termMonths=12` | `12_연20000km` |
+| `12_연20000km` | 기간·연 주행거리가 일치 | `12_연20000km` |
+| `1_월2000km` | 기간·월 주행거리가 일치 | `1_월2000km` |
+| 인수형, 알 수 없는 형식, 키의 개월과 `termMonths` 불일치 | 대응 불확실 | 해당 term 제외 |
+
+응답은 최대 80개 term이며 저장 스냅샷에 `vatTreatment`가 없으면 금액이 있어도 `EXCLUDED`로 추정하지 않고 `null`이다. 스냅샷 부재·차량번호 모호성은 `snapshotDate:null, terms:[]`이다.
 
 ### Kakao catalog reference
 
