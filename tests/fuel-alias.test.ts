@@ -63,5 +63,26 @@ describe('연료 별칭 표(대표 2026-10-19)', () => {
     expect(masterFuelFallback({ spec: { fuel_type: 1 } }, 'LPG')).toBeNull();                   // 형식 틀린 원천 값도 «있음»
     expect(masterFuelFallback({ list: { fuel: 1 } }, 'LPG')).toBeNull();
     expect(masterFuelFallback({ spec: { fuel_type: '' }, list: { fuel: null } }, 'LPG')).toBe('LPG');
+    // 대표 2026-10-28 아이언 연료 빈칸: 원천 자리표시자(«-»·«—»·«미정» 등)는 «원천에 없음» — 마스터 연료로 보완한다.
+    for (const placeholder of ['-', ' - ', '—', '–', '－', '--', '미정', '모름', '미확인', '확인 필요', '협의'])
+      expect(masterFuelFallback({ spec: { fuel_type: placeholder } }, '전기', '아이오닉 5 2WD 롱레인지')).toBe('전기');
+    expect(masterFuelFallback({ spec: { fuel_type: '-' }, list: { fuel: '미정' } }, '전기', '니로 플러스')).toBe('전기');
+    // 여섯 원천 연료 자리 모두 같은 판정: 자리표시자는 없음, 실제 값·숫자·객체는 있음
+    for (const where of [(v: unknown) => ({ spec: { fuel_type: v } }), (v: unknown) => ({ list: { fuel: v } }), (v: unknown) => ({ detail: { fuel: v } }),
+      (v: unknown) => ({ detail: { data: { fuel: v } } }), (v: unknown) => ({ fuel: v }), (v: unknown) => ({ source_fuel_text: v })]) {
+      expect(masterFuelFallback(where('—'), '전기')).toBe('전기');
+      expect(masterFuelFallback(where('휘발유'), '전기')).toBeNull();
+      expect(masterFuelFallback(where(0), '전기')).toBeNull();
+      expect(masterFuelFallback(where({ v: '-' }), '전기')).toBeNull();
+    }
+    // 자리표시자가 아닌 글자·다른 자리의 실제 원문은 그대로 «있음»(원천 우선)
+    for (const text of ['-전기', '전기-', '미정 전기', '?'])
+      expect(masterFuelFallback({ spec: { fuel_type: text } }, '전기')).toBeNull();
+    expect(masterFuelFallback({ spec: { fuel_type: '-' }, detail: { fuel: '휘발유' } }, '전기')).toBeNull();
+    // 색상 자리표시자(아이언 내장색 «-»)는 색으로 채우지 않는다
+    expect(refillableSpecValues({ int_color: '-', ext_color: '미정' }, ['int_color', 'ext_color'])).toEqual({});
+    expect(refillableSpecValues({ int_color: '블랙', ext_color: '—' }, ['int_color', 'ext_color'])).toEqual({ int_color: '블랙' });
+    // 자리표시자여도 마스터 연료가 차명과 어긋나면 쓰지 않는다
+    expect(masterFuelFallback({ spec: { fuel_type: '-' } }, '하이브리드', '니로 플러그인 하이브리드')).toBeNull();
   });
 });

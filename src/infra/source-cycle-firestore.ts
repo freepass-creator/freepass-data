@@ -15,6 +15,7 @@ import { hasSupplierDepositPolicy, supplierDepositRuleFor } from '../domain/supp
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import { reviewedSpecApprovals, reviewedSpecOf, type ReviewedSpecApproval } from '../domain/reviewed-spec-correction.js';
 import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFillValues, type MasterSpecValues } from '../domain/spec-refill.js';
+import { SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 import { photoLinkFillState, sheetPhotoLinkFields } from '../domain/sheet-photo-link.js';
 import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
@@ -262,8 +263,9 @@ const realCalendarDate = (v: string): boolean => {
   return day >= 1 && day <= days;
 };
 const SPEC_VALID: Record<(typeof SPEC_FILL_KEYS)[number], (v: string) => boolean> = {
-  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
-  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  // 색상은 원천 형식 규칙 하나를 따른다(자리표시자 «-»·«미정» 은 색이 아니다, 대표 2026-10-28 아이언).
+  ext_color: v => SPEC_FORMAT_RULES.ext_color!(v),
+  int_color: v => SPEC_FORMAT_RULES.int_color!(v),
   fuel_type: v => SPEC_FUEL_ALLOWED.has(v),
   first_registration_date: v => realCalendarDate(v),
   year: v => /^(19|20)\d{2}$/.test(v),

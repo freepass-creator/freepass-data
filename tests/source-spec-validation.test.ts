@@ -36,6 +36,13 @@ describe('validateSourceSpec(순수)', () => {
     expect((out.record.raw.spec as Record<string, string>).fuel_type).toBe('전기');
   });
 
+  it('색 자리표시자(«-»·«—»·«미정»)는 그 칸만 보류하고 다른 제원·하이픈 들어간 실제 색은 그대로(대표 2026-10-28)', () => {
+    const out = validateSourceSpec(rec('11가1111', { int_color: '-', ext_color: '블랙-베이지' }));
+    expect(out.violations.map(v => v.field)).toEqual(['int_color']);
+    expect(out.record.raw.spec).toEqual({ fuel_type: '가솔린', year: '2026', engine_cc: '2497', mileage: '7113', ext_color: '블랙-베이지' });
+    for (const placeholder of ['—', '미정', '확인 필요']) expect(validateSourceSpec(rec('11가1111', { ext_color: placeholder })).violations.map(v => v.field)).toEqual(['ext_color']);
+  });
+
   it('보증금: 0 과 정상 금액은 통과, 1만원 미만 양수·1억 초과는 위반', () => {
     expect(validateSourceSpec(rec('11가1111', {}, 0)).violations).toEqual([]);
     expect(validateSourceSpec(rec('11가1111', {}, 9_999)).violations.map(v => v.field)).toEqual(['deposit']);
