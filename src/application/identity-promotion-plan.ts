@@ -29,11 +29,15 @@ export type IdentityProduct = {
   makerModelFromSource?: boolean;
   /** 문서 연료 칸(제원, «차 한 대 사실» — 기준 한 장 3절). 원문이 파워트레인을 안 적어도 하이브리드·전기 변형 근거가 된다. 없으면 ''. */
   fuel?: string;
+  /** 최초등록일(«YYYY-MM» 이상 정밀할 때만 세대 근거로 쓴다). 없으면 ''. */
+  firstRegistration?: string;
 };
 export type IdentityMasterTrim = { name: string; aliases: string[] };
 export type IdentityMaster = {
   id: string; maker: string; model: string; sub_model: string; model_aliases: string[]; sub_model_aliases: string[];
   /** 세대 생산 시작·끝 연도(없으면 null = 제한 없음). */ yearFrom: number | null; yearTo: number | null;
+  /** 세대 출시월·단종월(«YYYY-MM», 트림 행 production_start 최소·production_end 최대). monthTo null = «현재». 근거가 하나라도 빠지면 둘 다 없음. */
+  monthFrom?: string; monthTo?: string | null;
   trims: IdentityMasterTrim[];
 };
 export type IdentityHold = { id: string; plate4: string; reason: 'NO_MASTER_MATCH' | 'NORMALIZED_CANDIDATE' | 'AMBIGUOUS_MASTER' | 'YEAR_OUT_OF_RANGE' | 'NO_TRIM_MATCH' | 'AMBIGUOUS_TRIM' | 'ALREADY_MATCHED' | 'TRIM_CONFLICT_EXISTING' | GenerationGuardReason | 'VARIANT_MISMATCH'; candidates: string[] };
@@ -169,7 +173,7 @@ export function matchIdentity(rawInput: IdentityProduct, masters: readonly Ident
   if (aliasMatched && !(p.rawName ?? '').trim() && !engineRawProduct) return { state: 'HOLD', reason: 'GENERATION_EVIDENCE_MISSING', candidates: [master.sub_model] };
   if (engineRawProduct || !norm(p.sub_model) || aliasMatched) {
     const rawText = p.rawName || (engineRawProduct ? p.sub_model : '');
-    const guard = generationGuard({ rawName: rawText, year: p.year, master, masters });
+    const guard = generationGuard({ rawName: rawText, year: p.year, master, masters, ...(p.firstRegistration ? { firstRegistration: p.firstRegistration } : {}) });
     if (guard) return { state: 'HOLD', reason: guard, candidates: [master.sub_model] };
   }
   // 변형 낱말(규칙 15·16: 하이브리드·플러그인 하이브리드·EV 는 세부모델을 따로 둔다): 원문에 있는데 고른 마스터 이름에 없으면 일반 세대를 잘못 고른 것 — 보류(R4).
@@ -283,7 +287,7 @@ export function auditConfirmedIdentities(products: ReadonlyArray<IdentityProduct
 /** 엔진 회차의 정체성 정제(대표 2026-10-15 «손오공 새로 API 연동해서 땡겨온 애들은 … 모델명도 정제되어 있지 않고»): 위 matchIdentity 를 그대로 쓴다.
  * 엔진 편입 문서(제조사·모델 빈칸, 원문 차명)를 마스터 하나로 특정할 때만 결과를 내고, 아니면 null(= 지금처럼 원문 차명·검토 필요로 둔다).
  * 세부트림은 하나로 특정될 때만 이름, 아니면 null(빈칸 유지). */
-export function refineEngineIdentity(input: { rawName: string; year: string; sheet?: SheetIdentity }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
+export function refineEngineIdentity(input: { rawName: string; year: string; sheet?: SheetIdentity; firstRegistration?: string }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
   const byName = refineByName(input, masters);
   const sheet = validSheetIdentity(input.sheet);
   if (!sheet) return byName;
@@ -316,10 +320,11 @@ export function matchSheetIdentity(input: { rawName: string; year: string; sheet
   return { maker: master.maker, model: master.model, sub_model: master.sub_model, trim_name: trim ? trim.name : null, master_id: master.id };
 }
 
-function refineByName(input: { rawName: string; year: string }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
+function refineByName(input: { rawName: string; year: string; firstRegistration?: string }, masters: readonly IdentityMaster[]): VehicleIdentityRefinement | null {
   const rawName = input.rawName.trim();
   if (!rawName) return null;
-  const m = matchIdentity({ id: '', plate4: '', maker: '', model: '', sub_model: rawName, trim_name: '', rawName, year: input.year, listable: false }, masters);
+  const m = matchIdentity({ id: '', plate4: '', maker: '', model: '', sub_model: rawName, trim_name: '', rawName, year: input.year, listable: false,
+    ...(input.firstRegistration ? { firstRegistration: input.firstRegistration } : {}) }, masters);
   if (m.state !== 'MATCH' || !m.master.maker.trim() || !m.master.model.trim() || !m.master.sub_model.trim()) return null;
   return { maker: m.master.maker, model: m.master.model, sub_model: m.master.sub_model, trim_name: m.trim.state === 'UNIQUE' ? m.trim.name : null, master_id: m.master.id };
 }
@@ -329,7 +334,7 @@ function refineByName(input: { rawName: string; year: string }, masters: readonl
  * 퇴역(retired)이거나 제조사·모델·세부모델이 빈 마스터는 이름으로 쓸 수 없어 뺀다. 세대 연도는 마스터의 year_start·year_end(앞 4자리, «현재»·빈칸은 제한 없음). */
 export function identityMastersFromVehicleMaster(input: {
   masters: ReadonlyArray<{ id: string; data: Record<string, unknown> }>;
-  records: ReadonlyArray<{ masterId: string; names: readonly string[]; aliases: ReadonlyArray<readonly string[]> }>;
+  records: ReadonlyArray<{ masterId: string; names: readonly string[]; aliases: ReadonlyArray<readonly string[]>; productionStart?: string | null; productionEnd?: string | null }>;
 }): IdentityMaster[] {
   const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()) : []);
@@ -356,7 +361,7 @@ export function identityMastersFromVehicleMaster(input: {
     for (const r of rows) for (const a of (r.aliases[2] ?? []).slice(1)) if (text(a)) subAliases.add(text(a));
     out.push({ id: doc.id, maker: text(d.maker), model: text(d.model), sub_model: text(d.sub_model),
       model_aliases: list(d.model_aliases), sub_model_aliases: [...subAliases].sort(),
-      yearFrom: year(d.year_start), yearTo: year(d.year_end),
+      yearFrom: year(d.year_start), yearTo: year(d.year_end), ...generationMonths(rows),
       trims: [...trims].sort(([a], [b]) => a.localeCompare(b)).map(([name, aliases]) => ({ name, aliases: [...aliases].sort() })) });
   }
   return dropVariantAliasCollisions(out);
@@ -381,4 +386,15 @@ export function dropVariantAliasCollisions(masters: IdentityMaster[]): IdentityM
       || !siblings.some(o => rangesOverlap(m, o) && [o.sub_model, ...o.sub_model_aliases].some(n => norm(n) === norm(a))));
     return kept.length === m.sub_model_aliases.length ? m : { ...m, sub_model_aliases: kept };
   });
+}
+
+/** 세대 출시월·단종월(트림 행 production_start 의 최소 · production_end 의 최대, «현재»는 끝 없음). 행이 없거나 한 행이라도 월 근거가 빠지면 둘 다 없음(월로 가르지 않는다). */
+export function generationMonths(rows: ReadonlyArray<{ productionStart?: string | null; productionEnd?: string | null }>): { monthFrom?: string; monthTo?: string | null } {
+  const ym = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}(?![0-9])/.test(v.trim()) ? v.trim().slice(0, 7) : null);
+  if (!rows.length) return {};
+  const starts = rows.map(r => ym(r.productionStart)), ends = rows.map(r => (typeof r.productionEnd === 'string' && r.productionEnd.trim() === '현재' ? 'OPEN' : ym(r.productionEnd)));
+  if (starts.some(s => s === null) || ends.some(e => e === null)) return {};
+  const monthFrom = (starts as string[]).sort()[0]!;
+  const monthTo = ends.includes('OPEN') ? null : (ends as string[]).sort().at(-1)!;
+  return { monthFrom, monthTo };
 }

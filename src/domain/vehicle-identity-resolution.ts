@@ -6,7 +6,8 @@ import { canonicalVehicleMakerName } from './vehicle-maker-name.js';
 export type VehicleIdentity = readonly [maker: string, model: string, subModel: string, trimName: string];
 export type VehicleIdentitySpecs = { fuel?: string | null; displacementCc?: number | null; drive?: string | null; seats?: number | null; modelYear?: number | null };
 export type VehicleMasterRecord = { masterId: string; trimId: string; names: VehicleIdentity; aliases: string[][];
-  specs?: VehicleIdentitySpecs; modelYearStart?: number | null; modelYearEnd?: number | null };
+  specs?: VehicleIdentitySpecs; modelYearStart?: number | null; modelYearEnd?: number | null;
+  /** 트림 행 출시월·단종월 원문(«YYYY-MM»·«현재»). 세대 기간을 월로 가를 때만 쓴다. */ productionStart?: string | null; productionEnd?: string | null };
 /** Native document IDs verified against one sealed snapshot, never a name-derived reference hash. */
 export type VehicleMasterReference = {
   state: 'KNOWN'; authority: 'FREEPASS_DATA_VEHICLE_MASTER';

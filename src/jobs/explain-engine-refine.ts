@@ -14,7 +14,7 @@ export function explainEngineRefine(products: ReadonlyArray<IdentityProduct & { 
   plates: readonly string[], supplier = 'RP012'): EngineRefineExplanation[] {
   const want = new Set(plates);
   return products.filter(p => want.has(p.plate4) && (p.supplier ?? '') === supplier).map(p => {
-    const engine = refineEngineIdentity({ rawName: p.rawName, year: p.year }, masters);
+    const engine = refineEngineIdentity({ rawName: p.rawName, year: p.year, ...(p.firstRegistration ? { firstRegistration: p.firstRegistration } : {}) }, masters);
     const plan = matchIdentity(p, masters);
     return { plate4: p.plate4, supplier, year: p.year, rawName: p.rawName, hasMakerModel: !!(p.maker.trim() && p.model.trim()), trimBlank: !p.trim_name.trim(),
       engine: engine ? { state: 'REFINED' as const, sub_model: engine.sub_model, trim: engine.trim_name } : { state: 'NULL' as const },

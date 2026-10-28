@@ -6,9 +6,9 @@ import { decodeErp5Value, type Erp5SourceCapture } from './erp5-source-capture.j
 import type { VehicleMasterSnapshot } from './vehicle-identity-inputs.js';
 
 /** build-identity-promotion-plan 입력 모양(application 의 IdentityProduct·IdentityMaster 와 같은 구조 — 어댑터는 application 에 의존하지 않는다, 호환은 시험의 대입이 지킨다). */
-export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean; supplier?: string; engineTemp?: boolean; makerModelFromSource?: boolean; fuel?: string };
+export type SnapshotProduct = { id: string; plate4: string; maker: string; model: string; sub_model: string; trim_name: string; rawName: string; year: string; listable: boolean; supplier?: string; engineTemp?: boolean; makerModelFromSource?: boolean; fuel?: string; firstRegistration?: string };
 export type SnapshotMaster = { id: string; maker: string; model: string; sub_model: string; model_aliases: string[]; sub_model_aliases: string[];
-  yearFrom: number | null; yearTo: number | null; trims: Array<{ name: string; aliases: string[] }> };
+  yearFrom: number | null; yearTo: number | null; monthFrom?: string; monthTo?: string | null; trims: Array<{ name: string; aliases: string[] }> };
 type Rec = Record<string, unknown>;
 const object = (v: unknown): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown) => typeof v === 'string' ? v.trim() : '';
@@ -42,6 +42,7 @@ function snapshotProductOf(id: string, f: Rec, includeAll: boolean): SnapshotPro
     ...(f.vehicle_maker_model_source === 'SOURCE_FIELDS' && object(f.vehicle_maker_model_filled)
       && str(f.vehicle_maker_model_filled.maker) === str(f.maker) && str(f.vehicle_maker_model_filled.model) === str(f.model) ? { makerModelFromSource: true } : {}),
     ...(str(f.fuel_type) ? { fuel: str(f.fuel_type) } : {}),
+    ...(/^\d{4}-\d{2}(?![0-9])/.test(str(f.first_registration_date)) ? { firstRegistration: str(f.first_registration_date) } : {}),
     ...(f.vehicle_review_required === true || f.vehicle_title_source === 'RAW_VEHICLE_TEXT' ? { engineTemp: true } : {}) };
 }
 
@@ -88,9 +89,20 @@ export function identityMastersFromSnapshot(snapshot: Pick<VehicleMasterSnapshot
       // 세대 연식 범위: 트림 시작 연식의 최소~끝 연식의 최대(하나라도 «현재»·없음이면 끝 제한 없음). 트림 연식이 없으면 제한 없음.
       yearFrom: masterFrom !== null ? masterFrom : starts.length ? Math.min(...starts) : null,
       yearTo: masterToOpen ? null : masterTo !== null ? masterTo : !ends.length || ends.some(e => e === null) ? null : Math.max(...(ends as number[])),
+      // 세대 출시월·단종월(엔진 경로 generationMonths 와 같은 규칙: 트림 행 하나라도 월 근거가 없으면 둘 다 없음).
+      ...monthsOf(trims),
       // 세부트림: vehicle_trim_master(master_id 로 연결, 별칭 포함)가 정본. 연결된 트림 문서가 하나도 없을 때만 마스터의 trims 문자열 목록(별칭 없음)을 쓴다.
       trims: trims.length
         ? trims.filter(t => str(t.trim)).map(t => ({ name: str(t.trim), aliases: strings(t.trim_aliases) }))
         : strings(m.data.trims).map(name => ({ name, aliases: [] as string[] })) };
   }).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** 트림 행 production_start 최소 · production_end 최대(«현재» = 끝 없음). 한 행이라도 «YYYY-MM» 근거가 없으면 빈 객체(application generationMonths 와 같은 규칙). */
+function monthsOf(trims: readonly Rec[]): { monthFrom?: string; monthTo?: string | null } {
+  const ym = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}(?![0-9])/.test(v.trim()) ? v.trim().slice(0, 7) : null);
+  if (!trims.length) return {};
+  const starts = trims.map(t => ym(t.production_start)), ends = trims.map(t => (str(t.production_end) === '현재' ? 'OPEN' : ym(t.production_end)));
+  if (starts.some(s => s === null) || ends.some(e => e === null)) return {};
+  return { monthFrom: (starts as string[]).sort()[0]!, monthTo: ends.includes('OPEN') ? null : (ends as string[]).sort().at(-1)! };
 }

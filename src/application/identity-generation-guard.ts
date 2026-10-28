@@ -6,7 +6,36 @@
  *     상품 연식이 이 세대 범위 «안에만» 있고 형제 범위와 겹치지 않을 때만 확정한다.
  *  R3 점검 목록: 마스터에서 형제 세대가 있는 모델 목록을 자동으로 도출한다. */
 
-export type GuardMaster = { id: string; maker: string; model: string; sub_model: string; sub_model_aliases: string[]; model_aliases?: string[]; yearFrom: number | null; yearTo: number | null };
+/** monthFrom·monthTo: 세대의 출시월·단종월(«YYYY-MM», 그 세대 트림 행 production_start 의 최소·production_end 의 최대).
+ * monthFrom 이 없으면(undefined) 월 근거 없음. monthTo 는 null = «현재»(끝 없음), undefined = 모름. */
+export type GuardMaster = { id: string; maker: string; model: string; sub_model: string; sub_model_aliases: string[]; model_aliases?: string[]; yearFrom: number | null; yearTo: number | null;
+  monthFrom?: string; monthTo?: string | null };
+
+/** «YYYY-MM»(뒤에 «-DD» 등이 붙어도 됨) → 월 번호(연×12+월). 월 정밀도가 없으면 null. */
+export function monthIndex(value: unknown): number | null {
+  const m = typeof value === 'string' ? /^(\d{4})[-.](\d{2})(?![0-9])/.exec(value.trim()) : null;
+  if (!m) return null;
+  const month = Number(m[2]);
+  return month >= 1 && month <= 12 ? Number(m[1]) * 12 + month - 1 : null;
+}
+/** 최초등록 월로 세대를 가르는 근거(PC3 커맨드 10-28): 이 세대와 형제 세대 모두 출시월·단종월(또는 «현재»)이 있을 때만,
+ * 등록월이 이 세대 기간 «안»에 있고 경계(출시·단종 ±1개월)가 아니며, 형제 세대 기간(±1개월 포함)에는 걸리지 않을 때만 이 세대로 정한다.
+ * 연식·«신형» 같은 글자로는 정하지 않는다 — 이 함수는 등록월만 본다. */
+export function registrationMonthDecides(master: GuardMaster, siblings: readonly GuardMaster[], registration: unknown): boolean {
+  // «YYYY-01-01»·«YYYY-01» 은 연도만 있던 값을 날짜로 채운 자리채움일 수 있다(운영 모의 2026-10-28: «2023-01-01» 등록 GV80 이 사람 확정 GV80 JX1 FL,
+  // «2022-01-01» 팰리세이드가 확정 더 뉴 팰리세이드 LX2) — 월 근거로 쓰지 않는다(진짜 1월 1일·1월 등록도 판정하지 않을 뿐, 보류로 남는다).
+  if (typeof registration !== 'string' || /^\d{4}[-.]01(?:[-.]01)?(?![0-9])\s*$/.test(registration.trim())) return false;
+  const reg = monthIndex(registration);
+  if (reg === null) return false;
+  const span = (g: GuardMaster) => {
+    const from = monthIndex(g.monthFrom);
+    const to = g.monthTo === null ? Infinity : monthIndex(g.monthTo);
+    return from === null || to === null ? null : { from, to };
+  };
+  const own = span(master);
+  if (!own || reg < own.from + 2 || reg > own.to - 2) return false;   // 기간 밖이거나 출시·단종 ±1개월 경계
+  return siblings.every(s => { const r = span(s); return !!r && (reg < r.from - 1 || reg > r.to + 1); });
+}
 
 const norm = (v: string) => v.normalize('NFKC').replace(/[\s_\-·.,()[\]/]/g, '').toUpperCase();
 const QUALIFIER_TAIL = /(?:신형|THE|ALL|NEW|디|올|더|뉴)+$/;
@@ -62,7 +91,7 @@ export type GenerationGuardReason = 'GENERATION_QUALIFIER_MISMATCH' | 'GENERATIO
 const inRange = (m: GuardMaster, year: number) => (m.yearFrom === null || year >= m.yearFrom) && (m.yearTo === null || year <= m.yearTo);
 
 /** 마스터 하나가 원문 차명의 근거로 충분한가. null = 통과, 아니면 보류 사유. rawPath = 원문 부분 일치로 고른 경우(이름을 정확히 대조한 경우는 점검 대상이 아니다). */
-export function generationGuard(input: { rawName: string; year: string; master: GuardMaster; masters: readonly GuardMaster[] }): GenerationGuardReason | null {
+export function generationGuard(input: { rawName: string; year: string; master: GuardMaster; masters: readonly GuardMaster[]; firstRegistration?: string }): GenerationGuardReason | null {
   const raw = norm(input.rawName);
   const { master } = input;
   // R1: 원문에서 가장 긴 매칭 이름의 모든 출현이 앞 수식어를 더 달고 있으면 부분 일치.
@@ -103,6 +132,9 @@ export function generationGuard(input: { rawName: string; year: string; master: 
   if (leading !== '' && siblingLeadings.every(l => l !== leading) && raw.includes(splitCode(master.sub_model).base)) return null;
   const year = /^\d{4}$/.test(input.year) ? Number(input.year) : null;
   if (year !== null && inRange(master, year) && siblings.every(s => !inRange(s, year))) return null;
+  // ④ 최초등록 월(PC3 커맨드 10-28): 연식이 형제 세대와 겹치는 해(예 2023년식 K5 DL3 ↔ 더 뉴 K5 DL3)는 등록월이 이 세대 기간에만 들어갈 때 이 세대다.
+  // 연식이 있으면 이 세대 연식 범위와 모순되지 않아야 한다(등록월이 맞아도 연식이 다른 세대면 보류).
+  if ((year === null || inRange(master, year)) && registrationMonthDecides(master, siblings, input.firstRegistration)) return null;
   return 'GENERATION_EVIDENCE_MISSING';
 }
 
