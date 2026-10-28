@@ -87,6 +87,8 @@ import {
 } from './public-product-feed.js';
 import { logRouteError } from '../shared/route-error-log.js';
 import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
+import { buildChannelPayoutResponse } from '../application/channel-payout.js';
+import type { ChannelPayoutReader } from '../ports/payout-fee-snapshot-store.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -98,7 +100,8 @@ export type ConsumerCapability =
   | 'estimate-artifacts'
   | 'settlement-ledger-read'
   | 'admin-workflow'
-  | 'contract-fee-link-read';
+  | 'contract-fee-link-read'
+  | 'channel-payout-read';
 export type ConsumerBinding = {
   id: string;
   projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
@@ -129,12 +132,12 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|gna-channel-payout|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
       ? ESTIMATE_NEWCAR_MASTER_PROJECTION_ID
-      : item.id === 'freepass-admin-catalog'
+      : item.id === 'freepass-admin-catalog' || item.id === 'gna-channel-payout'
         ? 'admin-catalog'
         : 'erp-public';
     if (item.projectionId !== expectedProjection) throw new Error('Unsupported consumer projection');
@@ -151,7 +154,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read']);
+          const allowed = new Set<ConsumerCapability>(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read', 'channel-payout-read']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -183,6 +186,10 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (capabilities.includes('contract-fee-link-read') && item.id !== 'freepass-admin-catalog') {
       throw new Error('Contract fee link capability requires freepass-admin-catalog registration');
+    }
+    if ((item.id === 'gna-channel-payout' && (capabilities.length !== 1 || capabilities[0] !== 'channel-payout-read'))
+      || (item.id !== 'gna-channel-payout' && capabilities.includes('channel-payout-read'))) {
+      throw new Error('GNA channel payout registration requires its exclusive channel-payout-read capability');
     }
     if (capabilities.includes('catalog-reference') && item.id !== 'kakao-ops') {
       throw new Error('Catalog reference capability requires kakao-ops registration');
@@ -399,6 +406,7 @@ export function createConsumerGateway(
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
   contractFeeLedgerRowsPort?: ContractFeeLinkLedgerRowsPort,
+  channelPayoutReader?: ChannelPayoutReader,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   assertPublicAllowlistsConfigured();
@@ -923,6 +931,40 @@ export function createConsumerGateway(
       return {schema:'freepass-data.contract-standards/v1',consumerId:binding.id,observedAt:new Date().toISOString(),standards};
     }catch(error){logRouteError('/v1/consumers/:consumerId/contract-standards','contract_standards',error);return reply.code(503).send({code:'STANDARD_READ_FAILED'});}
   });
+  app.get<{ Params: { consumerId: string }; Querystring: { vehicleId?: string } }>(
+    '/v1/consumers/:consumerId/channel-payout', async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+      const binding = registered.get(request.params.consumerId);
+      const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+      const resource = { kind: 'CATALOG' as const, name: 'private-channel-payout-fee-snapshot' };
+      const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read GNA channel payout fee snapshot', request.id),
+        operation: 'READ_CHANNEL_PAYOUT_FEE', resource };
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', spec, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (binding.id !== 'gna-channel-payout' || !binding.capabilities.includes('channel-payout-read')) {
+          await access.deny('READ', spec, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        const keys = Object.keys(request.query as object);
+        const vehicleId = request.query.vehicleId;
+        if (keys.length !== 1 || keys[0] !== 'vehicleId' || typeof vehicleId !== 'string' || !vehicleId
+          || vehicleId.trim() !== vehicleId || vehicleId.length > 180 || /[\s/\\\u0000-\u001f\u007f]/.test(vehicleId)) {
+          await access.deny('READ', spec, 'INVALID_VEHICLE_SELECTION');
+          return reply.code(400).send({ code: 'INVALID_VEHICLE_SELECTION' });
+        }
+        if (!channelPayoutReader) return reply.code(503).send({ code: 'CHANNEL_PAYOUT_READER_UNAVAILABLE' });
+        return await access.read({ ...spec, resource: { ...resource, entityId: vehicleId }, requestDigest: stableDigest({ vehicleId }),
+          summarize: value => ({ count: value.terms.length, digest: stableDigest(value) }) }, async () =>
+          buildChannelPayoutResponse(binding.id, await channelPayoutReader.readLatestChannelPayout(vehicleId)));
+      } catch (error) {
+        logRouteError('/v1/consumers/:consumerId/channel-payout', 'channel_payout', error);
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        return reply.code(503).send({ code: 'CHANNEL_PAYOUT_READ_FAILED' });
+      }
+    });
   app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');

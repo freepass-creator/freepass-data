@@ -607,7 +607,30 @@ describe('2026-10-04 confirmed commission policy', () => {
       expect(r.state).toBe('CALCULATED');
       expect(Number.isInteger(r.amount) && Number.isInteger(r.vatAmount)).toBe(true);
     }
-    expect(resolveSalesCommission({ ...base, supplierId: 'RP013', termMonths: 18 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP013', termMonths: 11 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+  });
+  it.each([[31, 24], [19, 12], [61, 60]])('RP006 billing and payout %s months use the nearest shorter standard %s-month rate', (termMonths, appliedTerm) => {
+    const input = { ...base, supplierId: 'RP006', productType: '중고렌트', monthlyRent: 800000, termMonths };
+    const payout = resolveSalesCommission(input);
+    expect(payout).toMatchObject({ state: 'CALCULATED' });
+    expect(payout.ruleId).toContain(`_${appliedTerm}_`);
+    expect(payout.sourceRefs).toEqual(expect.arrayContaining([
+      'ledger:59c7c3ba', `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${termMonths}→${appliedTerm})`,
+    ]));
+    expect(resolveSupplierBillingFee(input)).toMatchObject({ state: 'CALCULATED' });
+    expect(resolveSupplierBillingFee(input).sourceRefs).toEqual(expect.arrayContaining([
+      'ledger:59c7c3ba', `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${termMonths}→${appliedTerm})`,
+    ]));
+  });
+  it('keeps non-RP006 nonstandard billing unchanged', () => {
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', productType: '중고렌트', termMonths: 31 }))
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'TERM_NOT_IN_F04_COMMISSION_POLICY' });
+  });
+  it('keeps standard terms and unrelated UNKNOWN reasons unchanged', () => {
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '중고렌트', termMonths: 24 }).sourceRefs)
+      .not.toContain('ledger:59c7c3ba');
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '신차렌트', termMonths: 31 }))
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'NEW_PRODUCT_SUBTYPE_REQUIRED' });
   });
   it('keeps confirmed Iron fees and excludes Mindcar', () => {
     const input = { ...base, supplierId: 'RP006', productType: '신차렌트', vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' as const };
@@ -785,7 +808,7 @@ describe('Kakao billing, payout and margin facts', () => {
     }
   });
 
-  it('applies the switch subscription and Iancar fixed exceptions on both sides', () => {
+  it('applies switch rules and limits the 2026-10-28 RP004 payout-equals-billing decision to zero deposit', () => {
     const switchInput = { supplierId: 'RP014', productType: '중고구독', termMonths: 36, monthlyRent: 800000 };
     expect(resolveSupplierBillingFee(switchInput)).toMatchObject({ state: 'CALCULATED', amount: 1080000 });
     expect(resolveSalesCommission({ ...switchInput, fuel: '가솔린' })).toMatchObject({ state: 'CALCULATED', amount: 864000 });
@@ -793,6 +816,16 @@ describe('Kakao billing, payout and margin facts', () => {
     const iancarInput = { supplierId: 'RP004', productType: '중고렌트', termMonths: 6, monthlyRent: 700000, fuel: '가솔린' };
     expect(resolveSupplierBillingFee(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 400000 });
     expect(resolveSalesCommission(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 300000 });
+    expect(resolveSalesCommission(iancarInput).sourceRefs).not.toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+    const depositFree = { ...iancarInput, termMonths: 12, depositState: 'ZERO' as const };
+    expect(resolveSupplierBillingFee(depositFree)).toMatchObject({ state: 'CALCULATED', amount: 500000 });
+    expect(resolveSalesCommission(depositFree)).toMatchObject({ state: 'CALCULATED', amount: 500000 });
+    expect(resolveSalesCommission(depositFree).sourceRefs).toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+    const withDeposit = { ...iancarInput, termMonths: 36, depositState: 'KNOWN' as const };
+    expect(resolveSalesCommission(withDeposit)).toMatchObject({ state: 'CALCULATED', amount: 756000 });
+    const unknown = { ...iancarInput, termMonths: 36, depositState: 'UNKNOWN' as const };
+    expect(resolveSalesCommission(unknown)).toMatchObject({ state: 'CALCULATED', amount: 756000 });
+    expect(resolveSalesCommission(unknown).sourceRefs).not.toContain('ledger:2026-10-28-rp004-payout-equals-billing');
   });
 
   it('does not invent margin for human-decided or absent F04 rules', () => {
@@ -1130,9 +1163,18 @@ describe('F04 2026-10-04 alignment regression', () => {
   it('8: mindcar stays not applicable, never zero', () => {
     expect(both({ ...base, supplierId: 'RP034' }).every(r => r.state === 'NOT_APPLICABLE' && r.amount === null)).toBe(true);
   });
-  it.each([20,25,26,28,33,72,84])('unlisted term %s never interpolates a ladder', termMonths => {
-    for (const supplierId of KAKAO_COMMISSION_POLICY.standardSupplierIds) expect(both({ ...base, supplierId, productType: '장기렌트', termMonths }).every(r => r.state === 'UNKNOWN')).toBe(true);
-    for (const supplierId of ['RP012','RP014']) expect(both({ ...base, supplierId, termMonths }).every(r => r.state === 'UNKNOWN')).toBe(true);
+  it.each([20,25,26,28,33,72,84])('unlisted term %s applies only the approved payout ladder fallback', termMonths => {
+    for (const supplierId of KAKAO_COMMISSION_POLICY.standardSupplierIds) {
+      const results = both({ ...base, supplierId, productType: '장기렌트', termMonths });
+      const billing = results[0]!, payout = results[1]!;
+      expect(billing.state).toBe(supplierId === 'RP006' ? 'CALCULATED' : 'UNKNOWN');
+      expect(payout).toMatchObject({ state: 'CALCULATED' });
+    }
+    expect(both({ ...base, supplierId: 'RP012', termMonths }).every(r => r.state === 'UNKNOWN')).toBe(true);
+    const switchResults = both({ ...base, supplierId: 'RP014', termMonths });
+    const switchBilling = switchResults[0]!, switchPayout = switchResults[1]!;
+    expect(switchBilling.state).toBe('UNKNOWN');
+    expect(switchPayout.state).toBe('CALCULATED');
   });
   it.each(['AMR','오토셀렉션','금탑','빌림','퍼스트','SK'])('unregistered %s remains unknown', supplierId => {
     expect(both({ ...base, supplierId }).every(r => r.reasonCode === 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE')).toBe(true);
@@ -1154,7 +1196,7 @@ describe('F04 2026-10-04 alignment regression', () => {
 });
 
 describe('F04 source references and term scope (2026-10-04 review)', () => {
-  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
+  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
   it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
     const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
     const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
@@ -1206,8 +1248,13 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
   it('선납/분납·추가보증금을 모르면 계산하지 않고(0 으로 두지 않음), 기간 밖·구독 아님도 모름', () => {
     expect(resolveSalesCommission({ ...base, extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_DEPOSIT_PAYMENT_REQUIRED' });
     expect(resolveSalesCommission({ ...base, depositPayment: 'PREPAID' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_EXTRA_DEPOSIT_REQUIRED' });
-    expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
+    expect(resolveSalesCommission({ ...base, termMonths: 60 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_DEPOSIT_PAYMENT_REQUIRED' });
     expect(resolveSupplierBillingFee({ ...base, productType: '재렌트' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_SUBSCRIPTION_ONLY' });
+  });
+  it.each([[0, 1200000], [1000000, 1300000], [5000000, 1600000]])('60개월 선납 추가보증금 %s원은 %s원을 지급한다', (extraDeposit, amount) => {
+    expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit }))
+      .toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_GA_PREPAID_60_PAYOUT', amount });
+    expect(resolveSupplierBillingFee({ ...base, termMonths: 60 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
   });
   it('2026-10-05 이후 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다(계약일 모르면 멈춤, 선납·청구는 그대로)', () => {
     const pay = (over: object) => resolveSalesCommission({ ...base, ...over });
