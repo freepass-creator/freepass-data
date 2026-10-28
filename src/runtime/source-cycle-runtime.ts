@@ -11,7 +11,7 @@ import { latestCollectionSuccess } from '../application/erp4-collection-evidence
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
 import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { ingestSharedSheetObservedRows } from '../jobs/ingest-shared-sheet-canonical.js';
-import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin, type CycleCapture } from '../adapters/source-cycle-plugins.js';
+import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, aicaActualTab, type CyclePlugin, type CycleCapture } from '../adapters/source-cycle-plugins.js';
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
@@ -328,17 +328,20 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
     } else if (kind === 'AICA') {
       plugins.push(aicaNativePlugin(async () => {
         const id = required('SOURCE_CYCLE_AICA_SHEET_ID');
+        // 아이카 월렌트 상품 제외(대표 2026-10-23): 기본 켜짐. SOURCE_CYCLE_AICA_SKIP_MONTHLY=0 이면 이전처럼 월렌트 탭을 읽어 상품으로 만든다.
+        const skipMonthly = (env.SOURCE_CYCLE_AICA_SKIP_MONTHLY ?? '1').trim() !== '0';
+        const readScopes = AICA_SCOPES.filter(s => !(skipMonthly && s === '월렌트'));
         const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet`);
-        for (const title of AICA_SCOPES) url.searchParams.append('ranges', `'${title}'`);
+        for (const title of readScopes) url.searchParams.append('ranges', `'${aicaActualTab(title)}'`);
         url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
         const observedAt = new Date().toISOString();
         const visibilityBefore = await visibility(id);
         const before = await (await get(url, true)).json(), after = await (await get(url, true)).json();
         const visibilityAfter = await visibility(id);
         if (stableDigest(visibilityBefore) !== stableDigest(visibilityAfter)) throw new Error('SOURCE_VISIBILITY_CHANGED');
-        if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== AICA_SCOPES.length) throw new Error('AICA_CAPTURE_CHANGED');
-        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter,
-          { sheetSpec: specFillSources.includes('RP004') || sourceIdentitySources.includes('RP004') }));
+        if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== readScopes.length) throw new Error('AICA_CAPTURE_CHANGED');
+        return sheetCountGuard('RP004', aicaNativeCapture(readScopes.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter,
+          { sheetSpec: specFillSources.includes('RP004') || sourceIdentitySources.includes('RP004'), skipMonthly }));
       }, ratio));
     } else if (kind === 'IANCAR') {
       // 상세·가용 캐시(1번 커맨드 오더 2026-10-16, 기본 꺼짐): SOURCE_CYCLE_IANCAR_DETAIL_CACHE=1 일 때만 직전 회차 캐시를 재사용해 차량별 호출 3→1(요금만).
