@@ -244,6 +244,37 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-28 영업자 지급수수료 박제 규칙 확장 — ledger 59c7c3ba
+
+- 목적 / 대상 revision: `work/freepass-data/payout-nonstandard-terms-20261028` @ `2e612b3fb1339247ed7c533db367bfca39ce933c` 기준. 대표 2026-10-28 「제안대로 채워」 결정을 기존 F04 수수료 엔진·`precomputeOfferEconomics`·지급수수료 박제 job에 확장한다.
+- 변경: 사다리 공급사의 영업자 `PAYOUT`에만 12·24·36·48·60 중 가장 가까운 짧은 표준 기간 요율을 적용하고 `ledger:59c7c3ba`·`NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(원기간→적용기간)`을 남긴다. 12개월 미만·이안카 단기·구독 예외·청구는 기존 경계를 유지한다. 뮤카 60개월 선납은 48개월과 같은 120만원 + 추가보증금 10%(최대 40만원)으로 확장했다.
+- 박제 job: Firestore `products` 전체 입력·`provider_company_code` 우선·`listable` 표시 보존을 재확인했다. 기존 `PayoutFeeEvidence[]`와 `plate/가격원/확신도/근거URL/carName/연식` 신차 가격 배열을 받고, 낮음은 제외하며 일치 `NEW_RENT` 차량에만 `NEW_PREDELIVERY`를 준다. `--mewcar-prepaid-default`는 명시한 때만 PREPAID·추가보증금 0을 증거로 취급한다. 계획 출력에 증거 종류별·공급사별 비정형 기간 적용 건수를 ID 없이 추가했다.
+- 검증: `npx tsc --noEmit -p .` PASS; `vitest` 관련 181 PASS; `check-data-access-boundary` PASS; `check-architecture` PASS; `git diff --check` PASS. 네트워크·Firestore 읽기/쓰기·커밋 없음.
+- 남음 / next_start_here: 운영 증거 파일 경로로 dry-run 계획을 만들 때 `docs/READ-RUNTIME.md#상품별·기간별-영업자-지급수수료-일-박제`를 따라 증거 적용 건수·UNKNOWN 사유·planDigest를 대조한다. 이 작업은 실제 운영 데이터와 apply를 수행하지 않았다.
+
+### 2026-10-27 PC3 — 원천 명시 인승을 기존 spec-refill로 전달
+
+- 원건 `Mmvq7z9p8-81b743`, 기준 main `e2b07c99d327ec860325b0c0d42dac5258da56e4`. RP004 장기 차명과 RP031 완전한 현재 ONE 상세의 독립된 단일 `N인승`을 `raw.spec.seats`로 전달한다. 모델 추정·범위/대안/부정/개조/미확정 표기는 제외한다. 이안카 구조화 원천의 기존 인승(해석 불가 값 포함)과 원문 spec은 보존한다.
+- 기존 spec-refill의 빈칸·계약 잠금·회차 상한·CAS/백업/되읽기 경로만 사용한다. 새 writer/DB 통로/수집기/예약은 없다. F01은 대표 결정으로 폐기 상태를 유지하며 이 변경은 내부 정제/ERP 소비용이다.
+- 검증: 관련 9파일 276 PASS / 1 기존 조건부 SKIP, build/architecture/data-access-boundary PASS. 기존 Claude PC3 독립 검토 `Mmvqj7yry-d63e0d` 수령. 현재 단계는 CODED/TESTED이며 운영 적용/실제 인승 반영 완료가 아니다. 첫 병합 시도는 자동 승인 검토가 검토 근거 없음을 이유로 차단했으며, 미적용 상태로 정확한 선행조건을 확인 중이다.
+- next_start_here: PR #797의 exact-head 검토/CI 및 정상 통합 절차 → dirty 13개를 보존한 기존 fd-cycle 런타임의 제한적 적용 및 실제 dist 검증 → 현재 원천의 새 계획/빈칸·잠금 검증/기존 writer 적용/ERP 되읽기. private 후보 4건은 자동 쓰기 허용 목록이 아니며, 원천의 현재성·충돌을 다시 확인한다. 사진 복사 진행 작업과 겹치지 않으며 공유 Drive 폴더 이름 변경은 별도 실제 사용자 응답 대기다.
+
+### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
+
+- Representative authorization: PC3 remains the Data main owner; PC0 executes remotely on PC3 under the bounded child of C1026-827079b8. The currently held final supplier contract is the company standard, not an individually issued customer contract. Existing per-contract supplier preapproval remains in esign.
+- Source: supplier numeric catalog 2026-10-26.1 + freepass-complete-20261026-v1, held-source commit 5eb4cd64d19ac6b812124a7730c4850e7786ed16. Original supplier facts, FreePass standard supplementation, conditional variants and explicit blanks remain distinguishable. No original files, customer/account fields or private paths are included in the public business bundle.
+- PERSISTENCE VERIFIED on PC3: 23 immutable Canonical policies through CatalogStore, existing writer ownership, command receipt and audit. Source registration plan digest e9bf2ff243a5eb4a27430edcb2193efce2e425510fa2e6d708747c85898d4e61. Legacy policy corrector: 31 existing policies +17 explicitly registered supplier-code defaults;443 changes/readbacks/audits, aggregate plan digest 8da1465ee2dd9d4163e252b3a3421f474affe8e5de4e5ed627e7f251fd09ddea. Private before-images and per-plan receipts are retained on PC3 under .codex/private/policy-link-20261026 and the existing corrector backup folders.
+- Read contract: authenticated catalog-capability GET /v1/consumers/:consumerId/contract-standards returns validated immutable business editions. Existing selected-product compatibility reads include the validated native standard bundle. A missing product policy reference can use only the exact registered STD-<supplierCode> default with corrector ownership and matching supplier scope; broken explicit references are not repaired by guessing.
+- ERP renders the Data-owned projector, including staged annual late fees, source age/vehicle-class alternatives and the KH explicit blank general self-damage rate. Prices/deposits, offers, ACTIVE releases, sheet values, Firebase/IAM bindings and esign execution are not changed by this packet. The optional data-api catalog-mode experiment remains inactive and outside the release.
+- Local validation: architecture/data-access boundaries and TypeScript pass; focused policy/correction/point-read/consumer tests pass. ERP full suite1180 passed/1 skipped. Windows Data full run4445 passed/17 failed/19 skipped (shell execution/environment and temporary-directory cleanup); Linux CI must confirm the release. Standards checker retains the pre-existing PARTIAL capability list.
+- DEPLOYMENT VERIFIED: Data PR#794 source commit 2a15f180cf7052cd56e4d981fc87241a9ba02fa7, read runtime freepass-data-read-00057-brc, image sha256:2b7429b1b305d1cf83e50bfede946a324d7fb280c376fb898d13633829d7896d,100% traffic; existing deployment workflow run40359106008 succeeded. ERP PR#336 source commit82e13745d1f113cb55e572820b3de4a8ececd918, production Vercel deployment1ksx6dLWjaySnSWnrn4YZbrDYh8C READY. Linux Data CI40358002786 passed4469 tests/13 skipped; its frozen photo environment also passed3170/12 skipped. ERP release checks and production build passed.
+- PRODUCTION READBACK VERIFIED 2026-10-26T16:34Z: authenticated contract-standards returns23 editions (22 bound,1 unlinked); selected-product101호3376 returns35% under-one-year and its native bundle;13수0234 correctly returns null for rental-only rates on a subscription product. All110 public details match the Data projection exactly, with no failed reads.107 have an applicable held standard;3 expose a product-kind evidence gap. Rendered ERP screens confirm Iron35%/35%, Billincar40%/30%, property10억원 and staged annual12%→20%. All5444 public rate rows preserve rent/deposit/state; only7 mileage facts across4 products were filled from the policy standard. Iancar RAV4 133호5345 remains60m910000/deposit5000000 and12m1170000/deposit2000000 at20k/year, both KNOWN.
+- Authority HOLDs, not invented values: Billincar13수0234/58마8818/69주5498 are subscription products referencing a rental-only held contract. Their scope warning is visible and rental rates are suppressed. Tago's source business-registration hash was independently compared with all64 registered partners, with zero matches; its standard remains available as UNLINKED_SUPPLIER and no foreign supplier code is assigned. Original117 /125호8983 HOLD is unrelated and remains unchanged.
+- Final evidence: PC0 D:/dev-artifacts/freepass-data/policy-link-20261026/final-public-verification.json,production-policy-api-proof.json,catalog-regression.json,iancar-rav4-regression.json and rendered iron-policy-after.png/billin-policy-after.png. PC3 private policy-link-20261026 contains source plans, backups,443 readback/audit receipts,production-policy-api-proof.json,read-runtime-after.json and tago-business-match-proof.json. GitHub deployment had an initial pre-job queue; a prepared fallback Cloud Build d02db63f-34f9-4f56-97cc-dd0252e4ee46 was CANCELLED when the existing workflow started. No fallback image update was executed; no duplicate runtime deployment, IAM/account/schedule change or global consumer transport cutover occurred.
+- next_start_here: retain PC3 parent ownership and the existing source/freshness cycles. Do not replay the23 registration or443 corrections. When authoritative subscription contract evidence or a registered Tago identity arrives, create a new reviewed source edition and use the same CatalogStore/corrector/readback path; never fill the gap from a different company's policy. The optional data-api catalog experiment remains uncommitted and inactive in the ERP task worktree.
+
+
+
 ### 2026-10-24 계약 원본 단일 기준 — 남은 구형 수치 정정
 
 - 대표는 ERP5의 기존 값이 잘못된 데이터이며 계약서 원본이 항상 기준이라고 재확정했다. 기존 정책 정정기에서 구형 지연 이율·단일 초과주행 요금·보증금 연체 회차 세 칸을 근거와 함께 정정하도록 확장한다.
@@ -3428,3 +3459,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: 기존 `leaseConfigFromEnv`·`writerLeaseStore`를 조합한 기본 꺼짐 공용 관문을 추가하고, 사진 일일·사진 캐시·승인 사진 등록·AICA/Iron/손오공/이안카 RAW 적용·이안카 사진 적용/복원과 5분 source request 처리의 쓰기 전에 연결했다. 레인과 비쓰기 대상은 `WRITER-LEASE.md` 표에 고정했다.
 - 검증: `npx.cmd tsc --noEmit -p .` PASS; `npx.cmd vitest run tests/writer-lease.test.ts tests/writer-lease-ensure.test.ts tests/iancar-photo-daily.test.ts tests/supplier-iron-capture.test.ts tests/sonogong-api-runtime.test.ts` 39 PASS; `node scripts/check-data-access-boundary.mjs` PASS.
 - 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 운영 env에서 각 레인을 claim하고 `WRITER_LEASE_ENFORCE=1`, `WRITER_LEASE_PC`를 켜는 일은 별도 운영 전환이다. 기존 dirty 문서 한 줄과 `_ipt.mjs`, `_ms.mjs`, `_why2.mjs`는 보존했다.
+
+## 2026-10-28 RP004 지급=청구·역마진 차단·RP006 비정형 청구
+
+- 목적 / 대상 revision: `work/freepass-data/payout-margin-guard-20261028`, 기준 `0d54833648eb6ca7f100c8a0a1c0dbc49ba2ae3c`; 커밋·네트워크·Firestore 읽기/쓰기 없음.
+- 변경: RP004 지급을 같은 조건 청구 전액으로 바꾸고 무보증 500,000원 및 `ledger:2026-10-28-rp004-payout-equals-billing`을 연결했다. `precomputeOfferEconomics` 한 곳에서 지급>청구를 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 차단한다. RP006 재렌트 청구에도 12개월 이상 가장 가까운 짧은 표준 기간을 적용하고, 지급 박제 계획에 공급사별 `payoutExceedsBillingCounts`를 추가했다.
+- 검증: 관련 10파일 370 PASS; 전체 Vitest 4,461 PASS/24 FAIL/19 SKIP이며 24건은 샌드박스 자원·권한(`uv_os_get_passwd ENOMEM`, 사용자 홈/jq 권한, bash timeout/로컬 서버 기동) 실패다. `npx tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
+- 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 전체 시험의 환경성 24 FAIL은 권한·자원이 허용된 동일 revision 환경에서 재확인한다. 제품 규칙 관련 알려진 실패는 0건이다.

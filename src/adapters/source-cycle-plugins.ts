@@ -9,6 +9,7 @@ import { sharedSheetChannels, type SharedSheetCapture } from './shared-sheet-sou
 import { IancarOneApiError, type IancarOneListCapture } from './iancar-one-api.js';
 import type { CycleRead } from '../ports/source-cycle.js';
 import { stableIancarPayload } from './iancar-stable-facts.js';
+import { explicitSeatCount } from '../domain/source-spec-validation.js';
 
 export type CycleSourceKind = 'F05' | 'AICA' | 'IANCAR' | 'IRON' | 'AUTOPLUS' | 'SONOGONG' | 'DECISION' | 'FILE';
 export type CycleSourceDefinition = {
@@ -39,6 +40,8 @@ export interface CyclePlugin<T = unknown> extends SourceEngine<T> {
   sourceId: string; family: SourceFamily; maxDowngradeRatio: number; downgradeFloor?: number;
   /** 원천에 없는 노출 문서를 내릴 때 남기는 사유. 기본은 SOURCE_ABSENT, 대표 지시 공급사는 DECISION_WITHDRAWN. */
   absenceReason?: string;
+  /** 대표 결정으로 노출하지 않는 상품 구분(CycleConfig.decisionWithdrawnProductTypes). */
+  decisionWithdrawnProductTypes?: readonly string[];
   /** 이번 한 회차 한정 신규 편입 상한 상향(최초 대량 편입). 원천 잠금 안에서 «적용 전에» 표식을 원자적으로 기록해 소진시키고(claimEnrollCapOnce), 기록 실패 시 올리지 않는다. */
   enrollCapOnce?: number; enrollCapOnceMarker?: string;
   optionsRewriteCap?: number;
@@ -212,6 +215,11 @@ export function iancarCyclePlugin(maxDowngradeRatio: number, read: () => Promise
       if (typeof color === 'string' && color.trim()) spec.ext_color = color.trim();
       if (typeof mileage === 'number' && Number.isSafeInteger(mileage) && mileage >= 0) spec.mileage = String(mileage);
       if (typeof registered === 'string' && validCalendarDate(registered.trim())) spec.first_registration_date = registered.trim();
+      // 구조화된 원천 인승이 있으면(해석 불가 값 포함) 차명에서 파생해 가리지 않는다.
+      const hasSeatFact = [pick('seats'), pick('seat'), pick('capacity'), pick('passengers')]
+        .some(v => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim()));
+      const seats = hasSeatFact ? null : explicitSeatCount(detail.name);
+      if (seats) spec.seats = seats;
       const plate = typeof raw.plate_number === 'string' && raw.plate_number.trim() ? raw.plate_number.replace(/\s/g, '') : null;
       const record: SourceProductRecord = { sourceId: 'RP031', uid: item.vehicleId, plate,
         vehicleText: typeof detail.name === 'string' ? detail.name : '',

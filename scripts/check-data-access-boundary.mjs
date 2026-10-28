@@ -140,7 +140,8 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/normalize-first-registration.ts', ['runtime.access.write(', 'runtime.access.read(']],
   ['src/jobs/writer-lease.ts', ['runtime.access.write(', 'runtime.access.read(']],
   ['src/jobs/apply-billincar-policy-repair.ts', ['runtime.access.write(']],
-  ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
+  ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']],
+  ['src/jobs/snapshot-payout-fees.ts', ['input.access.read(', 'input.access.write(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {
   const requiredPath = path.join(checkRoot, relativeFile);

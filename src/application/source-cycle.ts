@@ -58,7 +58,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
     ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}),
     ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}),
-    ...(config.specValidation ? { specValidation: true } : {}) }, plannedAt: now,
+    ...(config.specValidation ? { specValidation: true } : {}),
+    ...(config.decisionWithdrawnProductTypes?.length ? { decisionWithdrawnProductTypes: [...new Set(config.decisionWithdrawnProductTypes)].sort() } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -100,6 +101,12 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     return after;
   };
   let identityHolds = false, depositPreserved = 0, uidBridged = 0;
+  // 대표 결정으로 노출하지 않는 상품 구분(손오공 픽업구독, 대표 2026-10-28): 저장 기록 raw.product_type 으로 가린다.
+  const decisionTypes = new Set(config.decisionWithdrawnProductTypes ?? []);
+  const decisionTyped = (r: SourceProductRecord) => decisionTypes.size > 0 && decisionTypes.has(String(r.raw?.product_type ?? ''));
+  // 이번 원천이 «허용된 구분»으로 내놓은 문서 키(번호 잇기 뒤 키 포함). 구분이 바뀐 차(예: 픽업구독 → 오공구독)는 결정 하향하지 않고 보통 경로가 갱신한다.
+  const offered = new Set<string>();
+  let decisionSkipped = 0;
   // 빈 제원 칸 다시 채움이 정해진 항목 키(계획 항목의 before 는 읽기 경로 그대로 두고, 사유는 여기서만 더한다 — reasonsOf).
   const specRefill = new Set<string>();
   // 빈 photo_link 를 시트 사진 폴더 링크로 채우는 항목 키(PHOTO_LINK 사유 — reasonsOf).
@@ -137,6 +144,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         r = checked.record;
       }
     }
+    // 결정으로 내린 구분의 원천 행은 편입·갱신·재노출하지 않는다(어댑터가 읽지 않는 것이 1차, 이것은 다른 경로로 들어와도 막는 2차).
+    if (decisionTyped(r)) { decisionSkipped++; continue; }
     let key = sourceProductKey(r), before = mine.get(key) ?? null;
     if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
       let candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
@@ -160,6 +169,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         errors.some(e => ['RECORD_SHAPE_INVALID', 'IDENTITY_REQUIRED', 'OBSERVATION_INVALID'].includes(e))) {
       identityHolds = true; hold('IDENTITY_OR_DUPLICATE'); continue;
     }
+    // 결정 하향 제외 근거는 식별·관측 검증을 통과하고 구분이 명시된(결정 구분이 아닌) 행만(Codex 검토: 구분 누락·검증 실패 행이 픽업구독 문서를 살리지 않게).
+    if (typeof r.raw?.product_type === 'string' && r.raw.product_type.trim()) offered.add(key);
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
     // 같은 번호(문서 ID)를 다른 공급사 문서가 이미 쓰고 있다: 편입하면 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN)로 공급사 회차 전체가 멈춘다.
@@ -297,8 +308,40 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // Missing/unidentified rows may hide any UID: never infer absence from a partial normalization.
   const absenceUnsafe = evidence.heldCount - (evidence.benignHeldCount ?? 0) > 0 || identityHolds || plan.unassignedPlateCount > 0;
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
+  // 결정 하향(대표 2026-10-28 «픽업구독 일단 다 내려»): 원천에 있고 없고를 추론하지 않으므로 읽기 완전성·보류와 무관하게 계획한다. 이번 원천이 허용된 구분으로 내놓은 차,
+  // 계약 잠금·가격 드리프트 문서는 내리지 않는다(기존 부재 하향과 같은 보호, 잠금은 건수만 경고로 남긴다). 사유 DECISION_WITHDRAWN 은 비율 가드 대상이 아니다.
+  const decisionDown = new Set<string>();
+  let decisionKept = 0;
+  if (decisionTypes.size && fresh) {
+    for (const before of snapshot.products) {
+      const key = sourceProductKey(before.record);
+      if (!before.listable || !decisionTyped(before.record) || offered.has(key)) continue;
+      if (locked(before) || driftHeld.has(before.record.uid)) { decisionKept++; continue; }
+      if (Date.parse(before.record.observedAt) > at) { hold('OBSERVATION_FUTURE'); continue; }
+      decisionDown.add(key);
+      plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, 'DECISION_WITHDRAWN') });
+    }
+  }
+  if (decisionDown.size) plan.warnings.push(`DECISION_WITHDRAWN_TYPE:${decisionDown.size}`);
+  if (decisionKept) plan.warnings.push(`DECISION_WITHDRAWN_KEPT_LOCKED:${decisionKept}`);
+  if (decisionSkipped) plan.warnings.push(`DECISION_TYPE_SOURCE_SKIPPED:${decisionSkipped}`);
+  // 읽기만 불완전하면(다른 막힘 없음) 결정 하향만 적용한다: 원천 값으로 쓰는 항목(편입·갱신·재노출·부재 하향)은 전부 빼고 막힘을 푼다.
+  // 결정 하향이 없으면 지금처럼 SOURCE_INCOMPLETE 로 멈춘다. 회차는 적용 뒤에도 불완전 읽기로 실패를 센다(jobs/source-cycle).
+  // 규격 위반 경고(번호 없음): 필드별 건수. 위반이 읽은 차의 20% 를 넘으면 원천 형식 변경 의심 — 회차를 보류한다(이안카 드리프트 한도와 같은 방식, 최소 5건).
+  // 결정 하향 예외 판정 «전에» 계산한다(Codex 검토: 막힘이 SOURCE_INCOMPLETE 하나뿐일 때만 예외).
+  for (const [field, count] of Object.entries(specViolationByField).sort(([a], [b]) => a.localeCompare(b))) plan.warnings.push(`SPEC_VIOLATION:${field}:${count}`);
+  if (specViolatedRecords >= 5 && specViolatedRecords > Math.floor(evidence.records.length * 0.2) && !plan.blockers.includes('SPEC_FORMAT_DRIFT')) plan.blockers.push('SPEC_FORMAT_DRIFT');
+  const decisionOnly = decisionDown.size > 0 && plan.blockers.length > 0 && plan.blockers.every(b => b === 'SOURCE_INCOMPLETE');
+  if (decisionOnly) {
+    plan.entries = plan.entries.filter(e => e.kind === 'DOWNGRADE' && decisionDown.has(sourceProductKey(e.before!.record)));
+    plan.blockers = [];
+    plan.warnings.push('DECISION_ONLY:SOURCE_INCOMPLETE');
+    infoIncomplete = 0; notSellableEnrolled = 0; depositPreserved = 0; statusUnknownExposed = 0; uidBridged = 0;
+    specRefill.clear(); photoLinkFill.clear(); sheetIdentity.clear(); sheetFact.clear(); sheetFactConflicts = 0;
+  }
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
+      if (decisionTyped(before.record)) continue;   // 결정 구분 문서는 위 결정 하향만 다룬다(부재 하향 중복·비율 가드 오적용 방지)
       // 계약 잠금 문서는 부재 하향에서 보호된다. 단 «API 교체 철회»(REPLACED_BY_API, 대표 «API 연동 아닌 건 다 내려라»)는 한 번만(표식) 허용된 결정이라
       // 잠금 문서도 «노출만» 내린다(하드 삭제 아님, 정산 원장·잠금 기록은 건드리지 않는다 — withdraw 는 listable·사유만 바꾼다).
       const lockProtected = locked(before) && config.absenceReason !== 'REPLACED_BY_API';
@@ -307,9 +350,6 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, config.absenceReason ?? 'SOURCE_ABSENT') });
     }
   }
-  // 규격 위반 경고(번호 없음): 필드별 건수. 위반이 읽은 차의 20% 를 넘으면 원천 형식 변경 의심 — 회차를 보류한다(이안카 드리프트 한도와 같은 방식, 최소 5건).
-  for (const [field, count] of Object.entries(specViolationByField).sort(([a], [b]) => a.localeCompare(b))) plan.warnings.push(`SPEC_VIOLATION:${field}:${count}`);
-  if (specViolatedRecords >= 5 && specViolatedRecords > Math.floor(evidence.records.length * 0.2) && !plan.blockers.includes('SPEC_FORMAT_DRIFT')) plan.blockers.push('SPEC_FORMAT_DRIFT');
   if (infoIncomplete > 0) plan.warnings.push(`ENROLLED_INFO_INCOMPLETE:${infoIncomplete}`);
   if (notSellableEnrolled > 0) plan.warnings.push(`ENROLLED_NOT_SELLABLE:${notSellableEnrolled}`);
   if (depositPreserved > 0) plan.warnings.push(`DEPOSIT_PRESERVED:${depositPreserved}`);
@@ -323,14 +363,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const absentDown = downs.filter(isAbsent).length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
-  if (plan.exposedBefore) {
+  // 비율 가드·편입 상한의 기준 노출 수에서 결정 구분 문서(이번 회차에 결정으로 내리는 쪽)를 뺀다 — 픽업구독 264건이 남은 십여 건의 부재 하향 허용분을 부풀리지 않게.
+  const guardBase = plan.exposedBefore - snapshot.products.filter(p => p.listable && decisionTyped(p.record)).length;
+  if (guardBase > 0) {
     // floor 0(기본·옛 동작): 합산 비율로 회차 전체를 막는다(호환).
     // floor>0(런타임 기본 3): 대표 2026-10-14 «걸림돌 해제» — 회차 전체를 멈추지 않고 «허용분까지만 적용, 나머지는 다음 회차로 이월»한다.
     //   부재 추론(SOURCE_ABSENT) 허용분 = max(절대 하한, 노출의 상한 비율), 원천이 명시한 불가·계약중 등 = max(절대 하한, 노출의 max(상한,0.5)).
     //   이월분은 노출 유지(키 순서 고정이라 같은 입력이면 같은 대수), 경고 DOWNGRADE_DEFERRED 로 남아 사람이 대량 오작동을 알아챈다.
     if (floor > 0) {
-      const absentAllow = Math.max(floor, Math.floor(plan.exposedBefore * config.maxDowngradeRatio));
-      const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
+      const absentAllow = Math.max(floor, Math.floor(guardBase * config.maxDowngradeRatio));
+      const explicitAllow = Math.max(floor, Math.floor(guardBase * Math.max(config.maxDowngradeRatio, 0.5)));
       const dropKeys = new Set<string>();
       const keyed = (list: typeof downs) => [...list].sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
       const absentList = keyed(downs.filter(isAbsent));
@@ -341,7 +383,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         plan.entries = plan.entries.filter(e => e.kind !== 'DOWNGRADE' || !dropKeys.has(sourceProductKey(e.after.record)));
         plan.warnings.push(`DOWNGRADE_DEFERRED:${dropKeys.size}`);
       }
-    } else if (downs.length / plan.exposedBefore > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
+    } else if (downs.length / guardBase > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
   }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
@@ -352,7 +394,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 설정은 상한을 «줄이기만» 할 수 있다(독립 검토 2026-10-14): 확정 상한과 설정값 중 작은 쪽. minEnrollPerCycle 은 더 이상 상한을 올리지 못한다.
   // 한 번만 상향(대표 2026-10-14 손오공 최초 편입 201대+): enrollCapOnce 는 운영 변수(SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE)가 «이번 한 회차에 한해» 켠다 —
   // 회차 직후 러너가 표식 파일을 남겨 다음 회차부터 자동 원복한다. 절대 상한 1000, plan.config 에 기록되어 적용 재계획(replay)과 같은 결과가 된다.
-  const confirmedCap = Math.min(Math.max(100, Math.ceil(plan.exposedBefore * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
+  const confirmedCap = Math.min(Math.max(100, Math.ceil(Math.max(0, guardBase) * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
   const enrollCap = config.enrollCapOnce && Number.isSafeInteger(config.enrollCapOnce) && config.enrollCapOnce > confirmedCap
     ? Math.min(config.enrollCapOnce, 1000) : confirmedCap;
   const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');

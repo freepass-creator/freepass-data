@@ -29,6 +29,13 @@ const int = (value: unknown) => {
   return Number.isFinite(n) ? Math.trunc(n) : undefined;
 };
 
+/** 기존 products 문서의 누적 주행거리 칸을 같은 방식으로 해석한다. */
+export const legacyProductMileageKm = (data: Record<string, unknown>): number | undefined => {
+  if (!/\d/.test(String(data.mileage ?? ''))) return undefined;
+  const mileage = int(data.mileage);
+  return mileage !== undefined && mileage >= 0 ? mileage : undefined;
+};
+
 function money(value: unknown): Money | null | undefined {
   if (value === '' || value == null) return undefined;
   const amount = int(value);
@@ -112,7 +119,7 @@ export function normalizeLegacyProduct(raw: LegacyProductRaw): CatalogCandidate 
   const vehicleStatusRaw = text(d.vehicle_status);
   const year = text(d.year);
   const fuelType = text(d.fuel_type);
-  const mileageKm = int(d.mileage);
+  const mileageKm = legacyProductMileageKm(d);
   const driveType = text(d.drive_type);
   const seats = int(d.seats);
   const origin = text(d.origin);
