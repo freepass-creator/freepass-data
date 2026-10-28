@@ -826,8 +826,8 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
   if (hasAgreement && (!agreement || typeof agreement !== 'object' || Array.isArray(agreement))) return unknownCommission('INDIVIDUAL_AGREEMENT_INVALID');
-  // 대표 2026-10-28: 아이카 지급은 같은 조건의 청구 전액이다. 청구 UNKNOWN 사유도 그대로 보존한다.
-  if (supplierId === 'RP004' && !billing) {
+  // 대표 2026-10-28 정정: 아이카 무보증만 청구·지급 500,000원이며, 그 외에는 기존 지급 사다리를 따른다.
+  if (supplierId === 'RP004' && !billing && input.depositState === 'ZERO') {
     const billed = resolveCommissionAmount(input, 'BILLING');
     if (billed.state !== 'CALCULATED' && billed.state !== 'CALCULATED_APPROX') return billed;
     return { ...billed, ruleId: billed.ruleId?.replace('_BILLING_', '_PAYOUT_EQUALS_BILLING_')
@@ -958,7 +958,8 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     ...(result.note ? [result.note] : []),
     ...(side === 'PAYOUT' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
     ...(side === 'BILLING' && input.supplierId === 'RP006' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
-    ...(side === 'PAYOUT' && input.supplierId === 'RP004' ? ['ledger:2026-10-28-rp004-payout-equals-billing'] : []),
+    ...(side === 'PAYOUT' && input.supplierId === 'RP004' && input.depositState === 'ZERO'
+      ? ['ledger:2026-10-28-rp004-payout-equals-billing'] : []),
   ];
   return { ...result, sourceRefs: [...new Set([...new Set(rows)].map(f04Ref).concat(notes))] };
 }
