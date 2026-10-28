@@ -252,6 +252,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: `npx tsc --noEmit -p .` PASS; `vitest` 관련 181 PASS; `check-data-access-boundary` PASS; `check-architecture` PASS; `git diff --check` PASS. 네트워크·Firestore 읽기/쓰기·커밋 없음.
 - 남음 / next_start_here: 운영 증거 파일 경로로 dry-run 계획을 만들 때 `docs/READ-RUNTIME.md#상품별·기간별-영업자-지급수수료-일-박제`를 따라 증거 적용 건수·UNKNOWN 사유·planDigest를 대조한다. 이 작업은 실제 운영 데이터와 apply를 수행하지 않았다.
 
+### 2026-10-27 PC3 — 원천 명시 인승을 기존 spec-refill로 전달
+
+- 원건 `Mmvq7z9p8-81b743`, 기준 main `e2b07c99d327ec860325b0c0d42dac5258da56e4`. RP004 장기 차명과 RP031 완전한 현재 ONE 상세의 독립된 단일 `N인승`을 `raw.spec.seats`로 전달한다. 모델 추정·범위/대안/부정/개조/미확정 표기는 제외한다. 이안카 구조화 원천의 기존 인승(해석 불가 값 포함)과 원문 spec은 보존한다.
+- 기존 spec-refill의 빈칸·계약 잠금·회차 상한·CAS/백업/되읽기 경로만 사용한다. 새 writer/DB 통로/수집기/예약은 없다. F01은 대표 결정으로 폐기 상태를 유지하며 이 변경은 내부 정제/ERP 소비용이다.
+- 검증: 관련 9파일 276 PASS / 1 기존 조건부 SKIP, build/architecture/data-access-boundary PASS. 기존 Claude PC3 독립 검토 `Mmvqj7yry-d63e0d` 수령. 현재 단계는 CODED/TESTED이며 운영 적용/실제 인승 반영 완료가 아니다. 첫 병합 시도는 자동 승인 검토가 검토 근거 없음을 이유로 차단했으며, 미적용 상태로 정확한 선행조건을 확인 중이다.
+- next_start_here: PR #797의 exact-head 검토/CI 및 정상 통합 절차 → dirty 13개를 보존한 기존 fd-cycle 런타임의 제한적 적용 및 실제 dist 검증 → 현재 원천의 새 계획/빈칸·잠금 검증/기존 writer 적용/ERP 되읽기. private 후보 4건은 자동 쓰기 허용 목록이 아니며, 원천의 현재성·충돌을 다시 확인한다. 사진 복사 진행 작업과 겹치지 않으며 공유 Drive 폴더 이름 변경은 별도 실제 사용자 응답 대기다.
+
 ### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
 
 - Representative authorization: PC3 remains the Data main owner; PC0 executes remotely on PC3 under the bounded child of C1026-827079b8. The currently held final supplier contract is the company standard, not an individually issued customer contract. Existing per-contract supplier preapproval remains in esign.
