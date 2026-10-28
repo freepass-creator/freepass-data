@@ -16,13 +16,19 @@ export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
   maxDetails: 600, minPassIntervalMinutes: 45,   // 정시 회차는 읽기 «시작»(회차 앞 단계·상류 갱신 대기 후) 시각이 기준이라 55 분이면 다음 정시에 번갈아 걸렸다(B3Q 10-16): 45 분 = 같은 정시 중복 읽기만 막고 15분 여유를 둔다
 });
-export const SONOGONG_API_TABS = ['rent', 'sub', 'pick'] as const;
-export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
+/** 명세의 전체 탭. 읽는 탭은 SONOGONG_API_TABS 뿐이다. */
+export const SONOGONG_API_ALL_TABS = ['rent', 'sub', 'pick'] as const;
+export type SonogongApiTab = typeof SONOGONG_API_ALL_TABS[number];
+/** 읽는 탭(우선순위 순): 중고렌트·오공구독만. 픽업구독(pick)은 읽지 않는다 — 대표 2026-10-28 «손오공은 중고렌트랑 중고구독만», «픽업구독 일단 다 내려».
+ * 이미 노출된 픽업구독 문서는 엔진 계획이 SONOGONG_WITHDRAWN_PRODUCT_TYPES 로 내린다(DECISION_WITHDRAWN). */
+export const SONOGONG_API_TABS: readonly SonogongApiTab[] = ['rent', 'sub'];
 /** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
 /** 탭 → 상품 구분(구독·픽업구독을 화면에서 구분). 소비처 어휘: 중고렌트·오공구독·픽업구독. */
 const PRODUCT_TYPE_BY_TAB: Record<SonogongApiTab, string> = { rent: '중고렌트', sub: '오공구독', pick: '픽업구독' };
+/** 대표 결정으로 노출하지 않는 손오공 상품 구분(읽지 않는 탭의 상품 구분). 저장 기록 raw.product_type 이 이 값인 노출 문서는 매 회차 DECISION_WITHDRAWN 으로 내린다. */
+export const SONOGONG_WITHDRAWN_PRODUCT_TYPES: readonly string[] = SONOGONG_API_ALL_TABS.filter(t => !SONOGONG_API_TABS.includes(t)).map(t => PRODUCT_TYPE_BY_TAB[t]);
 
 export class SonogongApiError extends Error {
   constructor(readonly code: string, readonly status?: number) { super(code); this.name = 'SonogongApiError'; }

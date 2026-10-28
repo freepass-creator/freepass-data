@@ -284,7 +284,8 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
 export async function runUnattendedSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleCommands, control: CycleControl,
   options: { onlyWhenSynced?: boolean; now?: () => number; sleepMs?: (ms: number) => Promise<void>; syncWatch?: { windowMs: number; pollMs?: number; readRetries?: number; backoffMs?: readonly number[]; stallMs?: number } } = {}) {
   const result = await runSourceCycle(plugin, commands, control, { ...options, autoApprove: true });
-  const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN';
+  // 결정 하향만 적용한 불완전 읽기 회차(DECISION_ONLY)는 쓰기가 있어도 상태가 HOLD 다 — 쓰기가 있었으면 적용 단계로 보고한다.
+  const reachedApply = result.status === 'APPLIED' || result.status === 'APPLY_UNCERTAIN' || (typeof result.writes === 'number' && result.writes > 0);
   const noChange = result.status === 'DRY_RUN' && 'plan' in result && result.plan && result.plan.entries.length === 0;
   return { ...result, stage: (reachedApply ? 'APPLY' : 'PLAN') as 'APPLY' | 'PLAN',
     ...(noChange ? { summary: `${result.summary} · 변경 0: 적용 생략` } : {}) };
