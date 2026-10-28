@@ -19,7 +19,8 @@ export function parseIdentitySnapshot(raw: unknown): { products: Array<IdentityP
     // 전체 차량번호가 들어오면 거부한다(보고서에 번호 전체를 남기지 않는다).
     if (/\d{2,3}[가-힣]\d{4}/.test(str(p.plate4)) || str(p.plate4).length > 4) throw new Error('IDENTITY_PRODUCT_PLATE_NOT_MASKED');
     return { id: str(p.id), plate4: str(p.plate4), maker: str(p.maker), model: str(p.model), sub_model: str(p.sub_model), trim_name: str(p.trim_name),
-      rawName: str(p.rawName), year: str(p.year), listable: p.listable === true, ...(str(p.supplier) ? { supplier: str(p.supplier) } : {}), ...(str(p.fuel) ? { fuel: str(p.fuel) } : {}), ...(p.engineTemp === true ? { engineTemp: true } : {}), ...(p.makerModelFromSource === true ? { makerModelFromSource: true } : {}) };
+      rawName: str(p.rawName), year: str(p.year), listable: p.listable === true, ...(str(p.supplier) ? { supplier: str(p.supplier) } : {}), ...(str(p.fuel) ? { fuel: str(p.fuel) } : {}), ...(p.engineTemp === true ? { engineTemp: true } : {}), ...(p.makerModelFromSource === true ? { makerModelFromSource: true } : {}),
+      ...(str(p.firstRegistration) ? { firstRegistration: str(p.firstRegistration) } : {}) };
   });
   const masters = raw.masters.map((m: unknown): IdentityMaster => {
     if (!object(m) || !str(m.id).trim() || !str(m.sub_model).trim()) throw new Error('IDENTITY_MASTER_INVALID');
@@ -30,7 +31,10 @@ export function parseIdentitySnapshot(raw: unknown): { products: Array<IdentityP
     const year = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) ? v : null);
     return { id: str(m.id), maker: str(m.maker), model: str(m.model), sub_model: str(m.sub_model),
       model_aliases: isStringArray(m.model_aliases) ? m.model_aliases : [], sub_model_aliases: isStringArray(m.sub_model_aliases) ? m.sub_model_aliases : [],
-      yearFrom: year(m.yearFrom), yearTo: year(m.yearTo), trims };
+      yearFrom: year(m.yearFrom), yearTo: year(m.yearTo),
+      // 출시월·단종월은 둘 다 있을 때만(«YYYY-MM», 단종 null = «현재»).
+      ...(/^\d{4}-\d{2}$/.test(str(m.monthFrom)) && (m.monthTo === null || /^\d{4}-\d{2}$/.test(str(m.monthTo))) ? { monthFrom: str(m.monthFrom), monthTo: m.monthTo === null ? null : str(m.monthTo) } : {}),
+      trims };
   });
   return { products, masters, label: str(raw.label) || 'identity-promotion' };
 }

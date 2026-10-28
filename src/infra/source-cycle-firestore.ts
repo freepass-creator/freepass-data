@@ -407,6 +407,12 @@ const specOf = (r: SourceProductRecord | undefined): Fields => {
 /** 대조에 쓰는 연식: 문서 연식 → 원천 연식 → 문서 최초등록 연도 → 원천 최초등록 연도(계획서 생성기 입력과 같은 뜻: 연식 또는 최초등록 연도). */
 export const identityYear = (f: Fields, r?: SourceProductRecord): string =>
   yearOf(f.year) || yearOf(specOf(r).year) || yearOf(f.first_registration_date) || yearOf(specOf(r).first_registration_date);
+/** 대조에 쓰는 최초등록일(세대가 겹치는 해를 등록월로 가른다): 문서 최초등록일 → 원천 최초등록일. «YYYY-MM» 이상일 때만, 아니면 ''. */
+export const identityFirstRegistration = (f: Fields, r?: SourceProductRecord): string => {
+  for (const v of [f.first_registration_date, specOf(r).first_registration_date]) if (typeof v === 'string' && /^\d{4}-\d{2}(?![0-9])/.test(v.trim())) return v.trim();
+  return '';
+};
+const withRegistration = (f: Fields, r?: SourceProductRecord) => { const v = identityFirstRegistration(f, r); return v ? { firstRegistration: v } : {}; };
 /** 대조에 쓰는 원천 차명: 이번에 쓸 차명(car_name) → 없으면 편입 때 남긴 원문 차명. 목록(envelope)과 쓰기(nativeCycleFields)가 같은 값을 보게 한다. */
 const identityRawName = (carName: unknown, f: Fields): string => textOf(carName) || textOf((f.원문 as Fields | undefined)?.차명);
 /** 마스터로 하나로 특정된 정체성 칸. 원문(원문.차명)은 건드리지 않는다. 세부트림은 하나로 특정됐고 문서 세부트림이 비어 있을 때만,
@@ -503,7 +509,7 @@ function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?
   // 정체성 보류 문서(엔진 편입, 제조사·모델 빈칸, 검토 필요)가 이번 회차 차종 마스터로 «하나로» 특정되면 한 번 다시 써서 이름을 채운다.
   // 쓰면 제조사·모델이 채워지고 검토 필요가 풀려 조건이 거짓이 된다(되풀이되지 않음). 특정되지 않으면 사유가 없어 일괄 UPDATE 도 없다.
   if (engineOwned && identity && engineIdentityHold(f) &&
-    identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
+    identity.match({ rawName: identityRawName(f.car_name, f), year: identityYear(f, record), ...withRegistration(f, record) })) rewriteReasons.push('VEHICLE_IDENTITY');
   // 정체성 보류 노출 문서 표시(계획이 시트 차종 후보 정제 대상을 고를 때 쓴다).
   const identityHold = engineOwned && !f.publication_withdrawal && engineIdentityHold(f) ? { year: identityYear(f, record) } : null;
   return { record, ...(reviewedSpec ? { reviewedSpec } : {}), ...(rewriteReasons.length ? { rewriteReasons } : {}), ...(specRefillKeys.length ? { specRefillKeys } : {}), ...(specMasterFuel ? { specMasterFuel } : {}), ...(specMasterSpecs ? { specMasterSpecs } : {}), ...(policyLinkCode ? { policyLinkCode } : {}),
@@ -573,7 +579,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const r = p.record;
   if (p.identityOnly === true) {
     const match = opts.identity && p.refineIdentity === true && engineIdentityHold(original)
-      ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...(p.sheetIdentity ? { sheet: p.sheetIdentity } : sheetOf(r)) }) : null;
+      ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...withRegistration(original, r), ...(p.sheetIdentity ? { sheet: p.sheetIdentity } : sheetOf(r)) }) : null;
     if (!match) return {};
     const all = identityFields(match, original, r, false);
     return Object.fromEntries(IDENTITY_ONLY_FIELDS.filter(k => k in all).map(k => [k, all[k]]));
@@ -590,7 +596,7 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}, opts: 
   const withdrawing = !isNew && (!p.listable || (p.publication_withdrawal !== null && p.publication_withdrawal !== undefined));
   // 기존 문서는 계획이 양성 표식(refineIdentity)을 준 항목만 정제한다 — 이미 쓰는 문서(가격 변경·재노출)가 회차 상한을 우회하지 못한다(Codex #704 잔여). 신규 편입은 편입 상한이 건다.
   const identity = opts.identity && !withdrawing && (isNew || (p.refineIdentity === true && engineIdentityHold(original)))
-    ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...sheetOf(r) }) : null;
+    ? opts.identity.match({ rawName: identityRawName(r.vehicleText, original), year: identityYear(original, r), ...withRegistration(original, r), ...sheetOf(r) }) : null;
   const rawDisplay = String(r.raw.sourceCycleDisplayStatus ?? ({ AVAILABLE: '출고가능', PREPARING: '출고가능', 게시: '출고가능' } as Record<string, string>)[r.status.raw] ?? r.status.raw);
   const display = ({ 배차문의: '출고협의', 수리중: '상품화중' } as Record<string, string>)[rawDisplay] ?? rawDisplay;
   // fail-closed(독립 검토 BLOCK): 검토된 어휘에 없는 상태는 «가용» 으로 추정해 노출하지 않는다. 플러그인이 먼저 보류하므로 여기 오는 일은 드물다.

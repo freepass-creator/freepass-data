@@ -25,7 +25,9 @@ export function verifiedMasterRecords(master: VehicleMasterSnapshot, now = Date.
     return { ...record, specs: { fuel: typeof trim.fuel === 'string' ? trim.fuel : null,
       displacementCc: numeric(trim.engine_cc), drive: drive(trim.drivetrain), seats: numeric(trim.seats) },
       modelYearStart: numeric(trim.model_year_start),
-      modelYearEnd: trim.model_year_end === '현재' ? 2100 : numeric(trim.model_year_end) };
+      modelYearEnd: trim.model_year_end === '현재' ? 2100 : numeric(trim.model_year_end),
+      productionStart: typeof trim.production_start === 'string' ? trim.production_start : null,
+      productionEnd: typeof trim.production_end === 'string' ? trim.production_end : null };
   });
 }
 /** Check the immutable pair itself; matching display names or a reference_vm_ hash is not proof. */

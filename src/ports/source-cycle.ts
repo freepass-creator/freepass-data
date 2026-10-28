@@ -82,7 +82,7 @@ export type CycleSnapshot = { products: CycleProduct[]; complete: boolean;
 /** 엔진 회차 정체성 정제 결과: 차종 마스터 하나로 특정된 이름(세부트림은 하나로 특정될 때만, 아니면 null). */
 export type VehicleIdentityRefinement = { maker: string; model: string; sub_model: string; trim_name: string | null; master_id: string };
 /** 회차마다 한 번 읽은 활성 차종 마스터로 만든 대조기(순수 함수). 같은 입력이면 같은 결과다. */
-export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string; sheet?: import('../domain/sheet-identity.js').SheetIdentity }): VehicleIdentityRefinement | null;
+export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: string; year: string; sheet?: import('../domain/sheet-identity.js').SheetIdentity; firstRegistration?: string }): VehicleIdentityRefinement | null;
   /** Verified same-snapshot records for the existing structured shared-sheet normalizer; never a second name authority. */
   sourceYearEvidence?: { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
   /** Reviewed exact UID scope for F05 year carry-through. Runtime always supplies it; empty means no year writes. */
