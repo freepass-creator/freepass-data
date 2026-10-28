@@ -375,7 +375,10 @@ export function dropVariantAliasCollisions(masters: IdentityMaster[]): IdentityM
     if (!VARIANT_NAME.test(m.sub_model)) return m;
     const siblings = byModel.get(`${norm(m.maker)}|${norm(m.model)}`)!.filter(o => o.id !== m.id && !VARIANT_NAME.test(o.sub_model));
     // 연식 범위가 겹치는 일반 행과만 충돌이다(범위가 갈리면 그 별칭은 연식으로 두 행을 가르는 근거라 남긴다).
-    const kept = m.sub_model_aliases.filter(a => !siblings.some(o => norm(o.sub_model) === norm(a) && rangesOverlap(m, o)));
+    // 일반 행의 «이름»뿐 아니라 «별칭»과 같아도 충돌이다(2026-10-28: 하이브리드 LJL 트림 기록의 별칭 «아르카나»가 일반 아르카나 LJL 의 별칭과 같아
+    // 원문 «아르카나»가 매번 AMBIGUOUS_MASTER). 변형 낱말이 든 별칭은 변형 행만 가리키므로 남긴다.
+    const kept = m.sub_model_aliases.filter(a => VARIANT_NAME.test(a)
+      || !siblings.some(o => rangesOverlap(m, o) && [o.sub_model, ...o.sub_model_aliases].some(n => norm(n) === norm(a))));
     return kept.length === m.sub_model_aliases.length ? m : { ...m, sub_model_aliases: kept };
   });
 }

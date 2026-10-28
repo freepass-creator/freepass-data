@@ -48,6 +48,16 @@ function containsToken(rawName: string, token: string): boolean {
   return false;
 }
 
+/** 정규화 원문의 at 자리 출현이 «앞 수식어 없이» 걸렸는가. 앞에 수식어가 붙어 있어도, 같은 마스터의 등록 이름(registered) 중 하나가 그 수식어 자리에서
+ * 시작해 이 출현까지 이어지면(수식어가 등록 이름의 일부) 깨끗한 출현이다. 등록 이름 자신의 앞은 수식어 꼬리가 아니다(QUALIFIER_TAIL 은 꼬리 전체를 잡는다). */
+function cleanAt(raw: string, at: number, registered: readonly string[]): boolean {
+  const before = raw.slice(0, at);
+  const tail = QUALIFIER_TAIL.exec(before)?.[0];
+  if (!tail) return true;
+  const start = at - tail.length;
+  return registered.some(n => n.length > tail.length && raw.startsWith(n, start) && start + n.length > at);
+}
+
 export type GenerationGuardReason = 'GENERATION_QUALIFIER_MISMATCH' | 'GENERATION_EVIDENCE_MISSING' | 'GENERATION_CODE_CONFLICT';
 const inRange = (m: GuardMaster, year: number) => (m.yearFrom === null || year >= m.yearFrom) && (m.yearTo === null || year <= m.yearTo);
 
@@ -56,13 +66,14 @@ export function generationGuard(input: { rawName: string; year: string; master: 
   const raw = norm(input.rawName);
   const { master } = input;
   // R1: 원문에서 가장 긴 매칭 이름의 모든 출현이 앞 수식어를 더 달고 있으면 부분 일치.
+  // 단, 그 앞 수식어가 «이 마스터의 등록 이름(별칭)»에 들어 있어 같은 자리에서 수식어째로 걸리면 수식어 불일치가 아니다
+  // (2026-10-28: 원문 «신형 K5(DL3)» — «신형 K5» 는 K5 DL3 의 등록 별칭인데 «K5DL3» 앞 «신형»을 다른 세대 수식어로 보고 보류했다).
   const names = nameList(master).filter(n => raw.includes(n)).sort((a, b) => b.length - a.length);
   if (names.length) {
     const name = names[0]!;
     let cleanOccurrence = false;
     for (let at = raw.indexOf(name); at >= 0; at = raw.indexOf(name, at + 1)) {
-      const before = raw.slice(0, at);
-      if (!QUALIFIER_TAIL.test(before)) { cleanOccurrence = true; break; }
+      if (cleanAt(raw, at, names)) { cleanOccurrence = true; break; }
     }
     if (!cleanOccurrence) return 'GENERATION_QUALIFIER_MISMATCH';
   }
