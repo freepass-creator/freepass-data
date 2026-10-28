@@ -3452,3 +3452,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: 기존 `leaseConfigFromEnv`·`writerLeaseStore`를 조합한 기본 꺼짐 공용 관문을 추가하고, 사진 일일·사진 캐시·승인 사진 등록·AICA/Iron/손오공/이안카 RAW 적용·이안카 사진 적용/복원과 5분 source request 처리의 쓰기 전에 연결했다. 레인과 비쓰기 대상은 `WRITER-LEASE.md` 표에 고정했다.
 - 검증: `npx.cmd tsc --noEmit -p .` PASS; `npx.cmd vitest run tests/writer-lease.test.ts tests/writer-lease-ensure.test.ts tests/iancar-photo-daily.test.ts tests/supplier-iron-capture.test.ts tests/sonogong-api-runtime.test.ts` 39 PASS; `node scripts/check-data-access-boundary.mjs` PASS.
 - 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 운영 env에서 각 레인을 claim하고 `WRITER_LEASE_ENFORCE=1`, `WRITER_LEASE_PC`를 켜는 일은 별도 운영 전환이다. 기존 dirty 문서 한 줄과 `_ipt.mjs`, `_ms.mjs`, `_why2.mjs`는 보존했다.
+
+## 2026-10-28 RP004 지급=청구·역마진 차단·RP006 비정형 청구
+
+- 목적 / 대상 revision: `work/freepass-data/payout-margin-guard-20261028`, 기준 `0d54833648eb6ca7f100c8a0a1c0dbc49ba2ae3c`; 커밋·네트워크·Firestore 읽기/쓰기 없음.
+- 변경: RP004 지급을 같은 조건 청구 전액으로 바꾸고 무보증 500,000원 및 `ledger:2026-10-28-rp004-payout-equals-billing`을 연결했다. `precomputeOfferEconomics` 한 곳에서 지급>청구를 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 차단한다. RP006 재렌트 청구에도 12개월 이상 가장 가까운 짧은 표준 기간을 적용하고, 지급 박제 계획에 공급사별 `payoutExceedsBillingCounts`를 추가했다.
+- 검증: 관련 10파일 370 PASS; 전체 Vitest 4,461 PASS/24 FAIL/19 SKIP이며 24건은 샌드박스 자원·권한(`uv_os_get_passwd ENOMEM`, 사용자 홈/jq 권한, bash timeout/로컬 서버 기동) 실패다. `npx tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
+- 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 전체 시험의 환경성 24 FAIL은 권한·자원이 허용된 동일 revision 환경에서 재확인한다. 제품 규칙 관련 알려진 실패는 0건이다.

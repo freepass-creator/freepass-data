@@ -85,6 +85,7 @@ export async function runPayoutFeeSnapshotJob(input: {
   const plan = planPayoutFeeSnapshots({ snapshotDate: date, ...source, evidence, mewcarPrepaidDefault: args.mewcarPrepaidDefault });
   if (!args.apply) return { status: 'PLANNED', writes: 0, supplierCounts: plan.supplierCounts,
     evidenceAppliedCounts: plan.evidenceAppliedCounts, nonstandardTermRuleCounts: plan.nonstandardTermRuleCounts,
+    payoutExceedsBillingCounts: plan.payoutExceedsBillingCounts,
     planDigest: plan.planDigest };
   if (!args.expectedDigest || !digestPattern.test(args.expectedDigest) || args.expectedDigest !== plan.planDigest) throw new Error('PAYOUT_SNAPSHOT_EXPECTED_DIGEST_MISMATCH');
   if (env.PAYOUT_FEE_SNAPSHOT_APPROVED !== 'true') throw new Error('PAYOUT_SNAPSHOT_APPROVAL_REQUIRED');

@@ -29,6 +29,7 @@ export type PayoutFeeSnapshotPlan = {
   supplierCounts: Record<string, StateCounts>;
   evidenceAppliedCounts: { vehicleValue: number; subtype: number; mewcar: number };
   nonstandardTermRuleCounts: Record<string, number>;
+  payoutExceedsBillingCounts: Record<string, number>;
   planDigest: string;
 };
 
@@ -73,6 +74,7 @@ export function planPayoutFeeSnapshots(input: {
   const evidence = input.evidence ?? [];
   const evidenceAppliedCounts = { vehicleValue: 0, subtype: 0, mewcar: 0 };
   const nonstandardTermRuleCounts: Record<string, number> = {};
+  const payoutExceedsBillingCounts: Record<string, number> = {};
   const drafts: Omit<PayoutFeeSnapshotDocument, 'planDigest'>[] = [];
   for (const [productId, product] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b, 'en-US'))) {
     const supplierId = text(product.provider_company_code) ?? text(product.supplierId) ?? 'UNKNOWN';
@@ -107,6 +109,9 @@ export function planPayoutFeeSnapshots(input: {
       if (evidenceRefs.some(ref => ref.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD('))) {
         nonstandardTermRuleCounts[supplierId] = (nonstandardTermRuleCounts[supplierId] ?? 0) + 1;
       }
+      if (fee.reasonCode === 'PAYOUT_EXCEEDS_BILLING') {
+        payoutExceedsBillingCounts[supplierId] = (payoutExceedsBillingCounts[supplierId] ?? 0) + 1;
+      }
       return {
         productId, supplierId, termKey: term.termKey, termMonths: term.termMonths,
         state: fee.state, amount: Number.isSafeInteger(fee.amount?.amount) ? fee.amount!.amount : null,
@@ -137,5 +142,6 @@ export function planPayoutFeeSnapshots(input: {
     supplierCounts: Object.fromEntries(Object.entries(supplierCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     evidenceAppliedCounts,
     nonstandardTermRuleCounts: Object.fromEntries(Object.entries(nonstandardTermRuleCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
+    payoutExceedsBillingCounts: Object.fromEntries(Object.entries(payoutExceedsBillingCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     planDigest };
 }

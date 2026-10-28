@@ -309,6 +309,7 @@ export function precomputeOfferEconomics(
       ...(resolvedTargetSettlement.conflict ? { subscriptionFormConflict: true as const } : {}),
       supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
+      depositState: term.depositState,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
       ...automaticSonokongEvidence,
       ...(explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
@@ -402,14 +403,23 @@ export function precomputeOfferEconomics(
         ...(result.state === 'CALCULATED_APPROX' ? { approximate: true, note: result.note ?? null } : {}) };
     };
     const deposit = structuredClone(term.deposit ?? null);
+    const supplierBillingFee = convert(resolveSupplierBillingFee(args), 'BILLING');
+    let channelPayoutFee = convert(resolveSalesCommission(args), 'PAYOUT');
+    const billingAmount = supplierBillingFee.state === 'KNOWN' || supplierBillingFee.state === 'ZERO' ? supplierBillingFee.amount?.amount : null;
+    const payoutAmount = channelPayoutFee.state === 'KNOWN' || channelPayoutFee.state === 'ZERO' ? channelPayoutFee.amount?.amount : null;
+    if (billingAmount !== null && billingAmount !== undefined && payoutAmount !== null && payoutAmount !== undefined && payoutAmount > billingAmount) {
+      const { referenceRentBasis: _guardedReference, ...guardedPayout } = channelPayoutFee;
+      channelPayoutFee = { ...guardedPayout, state: 'UNKNOWN', amount: null, calculation: null,
+        sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'PAYOUT_EXCEEDS_BILLING' };
+    }
     return {
       termKey: term.termKey, termMonths: term.termMonths, monthlyRent: structuredClone(term.monthlyRent),
       depositCalculation: { state: term.depositState, amount: deposit,
         calculation: deposit ? { kind: 'FIXED', amount: structuredClone(deposit) } : null,
         sourceRefs: deposit && (term.depositState === 'KNOWN' || term.depositState === 'ZERO') ? [priceRef] : [],
         priceSourceRefs: [priceRef] },
-      supplierBillingFee: convert(resolveSupplierBillingFee(args), 'BILLING'),
-      channelPayoutFee: convert(resolveSalesCommission(args), 'PAYOUT'),
+      supplierBillingFee,
+      channelPayoutFee,
     };
   });
 }

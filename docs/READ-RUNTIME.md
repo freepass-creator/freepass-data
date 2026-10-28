@@ -80,6 +80,8 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 `sourceRefs`는 KNOWN·ZERO 금액의 규칙·실사용 계산 근거만 담고 UNKNOWN·NOT_APPLICABLE이면 비운다. 가격 출처는 수수료·보증금 모두 별도 `priceSourceRefs`에 둔다.
 
+2026-10-28 수수료 결정: 아이카(RP004) 지급은 같은 기간·조건의 청구 공급가액 전액이며 무보증 청구·지급은 500,000원이다(`ledger:2026-10-28-rp004-payout-equals-billing`). 모든 공급사는 한 기간의 계산된 지급이 계산된 청구보다 크면 지급만 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 막고, 어느 한쪽이 UNKNOWN이면 개입하지 않는다. 아이언(RP006) 재렌트 청구와 지급은 12개월 이상 비정형 기간에 가장 가까운 짧은 표준 기간(12/24/36/48/60) 규칙을 함께 적용하며, 다른 공급사 청구에는 확장하지 않는다.
+
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
 
 ### 상품별·기간별 영업자 지급수수료 일 박제
