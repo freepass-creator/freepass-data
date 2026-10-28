@@ -18,6 +18,90 @@ const plan = (items: PolicyCorrectionPlan['items'] = [item()]): PolicyCorrection
 });
 const docs = (data: Record<string, unknown>) => ({ 'POL-0023': { data: { provider_company_code: 'RP000', updated_at: '2026-10-04T00:00:00.000Z', ...data } } });
 
+const sourceEvidence = {
+  source: '대표결정' as const, location: '계약 원본 AB91/Q95/AB96/U110',
+  effectiveDate: '2026-10-05', answerSha256: 'a'.repeat(64),
+  applicability: '일반 자차와 중과실 사고는 각 원본 조항의 적용 대상에 따름',
+};
+const clearRatio = (): PolicyCorrectionPlan['items'][number] => {
+  const next = item({ field: 'own_damage_repair_ratio', from: '20%', operation: 'clear', evidence: sourceEvidence });
+  delete next.to;
+  return next;
+};
+
+describe('source contract policy corrections', () => {
+  it('retires legacy scalar shortcuts only when exact-source replacements remain available', () => {
+    const replacements = {
+      policy_extra_terms: '송달 전 연 5%, 송달 다음 날부터 연 12%\n국산 200원, 수입 400원',
+      over_mileage_rate_domestic: '200원', over_mileage_rate_imported: '400원',
+    };
+    const field_evidence = Object.fromEntries(Object.entries(replacements).map(([key, value]) => [key, { ...sourceEvidence, value }]));
+    for (const [field, from] of [['late_fee_rate', 0.12], ['over_mileage_rate_per_km', 10]] as const) {
+      const entry = { ...clearRatio(), field, from };
+      const data = { ...replacements, field_evidence, [field]: from };
+      expect(validatePolicyCorrectionPlan(plan([entry]), { documents: docs(data) }).itemCount).toBe(1);
+      for (const corrupt of [
+        { ...data, policy_extra_terms: '' },
+        { ...data, field_evidence: { ...field_evidence, policy_extra_terms: { ...sourceEvidence, value: replacements.policy_extra_terms, answerSha256: 'b'.repeat(64) } } },
+        { ...data, policy_extra_terms: 'modified without matching evidence' },
+      ]) expect(() => validatePolicyCorrectionPlan(plan([entry]), { documents: docs(corrupt) })).toThrow(/SOURCE_REPLACEMENT_REQUIRED/);
+    }
+  });
+  it('keeps legacy numeric types and requires source evidence for their corrections', () => {
+    for (const [field, to] of [['late_fee_rate', 0.05], ['over_mileage_rate_per_km', 200], ['deposit_overdue_rounds', 1]] as const) {
+      expect(validatePolicyCorrectionPlan(plan([item({ field, from: null, to, evidence: sourceEvidence })])).itemCount).toBe(1);
+      expect(() => validatePolicyCorrectionPlan(plan([item({ field, from: null, to })]))).toThrow(/SOURCE_EVIDENCE_REQUIRED/);
+      expect(() => validatePolicyCorrectionPlan(plan([item({ field, from: null, to: String(to), evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+    }
+    for (const to of [0, -1, 1.5]) expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'deposit_overdue_rounds', to, evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+  });
+  it('protects retired legacy values from older default writers', () => {
+    const data = { late_fee_rate: null, over_mileage_rate_per_km: null, policy_field_owner: 'policy-corrector',
+      field_evidence: { late_fee_rate: { writer: 'policy-corrector' }, over_mileage_rate_per_km: { writer: 'policy-corrector' } } };
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: 0.12 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { over_mileage_rate_per_km: 10 })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { late_fee_rate: null, over_mileage_rate_per_km: null })).not.toThrow();
+  });
+  it('accepts an explicit clear with source evidence and an exact current ratio', () => {
+    expect(validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '20%' }) })).toMatchObject({ itemCount: 1 });
+    expect(() => validatePolicyCorrectionPlan(plan([clearRatio()]), { documents: docs({ own_damage_repair_ratio: '50%' }) })).toThrow(/CONFLICT/);
+  });
+  it('keeps ordinary null forbidden and limits clear to the supplier ordinary ratio', () => {
+    for (const bad of [
+      { ...clearRatio(), field: 'self_body_accident' },
+      { ...clearRatio(), layer: 'salesPolicy' as const },
+      { ...clearRatio(), to: undefined as never },
+      { ...clearRatio(), to: 0 },
+      { ...clearRatio(), from: null },
+    ]) expect(() => validatePolicyCorrectionPlan(plan([bad]))).toThrow(/CLEAR_/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ to: null as never })]))).toThrow(/EMPTY_TO/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ operation: 'unknown' as never })]))).toThrow(/INVALID_OPERATION/);
+  });
+  it('requires source hash and applicability for clear, original clauses and non-enum compensation', () => {
+    const variants = [
+      clearRatio(),
+      item({ field: 'policy_extra_terms', from: null, to: '중과실 사고 수리비용의 20% 우선 적용', evidence: sourceEvidence }),
+      item({ field: 'own_damage_compensation', to: '렌터카 공제조합 또는 손해보험사 시세 (한도 초과시 폐차)', evidence: sourceEvidence }),
+    ];
+    for (const entry of variants) {
+      expect(() => validatePolicyCorrectionPlan(plan([{ ...entry, evidence: { ...sourceEvidence, answerSha256: undefined as never } }]))).toThrow(/SOURCE_EVIDENCE_REQUIRED/);
+      expect(() => validatePolicyCorrectionPlan(plan([{ ...entry, evidence: { ...sourceEvidence, applicability: '' } }]))).toThrow(/SOURCE_EVIDENCE_REQUIRED/);
+    }
+  });
+  it('preserves multiline original wording and continues to accept legacy compensation enums', () => {
+    const original = '\n중과실 자차사고 (수리금액의 20% 추가납부)\n수리비용의 20% 우선 적용\n동급 차량으로 계약은 유지하며,\n';
+    expect(validatePolicyCorrectionPlan(plan([item({ field: 'policy_extra_terms', from: null, to: original, evidence: sourceEvidence })]))).toMatchObject({ itemCount: 1 });
+    expect(validatePolicyCorrectionPlan(plan([item({ field: 'own_damage_compensation', to: '차량가액' })]))).toMatchObject({ itemCount: 1 });
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'policy_extra_terms', to: 'x'.repeat(10001), evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'policy_extra_terms', to: 'a\u0000b', evidence: sourceEvidence })]))).toThrow(/INVALID_VALUE/);
+  });
+  it('protects a deliberately blank ratio from older writers', () => {
+    const data = { own_damage_repair_ratio: null, policy_field_owner: 'policy-corrector', field_evidence: { own_damage_repair_ratio: { writer: 'policy-corrector', operation: 'clear', value: null } } };
+    expect(correctorOwnedFields(data)).toEqual(['own_damage_repair_ratio']);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { own_damage_repair_ratio: '20%' })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+  });
+});
+
 describe('policy correction domain validation', () => {
   it('accepts a valid correction and returns counts plus digest', () => {
     expect(validatePolicyCorrectionPlan(plan(), { documents: docs({ driver_age_lowering: '협의' }) })).toMatchObject({ itemCount: 1, policyCount: 1 });

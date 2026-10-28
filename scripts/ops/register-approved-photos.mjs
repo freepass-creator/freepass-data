@@ -17,6 +17,10 @@ import { folderMatchesPlate, plateFoldersFromChildren } from '../../dist/src/dom
 const rootAt = process.argv.indexOf('--root'); const ROOT = rootAt > 0 ? process.argv[rootAt + 1] : null;
 const csvPath = ROOT ? null : process.argv[2];
 const apply = process.argv.includes('--apply');
+if (apply) {
+  const { ensureWriterLease } = await import('../../dist/src/runtime/ensure-writer-lease.js');
+  await ensureWriterLease(process.env, 'photo');
+}
 const maxAt = process.argv.indexOf('--max'); const MAX = Math.max(1, Math.min(50, maxAt > 0 ? Number(process.argv[maxAt + 1]) : 10));
 const byAt = process.argv.indexOf('--by'); const BY = (byAt > 0 ? process.argv[byAt + 1] : 'b3q-auto-register').slice(0, 60);
 const methodAt = process.argv.indexOf('--method'); const METHOD = methodAt > 0 ? process.argv[methodAt + 1] : 'AUTO_KAKAO_COLLECT';

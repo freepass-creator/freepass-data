@@ -7,6 +7,7 @@ import {
   type SourceIntakeBatch,
   type SupplierSourceAdapter,
 } from '../domain/source-intake.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 type IronCaptureReport = {
   counts: { records: number };
@@ -68,6 +69,7 @@ export async function captureIron(input: {
   const { batch, evidence } = await (ports.collect ?? collectSupplierSource)(adapter);
   if (input.applyRaw) {
     if (evidence.status !== 'RAW_READY') throw new Error('IRON_RAW_SOURCE_HOLD');
+    await ensureWriterLease(input.env ?? process.env, 'iron-raw');
     const ingest = ports.ingestRawBatch ?? (async (value: SourceIntakeBatch) => {
       const { createSourceIngestDataAccessRuntime } = await import('./data-access-runtime.js');
       return (await createSourceIngestDataAccessRuntime()).ingestRawBatch(value);

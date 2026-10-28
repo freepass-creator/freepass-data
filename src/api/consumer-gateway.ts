@@ -1,6 +1,8 @@
+import type { ContractStandardEdition } from '../application/contract-standard-catalog.js';
+import { isSupplierContractStandard } from '../domain/supplier-contract-standard.js';
 import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
 import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
-import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT } from '../domain/consumer-output-contract.js';
+import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, PUBLIC_VEHICLE_PHOTO_LIMIT } from '../domain/consumer-output-contract.js';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
 import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
@@ -85,6 +87,8 @@ import {
 } from './public-product-feed.js';
 import { logRouteError } from '../shared/route-error-log.js';
 import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
+import { buildChannelPayoutResponse } from '../application/channel-payout.js';
+import type { ChannelPayoutReader } from '../ports/payout-fee-snapshot-store.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -96,7 +100,8 @@ export type ConsumerCapability =
   | 'estimate-artifacts'
   | 'settlement-ledger-read'
   | 'admin-workflow'
-  | 'contract-fee-link-read';
+  | 'contract-fee-link-read'
+  | 'channel-payout-read';
 export type ConsumerBinding = {
   id: string;
   projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
@@ -127,12 +132,12 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|gna-channel-payout|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
       ? ESTIMATE_NEWCAR_MASTER_PROJECTION_ID
-      : item.id === 'freepass-admin-catalog'
+      : item.id === 'freepass-admin-catalog' || item.id === 'gna-channel-payout'
         ? 'admin-catalog'
         : 'erp-public';
     if (item.projectionId !== expectedProjection) throw new Error('Unsupported consumer projection');
@@ -149,7 +154,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read']);
+          const allowed = new Set<ConsumerCapability>(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read', 'channel-payout-read']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -181,6 +186,10 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (capabilities.includes('contract-fee-link-read') && item.id !== 'freepass-admin-catalog') {
       throw new Error('Contract fee link capability requires freepass-admin-catalog registration');
+    }
+    if ((item.id === 'gna-channel-payout' && (capabilities.length !== 1 || capabilities[0] !== 'channel-payout-read'))
+      || (item.id !== 'gna-channel-payout' && capabilities.includes('channel-payout-read'))) {
+      throw new Error('GNA channel payout registration requires its exclusive channel-payout-read capability');
     }
     if (capabilities.includes('catalog-reference') && item.id !== 'kakao-ops') {
       throw new Error('Catalog reference capability requires kakao-ops registration');
@@ -388,6 +397,7 @@ export function createConsumerGateway(
   compatReader?: {
     sourceStore?: Parameters<typeof readCurrentReferenceObservations>[0];
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
+    readContractStandards?(): Promise<ContractStandardEdition[]>;
     readProductCompat?(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot>;
     readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
@@ -396,6 +406,7 @@ export function createConsumerGateway(
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
   contractFeeLedgerRowsPort?: ContractFeeLinkLedgerRowsPort,
+  channelPayoutReader?: ChannelPayoutReader,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   assertPublicAllowlistsConfigured();
@@ -551,7 +562,7 @@ export function createConsumerGateway(
         || (size !== undefined && size !== 'list' && size !== 'detail')) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
-      if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= 200)
+      if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= PUBLIC_VEHICLE_PHOTO_LIMIT)
         || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
@@ -590,7 +601,7 @@ export function createConsumerGateway(
         reply.header('X-Photo-Cache', 'HIT');
         return reply.type(result.contentType).send(result.bytes);
       }
-      if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
+      if (!Number.isSafeInteger(result.count) || result.count < 0)
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
       if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
@@ -620,7 +631,7 @@ export function createConsumerGateway(
         catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
         return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
       }
-      if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
+      if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, result.count) });
       if (size !== undefined && result.cacheTag && Buffer.isBuffer(outputBytes)) renditionCache.set(request.params.productId, index, size, result.cacheTag, { bytes: outputBytes, contentType: outputType, sourceCheckedAt: result.sourceCheckedAt ?? Date.now(), ...(result.albumFingerprint !== undefined ? { albumFingerprint: result.albumFingerprint } : {}), ...(result.sourceSha256 !== undefined ? { sourceSha256: result.sourceSha256 } : {}) });
       return reply.type(outputType).send(outputBytes);
     } catch (error) {
@@ -901,6 +912,59 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
     }
   });
+  app.get<{Params:{consumerId:string}}>('/v1/consumers/:consumerId/contract-standards',async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');
+    const binding=registered.get(request.params.consumerId);
+    const matches=timingSafeEqual(hash(request.headers.authorization??''),hash(binding?`Bearer ${binding.token}`:'unregistered-consumer'));
+    const spec={context:consumerContext(binding?.id??'unregistered-consumer','read registered supplier standard contract facts',request.id),
+      operation:'READ_SUPPLIER_CONTRACT_STANDARDS',resource:{kind:'CATALOG' as const,name:'supplier-contract-standards'}};
+    try{
+      if(!binding||!matches){await access.deny('READ',spec,'UNAUTHORIZED');return reply.code(401).send({code:'UNAUTHORIZED'});}
+      if(!binding.capabilities.includes('catalog')){await access.deny('READ',spec,'FORBIDDEN');return reply.code(403).send({code:'FORBIDDEN'});}
+      if(Object.keys(request.query as object).length)return reply.code(400).send({code:'INVALID_STANDARD_SELECTION'});
+      if(!compatReader?.readContractStandards)return reply.code(503).send({code:'STANDARD_READER_UNAVAILABLE'});
+      const standards=await access.read({...spec,summarize:(v:ContractStandardEdition[])=>({count:v.length,digest:stableDigest(v)})},()=>compatReader.readContractStandards!());
+      if(!Array.isArray(standards)||standards.length>2000||standards.some(s=>!s||Object.keys(s).sort().join(',')!=='effectiveFrom,policyId,standard,supplierBindingState,version'
+        ||!isSupplierContractStandard(s.standard)||s.version!==s.standard.version||!/^std_[0-9a-f]{40}$/.test(s.policyId)
+        ||!Number.isFinite(Date.parse(s.effectiveFrom))||s.supplierBindingState!==(s.standard.supplierCodes.length?'BOUND':'UNLINKED_SUPPLIER')))
+        throw new Error('STANDARD_RESPONSE_INVALID');
+      return {schema:'freepass-data.contract-standards/v1',consumerId:binding.id,observedAt:new Date().toISOString(),standards};
+    }catch(error){logRouteError('/v1/consumers/:consumerId/contract-standards','contract_standards',error);return reply.code(503).send({code:'STANDARD_READ_FAILED'});}
+  });
+  app.get<{ Params: { consumerId: string }; Querystring: { vehicleId?: string } }>(
+    '/v1/consumers/:consumerId/channel-payout', async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+      const binding = registered.get(request.params.consumerId);
+      const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+      const resource = { kind: 'CATALOG' as const, name: 'private-channel-payout-fee-snapshot' };
+      const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read GNA channel payout fee snapshot', request.id),
+        operation: 'READ_CHANNEL_PAYOUT_FEE', resource };
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', spec, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (binding.id !== 'gna-channel-payout' || !binding.capabilities.includes('channel-payout-read')) {
+          await access.deny('READ', spec, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        const keys = Object.keys(request.query as object);
+        const vehicleId = request.query.vehicleId;
+        if (keys.length !== 1 || keys[0] !== 'vehicleId' || typeof vehicleId !== 'string' || !vehicleId
+          || vehicleId.trim() !== vehicleId || vehicleId.length > 180 || /[\s/\\\u0000-\u001f\u007f]/.test(vehicleId)) {
+          await access.deny('READ', spec, 'INVALID_VEHICLE_SELECTION');
+          return reply.code(400).send({ code: 'INVALID_VEHICLE_SELECTION' });
+        }
+        if (!channelPayoutReader) return reply.code(503).send({ code: 'CHANNEL_PAYOUT_READER_UNAVAILABLE' });
+        return await access.read({ ...spec, resource: { ...resource, entityId: vehicleId }, requestDigest: stableDigest({ vehicleId }),
+          summarize: value => ({ count: value.terms.length, digest: stableDigest(value) }) }, async () =>
+          buildChannelPayoutResponse(binding.id, await channelPayoutReader.readLatestChannelPayout(vehicleId)));
+      } catch (error) {
+        logRouteError('/v1/consumers/:consumerId/channel-payout', 'channel_payout', error);
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        return reply.code(503).send({ code: 'CHANNEL_PAYOUT_READ_FAILED' });
+      }
+    });
   app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
@@ -944,7 +1008,7 @@ export function createConsumerGateway(
           && stamp(iso) && Date.parse(iso) === (pair.seconds as number) * 1000 + Math.floor((pair.nanoseconds as number) / 1e6);
         const scalar = (v: unknown) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
           || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
-        const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && scalar(row[k]));
+        const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && (k==='standard_contract' ? allowed===SINGLE_POLICY_FACT_FIELDS && isSupplierContractStandard(row[k]) : scalar(row[k])));
         const priceFields = (row: unknown) => object(row) && Object.keys(row).every(k => (SINGLE_PRODUCT_PRICE_FIELDS as readonly string[]).includes(k)
           && (k === 'depositEvidenceBasis' ? fields(row[k], ['field', 'text', 'source', 'at'])
             : k === 'depositRuleDifference' ? fields(row[k], ['ruleAmount', 'ruleCode', 'differs']) : scalar(row[k])));

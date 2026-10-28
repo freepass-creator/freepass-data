@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { stableDigest } from '../src/shared/stable-digest.js';
-import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan, vehicleNameRepairPlanDigest } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
   it('accepts exact non-overlapping master and product repairs', () => {
@@ -195,6 +195,14 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, to: { ...item.to, model: '' } }] })).toThrow(/requires/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, from: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' } }] })).toThrow(/no-op/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [item, item] })).toThrow(/duplicate/);
+    // 모델 수준: sub_model 불변·from.model 빈칸·제조사 변경 금지·알 수 없는 level 거절
+    const raw = '현대 더 뉴 싼타페 HEV 1.6';
+    const modelItem = { id: 'p1', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: raw }, to: { maker: 'Maker', model: 'Model A', sub_model: raw }, evidence: 'e' };
+    expect(validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [modelItem] })).toEqual({ masterCount: 0, productCount: 0, productIdentityCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...modelItem, to: { ...modelItem.to, sub_model: 'Other' } }] })).toThrow(/keep sub_model unchanged/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...modelItem, from: { ...modelItem.from, model: 'Old' } }] })).toThrow(/blank from.model/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...modelItem, from: { ...modelItem.from, maker: 'Else' } }] })).toThrow(/must not change a stored maker/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...modelItem, level: 'SUB' as unknown as 'MODEL' }] })).toThrow(/level must be MODEL/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productTrimRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
   });
@@ -254,7 +262,17 @@ describe('vehicle-name reference repair gate', () => {
   });
   it('keeps existing plan digest unchanged when product identity repairs are absent', () => {
     const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }] };
+    expect(vehicleNameRepairPlanDigest(base)).toBe(stableDigest(base));
     expect(stableDigest(base)).toBe(stableDigest({ ...base, productIdentityRepairs: undefined }));
     expect(stableDigest(base)).toBe(stableDigest({ ...base, productSourceCorrections: undefined }));
+  });
+  it('domain-separates correction approval and binds its project and full plan', () => {
+    const plan = { kind: 'PRODUCT_IDENTITY_CORRECTION' as const, projectId: 'fake-project', sourceDigest: 'fake-source', masterRepairs: [], productRepairs: [], productIdentityCorrections: [] };
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(stableDigest(plan));
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(vehicleNameRepairPlanDigest({ ...plan, projectId: 'fake-other' }));
+    expect(vehicleNameRepairPlanDigest(plan)).not.toBe(vehicleNameRepairPlanDigest({ ...plan, sourceDigest: 'different' }));
+  });
+  it('does not silently ignore corrections without their dedicated kind', () => {
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'fake', masterRepairs: [], productRepairs: [], productIdentityCorrections: [] })).toThrow(/kind/);
   });
 });

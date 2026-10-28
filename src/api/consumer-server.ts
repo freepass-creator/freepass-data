@@ -15,6 +15,8 @@ const app = createConsumerGateway(
   runtime.health,
   runtime.compat,
   runtime.workflow,
-  runtime.estimateArtifacts
+  runtime.estimateArtifacts,
+  undefined,
+  runtime.channelPayout
 );
 await app.listen({ port: Number(process.env.PORT ?? 8787), host: process.env.HOST ?? '127.0.0.1' });

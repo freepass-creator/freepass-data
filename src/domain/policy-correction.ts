@@ -1,27 +1,31 @@
+import { isSupplierContractStandard, projectSupplierContractStandard, type SupplierContractStandard } from './supplier-contract-standard.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 export type PolicyCorrectionLayer = 'supplierCondition' | 'salesPolicy';
 export type PolicyCorrectionEvidenceSource = '공급사답' | '운영정책' | '대표결정';
-export type PolicyCorrectionValue = string | number;
+export type PolicyCorrectionValue = string | number | SupplierContractStandard;
 export type PolicyCorrectionEvidence = {
   source: PolicyCorrectionEvidenceSource;
   location: string;
   effectiveDate: string;
   answerSha256?: string;
+  applicability?: string;
 };
 export type PolicyCorrectionItem = {
   policyCode: string;
   supplierCode: string;
   field: string;
   layer: PolicyCorrectionLayer;
-  from: string | number | null;
-  to: PolicyCorrectionValue;
+  from: PolicyCorrectionValue | null;
+  operation?: 'set' | 'clear';
+  to?: PolicyCorrectionValue;
   evidence: PolicyCorrectionEvidence;
 };
 export type PolicyCorrectionPlan = {
   planId: string;
   createdAt: string;
   items: PolicyCorrectionItem[];
+  createDefaults?: Array<{policyCode:string;supplierCode:string}>;
 };
 export type StoredPolicyDocument = {
   id?: string;
@@ -41,7 +45,7 @@ const TEXT_FIELDS = new Set(['screening_criteria', 'rental_region', 'delivery_fe
 
 type Rule = { kind: string; validate: (value: PolicyCorrectionValue) => boolean };
 const rule = (kind: string, validate: (value: PolicyCorrectionValue) => boolean): Rule => ({ kind, validate });
-const str = (value: PolicyCorrectionValue) => typeof value === 'string';
+const str = (value: PolicyCorrectionValue): value is string => typeof value === 'string';
 const matches = (re: RegExp) => (value: PolicyCorrectionValue) => str(value) && re.test(value);
 const positiveNumber = (value: PolicyCorrectionValue) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const text = (value: PolicyCorrectionValue) => str(value) && value.trim() === value && value.length > 0 && value.length <= TEXT_MAX;
@@ -49,8 +53,11 @@ const text = (value: PolicyCorrectionValue) => str(value) && value.trim() === va
 const amount = rule('amount', (v) => matches(MONEY_TEXT)(v) || positiveNumber(v));
 const yn = rule('yes-no-discuss', matches(YES_NO_DISCUSS));
 const textRule = rule('text', text);
+const sourceText = (value: PolicyCorrectionValue, max: number) =>
+  str(value) && value.length <= max && value.trim().length > 0 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 
 export const ALLOWED_FIELDS: Record<string, Rule> = {
+  standard_contract: rule('standard-contract', isSupplierContractStandard),
   screening_criteria: textRule,
   // 기존 가능/불가/협의 형식도 유지하고, 정책 문서에 실제로 쓰이는 «보험료 포함/별도» 형식을 추가한다.
   insurance_included: rule('insurance', (value) => matches(YES_NO_DISCUSS)(value) || matches(/^(?:보험료 )?(?:포함|별도)$/)(value)),
@@ -64,6 +71,9 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
   mileage_upcharge_per_10000km: amount,
   over_mileage_rate_domestic: amount,
   over_mileage_rate_imported: amount,
+  over_mileage_rate_per_km: rule('numeric-per-km', positiveNumber),
+  late_fee_rate: rule('fraction', (v) => positiveNumber(v) && (v as number) <= 1),
+  deposit_overdue_rounds: rule('positive-integer', (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1),
   basic_driver_age: rule('age-lower', matches(/^만 \d+세 이상$/)),
   driver_age_lowering: rule('age-lowering', matches(/^(불가|협의|만 \d+세까지)$/)),
   age_lowering_cost: amount,
@@ -84,7 +94,8 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
   self_body_deductible: amount,
   uninsured_damage: rule('limit', matches(MONEY_LIMIT)),
   uninsured_deductible: amount,
-  own_damage_compensation: rule('limit', matches(MONEY_LIMIT)),
+  own_damage_compensation: rule('limit-or-source-text', (v) => matches(MONEY_LIMIT)(v) || sourceText(v, 500)),
+  policy_extra_terms: rule('source-terms', (v) => sourceText(v, 10000)),
   own_damage_repair_ratio: rule('ratio', matches(/^\d+%$/)),
   own_damage_min_deductible: amount,
   own_damage_max_deductible: amount,
@@ -100,8 +111,23 @@ export const ALLOWED_FIELDS: Record<string, Rule> = {
 for (const field of TEXT_FIELDS) ALLOWED_FIELDS[field] = textRule;
 
 export const policyCorrectionItemDigest = (item: PolicyCorrectionItem) => stableDigest(item);
+export const isPolicyCorrectionClear = (item: PolicyCorrectionItem) => item.operation === 'clear';
+const sourceBoundLegacyFields = new Set(['late_fee_rate', 'over_mileage_rate_per_km', 'deposit_overdue_rounds']);
+const clearReplacementFields: Record<string, string[]> = {
+  late_fee_rate: ['policy_extra_terms'],
+  over_mileage_rate_per_km: ['policy_extra_terms', 'over_mileage_rate_domestic', 'over_mileage_rate_imported'],
+};
+const requireSourceEvidence = (item: PolicyCorrectionItem) => {
+  const scope = item.evidence?.applicability;
+  if (typeof item.evidence?.answerSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(item.evidence.answerSha256)
+    || typeof scope !== 'string' || !scope.trim() || scope.length > 500) {
+    throw new Error('SOURCE_EVIDENCE_REQUIRED ' + item.policyCode + '.' + item.field);
+  }
+};
 const present = (value: unknown) => value !== undefined && value !== null && value !== '';
-const exactSame = (a: unknown, b: unknown) => a === b;
+export const policyCorrectionValuesEqual = (a: unknown, b: unknown) => a === b ||
+  (isSupplierContractStandard(a) && isSupplierContractStandard(b) && stableDigest(a) === stableDigest(b));
+const exactSame = policyCorrectionValuesEqual;
 const isoDate = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 const isoDateTime = (value: unknown) => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 const dateOnly = (value: unknown): string | null => {
@@ -126,6 +152,25 @@ const layerMap = (data: Record<string, unknown>, layer: PolicyCorrectionLayer): 
     : data;
 const storedEvidence = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string): Record<string, unknown> | undefined =>
   layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)?.[field]) : objectValue(objectValue(data.field_evidence)?.[field]);
+
+/** Retire a misleading legacy scalar only when the same source still has its full scoped replacement. */
+export function assertPolicyCorrectionReplacement(data: Record<string, unknown>, item: PolicyCorrectionItem, items: PolicyCorrectionItem[] = []) {
+  if (!isPolicyCorrectionClear(item)) return;
+  const standard=items.find(i=>i.policyCode===item.policyCode&&i.supplierCode===item.supplierCode&&i.field==='standard_contract'&&i.layer==='supplierCondition'&&isSupplierContractStandard(i.to));
+  if(standard && isSupplierContractStandard(standard.to) && standard.evidence.answerSha256===item.evidence.answerSha256
+    && projectSupplierContractStandard(standard.to,{supplierCode:item.supplierCode})?.managedKeys.includes(item.field)) return;
+  for (const field of clearReplacementFields[item.field] ?? []) {
+    const replacement = items.find(next => next.policyCode === item.policyCode && next.supplierCode === item.supplierCode
+      && next.layer === 'supplierCondition' && next.field === field && !isPolicyCorrectionClear(next));
+    const value = replacement ? replacement.to : data[field];
+    const evidence: Record<string, unknown> | undefined = replacement ? { ...replacement.evidence } : storedEvidence(data, 'supplierCondition', field);
+    if (!present(value) || !ALLOWED_FIELDS[field]!.validate(value as PolicyCorrectionValue)
+      || !evidence?.answerSha256 || evidence.answerSha256 !== item.evidence.answerSha256
+      || !evidence.applicability || (!replacement && evidence.value !== value)) {
+      throw new Error('SOURCE_REPLACEMENT_REQUIRED ' + item.policyCode + '.' + item.field + ':' + field);
+    }
+  }
+}
 /** The stored layer container / entry must have the shape this corrector writes (a map, entries as maps with a «value»).
  * Anything else (string, number, array …) is refused — never read as «absent», so «from: null» cannot overwrite it. */
 // A stored sales_policy «value» is a scalar: string, finite number, boolean or null — arrays/objects would slip past the contradiction check.
@@ -173,7 +218,7 @@ const toWon = (value: unknown): number | null => {
 };
 const finalLayerValues = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, items: PolicyCorrectionItem[]) => ({
   ...layerMap(data, layer),
-  ...Object.fromEntries(items.filter((item) => item.layer === layer).map((item) => [item.field, item.to])),
+  ...Object.fromEntries(items.filter((item) => item.layer === layer).map((item) => [item.field, isPolicyCorrectionClear(item) ? null : item.to])),
 });
 const requireNoContradictions = (policyCode: string, data: Record<string, unknown>, layer: PolicyCorrectionLayer, items: PolicyCorrectionItem[]) => {
   const touched = new Set(items.filter((item) => item.layer === layer).map((item) => item.field));
@@ -200,18 +245,46 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
   if (!isoDateTime(plan.createdAt)) throw new Error('createdAt must be ISO');
   if (!Array.isArray(plan.items) || plan.items.length === 0) throw new Error('items are required');
   if (plan.items.length > MAX_POLICY_CORRECTION_ITEMS) throw new Error(`MAX_ITEMS ${MAX_POLICY_CORRECTION_ITEMS}`);
+  const creations = plan.createDefaults ?? [];
+  if (!Array.isArray(creations) || creations.length > 30 || new Set(creations.map(c=>c.policyCode)).size !== creations.length) throw new Error('INVALID_STANDARD_DEFAULTS');
+  for (const c of creations) {
+    if (Object.keys(c).sort().join(',') !== 'policyCode,supplierCode' || !/^(?:RP\d{3}|PT-\d{4})$/.test(c.supplierCode) || c.policyCode !== 'STD-'+c.supplierCode) throw new Error('INVALID_STANDARD_DEFAULT');
+    const items=plan.items.filter(i=>i.policyCode===c.policyCode);
+    if(items.length!==1 || items[0]!.field!=='standard_contract' || items[0]!.from!==null || items[0]!.supplierCode!==c.supplierCode || items[0]!.operation==='clear') throw new Error('DEFAULT_REQUIRES_STANDARD_ONLY');
+  }
   const byDoc: Record<string, PolicyCorrectionItem[]> = {};
   const seen = new Set<string>();
   plan.items.forEach((item, index) => {
     if (!item.policyCode?.trim() || !item.supplierCode?.trim()) throw new Error(`item ${index} needs policyCode and supplierCode`);
     if (!ALLOWED_FIELDS[item.field]) throw new Error(`FIELD_NOT_ALLOWED ${item.field}`);
-    if (item.to === null || item.to === undefined || item.to === '') throw new Error(`EMPTY_TO ${item.policyCode}.${item.field}`);
-    if (!ALLOWED_FIELDS[item.field]!.validate(item.to)) throw new Error(`INVALID_VALUE ${item.policyCode}.${item.field}`);
+    if (item.operation !== undefined && item.operation !== 'set' && item.operation !== 'clear') throw new Error('INVALID_OPERATION');
+    if (isPolicyCorrectionClear(item)) {
+      const standardReplacement=plan.items.find(i=>i.policyCode===item.policyCode&&i.supplierCode===item.supplierCode&&i.field==='standard_contract'&&isSupplierContractStandard(i.to));
+      const coveredByStandard=standardReplacement&&isSupplierContractStandard(standardReplacement.to)
+        &&standardReplacement.evidence.answerSha256===item.evidence.answerSha256
+        &&projectSupplierContractStandard(standardReplacement.to,{supplierCode:item.supplierCode})?.managedKeys.includes(item.field);
+      if ((!coveredByStandard && item.field !== 'own_damage_repair_ratio' && !Object.hasOwn(clearReplacementFields, item.field)) || item.layer !== 'supplierCondition'
+        || Object.hasOwn(item, 'to')) throw new Error('CLEAR_NOT_ALLOWED');
+      if (item.from === null || item.from === '' || item.from === undefined) throw new Error('CLEAR_FROM_REQUIRED');
+      requireSourceEvidence(item);
+    } else {
+      if (item.to === null || item.to === undefined || item.to === '') throw new Error(`EMPTY_TO ${item.policyCode}.${item.field}`);
+      if (!ALLOWED_FIELDS[item.field]!.validate(item.to)) throw new Error(`INVALID_VALUE ${item.policyCode}.${item.field}`);
+      if (item.field === 'standard_contract') {
+        requireSourceEvidence(item);
+        if (item.layer !== 'supplierCondition' || !isSupplierContractStandard(item.to) || !item.to.supplierCodes.includes(item.supplierCode)) throw new Error('STANDARD_SUPPLIER_MISMATCH');
+      }
+      if (sourceBoundLegacyFields.has(item.field) || item.field === 'policy_extra_terms'
+        || (item.field === 'own_damage_compensation' && !matches(MONEY_LIMIT)(item.to))) requireSourceEvidence(item);
+    }
     if (item.layer !== 'supplierCondition' && item.layer !== 'salesPolicy') throw new Error(`INVALID_LAYER ${item.policyCode}.${item.field}`);
     if (!item.evidence || !EVIDENCE_SOURCES.has(item.evidence.source)) throw new Error(`INVALID_EVIDENCE_SOURCE ${item.policyCode}.${item.field}`);
     if (!item.evidence.location?.trim()) throw new Error(`EVIDENCE_LOCATION_REQUIRED ${item.policyCode}.${item.field}`);
     if (!isoDate(item.evidence.effectiveDate)) throw new Error(`INVALID_EFFECTIVE_DATE ${item.policyCode}.${item.field}`);
     if (item.evidence.answerSha256 !== undefined && !/^[0-9a-f]{64}$/i.test(item.evidence.answerSha256)) throw new Error(`INVALID_ANSWER_SHA256 ${item.policyCode}.${item.field}`);
+    if (item.evidence.applicability !== undefined
+      && (typeof item.evidence.applicability !== 'string' || !item.evidence.applicability.trim()
+        || item.evidence.applicability.length > 500)) throw new Error('INVALID_APPLICABILITY');
     const key = `${item.policyCode}|${item.layer}|${item.field}`;
     if (seen.has(key)) throw new Error(`DUPLICATE_ITEM ${item.policyCode}.${item.layer}.${item.field}`);
     seen.add(key);
@@ -226,6 +299,7 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
     for (const item of items) {
       if (data.provider_company_code !== item.supplierCode) throw new Error(`SUPPLIER_MISMATCH ${policyCode}`);
       assertStoredShape(policyCode, data, item.layer, item.field);
+      assertPolicyCorrectionReplacement(data, item, items);
       const current = storedPolicyValue(data, item.layer, item.field);
       if (!exactSame(current === undefined ? null : current, item.from)) throw new Error(`CONFLICT ${policyCode}.${item.field}`);
       const lastDate = lastEvidenceDate(data, item.layer, item.field);

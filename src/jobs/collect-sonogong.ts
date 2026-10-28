@@ -8,6 +8,7 @@ import { sonogongNormalizer } from '../adapters/normalize-sonogong.js';
 import { verifiedMasterRecords } from '../adapters/vehicle-identity-inputs.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 /** Conservative JSON Firestore storage bound, not JSON byte size alone.
  * Map/array overhead and scalar allowance deliberately overestimate storage.
@@ -71,6 +72,7 @@ export async function runSonogongCollection(input: {
     ...(args.has('--compare-deposits') ? { depositComparison: compareSonogongDeposits(batch) } : {}) };
   if (apply) {
     if (collected.evidence.status !== 'RAW_READY') throw new Error('SONOGONG_SOURCE_NOT_READY');
+    await ensureWriterLease(input.env, 'sonogong-raw');
     const normalize = input.ingest ? sonogongNormalizer() : await import('./data-access-runtime.js')
       .then(async runtimeModule => {
         const { captureVehicleMasterSnapshotReadOnly } = runtimeModule;

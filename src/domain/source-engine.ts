@@ -1,4 +1,6 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import { validSheetIdentity } from './sheet-identity.js';
+import { validSheetFacts } from './sheet-facts.js';
 import { boundedOptions, asBoundedOptions } from './sonogong-options.js';
 import type { SourceRun } from './source.js';
 
@@ -80,7 +82,7 @@ const specDigest = (spec: unknown) => ({ __digest: stableDigest(spec).slice(0, 3
  * spec 과 같은 방식이다: 저장은 실제 주소(새 문서·사진 없는 문서의 image_urls 쓰기가 읽는다), 변경 판정은 comparableRecord 가 compactRaw 와 같은
  * digest 로 바꿔 비교한다 — 옛 문서(digest 저장)와 목록이 같으면 «변경 없음»(일괄 UPDATE 없음). */
 export const PHOTO_URL_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
-const PHOTO_URL_LIST_MAX = 20, PHOTO_URL_MAX_LENGTH = 1000;
+const PHOTO_URL_LIST_MAX = 50, PHOTO_URL_MAX_LENGTH = 1000;
 export const isPhotoUrlList = (v: unknown): v is string[] => Array.isArray(v) && v.length <= PHOTO_URL_LIST_MAX &&
   v.every(x => typeof x === 'string' && x.length <= PHOTO_URL_MAX_LENGTH && /^https:\/\/[^\s]+$/.test(x));
 const photoListKept = (record: SourceProductRecord, v: unknown): v is string[] => PHOTO_URL_LIST_SOURCES.has(record.sourceId) && isPhotoUrlList(v);
@@ -91,6 +93,8 @@ export const API_OPTION_LIST_SOURCES: ReadonlySet<string> = new Set(['RP012']);
 export function compactRecord(record: SourceProductRecord): SourceProductRecord {
   const raw = compactRaw(record.raw ?? {});
   if (smallSpec(record.raw?.spec)) raw.spec = structuredClone(record.raw.spec);
+  { const sid = validSheetIdentity(record.raw?.sheet_identity); if (sid) raw.sheet_identity = sid; }
+  { const sf = validSheetFacts(record.raw?.sheet_facts); if (sf) raw.sheet_facts = sf; }   // 구동방식·원산지 후보는 digest 가 아니라 값 그대로   // 시트 차종 4칸 후보는 digest 가 아니라 값 그대로(정제기가 읽는다)
   if (photoListKept(record, record.raw?.images)) raw.images = [...record.raw.images];
   if (API_OPTION_LIST_SOURCES.has(record.sourceId)) {
     // 판정은 압축 전 원문에서 한다: 상세가 있으면 거기서, 이미 압축된 기록이면 저장된 제한 꼴만 다시 검증해 통과시킨다.
@@ -108,6 +112,12 @@ export function comparableRecord(record: SourceProductRecord): SourceProductReco
   delete compact.raw.api_options;   // 변경 판정에서 제외(상세 digest 가 이미 옵션 변화를 담는다)
   delete compact.raw.source_maker;  // 원천 제조사·모델: 목록 digest 가 이미 변화를 담는다(옛 저장 기록에는 이 칸이 없다)
   delete compact.raw.source_model;
+  // 차량번호 칸 사진 폴더 링크(F05): 변경 판정에서 뺀다 — 처음 켤 때 링크 있는 모든 문서가 «사실 변경»으로 일괄 UPDATE 되지 않게(옛 저장 기록에는 이 칸이 없다).
+  // 빈 photo_link 채움은 읽기 경로 표식(photoLinkFill)과 계획의 PHOTO_LINK 사유(회차 상한)가 맡고, 이미 값이 있는 photo_link 는 링크가 바뀌어도 덮지 않는다.
+  delete compact.raw.sheet_photo_link;
+  // 시트 차종 4칸 후보(F05): 변경 판정에서 뺀다 — 처음 켤 때 모든 문서가 «사실 변경»으로 일괄 UPDATE 되지 않게(정제는 읽기 경로 표식과 계획의 VEHICLE_IDENTITY 사유가 맡는다).
+  delete compact.raw.sheet_identity;
+  delete compact.raw.sheet_facts;   // 시트 사실 후보(구동방식·원산지): 변경 판정에서 뺀다(일괄 UPDATE 방지 — 채움은 읽기 경로 표시와 SHEET_FACT 사유가 맡는다)
   return compact;
 }
 /** 같은 개월에 약정거리 옵션이 여럿인 원천(이안카 ONE)은 (개월, 약정거리)가 항 식별자다. 원천 기록에는 전부 남기고,

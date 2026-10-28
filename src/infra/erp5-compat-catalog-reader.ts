@@ -1,3 +1,4 @@
+import { isSupplierContractStandard, isRegisteredSupplierStandardDefault, projectSupplierContractStandard } from '../domain/supplier-contract-standard.js';
 import { projectIancarPolicyTerms } from '../domain/iancar-policy-terms-projection.js';
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
@@ -221,11 +222,25 @@ export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
   'price', 'iancar_phase_one', 'iancar_policy_terms',
 ] as const);
 
-export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'provider_company_code',
-  'policy_name', 'policy_type', 'payment_method', 'payment_timing', 'basic_driver_age',
+export const SINGLE_POLICY_FACT_FIELDS = ['standard_contract', 'policy_scope', 'policy_field_owner', '_key', 'policy_code', 'companyId', 'provider_company_code',
+  'policy_name', 'policy_type', 'payment_method', 'payment_timing', 'basic_driver_age', 'insurer_name',
+  'designated_garage', 'self_damage_exclusions', 'replacement_car_policy',
   'driver_age_lowering', 'driver_age_upper_limit', 'license_period', 'personal_driver_scope',
   'business_driver_scope', 'insurance_included', 'deposit_installment', 'deposit_card_payment',
-  'rental_card_payment', 'maintenance_service', 'credit_grade'] as const;
+  'rental_card_payment', 'maintenance_service', 'credit_grade', 'payment_due_date',
+  'early_termination_rate_under1y', 'early_termination_rate_over1y', 'renewal_notice_days',
+  'deposit_return_days', 'buyout_notice_days', 'succession_allowed', 'succession_fee',
+  // Keep the existing public insurance contract facts available on targeted detail reads.
+  // These are stored facts only; no inferred limits, defaults, or customer e-sign terms.
+  'injury_compensation_limit', 'injury_deductible', 'property_compensation_limit', 'property_deductible',
+  'self_body_accident', 'self_body_deductible', 'personal_injury_compensation_limit', 'personal_injury_deductible',
+  'uninsured_damage', 'uninsured_compensation_limit', 'uninsured_deductible', 'own_damage_compensation',
+  'own_damage_repair_ratio', 'own_damage_compensation_rate', 'own_damage_min_deductible', 'own_damage_max_deductible',
+  'annual_roadside_assistance', 'roadside_assistance', 'over_mileage_rate_domestic', 'over_mileage_rate_imported',
+  'age_21_cost', 'age_23_cost', 'age_lowering_cost', 'additional_driver_allowance_count', 'additional_driver_cost',
+  'annual_mileage', 'max_annual_mileage', 'mileage_upcharge_per_10000km', 'delivery_fee', 'screening_criteria',
+  'late_fee_rate', 'engine_control_overdue_days', 'auto_terminate_overdue_days',
+  'deposit_overdue_rounds', 'accident_termination_count', 'penalty_condition'] as const;
 export const SINGLE_PARTNER_FACT_FIELDS = ['_key', 'partner_code', 'company_code', 'provider_company_code',
   'partner_name', 'company_name', 'name', 'brand_name', 'alias'] as const;
 
@@ -270,11 +285,12 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const policyCode = selectedDocId(raw.policy_code);
     const explicitPolicyId = selectedDocId(raw.policy_id);
     if (policyCode && explicitPolicyId && policyCode !== explicitPolicyId) return selectionUnavailable();
-    const policyId = policyCode ?? explicitPolicyId;
+    const explicitReference = policyCode ?? explicitPolicyId;
     const providerCode = selectedDocId(raw.provider_company_code);
     const partnerCode = selectedDocId(raw.partner_code);
     if (providerCode && partnerCode && providerCode !== partnerCode) return selectionUnavailable();
     const partnerId = providerCode ?? partnerCode;
+    const policyId = explicitReference ?? (partnerId ? 'STD-'+partnerId : undefined);
     const linked = async (kind: 'policy' | 'partner', id: string | undefined, collection: string, fields: readonly string[]) => {
       if (!id) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_REFERENCE_NOT_OBSERVED` } };
       if (!readCollections.has(kind)) return selectionUnavailable();
@@ -284,9 +300,15 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       const updateTime = doc.updateTime && new Date(doc.updateTime.toMillis()).toISOString();
       if (!updateTime || doc.id !== id) return selectionUnavailable();
       const facts = doc.data()!;
+      if (kind === 'policy' && !explicitReference && !isRegisteredSupplierStandardDefault(facts, partnerId ?? ''))
+        return {rows:{},versions:[],evidence:{state:'UNKNOWN' as const,reasonCode:'POLICY_NOT_OBSERVED'}};
+      if(kind==='policy' && Object.hasOwn(facts,'standard_contract') && (!isSupplierContractStandard(facts.standard_contract)
+        || !facts.standard_contract.supplierCodes.includes(partnerId??''))) return selectionUnavailable();
       const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
       if (codes.some(code => facts[code] != null && facts[code] !== '' && facts[code] !== id)) return selectionUnavailable();
-      return { rows: { [id]: { ...pickSelectedFacts(doc.data()!, fields), _key: id } },
+      const standardProjection=kind==='policy'?projectSupplierContractStandard(facts.standard_contract,{supplierCode:partnerId??'',productType:raw.product_type,baseDriverAge:facts.basic_driver_age}):null;
+      const projectedFacts=standardProjection?{...facts,...Object.fromEntries(Object.entries(standardProjection.values).filter(([k])=>fields.includes(k)).map(([k,v])=>[k,typeof v==='string'&&(v.length>300||/[\u0000-\u001f\u007f]/.test(v))?null:v]))}:facts;
+      return { rows: { [id]: { ...pickSelectedFacts(projectedFacts, fields.filter(f=>f!=='standard_contract')), ...(kind==='policy' && Object.hasOwn(facts,'standard_contract') ? {standard_contract:facts.standard_contract} : {}), _key: id } },
         versions: [{ id, updateTime, updateTimeExact: { seconds: doc.updateTime!.seconds, nanoseconds: doc.updateTime!.nanoseconds } }], evidence: { state: 'KNOWN' as const, reasonCode: null } };
     };
     const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
@@ -444,6 +466,12 @@ export class FirestoreCatalogCompatibilityReader {
     parsePhotoCopySuppliers(process.env.FREEPASS_DATA_PHOTO_COPY_SUPPLIERS));
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
+
+  async readContractStandards() {
+    const {createFirestoreDataStore}=await import('./firestore-store.js');
+    const {readContractStandardCatalog}=await import('../application/contract-standard-catalog.js');
+    return readContractStandardCatalog(await createFirestoreDataStore());
+  }
 
   readProductCompat(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot> {
     return readSingleProductCompatibility(this.db, consumerId, productId, this.readCollections);

@@ -17,6 +17,9 @@ import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { buildKakaoCatalogReference } from '../src/application/kakao-catalog-reference.js';
+import { buildChannelPayoutResponse, toGnaRateKey } from '../src/application/channel-payout.js';
+import { isIancarProductDocumentId, PayoutFeeSnapshotFirestoreStore } from '../src/infra/payout-fee-snapshot-firestore.js';
+import type { ChannelPayoutReader, PayoutFeeSnapshotDocument } from '../src/ports/payout-fee-snapshot-store.js';
 
 const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
@@ -125,15 +128,98 @@ const withAccess = (
   store: Parameters<typeof createConsumerGateway>[0],
   bindings: ConsumerBinding[],
   healthStore?: Parameters<typeof createConsumerGateway>[3],
-  compatReader?: Parameters<typeof createConsumerGateway>[4]
+  compatReader?: Parameters<typeof createConsumerGateway>[4],
+  channelPayoutReader?: ChannelPayoutReader,
 ) => {
   const logs = new MemoryDataAccessLogStore();
   const access = new DataAccessGateway(logs);
   return {
     logs,
-    app: createConsumerGateway(store, bindings, access, healthStore, compatReader)
+    app: createConsumerGateway(store, bindings, access, healthStore, compatReader, undefined, undefined, undefined, channelPayoutReader)
   };
 };
+
+const payoutSnapshot = (productId = 'product-1', snapshotDate = '2026-10-28', terms = [{ termKey: '48', termMonths: 48 }]): PayoutFeeSnapshotDocument => ({
+  schema: 'product-payout-fee-snapshot/v1', snapshotDate, productId, supplierId: 'RP031', listable: true, policyId: 'policy',
+  terms: terms.map((term, index) => ({ productId, supplierId: 'RP031', ...term, state: 'KNOWN', amount: 1000 + index,
+    vatAmount: 100, totalAmount: 1100 + index, ruleId: 'private-rule', policyId: 'policy', reasonCode: null,
+    evidenceRefs: ['private-source'], computedFrom: { rent: { amount: 500000, currency: 'KRW', sourceRef: 'private-rent' },
+      deposit: { state: 'KNOWN', amount: 1000000, currency: 'KRW', sourceRef: 'private-deposit' } } })),
+  contentDigest: 'digest', planDigest: 'plan',
+});
+
+describe('GNA channel payout read', () => {
+  const consumer: ConsumerBinding = { id: 'gna-channel-payout', projectionId: 'admin-catalog', token, capabilities: ['channel-payout-read'] };
+  const endpoint = '/v1/consumers/gna-channel-payout/channel-payout?vehicleId=iancar_abc123';
+
+  it('locks registration and authentication/capability/query gates', async () => {
+    expect(parseConsumerBindings(JSON.stringify([consumer]))[0]).toMatchObject({ id: 'gna-channel-payout', capabilities: ['channel-payout-read'] });
+    expect(() => parseConsumerBindings(JSON.stringify([{ ...consumer, capabilities: ['channel-payout-read', 'catalog'] }]))).toThrow('exclusive');
+    expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['channel-payout-read'] }]))).toThrow('GNA');
+    const reader = { readLatestChannelPayout: vi.fn(async () => null) };
+    const erp = { ...binding, token: token + '-erp' };
+    const { app } = withAccess(new MemoryDataStore(), [consumer, erp], undefined, undefined, reader);
+    expect((await app.inject({ url: endpoint })).statusCode).toBe(401);
+    expect((await app.inject({ url: '/v1/consumers/erp-com/channel-payout?vehicleId=product-1',
+      headers: { authorization: `Bearer ${erp.token}` } })).statusCode).toBe(403);
+    for (const query of ['', '?vehicleId=', '?vehicleId=a%20b', '?vehicleId=a/b', '?vehicleId=%09a', `?vehicleId=${'a'.repeat(181)}`, '?vehicleId=a&extra=1'])
+      expect((await app.inject({ url: '/v1/consumers/gna-channel-payout/channel-payout' + query,
+        headers: { authorization: `Bearer ${token}` } })).statusCode).toBe(400);
+    expect(reader.readLatestChannelPayout).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('returns empty when no snapshot and exposes only the fixed payout keys', async () => {
+    const snapshots = [null, payoutSnapshot()];
+    const reader = { readLatestChannelPayout: vi.fn(async () => snapshots.shift() ?? null) };
+    const { app, logs } = withAccess(new MemoryDataStore(), [consumer], undefined, undefined, reader);
+    const auth = { authorization: `Bearer ${token}` };
+    expect((await app.inject({ url: endpoint, headers: auth })).json()).toEqual({
+      schema: 'freepass-data.channel-payout-fee/v1', consumerId: 'gna-channel-payout', snapshotDate: null, terms: [] });
+    const response = (await app.inject({ url: endpoint, headers: auth })).json();
+    expect(Object.keys(response).sort()).toEqual(['consumerId', 'schema', 'snapshotDate', 'terms']);
+    expect(Object.keys(response.terms[0]).sort()).toEqual(['amount', 'key', 'months', 'state', 'totalAmount', 'vatAmount', 'vatTreatment']);
+    expect(JSON.stringify(response)).not.toMatch(/sourceRefs|evidenceRefs|computedFrom|ruleId|billing|margin/i);
+    expect(response.terms[0]).toMatchObject({ key: '48', vatTreatment: null });
+    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_CHANNEL_PAYOUT_FEE', phase: 'SUCCEEDED',
+      resource: { name: 'private-channel-payout-fee-snapshot', entityId: 'iancar_abc123' } });
+    await app.close();
+  });
+
+  it('converts only certain GNA keys and caps terms at 80', () => {
+    expect(toGnaRateKey({ termKey: '12_2만', termMonths: 12 })).toBe('12_연20000km');
+    expect(toGnaRateKey({ termKey: '1_월2000km', termMonths: 1 })).toBe('1_월2000km');
+    expect(toGnaRateKey({ termKey: '12_연20000km', termMonths: 12 })).toBe('12_연20000km');
+    expect(toGnaRateKey({ termKey: '12_인수형', termMonths: 12 })).toBeNull();
+    expect(toGnaRateKey({ termKey: '12', termMonths: 24 })).toBeNull();
+    const terms = Array.from({ length: 81 }, (_, index) => ({ termKey: String(index + 1), termMonths: index + 1 }));
+    expect(buildChannelPayoutResponse('gna-channel-payout', payoutSnapshot('p', '2026-10-28', terms)).terms).toHaveLength(80);
+  });
+
+  it('resolves document ID/plate, rejects ambiguous plates, and selects the latest snapshot', async () => {
+    const products = new Map<string, Record<string, unknown>>([
+      ['iancar_abc123', { car_number: '10호7028' }], ['other', { car_number: '20호1234' }], ['duplicate', { car_number: '20호1234' }],
+    ]);
+    const snapshots = [payoutSnapshot('iancar_abc123', '2026-10-27'), payoutSnapshot('iancar_abc123', '2026-10-28')];
+    const docs = (rows: Array<{ id: string; data: () => Record<string, unknown> }>) => ({ docs: rows });
+    const db = { collection: (name: string) => name === 'products' ? {
+      doc: (id: string) => ({ get: async () => ({ exists: products.has(id), id, data: () => products.get(id) }) }),
+      where: (_field: string, _op: string, plate: string) => ({ limit: (_n: number) => ({ get: async () => docs([...products]
+        .filter(([, value]) => value.car_number === plate).map(([id, value]) => ({ id, data: () => value }))) }) }),
+    } : {
+      where: (_field: string, _op: string, productId: string) => ({ orderBy: () => ({ limit: () => ({ get: async () => docs(snapshots
+        .filter(row => row.productId === productId).sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate))
+        .slice(0, 1).map((row, index) => ({ id: String(index), data: () => row as unknown as Record<string, unknown> }))) }) }) }),
+    } };
+    const reader = new PayoutFeeSnapshotFirestoreStore(db as never);
+    expect(isIancarProductDocumentId('iancar_abc123')).toBe(true);
+    expect(isIancarProductDocumentId('iancar_not-hex')).toBe(false);
+    expect((await reader.readLatestChannelPayout('iancar_abc123'))?.snapshotDate).toBe('2026-10-28');
+    expect((await reader.readLatestChannelPayout('10호7028'))?.productId).toBe('iancar_abc123');
+    expect(await reader.readLatestChannelPayout('20호1234')).toBeNull();
+    expect(await reader.readLatestChannelPayout('30호9999')).toBeNull();
+  });
+});
 
 describe('read-only consumer gateway', () => {
   it('delivers source displacement and explicit missing HOLD through both reference HTTP schemas', async () => {
@@ -246,6 +332,25 @@ describe('read-only consumer gateway', () => {
     expect(product.photo_link).toBe('https://supplier.example/tcar');
     await app.close();
   });
+  it('caps public photo manifests at 50 and rejects ordinal 50 before reading while retaining smaller albums', async () => {
+    for (const count of [0, 1, 49, 50, 51, 201]) {
+      const reads: (number | undefined)[] = [];
+      const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer: string, _product: string, index?: number) => {
+        reads.push(index);
+        return { count, bytes: index === undefined ? null : Buffer.from([255,216,255]), contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true };
+      } };
+      const { app } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+      const url = compatUrl + '/products/P1/photos';
+      const manifest = await app.inject({ url, headers });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.json().count).toBe(Math.min(50,count));
+      expect((await app.inject({ url: url+'/50', headers })).statusCode).toBe(400);
+      expect(reads).toEqual([undefined]);
+      if(count>=50)expect((await app.inject({ url: url+'/49', headers })).statusCode).toBe(200);
+      await app.close();
+    }
+  });
+
   it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
     let reads = 0;
     const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async (_consumer: string, product: string, index?: number) => {

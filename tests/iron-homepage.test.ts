@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { parseIronListingPage, parseIronDetail, readIronHomepage, parseIronSitemapIds, ironDeposit, ironMileage, ironOdometer, ironStatusFromBadges, ironFloorRecords,
-  IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY } from '../src/adapters/iron-homepage.js';
+  IRON_HOMEPAGE_POLICY, IRON_PHOTO_POLICY, IRON_SITEMAP_PROBE_MAX, ironFetchFailure } from '../src/adapters/iron-homepage.js';
 import { sourceCyclePlugin } from '../src/adapters/source-cycle-plugins.js';
 import { judgeSonogongApiRead } from '../src/adapters/sonogong-api-guards.js';
+import { validateSourceRecord } from '../src/domain/source-engine.js';
+import { planSourceCycle } from '../src/application/source-cycle.js';
 
 // 값은 전부 가짜(합성). 구조만 실제 홈페이지의 클래스 이름을 따른다.
 const BASE = IRON_HOMEPAGE_POLICY.baseUrl;
@@ -24,6 +26,8 @@ describe('아이언 홈페이지 어댑터', () => {
     const parsed = parseIronListingPage(listPage(card('a1') + card('a2', true), '/vehicles?condition=new&page=2'), `${BASE}/vehicles?condition=new`, 'new');
     expect(parsed.listings.map(l => [l.id, l.sold])).toEqual([['a1', false], ['a2', true]]);
     expect(parsed.nextUrl).toBe(`${BASE}/vehicles?condition=new&page=2`);
+    expect(parseIronListingPage(listPage(card('a1'), '/vehicles?condition=new&amp;page=2'), `${BASE}/vehicles?condition=new`, 'new').nextUrl)
+      .toBe(`${BASE}/vehicles?condition=new&page=2`);
     expect(parseIronListingPage(listPage(card('a1'), 'https://evil.example/vehicles?page=2'), `${BASE}/vehicles`, 'new').nextUrl).toBeNull();
   });
 
@@ -57,7 +61,7 @@ describe('아이언 홈페이지 어댑터', () => {
   it('reads both conditions with pagination and every detail, serially, and flags failures as incomplete', async () => {
     const sleeps: number[] = [];
     const pages: Record<string, string> = {
-      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&page=2'),
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1') + card('n2', true), '/vehicles?condition=new&amp;page=2'),
       [`${BASE}/vehicles?condition=new&page=2`]: listPage(card('n3')),
       [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
       [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/n2`]: detail('12가1002'),
@@ -98,6 +102,49 @@ describe('아이언 홈페이지 어댑터', () => {
     expect(ironDeposit('보증금 150만원')).toEqual({ state: 'KNOWN', value: 1_500_000 });
     expect(ironDeposit('')).toEqual({ state: 'UNKNOWN', value: null });
     expect(ironDeposit('보증금 문의')).toEqual({ state: 'UNKNOWN', value: null });
+  });
+
+  it('normalizes explicit won/thousand/ten-thousand units without guessing bare numbers or rounding', () => {
+    for (const label of ['보증금 2만원', '보증금 20,000원']) expect(ironDeposit(label)).toEqual({state:'KNOWN',value:20_000});
+    expect(ironDeposit('보증금 2,000천원')).toEqual({state:'KNOWN',value:2_000_000});
+    expect(ironDeposit('보증금 2,000원')).toEqual({state:'KNOWN',value:2_000});
+    for (const label of ['보증금 2000', '보증금 2만', '보증금 -2만원', '보증금 1~2만원', '보증금 1만원 또는 2만원', '보증금 1.2원', '보증금 2%', '보증금 1억2만원', '보증금 .5만원', '무보증 또는 2만원', '50만원대', '50만원 이상', '월 39만원부터', '－50,000원', '(5,000원)', '1～2만원', '1〜2만원']) {
+      expect(ironDeposit(label), label).toEqual({state:'UNKNOWN',value:null});
+    }
+    const record = parseIronDetail(detail('12가3456', {rent:[[72,'월 700천원']],deposit:'2,000천원'}), listing(), '2026-10-17T00:00:00Z');
+    expect(record.terms[0]).toMatchObject({months:72,monthlyRent:{state:'KNOWN',value:700_000},deposit:{state:'KNOWN',value:2_000_000},raw:{rent_text:'월 700천원',deposit_text:'보증금 2,000천원',normalized_amount_unit:'KRW'}});
+    expect(record.raw.price_rows).toEqual([{period:'72개월',rent:'월 700천원',rent_html:'월 700천원'}]);
+    const unknown = parseIronDetail(detail('12가3456', {rent:[[72,'월 2000']]}), listing(), 't');
+    expect(unknown.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+    expect(unknown.raw.price_rows).toEqual([{period:'72개월',rent:'월 2000',rent_html:'월 2000'}]);
+    expect(ironDeposit('무보증 36개월')).toEqual({state:'ZERO',value:0});
+    expect(ironDeposit('보증금 1천만원')).toEqual({state:'KNOWN',value:10_000_000});
+    expect(ironDeposit('보증금 1억원')).toEqual({state:'KNOWN',value:100_000_000});
+    expect(ironDeposit('보증금 1.200만원')).toEqual({state:'UNKNOWN',value:null});
+  });
+
+  it('excludes an explicit no-offer period only, keeping valid periods sellable and updateable', () => {
+    const at='2026-10-17T00:00:00Z';
+    for(const noOffer of ['문의','-','협의']) {
+      const prior=parseIronDetail(detail('12가3456'),listing(),at);
+      const next=parseIronDetail(detail('12가3456',{rent:[[12,noOffer],[36,'월 80만원'],[72,'월 1천만원']]}),listing(),at);
+      expect(next.terms.map(t=>[t.months,t.monthlyRent.value])).toEqual([[36,800000],[72,10_000_000]]);
+      expect(next.raw.price_rows).toHaveLength(3);
+      expect(validateSourceRecord(next)).toEqual([]);
+      const result=planSourceCycle({sourceId:'RP006',family:'OTHER',maxDowngradeRatio:1},
+        {records:[next],complete:true,observedAt:at,heldCount:0},
+        {products:[{record:prior,listable:true,locked_by_contract:false,publication_withdrawal:null,publication_withdrawal_prior:null}],complete:true},Date.parse(at));
+      expect(result.plan.entries[0]).toMatchObject({kind:'UPDATE',after:{listable:true}});
+      expect(result.plan.entries[0]!.after.record.terms[0]!.monthlyRent.value).toBe(800000);
+    }
+  });
+
+  it('holds implausible monthly amounts instead of accepting unit errors or tiny values', () => {
+    for(const value of ['월 39원','월 39,000,000만원','월 007원']) {
+      const r=parseIronDetail(detail('12가3456',{rent:[[12,value]]}),listing(),'2026-10-17T00:00:00Z');
+      expect(r.terms[0]!.monthlyRent).toEqual({state:'UNKNOWN',value:null});
+      expect(validateSourceRecord(r)).toContain('TERMS_HOLD');
+    }
   });
 
   it('status: 계약 synonyms → 계약중(sellable, provider spelling kept), sold words → not sellable, unknown/mixed badges hold', () => {
@@ -149,10 +196,75 @@ describe('아이언 홈페이지 어댑터', () => {
       [`${BASE}/vehicles?condition=new`]: listPage(card('n1')), [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
       [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/u1`]: detail('12가1004'),
     };
-    const run = (map: string) => readIronHomepage(async url => { const p = url.endsWith('/sitemap.xml') ? map : pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; },
-      { sleep: async () => undefined });
-    expect(await run(sitemap(['n1', 'u1']))).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:2:missing0'] });
-    expect(await run(sitemap(['n1', 'u1', 'n9']))).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP' });
+    const calls: string[] = [];
+    const run = (map: string, extra: Record<string, string | Error> = {}) => readIronHomepage(async url => {
+      calls.push(url);
+      const p = url.endsWith('/sitemap.xml') ? map : pages[url] ?? extra[url];
+      if (p instanceof Error) throw p;
+      if (!p) throw new Error('IRON_HTTP_404'); return p;
+    }, { sleep: async () => undefined });
+    expect(await run(sitemap(['n1', 'u1']))).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:2:missing0:stale0'] });
+    // 사이트맵에만 있는 id 의 상세가 열리면(2xx) 목록이 덜 읽힌 것 → 불완전
+    expect(await run(sitemap(['n1', 'u1', 'n9']), { [`${BASE}/vehicles/n9`]: detail('12가1009') }))
+      .toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:3:missing1:stale0'] });
+  });
+
+  it('completeness: a sitemap-only id whose detail is 404 is a stale entry, not a short listing; anything else stays incomplete', async () => {
+    const sitemap = (ids: string[]) => `<?xml version="1.0"?><urlset>${ids.map(id => `<url><loc>${BASE}/vehicles/${id}</loc></url>`).join('')}</urlset>`;
+    const pages: Record<string, string> = {
+      [`${BASE}/vehicles?condition=new`]: listPage(card('n1')), [`${BASE}/vehicles?condition=used`]: listPage(card('u1')),
+      [`${BASE}/vehicles/n1`]: detail('12가1001'), [`${BASE}/vehicles/u1`]: detail('12가1004'),
+    };
+    const run = async (map: string, extra: Record<string, string | Error> = {}) => {
+      const calls: string[] = [];
+      const read = await readIronHomepage(async url => {
+        calls.push(url);
+        const p = url.endsWith('/sitemap.xml') ? map : pages[url] ?? extra[url];
+        if (p instanceof Error) throw p;
+        if (!p) throw new Error('IRON_HTTP_404'); return p;
+      }, { sleep: async () => undefined });
+      return { read, calls };
+    };
+    // 404 → 잔재(stale): 완전, 상세 확인 요청은 그 id 에 한 번만
+    const stale = await run(sitemap(['n1', 'u1', 'gone']));
+    expect(stale.read).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:3:missing0:stale1'] });
+    expect(stale.calls.filter(u => u === `${BASE}/vehicles/gone`)).toHaveLength(1);
+    expect(stale.read.records.map(r => r.plate)).toEqual(['12가1001', '12가1004']);
+    // 확인 요청도 get() 을 거친다: 호스트 검사 + 500ms 간격(첫 요청 뒤 모든 요청)
+    const sleeps: number[] = [];
+    const spaced = await readIronHomepage(async url => { const p = url.endsWith('/sitemap.xml') ? sitemap(['n1', 'u1', 'gone']) : pages[url]; if (!p) throw new Error('IRON_HTTP_404'); return p; },
+      { sleep: async ms => { sleeps.push(ms); } });
+    expect(spaced.complete).toBe(true);
+    expect(sleeps).toHaveLength(2 + 1 + 1 + 2 - 1);                              // 목록 2 + 사이트맵 1 + 확인 1 + 상세 2 − 첫 요청 1
+    expect(sleeps.every(ms => ms === IRON_HOMEPAGE_POLICY.minIntervalMs)).toBe(true);
+    // 5xx·시간 초과·HTML 아님·호스트 거부 → 확인 못 함 = 불완전 그대로(가드 약화 없음)
+    for (const err of ['IRON_HTTP_500', 'IRON_HTTP_503', 'IRON_NOT_HTML', 'IRON_HOST_REJECTED', 'The operation was aborted due to timeout']) {
+      const { read } = await run(sitemap(['n1', 'u1', 'x1']), { [`${BASE}/vehicles/x1`]: new Error(err) });
+      expect(read, err).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:3:missing1:stale0'] });
+    }
+    // 섞임: 404 하나 + 열리는 상세 하나 → 불완전(missing1·stale1)
+    const mixed = await run(sitemap(['n1', 'u1', 'gone', 'n9']), { [`${BASE}/vehicles/n9`]: detail('12가1009') });
+    expect(mixed.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:4:missing1:stale1'] });
+    // 정확히 상한(IRON_SITEMAP_PROBE_MAX)까지는 전수 확인 — 전부 404 면 완전
+    const atCap = Array.from({ length: IRON_SITEMAP_PROBE_MAX }, (_, i) => `g${i}`);
+    const full = await run(sitemap(['n1', 'u1', ...atCap]));
+    expect(full.read).toMatchObject({ complete: true, notes: [`IRON_SITEMAP:${atCap.length + 2}:missing0:stale${atCap.length}`] });
+    expect(full.calls.filter(u => /\/vehicles\/g\d+$/.test(u))).toHaveLength(atCap.length);
+    // 상한을 넘게 빠지면 확인 요청 없이 불완전
+    const many = Array.from({ length: IRON_SITEMAP_PROBE_MAX + 1 }, (_, i) => `m${i}`);
+    const capped = await run(sitemap(['n1', 'u1', ...many]));
+    expect(capped.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: [`IRON_SITEMAP:${many.length + 2}:missing${many.length}:stale0`] });
+    expect(capped.calls.some(u => /\/vehicles\/m\d+$/.test(u))).toBe(false);
+  });
+
+  it('runtime fetch contract: final host is judged before HTTP status, so an external-host 404 is never a stale-sitemap 404', () => {
+    const iron = `${BASE}/vehicles/x`;
+    expect(ironFetchFailure({ ok: false, status: 404, url: iron }, iron)).toBe('IRON_HTTP_404');
+    expect(ironFetchFailure({ ok: false, status: 404, url: 'https://evil.example/vehicles/x' }, iron)).toBe('IRON_HOST_REJECTED');   // 리다이렉트 뒤 외부 404
+    expect(ironFetchFailure({ ok: true, status: 200, url: 'https://evil.example/' }, iron)).toBe('IRON_HOST_REJECTED');
+    expect(ironFetchFailure({ ok: false, status: 500, url: iron }, iron)).toBe('IRON_HTTP_500');
+    expect(ironFetchFailure({ ok: true, status: 200, url: '' }, iron)).toBeNull();                                                // url 비면 요청 주소로 판정
+    expect(ironFetchFailure({ ok: true, status: 200, url: 'not a url' }, iron)).toBe('IRON_HOST_REJECTED');
   });
 
   it('the IRON plugin keeps a held (null) homepage status as null and keeps 계약중 sellable', async () => {

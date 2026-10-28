@@ -125,6 +125,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       assets: copy([...this.assets.entries()]),
       products: copy([...this.products.entries()]),
       offers: copy([...this.offers.entries()]),
+      policies: copy([...this.policies.entries()]),
       receipts: copy([...this.receipts.entries()]),
       canonicalizationReceipts: copy([...this.canonicalizationReceipts.entries()]),
       manualCatalogEntryReceipts: copy([...this.manualCatalogEntryReceipts.entries()]),
@@ -168,6 +169,11 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       putProduct: async (product) => { this.products.set(product.id, copy(product)); },
       getOffer: async (id) => copy(this.offers.get(id) ?? null),
       putOffer: async (offer) => { this.offers.set(offer.id, copy(offer)); },
+      getPolicy: async (id) => copy(this.policies.get(id) ?? null),
+      putPolicy: async (policy) => {
+        if (this.policies.has(policy.id)) throw new Error(`Policy already exists: ${policy.id}`);
+        this.policies.set(policy.id, copy(policy));
+      },
 
       getSourceDefinition: async (sourceId) => copy(this.sourceDefinitions.get(sourceId) ?? null),
       putSourceDefinition: async (source) => {
@@ -292,6 +298,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       this.assets = new Map(snapshot.assets);
       this.products = new Map(snapshot.products);
       this.offers = new Map(snapshot.offers);
+      this.policies = new Map(snapshot.policies);
       this.receipts = new Map(snapshot.receipts);
       this.canonicalizationReceipts = new Map(snapshot.canonicalizationReceipts);
       this.manualCatalogEntryReceipts = new Map(snapshot.manualCatalogEntryReceipts);

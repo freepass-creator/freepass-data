@@ -6,6 +6,10 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import type { AuditEvent } from '../domain/catalog.js';
 import {
   isPlainObject,
+  policyCorrectionValuesEqual,
+  isPolicyCorrectionClear,
+  assertPolicyCorrectionReplacement,
+  assertAllStoredShapes,
   policyCorrectionItemDigest,
   storedPolicyValue,
   validatePolicyCorrectionPlan,
@@ -19,11 +23,17 @@ import { readbackAuditEvents } from './vehicle-name-reference-repair-firestore.j
 
 type Snapshot = { ref: { path: string; id: string; parent?: { id: string } }; exists: boolean; data: () => Record<string, unknown> | undefined; updateTime?: { toMillis: () => number } };
 const objectValue = (value: unknown): Record<string, unknown> => (isPlainObject(value) ? value : {});
-const sameStored = (data: Record<string, unknown>, item: PolicyCorrectionItem) => storedPolicyValue(data, item.layer, item.field) === item.to;
+const sameStored = (data: Record<string, unknown>, item: PolicyCorrectionItem) =>
+  isPolicyCorrectionClear(item) ? Object.hasOwn(data, item.field) && data[item.field] === null
+    : policyCorrectionValuesEqual(storedPolicyValue(data, item.layer, item.field), item.to);
 const storedEvidence = (data: Record<string, unknown>, item: PolicyCorrectionItem) =>
   item.layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)[item.field]) : objectValue(objectValue(data.field_evidence)[item.field]);
 const alreadyApplied = (data: Record<string, unknown>, item: PolicyCorrectionItem) =>
-  sameStored(data, item) && (storedEvidence(data, item).itemDigest === policyCorrectionItemDigest(item)
+  sameStored(data, item)
+    && (!isPolicyCorrectionClear(item) || (storedEvidence(data, item).operation === 'clear' && storedEvidence(data, item).value === null))
+    && storedEvidence(data, item).answerSha256 === item.evidence.answerSha256
+    && storedEvidence(data, item).applicability === item.evidence.applicability
+    && (storedEvidence(data, item).itemDigest === policyCorrectionItemDigest(item)
     || (storedEvidence(data, item).writer === 'policy-corrector'
       && storedEvidence(data, item).source === item.evidence.source
       && storedEvidence(data, item).location === item.evidence.location
@@ -34,11 +44,13 @@ const byPolicy = (items: PolicyCorrectionItem[]) => items.reduce<Record<string, 
 }, {});
 const serverEvidence = (planId: string, item: PolicyCorrectionItem) => ({
   layer: item.layer,
-  value: item.to,
+  value: isPolicyCorrectionClear(item) ? null : item.to,
+  ...(isPolicyCorrectionClear(item) ? { operation: 'clear' } : {}),
   source: item.evidence.source,
   location: item.evidence.location,
   effectiveDate: item.evidence.effectiveDate,
   ...(item.evidence.answerSha256 ? { answerSha256: item.evidence.answerSha256 } : {}),
+  ...(item.evidence.applicability ? { applicability: item.evidence.applicability } : {}),
   planId,
   itemDigest: policyCorrectionItemDigest(item),
   appliedAt: FieldValue.serverTimestamp(),
@@ -49,7 +61,10 @@ const readbackEvidenceMatches = (data: Record<string, unknown>, planId: string, 
   const evidence = storedEvidence(data, item);
   return evidence.planId === planId && evidence.itemDigest === policyCorrectionItemDigest(item)
     && evidence.source === item.evidence.source && evidence.location === item.evidence.location
-    && evidence.effectiveDate === item.evidence.effectiveDate && evidence.writer === 'policy-corrector';
+    && evidence.effectiveDate === item.evidence.effectiveDate && evidence.writer === 'policy-corrector'
+    && evidence.answerSha256 === item.evidence.answerSha256 && evidence.applicability === item.evidence.applicability
+    && policyCorrectionValuesEqual(evidence.value, isPolicyCorrectionClear(item) ? null : item.to)
+    && (!isPolicyCorrectionClear(item) || evidence.operation === 'clear');
 };
 
 export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
@@ -60,9 +75,19 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
   const refs = Object.keys(grouped).map((code) => db.collection('policy').doc(code));
   const before = refs.length ? await db.getAll(...refs) as Snapshot[] : [];
   const documents: Record<string, { data: Record<string, unknown> }> = {};
+  const defaults=new Map((plan.createDefaults??[]).map(c=>[c.policyCode,c]));
+  const defaultData=(code:string):Record<string,unknown>=>({policy_code:code,provider_company_code:defaults.get(code)!.supplierCode,policy_scope:'SUPPLIER_CONTRACT_STANDARD_DEFAULT',policy_name:'공급사 표준 계약',policy_field_owner:'policy-corrector'});
   before.forEach((snapshot) => {
-    if (!snapshot.exists) throw new Error(`POLICY_NOT_FOUND ${snapshot.ref.path}`);
-    documents[snapshot.ref.id] = { data: snapshot.data() ?? {} };
+    if (!snapshot.exists && !defaults.has(snapshot.ref.id)) throw new Error(`POLICY_NOT_FOUND ${snapshot.ref.path}`);
+    if(snapshot.exists && defaults.has(snapshot.ref.id) && (snapshot.data()?.policy_scope!=='SUPPLIER_CONTRACT_STANDARD_DEFAULT' || snapshot.data()?.policy_field_owner!=='policy-corrector')) throw new Error('DEFAULT_ID_OCCUPIED');
+    const data = snapshot.exists ? snapshot.data() ?? {} : defaultData(snapshot.ref.id);
+    if (!data.provider_company_code) throw new Error('SUPPLIER_CODE_MISSING ' + snapshot.ref.id);
+    assertAllStoredShapes(snapshot.ref.id, data);
+    for (const item of grouped[snapshot.ref.id]!) {
+      if (data.provider_company_code !== item.supplierCode) throw new Error('SUPPLIER_MISMATCH ' + snapshot.ref.id);
+      assertPolicyCorrectionReplacement(data, item, grouped[snapshot.ref.id]);
+    }
+    documents[snapshot.ref.id] = { data };
   });
   const skippedAlreadyApplied = plan.items.filter((item) => alreadyApplied(documents[item.policyCode]!.data, item)).length;
   const activeGrouped = Object.fromEntries(Object.entries(grouped)
@@ -92,12 +117,12 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
     const txDocs: Record<string, { data: Record<string, unknown> }> = {};
     current.forEach((snapshot, index) => {
       const original = activeBefore[index]!;
-      if (!snapshot.exists || snapshot.updateTime?.toMillis?.() !== original.updateTime?.toMillis?.()) throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
-      txDocs[snapshot.ref.id] = { data: snapshot.data() ?? {} };
+      if (snapshot.exists !== original.exists || snapshot.updateTime?.toMillis?.() !== original.updateTime?.toMillis?.()) throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
+      txDocs[snapshot.ref.id] = { data: snapshot.exists ? snapshot.data() ?? {} : defaultData(snapshot.ref.id) };
     });
     if (activeItems.length) validatePolicyCorrectionPlan({ ...plan, items: activeItems }, { documents: txDocs });
     current.forEach((snapshot) => {
-      const data = snapshot.data() ?? {};
+      const data = snapshot.exists ? snapshot.data() ?? {} : defaultData(snapshot.ref.id);
       const items = activeGrouped[snapshot.ref.id]!;
       const fieldEvidence = { ...objectValue(data.field_evidence) };
       const salesPolicy = { ...objectValue(data.sales_policy) };
@@ -109,7 +134,7 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
       for (const item of items) {
         const evidence = serverEvidence(plan.planId, item);
         if (item.layer === 'supplierCondition') {
-          update[item.field] = item.to;
+          update[item.field] = isPolicyCorrectionClear(item) ? null : item.to;
           fieldEvidence[item.field] = evidence;
         } else {
           salesPolicy[item.field] = evidence;
@@ -125,7 +150,8 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
           entityId: item.policyCode,
           action: 'POLICY_FIELD_CORRECTED',
           before: { [item.field]: storedPolicyValue(data, item.layer, item.field) ?? null },
-          after: { layer: item.layer, [item.field]: item.to, evidence },
+          after: { layer: item.layer, [item.field]: isPolicyCorrectionClear(item) ? null : item.to,
+            ...(isPolicyCorrectionClear(item) ? { operation: 'clear' } : {}), evidence },
           reason: `policy-corrector ${plan.planId} ${item.evidence.source} ${item.evidence.location}`,
           writerId: 'policy-corrector',
           revisionBefore: 0,
@@ -135,7 +161,8 @@ export async function applyPolicyCorrection(plan: PolicyCorrectionPlan) {
       }
       if (items.some((item) => item.layer === 'supplierCondition')) update.field_evidence = fieldEvidence;
       if (items.some((item) => item.layer === 'salesPolicy')) update.sales_policy = salesPolicy;
-      transaction.update(snapshot.ref as never, update as never);
+      if(snapshot.exists) transaction.update(snapshot.ref as never, update as never);
+      else transaction.create(snapshot.ref as never, {...data,...update,created_at:FieldValue.serverTimestamp()} as never);
     });
     audits.forEach((audit, index) => transaction.create(auditRefs[index] as never, audit));
   });

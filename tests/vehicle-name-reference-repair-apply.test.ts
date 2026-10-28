@@ -5,6 +5,8 @@ import { stableDigest } from '../src/shared/stable-digest.js';
 const store = new Map<string, Record<string, unknown>>();
 const put = (path: string, data: Record<string, unknown>) => { store['set'](path, data); };
 const UNION = Symbol('union');
+const DELETE = Symbol('delete');
+let correctionClock = 100;
 type Ref = { path: string; id: string; parent: { id: string } };
 const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${id}`, id, parent: { id: collection } });
 // Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
@@ -20,7 +22,8 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
     if (v && typeof v === 'object' && UNION in v) {
       const prev = Array.isArray(doc[k]) ? (doc[k] as unknown[]) : [];
       doc[k] = [...prev, ...((v as never)[UNION] as unknown[]).filter((x) => !prev.includes(x))];
-    } else doc[k] = v;
+    } else if (v === DELETE) delete doc[k];
+    else doc[k] = v;
   }
   store.set(path, doc);
 };
@@ -40,31 +43,37 @@ const runQuery = (q: Query) => {
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
-  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
+  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f), limit: (n: number) => query(c).limit(n) }),
   getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
-  runTransaction: async (fn: (t: unknown) => Promise<void>) => {
+  runTransaction: async (fn: (t: unknown) => Promise<unknown>) => {
     const writes: Array<() => void> = [];
     const t = {
       getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
-      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => applyUpdate(r.path, u)); },
+      update: (r: Ref, u: Record<string, unknown>, pre?: unknown) => { preconditions.push([r.path, pre]); writes.push(() => {
+        applyUpdate(r.path, u);
+        if (typeof updateTimes.get(r.path) === 'object') updateTimes.set(r.path, { seconds: correctionClock, nanoseconds: 0 });
+      }); },
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
-        store.set(r.path, structuredClone(d));
+        store.set(r.path, structuredClone(d.committedAt === 'ts' ? { ...d, committedAt: { seconds: correctionClock, nanoseconds: 0 } } : d));
+        if (d.committedAt === 'ts') updateTimes.set(r.path, { seconds: correctionClock, nanoseconds: 0 }); // 같은 커밋의 모든 문서는 같은 updateTime
       }),
     };
-    await fn(t);
+    const result = await fn(t);
+    correctionClock++;
     writes.forEach((w) => w());
+    return result;
   },
 };
 vi.mock('firebase-admin/firestore', () => ({
   getFirestore: () => db,
-  FieldValue: { arrayUnion: (...v: unknown[]) => ({ [UNION]: v }), serverTimestamp: () => 'ts' },
+  FieldValue: { arrayUnion: (...v: unknown[]) => ({ [UNION]: v }), serverTimestamp: () => 'ts', delete: () => DELETE },
 }));
-vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
-vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
+vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({ options: { projectId: 'test-project' } }) }));
+vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: vi.fn(async () => undefined) }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents, vehicleNameRepairPlanDigest } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 // 상품 정체성 정정은 승인 digest(계획 전체 digest)와 함께만 적용된다 — 적용기가 직접 대조한다.
 const applyApproved = (plan: Parameters<typeof applyVehicleNameReferenceRepair>[0]) => applyVehicleNameReferenceRepair(plan, { approvedPlanDigest: stableDigest(plan) });
@@ -646,6 +655,33 @@ describe('product identity applier guards (Codex 적용기 검토 5건)', () => 
     expect(store.get('products/p-guard')).toMatchObject({ sub_model: 'Model A New' });
   });
 
+  it('모델 수준(level MODEL): 제조사·모델만 쓰고 세부모델은 저장된 글자 그대로 유지, 백업·되읽기·사람 입력 거절은 그대로', async () => {
+    const raw = '현대  더 뉴 싼타페 HEV 1.6 2WD';   // 공백이 정규화되지 않은 원문형 값(그대로 유지되어야 한다)
+    const model = { id: 'p-model', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: raw }, to: { maker: 'Maker', model: 'Model A', sub_model: raw }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, vehicle_review_required: true, 원문: { 차명: raw } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).resolves.toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+    expect(store.get('products/p-model')).toMatchObject({ maker: 'Maker', model: 'Model A', sub_model: raw, vehicle_review_required: true });
+    // 마스터에 없는 제조사·모델은 거절
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, vehicle_review_required: true, 원문: { 차명: raw } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...model, to: { maker: 'Maker', model: 'Nope', sub_model: raw } }] }))).rejects.toThrow(/exactly one active vehicle_master/);
+    // 사람 입력(검토 완료·원문과 다른 세부모델)은 거절
+    store.set('products/p-model', { maker: '', model: '', sub_model: raw, 원문: { 차명: 'something else' } });
+    await expect(applyApproved(plan({ productIdentityRepairs: [model] }))).rejects.toThrow(/manual or confirmed value/);
+  });
+
+  it('모델 수준 + 저장 세부모델 빈칸: 제조사·모델만 채우고 세부모델 칸은 쓰지 않는다(없던 칸이 생기지 않음), 값이 있으면 종전 규칙', async () => {
+    const blank = { id: 'p-nosub', level: 'MODEL' as const, from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: '' }, evidence: 'master 항목·연식∈기간' };
+    store.set('products/p-nosub', { maker: '', model: '' });   // sub_model 칸 자체가 없음
+    await expect(applyApproved(plan({ productIdentityRepairs: [blank] }))).resolves.toMatchObject({ productIdentityCount: 1, readbackCount: 1 });
+    expect(store.get('products/p-nosub')).toMatchObject({ maker: 'Maker', model: 'Model A' });
+    expect(store.get('products/p-nosub')).not.toHaveProperty('sub_model');
+    // 마스터에 없는 모델은 여전히 거절
+    store.set('products/p-nosub', { maker: '', model: '' });
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, to: { maker: 'Maker', model: 'Nope', sub_model: '' } }] }))).rejects.toThrow(/exactly one active vehicle_master/);
+    // 전체 정정(level 없음)은 여전히 to.sub_model 필수
+    await expect(applyApproved(plan({ productIdentityRepairs: [{ ...blank, level: undefined }] }))).rejects.toThrow(/requires a non-empty value/);
+  });
+
   it('Codex #664 확인: false·빈 문자열·null·undefined 는 «잠금/철회 아님»이고, 빈 객체·문자열·true 는 표식 있음(보수)', async () => {
     for (const value of [null, undefined, false, '']) {
       store.set('products/p-guard', { maker: '', model: '', sub_model: '', locked_by_contract: value, publication_withdrawal: value });
@@ -972,5 +1008,286 @@ describe('alias canonicalization of a confirmed product identity', () => {
     await expect(applyApproved({ ...plan(), masterCreates: [{ id: 'm-new', evidence: '근거', data: { id: 'm-new', maker: '현대', model: '캐스퍼', sub_model: '캐스퍼', origin: '국산' } }] }))
       .rejects.toThrow(/canonical name|manual or confirmed value/);
     expect(store.get('products/p1')).toMatchObject({ sub_model: '캐스퍼' });
+  });
+});
+
+describe('confirmed product identity correction (isolated approval path)', () => {
+  type Plan = import('../src/infra/vehicle-name-reference-repair-firestore.js').VehicleNameRepairPlan;
+  const fixture = (): Plan => {
+    const from = { maker: 'Maker', model: 'Model', sub_model: 'Wrong', trim_name: 'Old' };
+    const to = { maker: 'Maker', model: 'Model', sub_model: 'Right', trim_name: 'New' };
+    const original = { 차명: 'old source', 전체: { 차량번호: '00가0000' } };
+    const correction = { 차명: 'corrected source' };
+    const master = { id: 'fake-master', maker: to.maker, model: to.model, sub_model: to.sub_model };
+    const trim = { ...master, id: 'fake-trim', master_id: master.id, trim: to.trim_name };
+    put('products/00가0000', { ...from, 원문: original, 원문_정정: correction, confirmed: true, unrelated: 'keep' });
+    put('vehicle_master/fake-master', master);
+    put('vehicle_trim_master/fake-trim', trim);
+    updateTimes.set('products/00가0000', { seconds: 1, nanoseconds: 123 });
+    const source = (data: unknown, name: string) => ({ source: name, authoredAt: '2026-01-01T00:00:00Z', retrievedAt: '2026-01-02T00:00:00Z', archiveRef: 'private:fake-reference', contentDigest: stableDigest(data) });
+    return { kind: 'PRODUCT_IDENTITY_CORRECTION', projectId: 'test-project', sourceDigest: 'fake-source', masterRepairs: [], productRepairs: [], productIdentityCorrections: [{
+      id: '00가0000', from, to, expectedUpdateTime: { seconds: 1, nanoseconds: 123 }, reason: 'Reviewed correction explicitly replaces the wrong source identity',
+      evidence: { original: source(original, 'supplier'), correction: { ...source(correction, '지지오토'), archiveVehicleNumber: '00가0000' }, vehicleNumber: '00가0000', correctsOriginalDigest: stableDigest(original), correctedFields: ['sub_model', 'trim_name'], resolvedIdentity: to, conflicts: [] },
+      master: { id: master.id, trimId: trim.id, contentDigest: stableDigest(master), trimContentDigest: stableDigest(trim) },
+    }] };
+  };
+  // 두 번째 가짜 차량: 번호판·원문 번호·보관 번호를 모두 새 번호로 맞춰 다른 근거 지문을 만든다.
+  const secondOf = (p: Plan) => {
+    const second = structuredClone(item(p)); second.id = '00가0001';
+    const base = store.get('products/00가0000')!; const original = { ...(base.원문 as Record<string, unknown>), 전체: { 차량번호: '00가0001' } };
+    second.evidence.vehicleNumber = '00가0001'; second.evidence.correction.archiveVehicleNumber = '00가0001';
+    second.evidence.original.contentDigest = stableDigest(original); second.evidence.correctsOriginalDigest = stableDigest(original);
+    return { second, original };
+  };
+  const apply = (p: Plan) => applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) });
+  const item = (p: Plan) => p.productIdentityCorrections![0]!;
+  const audits = () => [...store.values()].filter((x) => String(x.action).startsWith('PRODUCT_IDENTITY_CORRECT'));
+  const reverse = (p: Plan): Plan => {
+    const prior = audits()[0]!;
+    const next = structuredClone(p);
+    const i = item(next);
+    i.from = structuredClone(item(p).to); i.to = structuredClone(item(p).from);
+    i.expectedUpdateTime = updateTimes.get('products/00가0000') as typeof i.expectedUpdateTime;
+    i.rollbackOf = prior.eventId as string;
+    i.reason = 'Approved reversal of this exact correction';
+    return next;
+  };
+  it('corrects confirmed fields atomically and preserves source and unrelated fields', async () => {
+    const p = fixture(); const before = structuredClone(store.get('products/00가0000')!);
+    const result = await apply(p);
+    expect(result.readbackCount).toBe(1); expect(result.auditCount).toBe(1);
+    expect(store.get('products/00가0000')).toEqual({ ...before, ...item(p).to });
+    expect(audits()[0]).toMatchObject({ action: 'PRODUCT_IDENTITY_CORRECTED', planDigest: vehicleNameRepairPlanDigest(p), before: item(p).from, after: item(p).to });
+    expect(preconditions.at(-1)?.[1]).toEqual({ lastUpdateTime: item(p).expectedUpdateTime });
+  });
+  it('refuses ordinary approval even with the exact correction digest', async () => {
+    const p = fixture();
+    await expect(applyVehicleNameReferenceRepair(p, { approvedPlanDigest: vehicleNameRepairPlanDigest(p) })).rejects.toThrow(/AUTHORIZE_PRODUCT/);
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: stableDigest(p) })).rejects.toThrow(/AUTHORIZE_PRODUCT/);
+  });
+  it('binds approval to the project and every reviewed field', async () => {
+    const p = fixture(); const digest = vehicleNameRepairPlanDigest(p); item(p).reason += ' changed';
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: digest })).rejects.toThrow(/digest/);
+    p.projectId = 'other-project'; await expect(apply(p)).rejects.toThrow(/project mismatch/);
+  });
+  it.each(['masterRepairs', 'productRepairs', 'productIdentityRepairs', 'productTrimRepairs', 'masterCreates'] as const)('refuses mixed %s plans', async (key) => {
+    const p = fixture(); (p as unknown as Record<string, unknown>)[key] = [{ id: 'fake-other', from: 'a', to: 'b' }];
+    await expect(apply(p)).rejects.toThrow(/mix/);
+  });
+  it('refuses 11 products, duplicate IDs and empty correction batches', async () => {
+    const p = fixture(); const first = item(p);
+    p.productIdentityCorrections = Array.from({ length: 11 }, (_, n) => ({ ...first, id: `fake-${n}` }));
+    await expect(apply(p)).rejects.toThrow(/1\.\.10/);
+    p.productIdentityCorrections = [first, first]; await expect(apply(p)).rejects.toThrow(/duplicate/);
+    p.productIdentityCorrections = []; await expect(apply(p)).rejects.toThrow(/1\.\.10/);
+  });
+  it.each([{ locked_by_contract: true }, { locked_by_contract: 'locked' }, { publication_withdrawal: { reason: 'withdrawn' } }])('refuses protected products %j', async (flag) => {
+    const p = fixture(); Object.assign(store.get('products/00가0000')!, flag);
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT|PUBLICATION_WITHDRAWN/); expect(audits()).toHaveLength(0);
+  });
+  it.each([undefined, null, '', ' Wrong'])('compares from without normalization: %s', async (value) => {
+    const p = fixture(); const data = store.get('products/00가0000')!;
+    if (value === undefined) delete data.sub_model; else data.sub_model = value;
+    await expect(apply(p)).rejects.toThrow(/from\/version/);
+  });
+  it('refuses a changed version even when all four names are unchanged', async () => {
+    const p = fixture(); updateTimes.set('products/00가0000', { seconds: 1, nanoseconds: 124 });
+    await expect(apply(p)).rejects.toThrow(/version/);
+  });
+  it('rechecks product state after backup and aborts the entire batch', async () => {
+    const p = fixture();
+    const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('products/00가0000')!.locked_by_contract = true; });
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/); expect(audits()).toHaveLength(0);
+  });
+  it.each(['원문', '원문_정정'])('refuses changed %s content', async (field) => {
+    const p = fixture(); (store.get('products/00가0000')![field] as Record<string, unknown>).차명 = 'changed';
+    await expect(apply(p)).rejects.toThrow(/evidence changed/);
+  });
+  it('binds identity by vehicle number even when source and correction names differ and the product has no name field', async () => {
+    const p = fixture(); const data = store.get('products/00가0000')!;
+    expect(Object.hasOwn(data, '차명')).toBe(false); expect((data.원문 as Record<string, unknown>).차명).not.toBe((data.원문_정정 as Record<string, unknown>).차명);
+    await expect(apply(p)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses when any of the three vehicle numbers differs', async () => {
+    const original = fixture(); ((store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체).차량번호 = '00가0001';
+    original.productIdentityCorrections![0]!.evidence.original.contentDigest = stableDigest(store.get('products/00가0000')!.원문);
+    original.productIdentityCorrections![0]!.evidence.correctsOriginalDigest = stableDigest(store.get('products/00가0000')!.원문);
+    await expect(apply(original)).rejects.toThrow(/vehicle mismatch/);
+    const archive = fixture(); item(archive).evidence.correction.archiveVehicleNumber = '00가0001';
+    await expect(apply(archive)).rejects.toThrow(/unresolved/);
+    const claimed = fixture(); item(claimed).evidence.vehicleNumber = '00가0001';
+    await expect(apply(claimed)).rejects.toThrow(/unresolved/);
+    const car = fixture(); store.get('products/00가0000')!.car_number = '00가0001';
+    await expect(apply(car)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('accepts spacing inside the original number but refuses a hyphenated different number', async () => {
+    const spaced = fixture(); const all = (store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체; all.차량번호 = '00가 0000';
+    const o = store.get('products/00가0000')!.원문; item(spaced).evidence.original.contentDigest = stableDigest(o); item(spaced).evidence.correctsOriginalDigest = stableDigest(o);
+    await expect(apply(spaced)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses a hyphenated number as a different vehicle', async () => {
+    const p = fixture(); const all = (store.get('products/00가0000')!.원문 as { 전체: Record<string, unknown> }).전체; all.차량번호 = '00가-0000';
+    const o = store.get('products/00가0000')!.원문; item(p).evidence.original.contentDigest = stableDigest(o); item(p).evidence.correctsOriginalDigest = stableDigest(o);
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('binds approval to the archive vehicle number: changing it after approval is refused', async () => {
+    const p = fixture(); const digest = vehicleNameRepairPlanDigest(p);
+    item(p).evidence.correction.archiveVehicleNumber = '00가0001';
+    await expect(applyVehicleNameReferenceRepair(p, { approvedCorrectionDigest: digest })).rejects.toThrow(/exact plan digest|unresolved/);
+  });
+  it('links the exact committed version: audit doc and product share updateTime even when committedAt (server timestamp) differs by ms', async () => {
+    const p = fixture(); await apply(p);
+    const audit = [...store.entries()].find(([, x]) => x.action === 'PRODUCT_IDENTITY_CORRECTED')!;
+    const committed = audit[1].committedAt as { seconds: number; nanoseconds: number };
+    audit[1].committedAt = { seconds: committed.seconds, nanoseconds: committed.nanoseconds + 15_000_000 };
+    expect(updateTimes.get('products/00가0000')).toEqual(updateTimes.get(audit[0]));
+    expect((await apply(p)).skippedAlreadyApplied).toBe(1);
+  });
+  it('refuses a replay when another write changed and restored the document (same data, different version)', async () => {
+    const p = fixture(); await apply(p);
+    const v = updateTimes.get('products/00가0000') as { seconds: number; nanoseconds: number };
+    updateTimes.set('products/00가0000', { seconds: v.seconds, nanoseconds: v.nanoseconds + 1 });
+    await expect(apply(p)).rejects.toThrow(/replay/);
+    updateTimes.set('products/00가0000', { seconds: v.seconds - 1, nanoseconds: v.nanoseconds });
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('allows reversal only from the exact committed version, even if the data is identical', async () => {
+    const p = fixture(); await apply(p);
+    const v = updateTimes.get('products/00가0000') as { seconds: number; nanoseconds: number };
+    const stale = reverse(p); updateTimes.set('products/00가0000', { seconds: v.seconds, nanoseconds: v.nanoseconds + 1 });
+    item(stale).expectedUpdateTime = updateTimes.get('products/00가0000') as ReturnType<typeof item>['expectedUpdateTime'];
+    await expect(apply(stale)).rejects.toThrow(/rollback no longer matches/);
+    updateTimes.set('products/00가0000', v);
+    const ok = reverse(p); await expect(apply(ok)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  const withOriginal = (p: Plan, original: Record<string, unknown>) => {
+    store.get('products/00가0000')!.원문 = original;
+    item(p).evidence.original.contentDigest = stableDigest(original); item(p).evidence.correctsOriginalDigest = stableDigest(original);
+  };
+  it('accepts the supplier original top-level 차번 field when 전체.차량번호 is absent', async () => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', 차번: '00가0000' });
+    await expect(apply(p)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('requires both original plate fields to agree when both exist', async () => {
+    const same = fixture(); withOriginal(same, { 차명: 'old source', 차번: '00가0000', 전체: { 차량번호: '00가 0000' } });
+    await expect(apply(same)).resolves.toMatchObject({ productIdentityCorrectionCount: 1 });
+  });
+  it('refuses when the two original plate fields disagree', async () => {
+    const diff = fixture(); withOriginal(diff, { 차명: 'old source', 차번: '00가0001', 전체: { 차량번호: '00가0000' } });
+    await expect(apply(diff)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it.each([
+    ['number', { 차번: 1234 }], ['array', { 차번: ['00가0000'] }], ['null', { 차번: null }],
+    ['single wrong number', { 차번: '00가0001' }], ['empty string', { 차번: '' }],
+    ['empty string beside a good field', { 차번: '', 전체: { 차량번호: '00가0000' } }],
+    ['non-object middle path (number)', { 전체: 1234 }], ['non-object middle path (array)', { 전체: [] }],
+  ])('refuses a malformed or wrong original plate: %s', async (_name, original) => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', ...original });
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('refuses when the preserved original has no plate field at all', async () => {
+    const p = fixture(); withOriginal(p, { 차명: 'old source', 옵션: 'x' });
+    await expect(apply(p)).rejects.toThrow(/vehicle mismatch/);
+  });
+  it('explicitly refuses documents without a plate-number id', async () => {
+    const p = fixture(); item(p).id = 'RP000:MONTHLY:fake'; item(p).evidence.vehicleNumber = 'RP000:MONTHLY:fake'; item(p).evidence.correction.archiveVehicleNumber = 'RP000:MONTHLY:fake';
+    await expect(apply(p)).rejects.toThrow(/unresolved/);
+  });
+  it('refuses unresolved higher-priority evidence conflicts', async () => {
+    const p = fixture(); item(p).evidence.conflicts = ['registration disagrees'];
+    await expect(apply(p)).rejects.toThrow(/unresolved/);
+  });
+  it('requires preserved source provenance and explicit supersession', async () => {
+    const p = fixture(); item(p).evidence.original.archiveRef = '';
+    await expect(apply(p)).rejects.toThrow(/provenance/);
+    item(p).evidence.original.archiveRef = 'private:fake'; item(p).evidence.correctsOriginalDigest = 'bad';
+    await expect(apply(p)).rejects.toThrow(/identify the original/);
+  });
+  it.each(['duplicate', 'retired', 'changed'])('refuses %s masters', async (mode) => {
+    const p = fixture(); const m = store.get('vehicle_master/fake-master')!;
+    if (mode === 'duplicate') put('vehicle_master/fake-duplicate', { ...m });
+    else m[mode === 'retired' ? 'retired' : 'other'] = true;
+    await expect(apply(p)).rejects.toThrow(/master ambiguous/);
+  });
+  it.each(['duplicate', 'retired', 'wrong-link', 'old-trim'])('refuses %s trims', async (mode) => {
+    const p = fixture(); const t = store.get('vehicle_trim_master/fake-trim')!;
+    if (mode === 'duplicate') put('vehicle_trim_master/fake-duplicate', { ...t });
+    else if (mode === 'retired') t.retired = true;
+    else if (mode === 'wrong-link') t.master_id = 'fake-other';
+    else { item(p).to.trim_name = 'Old'; item(p).evidence.resolvedIdentity = { ...item(p).to }; }
+    await expect(apply(p)).rejects.toThrow(/trim ambiguous/);
+  });
+  it('rechecks master evidence after backup', async () => {
+    const p = fixture(); const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockImplementationOnce(async () => { store.get('vehicle_master/fake-master')!.retired = true; });
+    await expect(apply(p)).rejects.toThrow(/master ambiguous/);
+  });
+  it('does not write when private backup fails', async () => {
+    const p = fixture(); const { writeFile } = await import('node:fs/promises');
+    vi.mocked(writeFile).mockRejectedValueOnce(new Error('backup failed'));
+    await expect(apply(p)).rejects.toThrow(/backup failed/);
+    expect(store.get('products/00가0000')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+  });
+  it('rejects the whole batch when the second product fails', async () => {
+    const p = fixture(); const { second, original } = secondOf(p);
+    put('products/00가0001', { ...store.get('products/00가0000')!, 원문: original, locked_by_contract: true });
+    updateTimes.set('products/00가0001', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    await expect(apply(p)).rejects.toThrow(/LOCKED_BY_CONTRACT/);
+    expect(store.get('products/00가0000')!.sub_model).toBe('Wrong'); expect(audits()).toHaveLength(0);
+  });
+  it('only treats a matching audit AND complete actual result as already applied', async () => {
+    const p = fixture(); await apply(p);
+    expect((await apply(p)).skippedAlreadyApplied).toBe(1); expect(audits()).toHaveLength(1);
+    store.get('products/00가0000')!.unrelated = 'later edit';
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses a corrupted replay receipt', async () => {
+    const p = fixture(); await apply(p); audits()[0]!.itemDigest = 'corrupted';
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses changed before-images even when the receipt digest label remains unchanged', async () => {
+    const p = fixture(); await apply(p); audits()[0]!.before = { maker: 'tampered' };
+    await expect(apply(p)).rejects.toThrow(/replay/);
+  });
+  it('refuses a partial batch receipt without writing the missing member', async () => {
+    const p = fixture(); const { second, original } = secondOf(p);
+    put('products/00가0001', { ...store.get('products/00가0000')!, 원문: original });
+    updateTimes.set('products/00가0001', second.expectedUpdateTime); p.productIdentityCorrections!.push(second);
+    const before = structuredClone(store.get('products/00가0001')!);
+    await apply(p);
+    for (const [path, data] of store) if (data.entityId === '00가0001' && data.action === 'PRODUCT_IDENTITY_CORRECTED') store.delete(path);
+    put('products/00가0001', before); updateTimes.set('products/00가0001', second.expectedUpdateTime);
+    await expect(apply(p)).rejects.toThrow(/partial correction/);
+    expect(store.get('products/00가0001')!.sub_model).toBe('Wrong');
+  });
+  it('requires fresh approval for reverse and restores only changed fields', async () => {
+    const p = fixture(); await apply(p); const r = reverse(p);
+    await expect(applyVehicleNameReferenceRepair(r, { approvedCorrectionDigest: vehicleNameRepairPlanDigest(p) })).rejects.toThrow(/digest/);
+    await apply(r); expect(store.get('products/00가0000')).toMatchObject({ ...item(p).from, unrelated: 'keep', confirmed: true });
+    expect(audits().at(-1)!.action).toBe('PRODUCT_IDENTITY_CORRECTION_REVERSED');
+    expect((await apply(r)).skippedAlreadyApplied).toBe(1);
+  });
+  it.each(['version', 'lock', 'edited-target'])('refuses reverse after %s change', async (mode) => {
+    const p = fixture(); await apply(p); const r = reverse(p);
+    if (mode === 'version') { updateTimes.set('products/00가0000', { seconds: 9999, nanoseconds: 0 }); item(r).expectedUpdateTime = { seconds: 9999, nanoseconds: 0 }; }
+    else if (mode === 'lock') store.get('products/00가0000')!.locked_by_contract = true;
+    else item(r).to.sub_model = 'unapproved';
+    await expect(apply(r)).rejects.toThrow(/rollback|LOCKED_BY_CONTRACT/);
+  });
+  it.each(['null', 'empty'])('restores exact %s values rather than collapsing them', async (mode) => {
+    const p = fixture(); const data = store.get('products/00가0000')!;
+    data.trim_name = mode === 'null' ? null : ''; item(p).from.trim_name = data.trim_name as string | null;
+    await apply(p); await apply(reverse(p));
+    expect(Object.hasOwn(store.get('products/00가0000')!, 'trim_name')).toBe(true);
+    expect(store.get('products/00가0000')!.trim_name).toBe(mode === 'null' ? null : '');
+  });
+
+  it('refuses to restore a missing field by deletion (data-access boundary forbids erasing stored fields)', async () => {
+    const p = fixture(); const data = store.get('products/00가0000')!;
+    delete data.trim_name; delete item(p).from.trim_name;
+    await apply(p);
+    await expect(apply(reverse(p))).rejects.toThrow(/field deletion is not allowed/);
+    expect(Object.hasOwn(store.get('products/00가0000')!, 'trim_name')).toBe(true);
   });
 });

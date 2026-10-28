@@ -10,8 +10,11 @@ import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetHeaders, type Sha
 import { planSourceCycle, applySourceCycle } from '../src/application/source-cycle.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../src/jobs/source-cycle.js';
 import { fileCycleControl } from '../src/adapters/source-cycle-control.js';
-import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin } from '../src/runtime/source-cycle-runtime.js';
+import { createSourceCycleRuntime, runtimeCli, collectorObservationPlugin, refreshF05SourceObservations, runUnattended } from '../src/runtime/source-cycle-runtime.js';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import { ingestSharedSheetObservedRows } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import type { CycleProduct } from '../src/ports/source-cycle.js';
+import { emptyCycleState } from '../src/ports/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 const time = '2026-10-13T00:00:00.000Z', now = Date.parse(time), source = 'SYNTHETIC';
@@ -74,6 +77,34 @@ const apply = (commands: Awaited<ReturnType<typeof setup>>['commands'], built: R
   applySourceCycle(commands, built.plan, { apply: true, digest: built.digest, approval: built.digest, now });
 
 describe('Firestore REST runtime offline', () => {
+  it('repairs missing provenance only for reviewed UID, using the existing CAS writer and fresh source; repeat is noop', async () => {
+    const p = product('00가1001'); p.record.raw.source = 'shared-sheet';
+    const fake = fakeFirestore([p]);
+    delete fake.docs.get(p.record.uid).fields.source_cycle_write;
+    const dir = await directory();
+    const make = (uids: string[]) => firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' },
+      token: async () => 'synthetic-token', fetcher: fake.fetcher, provenanceUids: uids });
+    const plan = async (commands: ReturnType<typeof make>) => planSourceCycle({ sourceId: source, family: 'SHARED_SHEET', maxDowngradeRatio: 0.5 },
+      { records: [p.record], observedAt: time, complete: true, heldCount: 0 }, await commands.list(source), now);
+    expect((await plan(make([]))).plan.entries).toEqual([]);
+    const commands = make([p.record.uid]);
+    const before = structuredClone(decodeFields(fake.docs.get(p.record.uid).fields).price);
+    const built = planSourceCycle({ sourceId: source, family: 'SHARED_SHEET', maxDowngradeRatio: 0.5 },
+      { records: [p.record], observedAt: time, complete: true, heldCount: 0 }, await commands.list(source), now);
+    expect(built.plan.entries).toHaveLength(1);
+    expect(built.plan.entries[0]!.before!.rewriteReasons).toContain('SOURCE_PROVENANCE');
+    // Preparation of the repair itself must not write.
+    expect(fake.calls.filter(c => c.method === 'PATCH')).toHaveLength(0);
+    expect(before).toEqual(decodeFields(fake.docs.get(p.record.uid).fields).price);
+    fake.docs.get(p.record.uid).fields.locked_by_contract = { stringValue: 'LEDGER' };
+    expect((await commands.list(source)).products[0]!.rewriteReasons ?? []).not.toContain('SOURCE_PROVENANCE');
+    delete fake.docs.get(p.record.uid).fields.locked_by_contract;
+    expect(await apply(commands, await plan(commands))).toMatchObject({ status: 'APPLIED', verified: 1 });
+    const stored = decodeFields(fake.docs.get(p.record.uid).fields);
+    expect(stored.source_cycle_write).toMatchObject({ by: 'source-engine', at: time });
+    expect(stored.price).toEqual(before);
+    expect((await plan(commands)).plan.entries).toEqual([]);
+  });
   it('SPEC3E enrolls independent modes from all supplier documents, including non-listable', async () => {
     const existing = ['A', 'B', 'C'].map(uid => ({ ...product(uid), listable: false }));
     const { commands, fake } = await setup(existing);
@@ -315,7 +346,125 @@ function sheet(rows: Array<Record<string, SheetCell>>) {
     data: [{ startRow: 0, rowMetadata: t.values.map(() => ({} as { hiddenByUser?: boolean; hiddenByFilter?: boolean })) }] })) };
   return { capture, visibility, source: channel.code };
 }
+
+describe('existing unattended F05 producer source-head stage',()=>{
+  const env={SOURCE_CYCLE_UNATTENDED:'1',SOURCE_CYCLE_F05_SOURCE_ROWS:'1',SOURCE_CYCLE_SOURCES:'F05',SOURCE_CYCLE_F05_SHEET_ID:'synthetic-only'};
+  const memoryControl=()=>{let state=emptyCycleState();return{load:async()=>structuredClone(state),save:async(_key:string,next:typeof state)=>{state=structuredClone(next);}};};
+  it('stays off by default and refuses partial or mixed-source producers before acquiring the lease',async()=>{
+    const acquire=vi.fn();expect(await refreshF05SourceObservations({},undefined,{acquire})).toBeNull();
+    await expect(refreshF05SourceObservations({...env,SOURCE_CYCLE_SOURCES:'F05,IRON'},undefined,{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    await expect(refreshF05SourceObservations(env,'RP013',{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    await expect(refreshF05SourceObservations({...env,SOURCE_CYCLE_UNATTENDED:'0'},undefined,{acquire})).rejects.toThrow('EXCLUSIVE_FULL_PRODUCER');
+    expect(acquire).not.toHaveBeenCalled();
+  });
+  it('calls the existing intake from the producer lease and keeps missing-master names held',async()=>{
+    const previous=process.env.FREEPASS_SHEET_F04_ID;process.env.FREEPASS_SHEET_F04_ID='test-sheet-f04';
+    try{
+      const store=new MemorySourceStore(),release=vi.fn(async()=>{}),acquire=vi.fn(async()=>release);let captures=0;
+      const capture=vi.fn(async()=>{const c=sheet([{차량번호:'신차'}]).capture;c.readTime=new Date(Date.now()-1000+(++captures)*100).toISOString();for(const t of c.tabs){t.readTime=c.readTime;t.values=t.values.map(r=>r.slice(0,74));}return c;});
+      const persist=vi.fn(input=>ingestSharedSheetObservedRows(store,{target:'memory',...input}));
+      const control=memoryControl();
+      const result=await refreshF05SourceObservations(env,undefined,{acquire,observedCapture:capture,control,capture,persist,master:async()=>{throw Error('MASTER_UNAVAILABLE');}});
+      expect(acquire).toHaveBeenCalledWith('F05_SOURCE_ROWS');expect(capture).toHaveBeenCalledTimes(2);expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({status:'SOURCE_HEAD_VERIFIED',rawRows:1,candidateRows:1,heldCandidateRows:1,canonicalWrites:0});
+      expect((await store.getSourceHead(result!.sourceId))!.runId).toBe(result!.runId);
+      expect(await control.load()).toMatchObject({stopped:false,error:null,readCount:1});
+    }finally{if(previous===undefined)delete process.env.FREEPASS_SHEET_F04_ID;else process.env.FREEPASS_SHEET_F04_ID=previous;}
+  });
+  it('does not persist on capture failure and always releases its existing producer lease',async()=>{
+    const release=vi.fn(async()=>{}),persist=vi.fn(),capture=vi.fn(async()=>{throw Error('READ_FAILED');});
+    await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>release,observedCapture:capture,control:memoryControl(),capture,persist})).rejects.toThrow('READ_FAILED');
+    expect(release).toHaveBeenCalledOnce();expect(persist).not.toHaveBeenCalled();
+    capture.mockClear();await expect(refreshF05SourceObservations(env,undefined,{acquire:async()=>null,observedCapture:capture,control:memoryControl(),capture,persist})).rejects.toThrow('F05_SOURCE_ROWS_LOCKED');expect(capture).not.toHaveBeenCalled();
+  });
+  it('journals uncertainty before durable effects and blocks the next unattended retry',async()=>{
+    const control=memoryControl(),release=vi.fn(async()=>{}),capture=async()=>sheet([{}]).capture;
+    const persist=vi.fn(async({claimEffect}:{claimEffect:NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']>})=>{await claimEffect({sourceId:'synthetic',runId:'intent-run',sourceDigest:'synthetic-digest',observedAt:time});throw Error('SHARED_SOURCE_READBACK_MISMATCH');});
+    const ports={control,acquire:async()=>release,observedCapture:capture,capture,master:async()=>undefined,persist};
+    await expect(refreshF05SourceObservations(env,undefined,ports)).rejects.toThrow('READBACK_MISMATCH');
+    expect(await control.load()).toMatchObject({stopped:true,error:'APPLY_UNCERTAIN',sourceObservationIntent:{runId:'intent-run'}});
+    await expect(refreshF05SourceObservations(env,undefined,ports)).rejects.toThrow('UNCERTAIN_REQUIRES_READBACK');
+    expect(persist).toHaveBeenCalledOnce();expect(release).toHaveBeenCalledTimes(2);
+  });
+  it('keeps legacy product writes running while an uncertain source head stays non-green',async()=>{
+    const {commands,fake,dir}=await setup();
+    const control=fileCycleControl(dir,async(source,state)=>{await appendFile(join(dir,'heartbeats.jsonl'),JSON.stringify({source,...state})+'\n');});
+    await control.save('F05_SOURCE_ROWS',{...emptyCycleState(),stopped:true,error:'APPLY_UNCERTAIN'});
+    const at=new Date().toISOString(),record={...product().record,observedAt:at};
+    const plugin=sourceCyclePlugin({sourceId:source,kind:'IRON',scopes:['inventory'],maxDowngradeRatio:1},async()=>({observedAt:at,complete:true,completedScopes:['inventory'],visibilityComplete:true,heldCount:0,rows:[{scope:'inventory',record}]}));
+    const result=await runUnattended([],{...env,SHEETS_TRANSPORT:'adc',SOURCE_CYCLE_PRIVATE_DIR:dir},[],{gwsBin:()=>null,gcloudToken:async()=>'synthetic'},()=>({plugins:[plugin],commands,control,directory:dir,identityStatus:()=> 'DISABLED',f05ObservedCapture:async()=>{throw Error('MUST_NOT_RETRY_UNKNOWN_HEAD');}}));
+    expect(result.sourceObservations).toMatchObject({status:'APPLY_UNCERTAIN',reasonCode:'F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK'});
+    expect(result.reports![0]!.status).toBe('APPLIED');expect(fake.calls.some(c=>c.method==='PATCH')).toBe(true);
+    expect(result.exit).toBe(1);expect((await control.load('F05_SOURCE_ROWS')).error).toBe('APPLY_UNCERTAIN');
+  });
+});
 describe('native mappings and UID', () => {
+  it('uses the existing structured normalizer for a known source year when raw-name matching remains unresolved', () => {
+    const s = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '합성세대', 세부트림: '합성트림',
+      연식: 2023, 연료: '', 배기량: '', 인승: '', 구동방식: '', 최초등록일: '', '차명 원문': '원문 그대로' }]);
+    const match = vi.fn(() => null);
+    const sourceYearEvidence = { snapshotDigest: 'verified-snapshot', readAt: s.capture.readTime,
+      records: [{ masterId: 'synthetic-master', trimId: 'synthetic-trim', names: ['합성', '합성모델', '합성세대', '합성트림'] as const,
+        aliases: [[], [], [], []], modelYearStart: 2020, modelYearEnd: 2024 }] };
+    const master = { digest: 'synthetic-master-digest', match, sourceYearEvidence, allowsYear: (id: string, year: number) => id === 'synthetic-master' && year === 2023 };
+    const r = f05NativeCapture(s.source, s.capture, s.visibility, master).rows[0]!.record;
+    expect(r.raw.spec).toEqual({ year: '2023' });
+    expect(r.raw.spec_master_digest).toBe('verified-snapshot');
+    expect(r.vehicleHold).toEqual(['VEHICLE_MASTER_REVIEW_REQUIRED']);
+    expect(match).not.toHaveBeenCalled();
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set() }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set(['OTHER']) }).rows[0]!.record.raw).not.toHaveProperty('spec');
+    expect(f05NativeCapture(s.source, s.capture, s.visibility, { ...master, sourceYearUids: new Set([r.uid]) }).rows[0]!.record.raw.spec).toEqual({ year: '2023' });
+    const bad = sheet([{ 제조사: '합성', 모델: '합성모델', 세부모델: '다른세대', 세부트림: '확인필요', 연식: 2023 }]);
+    expect(f05NativeCapture(bad.source, bad.capture, bad.visibility, master).rows[0]!.record.raw).not.toHaveProperty('spec');
+  });
+  it('F05 preserves an explicitly supplied master-admitted year through the existing spec writer without changing RAW or identity HOLD', () => {
+    const s = sheet([{ 연식: 2023, '차명 원문': '합성 원문 차종', 최초등록일: 'https://example.invalid/not-a-date' }]);
+    const before = structuredClone(s.capture);
+    const match = vi.fn(({ year }: { rawName: string; year: string }) => year === '2023'
+      ? { maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' } : null);
+    expect(f05NativeCapture(s.source, s.capture, s.visibility).rows[0]!.record.raw).not.toHaveProperty('spec');
+    const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+      allowsYear: (id, year) => id === 'synthetic-master' && year === 2023 }).rows[0]!.record;
+    expect(match).toHaveBeenCalledWith({ rawName: '합성 원문 차종', year: '2023' });
+    expect(r.raw.spec).toEqual({ year: '2023' });
+    expect(r.raw.spec_master_digest).toBe('synthetic-master-digest');
+    expect(r.vehicleHold).toContain('VEHICLE_MASTER_REVIEW_REQUIRED');
+    expect(s.capture).toEqual(before);
+    const p: CycleProduct = { record: r, listable: true, locked_by_contract: false,
+      publication_withdrawal: null, publication_withdrawal_prior: null, fillSourceIdentity: true };
+    const original = { car_number: r.plate, year: '', vehicle_spec_source_checked: true };
+    const fields = nativeCycleFields(p, original, { specFillSources: new Set([s.source]) });
+    expect(fields.year).toBe('2023');
+    expect((fields.source_cycle_record as typeof r).raw.spec).toEqual({ year: '2023' });
+    expect(nativeCycleFields(p, { ...original, year: '2024' }, { specFillSources: new Set([s.source]) })).not.toHaveProperty('year');
+    expect(nativeCycleFields(p, original)).not.toHaveProperty('year');
+  });
+  it('F05 leaves missing, malformed, master-conflicting and registration-conflicting years in RAW without promoting them', () => {
+    const match = vi.fn(() => ({ maker: '합성', model: '합성', sub_model: '합성 A', trim_name: null, master_id: 'synthetic-master' }));
+    for (const row of [{ 연식: '' }, { 연식: '2023unknown' }, { 연식: 2000 }, { 연식: 2023, 최초등록일: '2025-01' }]) {
+      const s = sheet([row]);
+      const r = f05NativeCapture(s.source, s.capture, s.visibility, { digest: 'synthetic-master-digest', match,
+        allowsYear: (_id, year) => year === 2023 }).rows[0]!.record;
+      expect(r.raw).not.toHaveProperty('spec');
+      expect(r.raw.cells).toEqual(s.capture.tabs.find(t => t.rowCount > 1)!.values[1]);
+    }
+    expect(match.mock.calls).toEqual([[{ rawName: '합성', year: '2000' }]]);
+  });
+  it('keeps an exclusive registered supplier row when its company cell is blank, preserving RAW and identity HOLD', () => {
+    const s = sheet([{ 회사명: '' }]);
+    expect(sharedSheetChannels.filter(c => c.tab === s.capture.tabs.find(t => t.rowCount > 1)!.title)).toHaveLength(1);
+    const c = f05NativeCapture(s.source, s.capture, s.visibility);
+    expect(c.rows).toHaveLength(1);
+    expect(c.rows[0]!.record.sourceId).toBe(s.source);
+    expect((c.rows[0]!.record.raw.cells as unknown[])[0]).toBe('');
+    expect(c.rows[0]!.record.vehicleHold).toContain('VEHICLE_MASTER_REVIEW_REQUIRED');
+    expect(c.heldReasons).not.toContain('COMPANY_UNMAPPED');
+    expect(c.rows[0]!.record.terms[0]!.monthlyRent.value).toBe(500000);
+    for (const tab of ['스타', '빌린카', '경진']) expect(sharedSheetChannelOf(tab, '')).toBeUndefined();
+    expect(sharedSheetChannelOf('웰릭스', 'unregistered-company')).toBeUndefined();
+    expect(sharedSheetChannelOf('unregistered-tab', '')).toBeUndefined();
+  });
   it('plate wins, placeholder needs explicit UID, never row fallback', () => {
     expect(sourceUid(' TEST 1001 ', 'sheet')).toBe('TEST1001'); expect(sourceUid('신차', 'new-one')).toBe('new-one'); expect(sourceUid('미정')).toBeNull();
   });
@@ -521,6 +670,11 @@ describe('native mappings and UID', () => {
     expect(decodeFields(fake.docs.get('RP004:MONTHLY:MODELB').fields)).toMatchObject({
       product_group: 'MONTHLY_RENT', car_number: null, maker: '', model: '', sub_model: expect.any(String), trim_name: '', vehicle_review_required: true, vehicle_title_source: 'RAW_VEHICLE_TEXT',
       price: { '1': { rent: 500000, deposit: null, mileage: '월렌트' } }, provider_name: '아이카' });
+    // 신규 편입은 공급사 기본값(정책 없음)으로 들어오고, 다음 회차에 공급사 기본 정책 연결 규칙(장기 2건만, 월렌트 모델 줄 제외)이 한 번 연결한다 — 그 뒤 되풀이 없음.
+    const linkPlan = planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now);
+    expect(linkPlan.plan.entries.map(e => e.before?.rewriteReasons)).toEqual([['POLICY_LINK'], ['POLICY_LINK']]);
+    expect(linkPlan.plan.entries.every(e => e.after.record.raw.product_group !== 'MONTHLY_RENT')).toBe(true);
+    expect(await apply(commands, linkPlan)).toMatchObject({ status: 'APPLIED', verified: 2 });
     expect(planSourceCycle(out.plugin, evidence, await commands.list('RP004'), now).plan.entries).toEqual([]);
     const ctrl = fileCycleControl(await directory(), async () => {});
     const result = await runSourceCycle(out.plugin, commands, ctrl, { now: () => now });

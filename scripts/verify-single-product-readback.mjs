@@ -23,12 +23,18 @@ const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const exact = (v, keys) => object(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const scalar = v => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
   || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
-const fields = (v, allowed) => object(v) && Object.keys(v).every(k => allowed.includes(k) && scalar(v[k]));
+const publicStandard = v => object(v) && v.schema==='supplier-contract-standard/v1'
+  && Object.keys(v).sort().join(',')==='adoptedOn,profiles,schema,sourceCatalogSha256,supplierCodes,supplierName,version'
+  && typeof v.version==='string' && Array.isArray(v.supplierCodes) && v.supplierCodes.every(x=>typeof x==='string')
+  && Array.isArray(v.profiles) && v.profiles.length>0 && v.profiles.length<=12
+  && Buffer.byteLength(JSON.stringify(v))<=256*1024
+  && !/https?:\/\/|file:\/\/|AIza|ya29\.|-----BEGIN|"(?:bank_account|customerName|password|credentials|source_reference_terms)"/i.test(JSON.stringify(v));
+const fields = (v, allowed) => object(v) && Object.keys(v).every(k => allowed.includes(k) && (k==='standard_contract'?publicStandard(v[k]):scalar(v[k])));
 const priceKey = k => typeof k === 'string' && k.length > 0 && k.length <= 80
   && !['__proto__', 'constructor', 'prototype'].includes(k) && !/[\u0000-\u001f\u007f]|https?:\/\/|<[^>]*>|AIza|ya29\./i.test(k);
 // Verification allowlists mirror the bounded response contract; they do not assign policy meaning.
 export const PRODUCT_FIELDS = '_key product_code provider_company_code partner_code provider_name partner_name deposit_note policy_id policy_code _deleted deletedAt status vehicle_status status_kind listable publication_withdrawal car_number vehicle_uid maker model sub_model trim_name trim_extra variant fuel_type engine_type engine_cc drive_type transmission vehicle_class product_type year seats mileage annual_mileage ext_color int_color first_registration_date price iancar_phase_one iancar_policy_terms'.split(' ');
-export const POLICY_FIELDS = '_key policy_code companyId provider_company_code policy_name policy_type payment_method payment_timing basic_driver_age driver_age_lowering driver_age_upper_limit license_period personal_driver_scope business_driver_scope insurance_included deposit_installment deposit_card_payment rental_card_payment maintenance_service credit_grade'.split(' ');
+export const POLICY_FIELDS = 'standard_contract policy_scope policy_field_owner _key policy_code companyId provider_company_code policy_name policy_type payment_method payment_timing basic_driver_age insurer_name designated_garage self_damage_exclusions replacement_car_policy driver_age_lowering driver_age_upper_limit license_period personal_driver_scope business_driver_scope insurance_included deposit_installment deposit_card_payment rental_card_payment maintenance_service credit_grade payment_due_date early_termination_rate_under1y early_termination_rate_over1y renewal_notice_days deposit_return_days buyout_notice_days succession_allowed succession_fee injury_compensation_limit injury_deductible property_compensation_limit property_deductible self_body_accident self_body_deductible personal_injury_compensation_limit personal_injury_deductible uninsured_damage uninsured_compensation_limit uninsured_deductible own_damage_compensation own_damage_repair_ratio own_damage_compensation_rate own_damage_min_deductible own_damage_max_deductible annual_roadside_assistance roadside_assistance over_mileage_rate_domestic over_mileage_rate_imported age_21_cost age_23_cost age_lowering_cost additional_driver_allowance_count additional_driver_cost annual_mileage max_annual_mileage mileage_upcharge_per_10000km delivery_fee screening_criteria late_fee_rate engine_control_overdue_days auto_terminate_overdue_days deposit_overdue_rounds accident_termination_count penalty_condition'.split(' ');
 export const PARTNER_FIELDS = '_key partner_code company_code provider_company_code partner_name company_name name brand_name alias'.split(' ');
 export const PRICE_FIELDS = 'rent deposit depositState deposit_state depositStatusLabel depositEvidenceReason depositEvidenceBasis depositRuleDifference'.split(' ');
 const ref = (row, primary, secondary) => {
@@ -121,7 +127,11 @@ export function validateProduct(value, headers, note = () => {}) {
   note('VALIDATE_LINKED');
   for (const [name, singular, allowed] of [['policies', 'policy', POLICY_FIELDS], ['partners', 'partner', PARTNER_FIELDS]]) {
     const rows = data[name], versions = meta.documentVersions[name], fact = meta.linkedFacts[singular];
-    const reference = singular === 'policy' ? ref(product, 'policy_code', 'policy_id') : ref(product, 'provider_company_code', 'partner_code');
+    const explicit=ref(product,'policy_code','policy_id'), supplier=ref(product,'provider_company_code','partner_code');
+    const registered=rows?.['STD-'+supplier];
+    const standardDefault=!explicit&&registered?.policy_scope==='SUPPLIER_CONTRACT_STANDARD_DEFAULT'&&registered?.policy_field_owner==='policy-corrector'
+      &&registered?.provider_company_code===supplier&&publicStandard(registered?.standard_contract)&&registered.standard_contract.supplierCodes.includes(supplier);
+    const reference=singular==='policy'?(explicit||(standardDefault?'STD-'+supplier:null)):supplier;
     const codes = singular === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
     if (!object(rows) || !Array.isArray(versions) || versions.length !== Object.keys(rows).length
       || meta.collectionCounts[name] !== versions.length || new Set(versions.map(v => v?.id)).size !== versions.length

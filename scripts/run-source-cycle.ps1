@@ -32,4 +32,39 @@ if ($AcceptDrift) {
   $cliArgs += @('--accept-drift', $AcceptDrift)
 }
 & $node @cliArgs
-exit $LASTEXITCODE
+$cycleExit = $LASTEXITCODE
+# 사진 폴더 연결 «계획만» 단계(2026-10-22 PC1 커맨드 승인): SOURCE_CYCLE_PHOTO_PLAN_CODES(쉼표 공급사 코드)가 있을 때만, 회차가 끝난 뒤 공급사별로 계획(쓰기 0, --apply 를 넘기지 않는다)을 돌려
+# 비공개 디렉터리 photo-plan.log 에 요약만 남긴다. 단계 전체가 예외·시간 초과(공급사당 3분, 전체 10분)와 격리돼 회차 종료 코드·결과에 영향을 주지 않는다.
+try {
+  # 쓰는 쪽 하나(writer lease, 기본 꺼짐): WRITER_LEASE_ENFORCE=1 이면 사진 단계도 «사진» 레인 임대(WRITER_LEASE_PHOTO_LANE, 기본 photo)를 가진 PC 만 돈다. 임대를 못 읽으면 건너뛴다(닫힘).
+  $photoLeaseOk = $true
+  if ($env:WRITER_LEASE_ENFORCE -eq '1') {
+    $photoLeaseOk = $false
+    try {
+      $leaseJs = Join-Path $repo 'dist\src\jobs\writer-lease.js'
+      $photoLane = if ($env:WRITER_LEASE_PHOTO_LANE) { $env:WRITER_LEASE_PHOTO_LANE } else { 'photo' }
+      if (Test-Path -LiteralPath $leaseJs) { & $node $leaseJs check "--lane=$photoLane" *> $null; $photoLeaseOk = ($LASTEXITCODE -eq 0) }
+    } catch { $photoLeaseOk = $false }
+  }
+  if ($photoLeaseOk -and $env:SOURCE_CYCLE_PHOTO_PLAN_CODES -and $env:SOURCE_CYCLE_PRIVATE_DIR) {
+    $ErrorActionPreference = 'Continue'
+    $photoScript = Join-Path $repo 'scripts\ops\photo-cache-from-folder.mjs'
+    $photoLog = Join-Path $env:SOURCE_CYCLE_PRIVATE_DIR 'photo-plan.log'
+    $photoDeadline = (Get-Date).AddMinutes(10)
+    foreach ($photoCode in ($env:SOURCE_CYCLE_PHOTO_PLAN_CODES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(RP|PT-)\d{3,4}$' } | Select-Object -Unique)) {
+      if ((Get-Date) -gt $photoDeadline) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] 전체 시간 초과로 {1} 이후 생략' -f (Get-Date -Format o), $photoCode); break }
+      $photoText = ''
+      # 적용 승격(PC1 커맨드 승인 2026-10-22): SOURCE_CYCLE_PHOTO_APPLY_CODES 에 든 공급사만 --apply, 엔진이 시트 링크로 채운 검증된 photo_link 문서만, 회차당 20건 상한.
+      $photoArgs = @("--code=$photoCode")
+      if (($env:SOURCE_CYCLE_PHOTO_APPLY_CODES -split ',' | ForEach-Object { $_.Trim() }) -contains $photoCode) { $photoArgs += @('--apply', '--only-sheet-link', '--max-writes=20') }
+      try {
+        $photoJob = Start-Job -ScriptBlock { param($n, $s, $a) & $n $s @a 2>&1 | Out-String } -ArgumentList $node, $photoScript, (, $photoArgs)
+        if (Wait-Job -Job $photoJob -Timeout 180) { $photoText = [string](Receive-Job -Job $photoJob) } else { $photoText = '시간 초과(3분)'; Stop-Job -Job $photoJob }
+        Remove-Job -Job $photoJob -Force
+      } catch { $photoText = '실행 실패' }
+      $photoLines = @($photoText -split "`r?`n" | Where-Object { $_ -match '^(PLAN|APPLIED|\d{4} |시간 초과|실행 실패)' } | Select-Object -First 40)
+      try { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ('[{0}] {1}' -f (Get-Date -Format o), $photoCode); if ($photoLines.Count) { Add-Content -LiteralPath $photoLog -Encoding UTF8 -Value ($photoLines -join [Environment]::NewLine) } } catch { }
+    }
+  }
+} catch { }
+exit $cycleExit

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { iancarPhotoCopyCli } from './copy-iancar-photos-to-drive.js';
 import type { PhotoCopyResult } from '../application/iancar-photo-drive-copy.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 export type DailyRunner = (command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number) => string;
 export type DailyDeps = {
@@ -79,6 +80,7 @@ export async function runIancarPhotoDaily(env: NodeJS.ProcessEnv = process.env, 
 
 async function runLocked(env: NodeJS.ProcessEnv, deps: DailyDeps, csv: string): Promise<DailySummary> {
   const mode = env.IANCAR_PHOTO_COPY_MODE ?? 'DRY_RUN';
+  if (mode !== 'DRY_RUN') await ensureWriterLease(env, 'photo');
   const result = await deps.copy(['--mode', mode, '--out', csv], env);
   const base = { mode, copyStop: result.stop, counts: result.counts, photosWritten: result.photosWritten, completed: result.completed.length };
   const copyFailed = ['RATE_LIMITED', 'CONSECUTIVE_FAILURES', 'SOURCE_STALE'].includes(result.stop) || result.counts.FAILED > 0;

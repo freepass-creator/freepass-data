@@ -9,26 +9,32 @@ import { judgeSheetCount, parseSheetCountState, SHEET_SHRINK_RATIO } from '../ad
 import { assessFreshness, parseFreshnessExempt, parseFreshnessThresholds } from '../application/source-freshness.js';
 import { latestCollectionSuccess } from '../application/erp4-collection-evidence.js';
 import { captureSharedSheetReadOnly } from '../jobs/capture-shared-sheet.js';
-import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
+import { sharedSheetChannels, assertCurrentSharedSheetSource, sharedSheetCaptureDigest, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
+import { ingestSharedSheetObservedRows } from '../jobs/ingest-shared-sheet-canonical.js';
 import { sourceCyclePlugin, iancarCyclePlugin, decisionWithdrawnPlugin, AICA_SCOPES, type CyclePlugin, type CycleCapture } from '../adapters/source-cycle-plugins.js';
 import withdrawnSuppliers from '../../contracts/withdrawn-suppliers.v1.json' with { type: 'json' };
 import { f05NativeCapture, aicaNativeCapture, aicaNativePlugin, ironNativeCapture, plateUidPlugin, type Visibility } from '../adapters/source-cycle-native.js';
 import { collectIancarOneFullFacts, iancarOneApiConfigFromEnv, collectIancarOneVehicleList } from '../adapters/iancar-one-api.js';
+import { parseIancarDetailCache, mergeIancarDetailCache, type IancarDetailCache, type IancarDetailCacheEntry } from '../adapters/iancar-detail-cache.js';
 import { fileCycleControl } from '../adapters/source-cycle-control.js';
 import { createAutoplusHomepageClient, collectAutoplusHomepage, compareAutoplusHomepage } from '../adapters/autoplus-homepage.js';
 import { readAutoplusSheet, autoplusSheetRowFloor, type AutoplusSheetTab } from '../adapters/autoplus-sheet.js';
 import { createSonogongErpReader } from '../adapters/sonogong-erp-reader.js';
-import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, type SonogongApiRead } from '../adapters/sonogong-api.js';
+import { createSonogongApiClient, readSonogongApi, SONOGONG_API_POLICY, SONOGONG_WITHDRAWN_PRODUCT_TYPES, type SonogongApiRead } from '../adapters/sonogong-api.js';
 import { parseDetailCache, waitForUpstreamRefresh, type DetailCache } from '../adapters/sonogong-detail-cache.js';
-import { judgeSonogongApiRead, claimEnrollCapOnce } from '../adapters/sonogong-api-guards.js';
-import { readIronHomepage, ironFloorRecords, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
+import { judgeSonogongApiRead, claimEnrollCapOnce, sonogongExposedUnlockedCount, parseSonogongCountState, SONOGONG_COUNT_TAB_SCOPE } from '../adapters/sonogong-api-guards.js';
+import { readIronHomepage, ironFloorRecords, ironFetchFailure, IRON_HOMEPAGE_POLICY } from '../adapters/iron-homepage.js';
 import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
-import type { CyclePlan, VehicleIdentityRefiner } from '../ports/source-cycle.js';
-import { captureVehicleMasterSnapshotReadOnly } from '../jobs/data-access-runtime.js';
+import { leaseConfigFromEnv } from '../domain/writer-lease.js';
+import { writerLeaseStore } from '../infra/writer-lease-firestore.js';
+import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { masterTrimFuelLookup } from '../domain/fuel-alias.js';
+import { masterTrimSpecLookup } from '../domain/spec-refill.js';
 import { createHash } from 'node:crypto';
 import { readXlsx } from '../adapters/xlsx-reader.js';
 import { convertMaumcarWorkbook, MAUMCAR_SOURCE_ID, type MaumcarConversion } from '../adapters/maumcar-file.js';
@@ -109,20 +115,76 @@ export function sonogongApiWritePlugin(ratio: number, collect: () => Promise<Son
  * (captureVehicleMasterSnapshotReadOnly — 데이터 접근 게이트웨이·원자 읽기)로 활성 마스터를 읽고, 기존 검증기(verifiedMasterRecords: 최신성·digest·완전성·이름 일치)를
  * 통과할 때만 대조기를 만든다. 못 읽거나 검증에 실패하면 null(정제 안 함 = 지금 동작)이고 상태 코드만 남긴다. 값·번호는 남기지 않는다. */
 export async function loadIdentityRefiner(load: () => Promise<unknown>, now: () => number = Date.now, timeoutMs = 120_000):
-  Promise<{ status: string; refiner: VehicleIdentityRefiner | null }> {
+  Promise<{ status: string; refiner: VehicleIdentityRefiner | null; clockSkewSeconds?: number }> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const snapshot = await Promise.race([load(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('VEHICLE_MASTER_READ_TIMEOUT')), timeoutMs); })]) as VehicleMasterSnapshot;
+    // A server-issued readTime can be slightly ahead of the collector clock. Wait for real
+    // time to catch up once; keep the sealed timestamp and the existing validator unchanged.
+    // Large skew and a clock that fails to advance still fail closed.
+    const futureMs = Date.parse(snapshot?.readAt) - now();
+    if (futureMs > 1000 && futureMs <= Math.min(5000, timeoutMs)) {
+      await new Promise(resolve => setTimeout(resolve, futureMs + 1));
+    }
+    // 대표 2026-10-22 «6~7초 어긋남 때문에 정제가 매번 멈추는 건 오작동»: 5초를 넘고 60초 이내로 마스터 스냅숏 시각이 «미래»이면 기다리지 않고
+    // 스냅숏 자신의 시각을 평가 시각으로 검증한다(봉인된 시각·digest·건수·스키마 검증은 그대로). 60초를 넘으면 지금처럼 보류. 어긋난 초는 회차 기록에 남긴다.
+    const leadMs = Date.parse(snapshot?.readAt) - now();
+    const skewed = leadMs > 5000 && leadMs <= 60_000;
     let records;
-    try { records = verifiedMasterRecords(snapshot, now()); }
+    try { records = verifiedMasterRecords(snapshot, skewed ? Date.parse(snapshot.readAt) : now()); }
     catch { return { status: 'SKIPPED:VEHICLE_MASTER_INVALID', refiner: null }; }
     const masters = identityMastersFromVehicleMaster({ masters: snapshot.masters, records });
     if (!masters.length) return { status: 'SKIPPED:VEHICLE_MASTER_EMPTY', refiner: null };
     const digest = stableDigest(masters);
-    return { status: `ENABLED:${digest.slice(0, 12)}`, refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort() } };
+    const eligibleTrims = new Set(records.map(r => r.trimId));
+    return { status: `ENABLED:${digest.slice(0, 12)}`, ...(skewed ? { clockSkewSeconds: Math.round(leadMs / 1000) } : {}), refiner: { digest, match: input => refineEngineIdentity(input, masters), makers: [...new Set(masters.map(m => m.maker.trim()).filter(Boolean))].sort(),
+      sourceYearEvidence: { records, snapshotDigest: snapshot.digest, readAt: snapshot.readAt },
+      allowsYear: (id, year) => Number.isInteger(year) && masters.some(m => m.id === id && m.yearFrom !== null &&
+        year >= m.yearFrom && (m.yearTo === null || year <= m.yearTo)) &&
+        (year <= new Date(now()).getUTCFullYear() || snapshot.trims.some(t => eligibleTrims.has(t.id) &&
+          t.data.master_id === id && /^(?:19|20)\d{2}$/.test(String(t.data.model_year_start ?? '')) &&
+          Number(t.data.model_year_start) === year)),
+      ...modelTablesFromMasters(masters),
+      // 확정 정체성 → vehicle_trim_master 연료(하나로 모일 때만, 대표 2026-10-19): 제원 채움이 원천에 연료가 없을 때만 쓴다.
+      trimFuel: masterTrimFuelLookup(records),
+      // 확정 정체성 + 마스터 연결 → 인승·구동방식·배기량(트림 행이 하나로 모이는 칸만, 대표 2026-10-22): 원천에 그 칸 원문이 없을 때만 빈 칸에 쓴다.
+      trimSpecs: masterTrimSpecLookup(records) } };
   } catch (e) {
     return { status: e instanceof Error && e.message === 'VEHICLE_MASTER_READ_TIMEOUT' ? 'SKIPPED:VEHICLE_MASTER_READ_TIMEOUT' : 'SKIPPED:VEHICLE_MASTER_UNAVAILABLE', refiner: null };
   } finally { if (timer) clearTimeout(timer); }
+}
+/** 입구 매핑이 쓰는 마스터 모델 표(순수): 허용 집합 = 마스터 «정식 모델 이름»만, 별칭은 «정식 이름으로 변환» 표로만(별칭 자체가 «신형 카니발» 같은 금지 표기일 수 있다).
+ * 같은 제조사에서 한 별칭(정규화 키: 공백·대소문자 무시)이 서로 다른 정식 모델 둘 이상에 있으면 모호하므로 그 별칭은 제외한다(틀린 모델을 쓰지 않는다, Codex #706). */
+export function modelTablesFromMasters(masters: ReadonlyArray<{ maker: string; model: string; model_aliases: readonly string[] }>):
+  { models: Record<string, readonly string[]>; modelAliases: Record<string, Record<string, string>> } {
+  const key = (v: string): string => v.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const models: Record<string, Set<string>> = {};
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (maker && model) (models[maker] ??= new Set<string>()).add(model);
+  }
+  const canonicalKeys = (maker: string): Set<string> => new Set([...(models[maker] ?? [])].map(key));
+  const candidates: Record<string, Map<string, Map<string, string>>> = {};   // maker → aliasKey → (정식 키 → 정식 이름)
+  for (const m of masters) {
+    const maker = m.maker.trim(), model = m.model.trim();
+    if (!maker || !model) continue;
+    for (const alias of m.model_aliases) {
+      const a = alias.trim();
+      if (!a || key(a) === key(model)) continue;
+      const byAlias = (candidates[maker] ??= new Map<string, Map<string, string>>());
+      const targets = byAlias.get(key(a)) ?? byAlias.set(key(a), new Map<string, string>()).get(key(a))!;
+      targets.set(key(model), model);
+    }
+  }
+  const modelAliases: Record<string, Record<string, string>> = {};
+  for (const [maker, byAlias] of Object.entries(candidates)) {
+    const own = canonicalKeys(maker);
+    for (const [aliasKey, targets] of byAlias) {
+      if (targets.size !== 1 || own.has(aliasKey)) continue;   // 모호(정식 모델 둘 이상) 또는 다른 정식 이름과 같은 키
+      (modelAliases[maker] ??= {})[aliasKey] = [...targets.values()][0]!;
+    }
+  }
+  return { models: Object.fromEntries(Object.entries(models).map(([k, v]) => [k, [...v].sort()])), modelAliases };
 }
 export const sonogongApiEnabled = (env: NodeJS.ProcessEnv): boolean =>
   env.SOURCE_CYCLE_SONOGONG_API === '1' && !!env.SONOGONG_API_KEY?.trim() && !!env.SONOGONG_API_BASE?.trim();
@@ -134,11 +196,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 정체성 정제: 기본 켜짐, SOURCE_CYCLE_IDENTITY_REFINE=0 이면 끔. 첫 목록 읽기 때 한 번만 읽고(같은 Promise) 회차 내내 같은 마스터를 쓴다.
   // 입구 매핑이 켜진 공급사가 있으면 마스터(제조사 목록)를 읽어야 하므로 REFINE=0 이어도 로드한다(정제 자체는 identityRefine=false 로 끈 채).
   const sourceIdentitySources = (env.SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
-  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0';
-  let identityStatus = refineOff && !sourceIdentitySources.length ? 'DISABLED' : 'NOT_LOADED';
+  // 정체성 정제 켜기(IDENTITY-SAME-CYCLE-DESIGN 2단계, 기본 꺼짐으로 뒤집음): SOURCE_CYCLE_IDENTITY_SOURCES=공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다.
+  // 목록이 없으면 SOURCE_CYCLE_IDENTITY_REFINE=1 일 때만 전체에 켠다(명시). 그 밖(미설정 포함)은 꺼짐 — 옵션 사고(#674)의 교훈: 무인 쓰기 경로는 기본 꺼짐.
+  const identitySources = (env.SOURCE_CYCLE_IDENTITY_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  const refineOff = env.SOURCE_CYCLE_IDENTITY_REFINE === '0' || (identitySources.length === 0 && env.SOURCE_CYCLE_IDENTITY_REFINE !== '1');
+  // 제원 채움만 켜는 공급사(대표 2026-10-19 «연료가 빠지면 안 된다»): 입구 매핑(제조사·모델)은 켜지 않고 빈 제원 칸 채움·다시 채움만 켠다. 기본 꺼짐(쉼표 목록).
+  // 입구 매핑 공급사(SOURCE_CYCLE_SOURCE_IDENTITY_SOURCES)는 지금처럼 제원 채움도 함께 한다.
+  const specFillSources = (env.SOURCE_CYCLE_SPEC_FILL_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  let identityStatus = refineOff && !sourceIdentitySources.length && !specFillSources.length ? 'DISABLED' : 'NOT_LOADED';
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
-    : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.status; return r.refiner; });
+    : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.clockSkewSeconds ? `${r.status}:CLOCK_SKEW_${r.clockSkewSeconds}S` : r.status; return r.refiner; });
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
@@ -147,7 +215,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       // 손오공 API 옵션 칸(api_options_*)은 대표 재확인 뒤에만 켠다(기본 꺼짐). 켜면 회차당 100대 상한으로 채운다.
       writeApiOptions: env.SOURCE_CYCLE_WRITE_API_OPTIONS === '1',
       // 입구 매핑(원천 brand·model → 빈 maker·model): 기본 꺼짐. 공급사 코드 목록(쉼표)일 때만 그 공급사에 켠다(예: RP012). 회차당 100대 상한은 계획 단계가 건다.
-      sourceIdentitySources, identityRefine: !refineOff, identity });
+      sourceIdentitySources, specFillSources,
+      // 시트 사실 빈 칸 채움(구동방식·원산지, 대표 2026-10-23 승인): 둘 다 있을 때만 켜진다(기본 꺼짐).
+      sheetFactSources: (env.SOURCE_CYCLE_SHEET_FACT_SOURCES ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      sheetFactKeys: (env.SOURCE_CYCLE_SHEET_FACT_KEYS ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      provenanceUids: (env.SOURCE_CYCLE_PROVENANCE_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean),
+      identityRefine: !refineOff, ...(identitySources.length ? { identityRefineSources: identitySources } : {}), identity });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -168,10 +241,12 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   // 시트 읽기 전송은 읽기 모듈의 단일 판정(resolveSheetsTransport)을 쓴다: SHEETS_TRANSPORT=gws 면 이미 인증된 gws(회사 계정 위임, 시간 제한 120초·
   // 실패 코드 분류), 그 밖은 ADC 읽기 전용 토큰(온라인 실행기: WIF 서비스 계정, 시트 «보기» 공유). 같은 F05 읽기 안의 캡처(capture-shared-sheet)도 같은 판정이다.
   const sheetsRead = (url: URL) => readSheetsUrl(url, { env });
-  const get = async (url: URL, authenticated: boolean) => {
+  const get = async (url: URL, authenticated: boolean, retriedAuth = false): Promise<Response> => {
     if (authenticated && url.hostname === 'sheets.googleapis.com') return new Response(JSON.stringify(await sheetsRead(url)), { status: 200 });
     const response = await fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(60_000),
       headers: authenticated ? { authorization: `Bearer ${await gcloudUserToken()}` } : {} });
+    // 401 = 캐시 토큰 만료·무효: 한 번만 다시 발급해 재요청(createGcloudTokenSource 참고).
+    if (authenticated && response.status === 401 && !retriedAuth) { gcloudUserToken.invalidate(); return get(url, false || authenticated, true); }
     if (!response.ok) throw new Error(`SOURCE_HTTP_${response.status}`);
     return response;
   };
@@ -208,30 +283,46 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   };
   const plugins: CyclePlugin<any>[] = [];
   const enabled = required('SOURCE_CYCLE_SOURCES').split(',').map(x => x.trim());
+  let f05Capture: Promise<{ capture: SharedSheetCapture; observedCapture: SharedSheetCapture; visibility: Visibility }> | null = null;
+  const readF05 = async () => {
+    const id = required('SOURCE_CYCLE_F05_SHEET_ID'); assertCurrentSharedSheetSource(id);
+    const fullUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet`);
+    for (const title of new Set(sharedSheetChannels.map(c => c.tab))) fullUrl.searchParams.append('ranges', `'${title.replace(/'/g, "''")}'`);
+    const before = await visibility(id), rawBefore = await (await get(fullUrl, true)).json();
+    const capture = await captureSharedSheetReadOnly(id), rawAfter = await (await get(fullUrl, true)).json(), after = await visibility(id);
+    if (stableDigest(before) !== stableDigest(after)) throw new Error('SOURCE_VISIBILITY_CHANGED');
+    if (stableDigest(rawBefore) !== stableDigest(rawAfter) || rawAfter.valueRanges?.length !== capture.tabs.length) throw new Error('SOURCE_CAPTURE_CHANGED');
+    const observedCapture = structuredClone(capture);
+    for (const [i, tab] of capture.tabs.entries()) {
+      const values = rawAfter.valueRanges[i].values ?? [], headers: unknown[] = values[0] ?? [];
+      const indexes = headers.flatMap((h, n) => h === 'UID' ? [n] : []);
+      if (indexes.length > 1) throw new Error('UID_COLUMN_AMBIGUOUS');
+      if (indexes.length === 1) {
+        if (indexes[0]! < tab.values[0]!.length) throw new Error('UID_COLUMN_SCHEMA_CHANGED');
+        tab.values[0]!.push('UID');
+        for (let row = 1; row < tab.values.length; row++) tab.values[row]!.push(values[row]?.[indexes[0]!] ?? '');
+      }
+    }
+    capture.digest = sharedSheetCaptureDigest(capture);
+    return { capture, observedCapture, visibility: after };
+  };
+  const f05ObservedCapture = async () => {
+    if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') throw new Error('F05_SOURCE_ROWS_DISABLED');
+    return structuredClone((await (f05Capture ??= readF05())).observedCapture);
+  };
   for (const kind of enabled) {
     if (kind === 'F05') {
       for (const code of new Set(sharedSheetChannels.map(c => c.code))) {
         const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === code).map(c => c.tab))];
         plugins.push(sourceCyclePlugin({ sourceId: code, kind: 'F05', scopes, maxDowngradeRatio: ratio }, async () => {
-          const id = required('SOURCE_CYCLE_F05_SHEET_ID'); assertCurrentSharedSheetSource(id);
-          const fullUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet`);
-          for (const title of new Set(sharedSheetChannels.map(c => c.tab))) fullUrl.searchParams.append('ranges', `'${title.replace(/'/g, "''")}'`);
-          const before = await visibility(id), rawBefore = await (await get(fullUrl, true)).json();
-          const capture = await captureSharedSheetReadOnly(id), rawAfter = await (await get(fullUrl, true)).json(), after = await visibility(id);
-          if (stableDigest(before) !== stableDigest(after)) throw new Error('SOURCE_VISIBILITY_CHANGED');
-          if (stableDigest(rawBefore) !== stableDigest(rawAfter) || rawAfter.valueRanges?.length !== capture.tabs.length) throw new Error('SOURCE_CAPTURE_CHANGED');
-          for (const [i, tab] of capture.tabs.entries()) {
-            const values = rawAfter.valueRanges[i].values ?? [], headers: unknown[] = values[0] ?? [];
-            const indexes = headers.flatMap((h, n) => h === 'UID' ? [n] : []);
-            if (indexes.length > 1) throw new Error('UID_COLUMN_AMBIGUOUS');
-            if (indexes.length === 1) {
-              if (indexes[0]! < tab.values[0]!.length) throw new Error('UID_COLUMN_SCHEMA_CHANGED');
-              tab.values[0]!.push('UID');
-              for (let row = 1; row < tab.values.length; row++) tab.values[row]!.push(values[row]?.[indexes[0]!] ?? '');
-            }
-          }
-          capture.digest = sharedSheetCaptureDigest(capture);
-          return sheetCountGuard(code, f05NativeCapture(code, capture, after));
+          const read = env.SOURCE_CYCLE_F05_SOURCE_ROWS === '1' ? await (f05Capture ??= readF05()) : await readF05();
+          const yearRefiner = env.SOURCE_CYCLE_F05_SOURCE_YEARS === '1' && (sourceIdentitySources.includes(code) || specFillSources.includes(code))
+            ? await identity() : null;
+          return sheetCountGuard(code, f05NativeCapture(code, structuredClone(read.capture), read.visibility,
+            yearRefiner ? { ...yearRefiner,
+              sourceYearUids: new Set((env.SOURCE_CYCLE_F05_SOURCE_YEAR_UIDS ?? '').split(',').map(v => v.trim()).filter(Boolean)) } : undefined,
+            // 시트 제원(연료·주행거리·인승·배기량·최초등록일·색상) 전달: 제원 채움 공급사(SOURCE_CYCLE_SPEC_FILL_SOURCES·입구 매핑 공급사)만. 기본 꺼짐.
+            { sheetSpec: specFillSources.includes(code) || sourceIdentitySources.includes(code) }));
         }));
       }
     } else if (kind === 'AICA') {
@@ -246,11 +337,31 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
         const visibilityAfter = await visibility(id);
         if (stableDigest(visibilityBefore) !== stableDigest(visibilityAfter)) throw new Error('SOURCE_VISIBILITY_CHANGED');
         if (stableDigest(before) !== stableDigest(after) || before.valueRanges?.length !== AICA_SCOPES.length) throw new Error('AICA_CAPTURE_CHANGED');
-        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter));
+        return sheetCountGuard('RP004', aicaNativeCapture(AICA_SCOPES.map((title, i) => ({ title, values: before.valueRanges[i].values ?? [] })), observedAt, visibilityAfter,
+          { sheetSpec: specFillSources.includes('RP004') || sourceIdentitySources.includes('RP004') }));
       }, ratio));
     } else if (kind === 'IANCAR') {
-      plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, () => collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher),
-        undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt)));
+      // 상세·가용 캐시(1번 커맨드 오더 2026-10-16, 기본 꺼짐): SOURCE_CYCLE_IANCAR_DETAIL_CACHE=1 일 때만 직전 회차 캐시를 재사용해 차량별 호출 3→1(요금만).
+      // 상태 파일 손상·형식 불일치면 캐시 없음(전수 읽기). 캐시 갱신은 무인 정시 회차만 저장한다(수동 plan 이 파일을 흔들지 않게).
+      const iancarCacheOn = (env.SOURCE_CYCLE_IANCAR_DETAIL_CACHE ?? '').trim() === '1';
+      const iancarCacheFile = join(directory, 'iancar-detail-cache.json');
+      // 값 지문 안정화(1번 커맨드 오더 2026-10-17, 기본 꺼짐): SOURCE_CYCLE_IANCAR_STABLE_FACTS=1 일 때 관측 시각·사진 자격 URL 을 뺀 원문으로 저장·비교해
+      // 값이 같은 문서를 매 회차 다시 쓰지 않는다. 켜는 첫 회차는 전량 1회 UPDATE(저장 digest 이관), 그다음부터 변화 없는 문서는 쓰기 0.
+      const iancarStableFacts = (env.SOURCE_CYCLE_IANCAR_STABLE_FACTS ?? '').trim() === '1';
+      plugins.push(plateUidPlugin(iancarCyclePlugin(ratio, async () => {
+        let detailCache: IancarDetailCache | null = null;
+        if (iancarCacheOn) try { detailCache = parseIancarDetailCache(JSON.parse(await readFile(iancarCacheFile, 'utf8'))); } catch { detailCache = null; }
+        // 캐시 적재는 회차 성공·실패와 무관(닭과 달걀 해소, 1번 커맨드 2026-10-16): 검증을 통과한 차량별 봉투(sink)를 기존 파일과 병합해 저장한다.
+        // finally 에는 로컬 파일 저장만 두고 원래 예외·실패 상태는 그대로 전파한다 — 발행·Firestore 쓰기 경로는 변하지 않는다(Codex P1 ③).
+        const sink: Record<string, IancarDetailCacheEntry> = {};
+        try {
+          return await collectIancarOneFullFacts(iancarOneApiConfigFromEnv(env), fetcher, undefined, undefined, iancarCacheOn ? { detailCache, cacheSink: sink } : {});
+        } finally {
+          if (iancarCacheOn && env.SOURCE_CYCLE_UNATTENDED === '1' && Object.keys(sink).length) {
+            try { await writeJsonAtomic(iancarCacheFile, mergeIancarDetailCache(detailCache, sink, Date.now())); } catch { /* 저장 실패는 원래 결과를 가리지 않는다 */ }
+          }
+        }
+      }, undefined, async () => (await collectIancarOneVehicleList(iancarOneApiConfigFromEnv(env), fetcher)).syncedAt, { stableFacts: iancarStableFacts })));
     } else if (kind === 'MAUMCAR') {
       // 파일 경로는 명시해야 한다(없으면 회차 설정 오류). 쓰기는 별도 승인 범위 — 이 플러그인은 읽기·계획 입력만 만든다.
       const file = required('SOURCE_CYCLE_MAUMCAR_FILE');
@@ -268,8 +379,9 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
       plugins.push(plateUidPlugin(sourceCyclePlugin({ sourceId: 'RP006', kind: 'IRON', scopes: ['homepage'], maxDowngradeRatio: ratio }, async () => {
         const fetchHtml = async (url: string) => {
           const response = await fetch(url, { headers: { 'User-Agent': 'FreePassData/1 iron homepage sync' }, redirect: 'follow', signal: AbortSignal.timeout(IRON_HOMEPAGE_POLICY.timeoutMs) });
-          if (!response.ok) throw new Error(`IRON_HTTP_${response.status}`);
-          if (new URL(response.url || url).hostname !== IRON_HOMEPAGE_POLICY.host) throw new Error('IRON_HOST_REJECTED');
+          // 최종 호스트 검사가 HTTP 상태보다 먼저(외부 호스트의 404 를 사이트맵 잔재로 오인하지 않게) — 판정은 ironFetchFailure 한 곳.
+          const failure = ironFetchFailure(response, url);
+          if (failure) throw new Error(failure);
           const html = await response.text();
           // 사이트맵(완전성 대조)만 XML 을 받는다. 그 밖은 HTML 이어야 한다.
           const sitemap = new URL(url).pathname === '/sitemap.xml';
@@ -406,22 +518,17 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           const read = await readSonogongApi(client, cacheOn ? { detailCache } : {});
           if (cacheOn && unattended && read.detailCacheOut) await writeJsonAtomic(cacheFile, read.detailCacheOut);
           // 행 수 하한(부분 읽기 방어): 잠금 제외 노출 문서 80%·직전 정상 회차 목록 수 80% 중 큰 값. 기준 파일 손상은 이번 회차만 불인정 후 복구.
-          const exposedDocs = (await commands.documents('RP012')).filter(d => {
-            const f = decodeFields(d.fields as never) as Record<string, unknown>;
-            const locked = (f.locked_by_contract !== undefined && f.locked_by_contract !== null && f.locked_by_contract !== false && f.locked_by_contract !== '')
-              || f.status === '계약중' || f.status_kind === '계약중';
-            return f.listable === true && !locked;
-          }).length;
-          let previous = 0, stateError: string | null = null;
-          try {
-            const parsed = JSON.parse(await readFile(countFile, 'utf8')) as { count?: unknown };
-            if (typeof parsed.count === 'number' && Number.isSafeInteger(parsed.count) && parsed.count > 0) previous = parsed.count; else stateError = 'API_COUNT_STATE_INVALID';
-          } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') stateError = 'API_COUNT_STATE_INVALID'; }
+          // 읽지 않는 탭의 상품 구분(픽업구독, 대표 2026-10-28) 문서는 노출 문서 수에서 뺀다(결정 하향은 계획이 따로 한다).
+          const exposedDocs = sonogongExposedUnlockedCount((await commands.documents('RP012')).map(d => decodeFields(d.fields as never) as Record<string, unknown>));
+          // 기준 파일은 «읽은 탭 범위»와 함께 저장한다. 범위가 다른 옛 기준(세 탭 전부)은 «기준 없음»(파일 없음과 같은 동작)으로 본다.
+          let countText: string | null = null, countReadError = false;
+          try { countText = await readFile(countFile, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') countReadError = true; }
+          const { previous, stateError } = parseSonogongCountState(countText, countReadError);
           // 판정은 순수 함수(시험 가능): 축소·불완전 읽기는 기준 파일에 저장하지 않고, 하한은 고유 차량번호 수 기준이다(#601 독립 검토).
           const verdict = judgeSonogongApiRead(read, { exposedUnlockedDocs: exposedDocs, previousCount: previous, stateError });
           let complete = verdict.complete, reason = verdict.incompleteReason;
           if (verdict.saveCount !== null) {
-            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt })) &&
+            const saved = (await writeJsonAtomic(countFile, { count: verdict.saveCount, at: observedAt, tabs: SONOGONG_COUNT_TAB_SCOPE })) &&
               (!verdict.complete || !unattended || await writeJsonAtomic(passFile, { at: observedAt }));
             if (verdict.complete && !saved) { complete = false; reason = 'API_COUNT_STATE_WRITE_FAILED'; }
           }
@@ -452,6 +559,10 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
           }
           return { ...read, complete, ...(reason ? { incompleteReason: reason } : {}) };
         }));
+        // 픽업구독 결정 하향(대표 2026-10-28): 노출된 픽업구독 문서를 매 회차 DECISION_WITHDRAWN 으로 내린다. 읽기가 불완전해도 이 하향만은 적용된다(계획 DECISION_ONLY).
+        apiPlugin.decisionWithdrawnProductTypes = SONOGONG_WITHDRAWN_PRODUCT_TYPES;
+        // 규격 검증(기본 꺼짐): SOURCE_CYCLE_SPEC_VALIDATION_SOURCES 에 RP012 가 있을 때만.
+        if ((env.SOURCE_CYCLE_SPEC_VALIDATION_SOURCES ?? '').split(',').map(x => x.trim()).includes('RP012')) apiPlugin.specValidation = true;
         { const optCap = Number(env.SOURCE_CYCLE_API_OPTIONS_CAP ?? ''); if (Number.isSafeInteger(optCap) && optCap > 100 && optCap <= 400) apiPlugin.optionsRewriteCap = optCap; }
         plugins.push(apiPlugin);
       } else
@@ -512,7 +623,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   const floor = Number(env.SOURCE_CYCLE_DOWNGRADE_FLOOR ?? '3');
   if (!Number.isSafeInteger(floor) || floor < 0 || floor > 50) throw new Error('CYCLE_CONFIG_INVALID');
   for (const plugin of plugins) plugin.downgradeFloor = floor;
-  return { plugins, commands, control, directory, identityStatus: () => identityStatus };
+  return { plugins, commands, control, directory, identityStatus: () => identityStatus, f05ObservedCapture };
 }
 
 // No authentication or network on import. A reviewed runtime needs explicit environment configuration.
@@ -532,7 +643,11 @@ export async function unattendedPreflight(env: NodeJS.ProcessEnv, kinds: readonl
   // 시트 원천은 전송을 명시해야 한다(미설정 기본값은 ADC — 운영 PC 에서 조용히 다른 전송으로 읽지 않게, F05 뿐 아니라 아이카·오토플러스 시트도).
   if (sheets && env.SHEETS_TRANSPORT !== 'gws' && env.SHEETS_TRANSPORT !== 'adc') missing.push('PREFLIGHT_SHEETS_TRANSPORT_UNSET');
   try { if (!(await probes.gcloudToken())) missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
-  catch { missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING'); }
+  catch (e) {
+    // 사유 코드(GCLOUD_TOKEN_FAILED_TIMEOUT 등)가 있으면 함께 남긴다 — 10-17 장애 때 «MISSING» 만 남아 원인을 gcloud 로그에서 찾아야 했다.
+    missing.push('PREFLIGHT_GCLOUD_TOKEN_MISSING');
+    if (e instanceof Error && /^GCLOUD_TOKEN_FAILED_[A-Z_]+$/.test(e.message)) missing.push(e.message);
+  }
   return missing;
 }
 
@@ -561,7 +676,69 @@ export function unattendedExitCode(input: { statuses: readonly string[]; freshne
   return { exit: 0, freshnessSkipped: onlyLocked && input.freshnessStatus !== 'HEALTHY' };
 }
 
-export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes) {
+type F05SourceObservationReport = Awaited<ReturnType<typeof ingestSharedSheetObservedRows>>;
+type F05SourceObservationFailure = { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1';
+  mode: 'SOURCE_OBSERVATIONS_ONLY'; status: 'HOLD' | 'APPLY_UNCERTAIN'; reasonCode: string;
+  intent?: Awaited<ReturnType<CycleControl['load']>>['sourceObservationIntent'] };
+/** Called only by the existing full F05 unattended producer. Activation follows
+ * the single-owner cutover; manual plans and all other collectors stay unchanged.
+ */
+export async function refreshF05SourceObservations(env: NodeJS.ProcessEnv, selectedSource: string | undefined, ports: {
+  acquire: (source: string) => Promise<null | (() => Promise<void>)>;
+  observedCapture?: () => Promise<SharedSheetCapture>;
+  control?: Pick<CycleControl, 'load' | 'save'>;
+  capture?: (id: string) => Promise<SharedSheetCapture>;
+  master?: () => Promise<unknown>;
+  persist?: (input: { capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
+    claimEffect: NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']> }) => Promise<F05SourceObservationReport>;
+}) {
+  if (env.SOURCE_CYCLE_F05_SOURCE_ROWS !== '1') return null;
+  const kinds = (env.SOURCE_CYCLE_SOURCES ?? '').split(',').map(k => k.trim()).filter(Boolean);
+  if (env.SOURCE_CYCLE_UNATTENDED !== '1' || selectedSource || kinds.length !== 1 || kinds[0] !== 'F05') throw new Error('F05_SOURCE_ROWS_REQUIRE_EXCLUSIVE_FULL_PRODUCER');
+  const id = env.SOURCE_CYCLE_F05_SHEET_ID?.trim();
+  if (!id) throw new Error('F05_SOURCE_ROWS_SHEET_REQUIRED');
+  if (!ports.observedCapture) throw new Error('F05_SOURCE_ROWS_PRODUCER_CAPTURE_REQUIRED');
+  if (!ports.control) throw new Error('F05_SOURCE_ROWS_CONTROL_REQUIRED');
+  const release = await ports.acquire('F05_SOURCE_ROWS');
+  if (!release) throw new Error('F05_SOURCE_ROWS_LOCKED');
+  try {
+    const state = await ports.control.load('F05_SOURCE_ROWS');
+    if (state.error === 'APPLY_UNCERTAIN') throw new Error('F05_SOURCE_ROWS_UNCERTAIN_REQUIRES_READBACK');
+    const capture = ports.capture ?? (async (sheetId: string) => { assertCurrentSharedSheetSource(sheetId); return captureSharedSheetReadOnly(sheetId); });
+    const first = await ports.observedCapture();
+    const master = await (ports.master ?? captureVehicleMasterSnapshotReadOnly)().catch(() => undefined);
+    const live = await capture(id);
+    if (master) { first.vehicleMasterSnapshot = master; live.vehicleMasterSnapshot = master; }
+    first.digest = sharedSheetCaptureDigest(first); live.digest = sharedSheetCaptureDigest(live);
+    const persist = ports.persist ?? (input => withSharedSheetCatalogAccess(true,
+      stableDigest({ operation: 'F05_SOURCE_OBSERVATIONS_ONLY', capture: input.capture.digest, live: input.liveCapture.digest }),
+      async (_catalog, source) => ingestSharedSheetObservedRows(source, { target: 'freepasserp5', ...input })));
+    let claimed = false;
+    const claimEffect: NonNullable<Parameters<typeof ingestSharedSheetObservedRows>[1]['claimEffect']> = async intent => {
+      state.stopped = true; state.error = 'APPLY_UNCERTAIN'; state.lastAttemptAt = new Date().toISOString();
+      state.sourceObservationIntent = intent;
+      await ports.control!.save('F05_SOURCE_ROWS', state); claimed = true;
+    };
+    const report = await persist({ capture: first, liveCapture: live, claimEffect });
+    if (!claimed) throw new Error('F05_SOURCE_ROWS_EFFECT_JOURNAL_REQUIRED');
+    state.stopped = false; state.error = null; state.lastCompleteAt = report.verifiedAt;
+    state.readCount = report.rawRows; state.heldCount = report.heldCandidateRows;
+    await ports.control.save('F05_SOURCE_ROWS', state);
+    return report;
+  } finally { await release(); }
+}
+
+/** 무인 회차의 대상 원천 선택(순수). --source 가 있으면 그 원천만, 없으면 전체에서 SOURCE_CYCLE_ALL_RUN_EXCLUDE(쉼표 코드)를 뺀다.
+ * 이안카(RP031)는 전용 감시 실행기(:50, --watch-sync)가 상류 갱신을 기다리며 맡고, 시간당 전체 회차가 같은 시각에 읽으면 시간 초과·잠금 겹침으로 ERROR 가 찍혔다(대표 지시 2026-10-22). */
+export function selectUnattendedPlugins<T extends { sourceId: string }>(plugins: readonly T[], source: string | undefined, env: NodeJS.ProcessEnv): T[] {
+  if (source) return plugins.filter(p => p.sourceId === source);
+  const excluded = new Set((env.SOURCE_CYCLE_ALL_RUN_EXCLUDE ?? '').split(',').map(v => v.trim()).filter(Boolean));
+  return plugins.filter(p => !excluded.has(p.sourceId));
+}
+
+export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acceptDrift: string[], probes: UnattendedProbes = defaultProbes,
+  runtimeFactory: typeof createSourceCycleRuntime = createSourceCycleRuntime,
+  leaseStoreFactory: (e: NodeJS.ProcessEnv) => Pick<ReturnType<typeof writerLeaseStore>, 'check'> = e => writerLeaseStore({ env: e })) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const source = args.indexOf('--source') >= 0 ? args[args.indexOf('--source') + 1] : undefined;
   const record: { started: string; finished: string; exit: number; preflight?: string[]; error?: string; configNotices?: string[];
@@ -575,7 +752,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     /** 신선도 판정을 종료 코드에 쓰지 않은 사유 코드(SKIPPED_ALL_LOCKED = 모든 원천이 다른 회차의 잠금으로 건너뜀). */
     freshnessNote?: string;
     /** 정체성 정제 상태: ENABLED:<마스터 digest 앞 12> · SKIPPED:<사유 코드>(정제 안 함 = 지금 동작) · DISABLED · NOT_LOADED(목록을 읽지 않음). */
-    identityRefine?: string } = { started: new Date().toISOString(), finished: '', exit: 0 };
+    identityRefine?: string; sourceObservations?: F05SourceObservationReport | F05SourceObservationFailure } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
   await mkdir(directory, { recursive: true });
@@ -591,9 +768,24 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     record.preflight = await unattendedPreflight(env, kinds, probes);
     if (record.preflight.length) { record.exit = 1; await alert(record.preflight.join(',')); }
     else {
-      const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
-      const selected = runtime.plugins.filter(p => !source || p.sourceId === source);
+      const runtime = runtimeFactory(env, fetch, acceptDrift);
+      const selected = selectUnattendedPlugins(runtime.plugins, source, env);
       if (!selected.length) throw new Error('ONE_SOURCE_REQUIRED');
+      try {
+        const sourceObservations = await refreshF05SourceObservations(env, source, {
+          acquire: id => runtime.control.acquire(id), observedCapture: runtime.f05ObservedCapture, control: runtime.control,
+        });
+        if (sourceObservations) record.sourceObservations = sourceObservations;
+      } catch (error) {
+        const reasonCode = error instanceof Error && /^[A-Z0-9_]{1,100}$/.test(error.message) ? error.message : 'F05_SOURCE_ROWS_FAILED';
+        const state = await runtime.control.load('F05_SOURCE_ROWS').catch(() => null);
+        record.sourceObservations = { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1',
+          mode: 'SOURCE_OBSERVATIONS_ONLY', status: state?.error === 'APPLY_UNCERTAIN' ? 'APPLY_UNCERTAIN' : 'HOLD',
+          reasonCode, ...(state?.sourceObservationIntent ? { intent: state.sourceObservationIntent } : {}) };
+        record.exit = 1; await alert(`F05_SOURCE_ROWS:${reasonCode}`);
+        // Preserve the existing product collector; failed source storage is
+        // independently non-green and its uncertain effect remains fenced.
+      }
       record.reports = [];
       // 직전 회차 기록의 원천별 «적용 뒤 노출 수» — 이번 회차 시작 노출 수와 비교해 회차 밖 증감(다른 쓰기 주체·수동 작업)을 표시한다.
       const priorAfter = new Map<string, number>();
@@ -606,9 +798,18 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           for (const r of parsed.reports ?? []) if (typeof r.exposure?.after === 'number') priorAfter.set(r.source, r.exposure.after);
         }
       } catch { /* 첫 회차 또는 기록 없음 */ }
+      const leaseConfig = leaseConfigFromEnv(env);   // 쓰는 쪽 하나(기본 꺼짐): 원천마다 시작 전에 임대를 다시 확인해, 회차 도중 넘어갔으면 남은 원천은 쓰지 않는다
+      const leaseStore = leaseConfig ? leaseStoreFactory(env) : null;
       for (const plugin of selected) {
+        if (leaseConfig && leaseStore) {
+          const still = await leaseStore.check(leaseConfig.lane, leaseConfig.pc).catch(() => null);
+          if (!still?.held) { record.exit = 1; record.error = 'WRITER_LEASE_LOST'; await alert('WRITER_LEASE_LOST'); break; }
+        }
         const result = await runUnattendedSourceCycle(plugin, runtime.commands, runtime.control,
-          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR' });
+          { onlyWhenSynced: args.includes('--only-when-synced') && plugin.family === 'IANCAR',
+            // 상류 갱신 감시(독립 판독기): --watch-sync 를 줄 때만(기본 꺼짐). 창(분)은 SOURCE_CYCLE_IANCAR_WATCH_MIN(기본 20, 1~30) — 예: :50 에 시작해 :10 까지.
+            ...(args.includes('--watch-sync') && args.includes('--only-when-synced') && plugin.family === 'IANCAR'
+              ? { syncWatch: { windowMs: Math.min(30, Math.max(1, Number(env.SOURCE_CYCLE_IANCAR_WATCH_MIN ?? '20') || 20)) * 60_000 } } : {}) });
         let exposure: NonNullable<typeof record.reports>[number]['exposure'];
         const plan = 'plan' in result ? result.plan : null;
         if (plan && typeof plan.exposedBefore === 'number') {
@@ -644,7 +845,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           sourceThresholds: env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS !== undefined ? parseFreshnessThresholds(env.SOURCE_CYCLE_FRESHNESS_THRESHOLDS)
             : sonogongApiEnabled(env) ? parseFreshnessThresholds('RP012=90:180:SONOGONG_API_STAGNANT') : [] });
       const decided = unattendedExitCode({ statuses: record.reports.map(r => r.status), freshnessStatus: record.freshness.status, requestRun: env.SOURCE_CYCLE_REQUEST_RUN === '1' });
-      record.exit = decided.exit;
+      record.exit = record.sourceObservations && record.sourceObservations.status !== 'SOURCE_HEAD_VERIFIED' ? 1 : decided.exit;
       if (decided.freshnessSkipped) record.freshnessNote = 'SKIPPED_ALL_LOCKED';
     }
   } catch (e) {
@@ -656,6 +857,29 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
   return record;
 }
 
+/** 쓰는 쪽 하나(writer lease, 기본 꺼짐 WRITER_LEASE_ENFORCE=1): 무인 회차 시작에 임대를 확인·갱신하고, 내 PC 가 아니면 쓰기 0 으로 끝낸다(exit 0, lease-skips.jsonl 에만 기록).
+ *  설정이 틀리거나 임대를 읽지 못하면 닫힘 — 쓰지 않고 exit 1 + 알림. 임대 확인이 필요 없으면(꺼짐) null. */
+export async function writerLeaseGate(env: NodeJS.ProcessEnv, store: Pick<ReturnType<typeof writerLeaseStore>, 'check'> | undefined = undefined) {
+  const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
+  const at = new Date().toISOString();
+  let outcome: Record<string, unknown>, exit = 0;
+  try {
+    const config = leaseConfigFromEnv(env);
+    if (!config) return null;
+    const result = await (store ?? writerLeaseStore({ env })).check(config.lane, config.pc);
+    if (result.held) return null;
+    outcome = { lane: config.lane, pc: config.pc, ...result };
+    if (result.status === 'NO_LEASE') { outcome.error = 'WRITER_LEASE_MISSING'; exit = 1; }   // 첫 인수를 놓친 채 «정상 건너뜀»으로 보이지 않게
+  } catch (error) {
+    const code = error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'WRITER_LEASE_ERROR';
+    outcome = { error: code }; exit = 1;
+  }
+  await mkdir(directory, { recursive: true });
+  await appendFile(join(directory, 'lease-skips.jsonl'), JSON.stringify({ at, ...outcome, writes: 0 }) + '\n', { mode: 0o600 });
+  if (exit) await appendFile(join(directory, 'alerts.jsonl'), JSON.stringify({ source: 'RUNNER', reason: String(outcome.error), at }) + '\n', { mode: 0o600 });
+  return { started: at, finished: new Date().toISOString(), exit, lease: outcome };
+}
+
 export async function runtimeCli(args: string[], env = process.env) {
   const get = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
   const acceptDrift = (get('--accept-drift') ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -664,7 +888,13 @@ export async function runtimeCli(args: string[], env = process.env) {
   if (args.includes('--unattended')) {
     if (env.SOURCE_CYCLE_UNATTENDED !== '1') throw new Error('UNATTENDED_NOT_ENABLED');
     if (args.includes('--apply') || get('--plan') || get('--rollback')) throw new Error('UNATTENDED_ARGS_INVALID');
+    const gated = await writerLeaseGate(env);
+    if (gated) return gated;
     return runUnattended(args, env, acceptDrift);
+  }
+  if (args.includes('--apply') || get('--rollback')) {   // 수동 쓰기도 쓰는 쪽 하나 조건을 따른다(기본 꺼짐)
+    const blocked = await writerLeaseGate(env);
+    if (blocked) throw new Error('WRITER_LEASE_NOT_HELD');
   }
   const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
   const key = get('--rollback');

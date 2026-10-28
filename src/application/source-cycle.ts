@@ -1,9 +1,15 @@
+import { plannedReviewedSpec } from '../domain/reviewed-spec-correction.js';
 import { sourceProductKey, sourceSaleAvailable, validateSourceRecord, termIdentity, compactRecord, comparableRecord, SOURCE_EXPIRY_SECONDS,
   type SourceProductRecord } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
+import { validateSourceSpec } from '../domain/source-spec-validation.js';
+import { refillableSpecValues, masterFuelFallback, masterSpecFallback } from '../domain/spec-refill.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { reconcileSource } from './source-reconciliation.js';
 import { preservedDepositOf } from '../domain/supplier-deposit-policy.js';
+import { photoLinkFillDue } from '../domain/sheet-photo-link.js';
+import { validSheetIdentity } from '../domain/sheet-identity.js';
+import { sheetFactPlan, validSheetFacts, SHEET_FACT_KEYS, type SheetFactKey } from '../domain/sheet-facts.js';
 
 import type { CycleProduct, CycleSnapshot, CycleCommands, CycleConfig, CycleEvidence, CyclePlan } from '../ports/source-cycle.js';
 export * from '../ports/source-cycle.js';
@@ -25,6 +31,18 @@ const withoutObservationClocks = (value: unknown): unknown => {
 // 변경 판정은 압축 형태로 한다: 문서에는 압축 레코드만 저장하므로 저장된 값과 새 원천 값을 같은 기준으로 비교한다(원문이 바뀌면 digest 가 바뀐다).
 // spec 은 문서에 실제 값으로 남지만(새 문서 사실 칸), 비교는 digest 로 한다 — 옛 문서(digest 저장)와 값이 같으면 변경 없음.
 const facts = (r: SourceProductRecord) => withoutObservationClocks(comparableRecord(r));
+/** 변경 판정(저장된 기록 vs 새 기록). 저장된 기록에 raw.spec 이 «아직 없을» 때 새 기록의 spec 은 변경이 아니다 — 시트 제원 전달을 처음 켜면 모든 문서의 기록이 spec 한 칸 때문에
+ * 사실 변경(UPDATE)으로 판정돼 회차 상한(optionsCap)을 우회하던 것을 막는다(2026-10-22 Codex 검토 P1, 합성 101건 → 101 UPDATE). 빈 칸을 채우는 쓰기는 읽기 경로의 빈 칸 판정(SOURCE_SPEC 사유, 상한 적용)이 맡고,
+ * 그 쓰기가 일어날 때 새 기록(spec 포함)이 함께 저장된다. 저장된 기록에 spec 이 있으면 spec 변화는 종전처럼 변경이다. */
+const sameFacts = (before: SourceProductRecord, after: SourceProductRecord): boolean => {
+  const fb = facts(before) as SourceProductRecord;
+  const fa = facts(after) as SourceProductRecord;
+  if (before.raw?.spec === undefined || before.raw.spec === null) {
+    if (fb.raw) delete (fb.raw as Record<string, unknown>).spec;
+    if (fa.raw) delete (fa.raw as Record<string, unknown>).spec;
+  }
+  return deepEqual(fb, fa);
+};
 export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, snapshot: CycleSnapshot, now: number) {
   if (!config.sourceId || !Object.hasOwn(SOURCE_EXPIRY_SECONDS, config.family) || !Number.isFinite(now) || !Number.isFinite(config.maxDowngradeRatio) ||
       config.maxDowngradeRatio <= 0 || config.maxDowngradeRatio > 1) throw new Error('CYCLE_CONFIG_INVALID');
@@ -39,7 +57,9 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     maxDowngradeRatio: config.maxDowngradeRatio, ...(config.downgradeFloor ? { downgradeFloor: config.downgradeFloor } : {}),
     ...(config.absenceReason ? { absenceReason: config.absenceReason } : {}),
     ...(config.enrollCapOnce ? { enrollCapOnce: config.enrollCapOnce } : {}),
-    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}) }, plannedAt: now,
+    ...(config.optionsRewriteCap ? { optionsRewriteCap: config.optionsRewriteCap } : {}),
+    ...(config.specValidation ? { specValidation: true } : {}),
+    ...(config.decisionWithdrawnProductTypes?.length ? { decisionWithdrawnProductTypes: [...new Set(config.decisionWithdrawnProductTypes)].sort() } : {}) }, plannedAt: now,
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
@@ -69,6 +89,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const withdraw = (before: CycleProduct, reason: string, observed?: SourceProductRecord) => {
     const after = structuredClone(before);
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과(내려간 문서)에는 남지 않는다
+    delete after.specRefillKeys; delete after.specMasterFuel; delete after.specMasterSpecs; delete after.reviewedSpec; delete after.policyLinkCode; delete after.photoLinkFill;
     if (observed) after.record = structuredClone(observed);
     after.record.status.saleAvailable = false;
     after.listable = false;
@@ -80,6 +101,21 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     return after;
   };
   let identityHolds = false, depositPreserved = 0, uidBridged = 0;
+  // 대표 결정으로 노출하지 않는 상품 구분(손오공 픽업구독, 대표 2026-10-28): 저장 기록 raw.product_type 으로 가린다.
+  const decisionTypes = new Set(config.decisionWithdrawnProductTypes ?? []);
+  const decisionTyped = (r: SourceProductRecord) => decisionTypes.size > 0 && decisionTypes.has(String(r.raw?.product_type ?? ''));
+  // 이번 원천이 «허용된 구분»으로 내놓은 문서 키(번호 잇기 뒤 키 포함). 구분이 바뀐 차(예: 픽업구독 → 오공구독)는 결정 하향하지 않고 보통 경로가 갱신한다.
+  const offered = new Set<string>();
+  let decisionSkipped = 0;
+  // 빈 제원 칸 다시 채움이 정해진 항목 키(계획 항목의 before 는 읽기 경로 그대로 두고, 사유는 여기서만 더한다 — reasonsOf).
+  const specRefill = new Set<string>();
+  // 빈 photo_link 를 시트 사진 폴더 링크로 채우는 항목 키(PHOTO_LINK 사유 — reasonsOf).
+  const photoLinkFill = new Set<string>();
+  // 시트 차종 4칸 후보로 정제할 항목 키(VEHICLE_IDENTITY 사유 — reasonsOf, 회차 상한 대상).
+  const sheetIdentity = new Set<string>();
+  // 시트 사실(구동방식·원산지) 빈 칸 채움 항목 키·충돌 수(SHEET_FACT 사유 — reasonsOf, 회차 상한 대상).
+  const sheetFact = new Set<string>();
+  let sheetFactConflicts = 0;
   // 문서 ID 가 다른 같은 차량(옛 ID 체계로 만든 문서): 같은 공급사 안에서 차량번호가 같은 문서가 정확히 하나이고 어떤 원천 행과도 직접
   // 대응하지 않으면 그 문서를 갱신 대상으로 잇는다. 새 문서를 만들고 옛 문서를 내리면 문서에 붙은 사진·정책 등이 새 문서에 없어
   // 화면이 퇴보한다(2026-10-13 이안카: 옛 iancar_* ID 문서 21건 하향 + 번호판 ID 23건 편입 계획). 문서 ID 는 옮기지 않는다.
@@ -95,8 +131,21 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     const fp = p.record.raw?.row_fingerprint;
     if (typeof fp === 'string' && fp && !isAssignedPlate(p.record.plate)) (fingerprintPool.get(fp) ?? fingerprintPool.set(fp, []).get(fp)!).push(p);
   }
+  // 규격 검증(기본 꺼짐): 위반 칸만 보류한 복사본으로 계획을 세운다. 원문(raw.list·detail)은 그대로, 값을 고쳐 쓰지 않는다.
+  const specViolationByField: Record<string, number> = {};
+  let specViolatedRecords = 0;
   for (const original of evidence.records) {
     let r = original;
+    if (config.specValidation) {
+      const checked = validateSourceSpec(r);
+      if (checked.violations.length) {
+        specViolatedRecords++;
+        for (const field of new Set(checked.violations.map(x => x.field))) specViolationByField[field] = (specViolationByField[field] ?? 0) + 1;
+        r = checked.record;
+      }
+    }
+    // 결정으로 내린 구분의 원천 행은 편입·갱신·재노출하지 않는다(어댑터가 읽지 않는 것이 1차, 이것은 다른 경로로 들어와도 막는 2차).
+    if (decisionTyped(r)) { decisionSkipped++; continue; }
     let key = sourceProductKey(r), before = mine.get(key) ?? null;
     if (!before && !duplicates.has(key) && isAssignedPlate(r.plate)) {
       let candidates = (platePool.get(plateIdentityKey(r.plate)) ?? []).filter(p => !seen.has(sourceProductKey(p.record)));
@@ -120,6 +169,8 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         errors.some(e => ['RECORD_SHAPE_INVALID', 'IDENTITY_REQUIRED', 'OBSERVATION_INVALID'].includes(e))) {
       identityHolds = true; hold('IDENTITY_OR_DUPLICATE'); continue;
     }
+    // 결정 하향 제외 근거는 식별·관측 검증을 통과하고 구분이 명시된(결정 구분이 아닌) 행만(Codex 검토: 구분 누락·검증 실패 행이 픽업구독 문서를 살리지 않게).
+    if (typeof r.raw?.product_type === 'string' && r.raw.product_type.trim()) offered.add(key);
     const sale = sourceSaleAvailable(r, config.family, now);
     if (r.status.saleAvailable === true) plan.sourceCount++;
     // 같은 번호(문서 ID)를 다른 공급사 문서가 이미 쓰고 있다: 편입하면 문서 ID 충돌(CAS_CONFLICT → APPLY_UNCERTAIN)로 공급사 회차 전체가 멈춘다.
@@ -129,17 +180,41 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
       if (!plan.warnings.includes('PLATE_OWNED_BY_OTHER_SUPPLIER')) plan.warnings.push('PLATE_OWNED_BY_OTHER_SUPPLIER');
       continue;
     }
-    if (before && locked(before)) { hold('CONTRACT_LOCKED'); continue; }
+    if (before && locked(before)) {
+      hold('CONTRACT_LOCKED');
+      // 계약 잠금 문서도 차종 마스터로 «하나로 특정될 때만» 이름 4칸만 정제한다(읽기 경로가 VEHICLE_IDENTITY 사유를 준 노출 문서). 기록·가격·상태·잠금은 before 그대로(identityOnly).
+      const lockedSheetDue = !!before.identityHold && !before.rewriteReasons?.includes('VEHICLE_IDENTITY') && snapshot.sheetIdentityMatch?.(r, before.identityHold.year) === true;
+      if (before.listable && (before.rewriteReasons?.includes('VEHICLE_IDENTITY') || lockedSheetDue) && !before.publication_withdrawal && !driftHeld.has(before.record.uid)) {
+        if (lockedSheetDue) sheetIdentity.add(key);
+        const lockedAfter: CycleProduct = { ...structuredClone(before), identityOnly: true, ...(lockedSheetDue && validSheetIdentity(r.raw?.sheet_identity) ? { sheetIdentity: validSheetIdentity(r.raw?.sheet_identity)! } : {}) };
+        delete lockedAfter.rewriteReasons; delete lockedAfter.specRefillKeys; delete lockedAfter.specMasterFuel; delete lockedAfter.specMasterSpecs;
+        delete lockedAfter.reviewedSpec; delete lockedAfter.policyLinkCode; delete lockedAfter.photoLinkFill; delete lockedAfter.identityHold;
+        plan.entries.push({ kind: 'UPDATE', before: structuredClone(before), after: lockedAfter });
+      }
+      continue;
+    }
     if (before && driftHeld.has(before.record.uid)) {
       // 이 문서를 원천 값으로 쓰면 외부에서 바뀐 가격을 덮는다 — 보정 허용(-AcceptDrift)이 있어야만 통과한다.
       if (!plan.blockers.includes('CATALOG_SOURCE_RECORD_DRIFT')) plan.blockers.push('CATALOG_SOURCE_RECORD_DRIFT');
+      continue;
+    }
+    // 공급사 확인 판매완료(대표 2026-10-22): 사람이 공급사 확인으로 노출을 내렸고(표식), 그 뒤 엔진이 이 기록을 다시 쓰지 않았고, 원천 상태가 표식 때와 같은
+    // «판매 가능» 값이면(관측이 낡아 sale 이 거짓이어도 원천 문구가 그대로면 기록을 다시 쓰지 않는다) 철회를 지킨다 — 원천이 아직 갱신되지 않았을 뿐이다. 원천이 다른 값(판매완료·삭제 포함)으로 바뀌면 보통 경로가 처리한다.
+    if (before && !before.listable && r.status.saleAvailable === true && before.supplierConfirmedSold?.recordObservedAt === before.record.observedAt &&
+        r.status.raw === before.record.status.raw) {
+      if (!plan.warnings.includes('SUPPLIER_CONFIRMED_SOLD_HELD')) plan.warnings.push('SUPPLIER_CONFIRMED_SOLD_HELD');
       continue;
     }
     // 1차는 무조건 가져온다(대표 2026-10-14): 새 차(문서 없음)는 상태를 몰라도 식별자만 있으면 편입한다(노출 제외). 이미 문서가 있는 차는 이전처럼 보류 —
     // 상태를 모르는 값으로 기존 노출을 바꾸지 않는다.
     // 노출 중인 문서가 모르는 상태값(예: 취소·진행중)으로 보류되면 노출이 그대로 남는다 — 조용히 두지 않고 회차 경고로 센다.
     if (errors.includes('STATUS_UNKNOWN') && before) { hold('STATUS_UNKNOWN'); if (before.listable) statusUnknownExposed++; continue; }
-    if (errors.includes('TERMS_HOLD')) hold('TERMS_HOLD');
+    if (errors.includes('TERMS_HOLD')) {
+      hold('TERMS_HOLD');
+      // A failed price observation is not proof of withdrawal. Keep the last
+      // verified document and its original observation time; other cars continue.
+      if (before && r.status.saleAvailable === true) continue;
+    }
     if (Date.parse(r.observedAt) > now || (before && Date.parse(r.observedAt) < Date.parse(before.record.observedAt))) {
       hold('OBSERVATION_ORDER'); continue;
     }
@@ -188,18 +263,85 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     // Vehicle master review stays attached; source facts/conditions may enroll without inventing a model.
     // 보정 허용으로 통과한 문서는 값이 원천과 같아도 한 번 다시 쓴다: 저장된 가격 digest 를 현재 값에 맞춰야 다음 회차부터
     // 보정 허용 없이 통과한다(안 쓰면 digest 가 낡은 채 남아 매 회차 DRIFT HOLD 가 반복된다 — 2026-10-13 RP013 실측).
-    if (before && deepEqual(facts(before.record), facts(after.record)) && before.listable === after.listable &&
+    // 빈 제원 칸 다시 채움(대표 2026-10-19): 확인 표식이 있는 노출 문서의 빈 칸(before.specRefillKeys) 중 이번 관측 원천(raw.spec)에 형식 맞는 값이 있으면
+    // 제원 채움(SOURCE_SPEC)과 같은 상한·양성 표식으로 고른다. before 자체는 바꾸지 않는다(백업·CAS 가 읽기 경로 envelope 와 같은 before 를 대조한다).
+    // 마스터 연료 보완 결정은 여기서 한 번만, 검증·압축 «전» 원문(original)으로 정해 after 에 고정한다(Codex 재검토: 규격 검증이 지운 연료·압축된 raw 를 «원천에 없음»으로 오인하지 않게).
+    // 쓰기는 after.specMasterFuel 만 쓰고 다시 판정하지 않는다. 원천 연료 원문이 하나라도 있거나 차명과 어긋나면 지운다.
+    const plannedMasterFuel = before?.specMasterFuel ? masterFuelFallback(original.raw, before.specMasterFuel, original.vehicleText) : null;
+    if (plannedMasterFuel && after.listable) after.specMasterFuel = plannedMasterFuel; else delete after.specMasterFuel;
+    // 마스터 제원 보완(인승·구동방식·배기량, 대표 2026-10-22): 마스터 연료와 같은 자리·같은 원칙 — 읽기 경로가 고정한 값 중 원문(original)에 그 칸 원문이 없는 칸만 after 에 고정한다.
+    const plannedMasterSpecs = before?.specMasterSpecs ? masterSpecFallback(original.raw, before.specMasterSpecs) : null;
+    if (plannedMasterSpecs && after.listable) after.specMasterSpecs = plannedMasterSpecs; else delete after.specMasterSpecs;
+    // 공급사 기본 정책 연결 코드는 노출 유지·재노출 항목에만 남긴다(하향·철회 항목에는 정책을 새로 붙이지 않는다).
+    if (!after.listable || after.publication_withdrawal || r.raw?.product_group === 'MONTHLY_RENT') delete after.policyLinkCode;   // 이번 원천이 월렌트 모델 줄이면 문서의 옛 상품군이 비어 있어도 연결하지 않는다
+    // 쓰고 나면 문서에서 되읽히는 모양(공급사 칸의 policy_code)을 계획 단계에서 미리 맞춘다 — 되읽기 비교가 정확히 같아야 한다.
+    else if (after.policyLinkCode && after.supplierFields) after.supplierFields = { ...after.supplierFields, policy_code: after.policyLinkCode };
+    const reviewed = plannedReviewedSpec(before?.reviewedSpec, original.raw, original.vehicleText);
+    if (reviewed && after.listable) after.reviewedSpec = reviewed; else delete after.reviewedSpec;
+    const refillDue = (!!before?.specRefillKeys?.length && after.listable &&
+      (Object.keys(refillableSpecValues(r.raw?.spec, before.specRefillKeys, r.vehicleText)).length > 0
+        || (before.specRefillKeys.includes('fuel_type') && !!plannedMasterFuel) || !!after.reviewedSpec))
+      // 마스터 제원은 그 자체가 채울 근거다(쓰면 칸이 채워져 읽기 경로가 다시 계산하지 않는다 — 되풀이 없음).
+      || (!!before && after.listable && !!after.specMasterSpecs);
+    if (refillDue) specRefill.add(key);
+    // 빈 photo_link 채움(F05 차량번호 칸 사진 폴더 링크, 대표 2026-10-22): 읽기 경로가 «비어 있음»(photoLinkFill)을 표시한 노출 문서에, 이번 관측 원천에
+    // 검증된 폴더 링크가 있을 때만 쓴다. 사유는 PHOTO_LINK(회차 상한 대상). 쓰면 photo_link 가 채워져 표시가 사라진다(되풀이 없음).
+    const photoLinkDue = after.listable && !after.publication_withdrawal && photoLinkFillDue(before?.photoLinkFill, r.raw?.sheet_photo_link);
+    // 시트 차종 4칸 후보 정제(대표 2026-10-22 승인): 이름 대조는 못 정했지만(VEHICLE_IDENTITY 사유 없음) 정체성 보류 노출 문서에, 이번 관측의 시트 4칸이 마스터 한 행과 정확히 일치하고 원문과 모순되지 않을 때만.
+    const sheetIdentityDue = !!before && !!before.identityHold && !before.rewriteReasons?.includes('VEHICLE_IDENTITY') && after.listable && !after.publication_withdrawal && snapshot.sheetIdentityMatch?.(r, before.identityHold.year) === true;
+    if (sheetIdentityDue) sheetIdentity.add(key);
+    // 시트 사실 채움(대표 2026-10-23 승인): 읽기 경로가 켜진 칸의 현재 값(sheetFactState)을 표시한 노출 문서에, 이번 관측의 검증된 후보가 있고 칸이 «비어 있을 때만». 다른 값이 있으면 충돌로 세고 쓰지 않는다.
+    const factPlan = sheetFactPlan(before?.sheetFactState, validSheetFacts(r.raw?.sheet_facts), before?.sheetFactState ? (Object.keys(before.sheetFactState).filter((k): k is SheetFactKey => (SHEET_FACT_KEYS as readonly string[]).includes(k))) : []);
+    sheetFactConflicts += factPlan.conflicts.length;
+    const sheetFactDue = !!before && after.listable && !after.publication_withdrawal && factPlan.fill.length > 0;
+    if (sheetFactDue) { sheetFact.add(key); after.sheetFactFill = [...factPlan.fill]; }
+    if (photoLinkDue) photoLinkFill.add(key);
+    if (before && sameFacts(before.record, after.record) && before.listable === after.listable &&
         deepEqual(before.publication_withdrawal, after.publication_withdrawal) &&
-        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable)) continue;
+        !(snapshot.acceptedDrift ?? []).includes(before.record.uid) && !(before.rewriteReasons?.length && after.listable) && !refillDue && !photoLinkDue && !sheetIdentityDue && !sheetFactDue) continue;
     delete after.rewriteReasons;   // 읽기 경로가 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다
+    delete after.specRefillKeys;
+    delete after.photoLinkFill; delete after.identityHold; delete after.sheetFactState; if (!sheetFactDue) delete after.sheetFactFill;
     plan.entries.push({ kind: !before ? 'ENROLL' : before.listable && !after.listable ? 'DOWNGRADE' :
       !before.listable && after.listable ? 'REEXPOSE' : 'UPDATE', before: structuredClone(before), after });
   }
   // Missing/unidentified rows may hide any UID: never infer absence from a partial normalization.
   const absenceUnsafe = evidence.heldCount - (evidence.benignHeldCount ?? 0) > 0 || identityHolds || plan.unassignedPlateCount > 0;
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
+  // 결정 하향(대표 2026-10-28 «픽업구독 일단 다 내려»): 원천에 있고 없고를 추론하지 않으므로 읽기 완전성·보류와 무관하게 계획한다. 이번 원천이 허용된 구분으로 내놓은 차,
+  // 계약 잠금·가격 드리프트 문서는 내리지 않는다(기존 부재 하향과 같은 보호, 잠금은 건수만 경고로 남긴다). 사유 DECISION_WITHDRAWN 은 비율 가드 대상이 아니다.
+  const decisionDown = new Set<string>();
+  let decisionKept = 0;
+  if (decisionTypes.size && fresh) {
+    for (const before of snapshot.products) {
+      const key = sourceProductKey(before.record);
+      if (!before.listable || !decisionTyped(before.record) || offered.has(key)) continue;
+      if (locked(before) || driftHeld.has(before.record.uid)) { decisionKept++; continue; }
+      if (Date.parse(before.record.observedAt) > at) { hold('OBSERVATION_FUTURE'); continue; }
+      decisionDown.add(key);
+      plan.entries.push({ kind: 'DOWNGRADE', before: structuredClone(before), after: withdraw(before, 'DECISION_WITHDRAWN') });
+    }
+  }
+  if (decisionDown.size) plan.warnings.push(`DECISION_WITHDRAWN_TYPE:${decisionDown.size}`);
+  if (decisionKept) plan.warnings.push(`DECISION_WITHDRAWN_KEPT_LOCKED:${decisionKept}`);
+  if (decisionSkipped) plan.warnings.push(`DECISION_TYPE_SOURCE_SKIPPED:${decisionSkipped}`);
+  // 읽기만 불완전하면(다른 막힘 없음) 결정 하향만 적용한다: 원천 값으로 쓰는 항목(편입·갱신·재노출·부재 하향)은 전부 빼고 막힘을 푼다.
+  // 결정 하향이 없으면 지금처럼 SOURCE_INCOMPLETE 로 멈춘다. 회차는 적용 뒤에도 불완전 읽기로 실패를 센다(jobs/source-cycle).
+  // 규격 위반 경고(번호 없음): 필드별 건수. 위반이 읽은 차의 20% 를 넘으면 원천 형식 변경 의심 — 회차를 보류한다(이안카 드리프트 한도와 같은 방식, 최소 5건).
+  // 결정 하향 예외 판정 «전에» 계산한다(Codex 검토: 막힘이 SOURCE_INCOMPLETE 하나뿐일 때만 예외).
+  for (const [field, count] of Object.entries(specViolationByField).sort(([a], [b]) => a.localeCompare(b))) plan.warnings.push(`SPEC_VIOLATION:${field}:${count}`);
+  if (specViolatedRecords >= 5 && specViolatedRecords > Math.floor(evidence.records.length * 0.2) && !plan.blockers.includes('SPEC_FORMAT_DRIFT')) plan.blockers.push('SPEC_FORMAT_DRIFT');
+  const decisionOnly = decisionDown.size > 0 && plan.blockers.length > 0 && plan.blockers.every(b => b === 'SOURCE_INCOMPLETE');
+  if (decisionOnly) {
+    plan.entries = plan.entries.filter(e => e.kind === 'DOWNGRADE' && decisionDown.has(sourceProductKey(e.before!.record)));
+    plan.blockers = [];
+    plan.warnings.push('DECISION_ONLY:SOURCE_INCOMPLETE');
+    infoIncomplete = 0; notSellableEnrolled = 0; depositPreserved = 0; statusUnknownExposed = 0; uidBridged = 0;
+    specRefill.clear(); photoLinkFill.clear(); sheetIdentity.clear(); sheetFact.clear(); sheetFactConflicts = 0;
+  }
   if (evidence.complete && !absenceUnsafe && fresh) {
     for (const before of snapshot.products) {
+      if (decisionTyped(before.record)) continue;   // 결정 구분 문서는 위 결정 하향만 다룬다(부재 하향 중복·비율 가드 오적용 방지)
       // 계약 잠금 문서는 부재 하향에서 보호된다. 단 «API 교체 철회»(REPLACED_BY_API, 대표 «API 연동 아닌 건 다 내려라»)는 한 번만(표식) 허용된 결정이라
       // 잠금 문서도 «노출만» 내린다(하드 삭제 아님, 정산 원장·잠금 기록은 건드리지 않는다 — withdraw 는 listable·사유만 바꾼다).
       const lockProtected = locked(before) && config.absenceReason !== 'REPLACED_BY_API';
@@ -221,14 +363,16 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   const absentDown = downs.filter(isAbsent).length;
   const explicitDown = downs.length - absentDown;
   const floor = config.downgradeFloor ?? 0;
-  if (plan.exposedBefore) {
+  // 비율 가드·편입 상한의 기준 노출 수에서 결정 구분 문서(이번 회차에 결정으로 내리는 쪽)를 뺀다 — 픽업구독 264건이 남은 십여 건의 부재 하향 허용분을 부풀리지 않게.
+  const guardBase = plan.exposedBefore - snapshot.products.filter(p => p.listable && decisionTyped(p.record)).length;
+  if (guardBase > 0) {
     // floor 0(기본·옛 동작): 합산 비율로 회차 전체를 막는다(호환).
     // floor>0(런타임 기본 3): 대표 2026-10-14 «걸림돌 해제» — 회차 전체를 멈추지 않고 «허용분까지만 적용, 나머지는 다음 회차로 이월»한다.
     //   부재 추론(SOURCE_ABSENT) 허용분 = max(절대 하한, 노출의 상한 비율), 원천이 명시한 불가·계약중 등 = max(절대 하한, 노출의 max(상한,0.5)).
     //   이월분은 노출 유지(키 순서 고정이라 같은 입력이면 같은 대수), 경고 DOWNGRADE_DEFERRED 로 남아 사람이 대량 오작동을 알아챈다.
     if (floor > 0) {
-      const absentAllow = Math.max(floor, Math.floor(plan.exposedBefore * config.maxDowngradeRatio));
-      const explicitAllow = Math.max(floor, Math.floor(plan.exposedBefore * Math.max(config.maxDowngradeRatio, 0.5)));
+      const absentAllow = Math.max(floor, Math.floor(guardBase * config.maxDowngradeRatio));
+      const explicitAllow = Math.max(floor, Math.floor(guardBase * Math.max(config.maxDowngradeRatio, 0.5)));
       const dropKeys = new Set<string>();
       const keyed = (list: typeof downs) => [...list].sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
       const absentList = keyed(downs.filter(isAbsent));
@@ -239,7 +383,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
         plan.entries = plan.entries.filter(e => e.kind !== 'DOWNGRADE' || !dropKeys.has(sourceProductKey(e.after.record)));
         plan.warnings.push(`DOWNGRADE_DEFERRED:${dropKeys.size}`);
       }
-    } else if (downs.length / plan.exposedBefore > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
+    } else if (downs.length / guardBase > config.maxDowngradeRatio) plan.blockers.push('DOWNGRADE_RATIO_EXCEEDED');
   }
   plan.entries.sort((a, b) => Number(a.kind !== 'DOWNGRADE') - Number(b.kind !== 'DOWNGRADE') ||
     sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
@@ -250,7 +394,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 설정은 상한을 «줄이기만» 할 수 있다(독립 검토 2026-10-14): 확정 상한과 설정값 중 작은 쪽. minEnrollPerCycle 은 더 이상 상한을 올리지 못한다.
   // 한 번만 상향(대표 2026-10-14 손오공 최초 편입 201대+): enrollCapOnce 는 운영 변수(SOURCE_CYCLE_SONOGONG_ENROLL_CAP_ONCE)가 «이번 한 회차에 한해» 켠다 —
   // 회차 직후 러너가 표식 파일을 남겨 다음 회차부터 자동 원복한다. 절대 상한 1000, plan.config 에 기록되어 적용 재계획(replay)과 같은 결과가 된다.
-  const confirmedCap = Math.min(Math.max(100, Math.ceil(plan.exposedBefore * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
+  const confirmedCap = Math.min(Math.max(100, Math.ceil(Math.max(0, guardBase) * 0.5)), config.maxEnrollPerCycle ?? Number.POSITIVE_INFINITY);
   const enrollCap = config.enrollCapOnce && Number.isSafeInteger(config.enrollCapOnce) && config.enrollCapOnce > confirmedCap
     ? Math.min(config.enrollCapOnce, 1000) : confirmedCap;
   const enrolls = plan.entries.filter(e => e.kind === 'ENROLL');
@@ -264,9 +408,24 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // 손오공 API 옵션 첫 반영(대표 10-15 승인): 옵션 칸만 채우려고 다시 쓰는 문서는 «회차 전체 쓰기 건수»가 OPTIONS_REWRITE_CAP 을 넘지 않는 만큼만 쓰고
   // 나머지는 다음 회차로 이월한다(Codex #674: 다른 사유·원천 변경과 겹쳐도 한 회차 쓰기가 상한을 넘기지 않게). 다른 쓰기가 상한 이상이면 옵션 전용 쓰기는 0 이다.
   // 이월분은 노출·내용 변화 없이 대기, 키 순서 고정이라 같은 입력이면 같은 대수 — 적용 재계획과 같은 결과. 원천 사실이 함께 바뀌는 문서는 이 상한 대상이 아니다.
-  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC']);   // 입구 매핑(SOURCE_IDENTITY)도 같은 상한 안에서 이월한다
-  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => CAPPED_REASONS.has(r)) &&
-    e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record)));
+  const CAPPED_REASONS = new Set(['API_OPTIONS', 'SOURCE_IDENTITY', 'SOURCE_SPEC', 'VEHICLE_IDENTITY', 'SOURCE_PROVENANCE', 'POLICY_LINK', 'PHOTO_LINK', 'SHEET_FACT']);   // 입구 매핑과 provenance도 같은 상한 안에서 이월한다
+  // 사유 집계(진단 전용, 상한 이월 «전»): 이월로 계획에서 빠지는 항목은 이후 경고(VEHICLE_IDENTITY_REFINE 등)가 세지 못한다 —
+  // 정제 사유가 상한에 밀려 보이지 않는지 가리는 근거(2026-10-16 00:00 회차: 정제 0건이 «사유 없음»인지 «이월»인지 구분 불가). 쓰기·계획 내용은 바꾸지 않는다.
+  // 계획(plan.warnings)에 넣지 않는다: 계획 digest·재계획 비교에 들어가면 진단만으로 승인 계획이 달라진다. 계획 밖 보고 필드(reasonCensus)로만 돌려준다.
+  // 항목의 사유 = 읽기 경로 사유 + 계획이 정한 빈 칸 다시 채움(SOURCE_SPEC). 상한·이월·채움 표식은 모두 이 합친 사유로 정한다.
+  type PlanEntry = (typeof plan.entries)[number];
+  const reasonsOf = (e: PlanEntry): string[] => [...(e.before?.rewriteReasons ?? []), ...(specRefill.has(sourceProductKey(e.after.record)) ? ['SOURCE_SPEC'] : []),
+    ...(photoLinkFill.has(sourceProductKey(e.after.record)) ? ['PHOTO_LINK'] : []),
+    ...(sheetFact.has(sourceProductKey(e.after.record)) ? ['SHEET_FACT'] : []),
+    ...(sheetIdentity.has(sourceProductKey(e.after.record)) && !(e.before?.rewriteReasons ?? []).includes('VEHICLE_IDENTITY') ? ['VEHICLE_IDENTITY'] : [])];
+  let reasonCensus: string | null = null;
+  {
+    const census = new Map<string, number>();
+    for (const e of plan.entries) for (const r of new Set(reasonsOf(e))) if (CAPPED_REASONS.has(r)) census.set(r, (census.get(r) ?? 0) + 1);
+    if (census.size) reasonCensus = `REASON_CENSUS:${[...census].sort(([a], [b]) => a.localeCompare(b)).map(([r, n]) => `${r}=${n}`).join(',')}`;
+  }
+  const optionsOnly = plan.entries.filter(e => e.kind === 'UPDATE' && !!e.before && reasonsOf(e).length > 0 && reasonsOf(e).every(r => CAPPED_REASONS.has(r)) &&
+    e.before.listable === e.after.listable && sameFacts(e.before.record, e.after.record));
   const optionsCap = config.optionsRewriteCap && Number.isSafeInteger(config.optionsRewriteCap) && config.optionsRewriteCap >= OPTIONS_REWRITE_CAP && config.optionsRewriteCap <= 400 ? config.optionsRewriteCap : OPTIONS_REWRITE_CAP;
   const optionsAllowed = Math.max(0, optionsCap - (plan.entries.length - optionsOnly.length));
   if (optionsOnly.length > optionsAllowed) {
@@ -276,20 +435,35 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const optionsRewrite = plan.entries.filter(e => e.before?.rewriteReasons?.includes('API_OPTIONS')).length;
   if (optionsRewrite > 0) plan.warnings.push(`API_OPTIONS_REWRITE:${optionsRewrite}`);
+  const photoLinkRewrite = plan.entries.filter(e => photoLinkFill.has(sourceProductKey(e.after.record))).length;
+  if (photoLinkRewrite > 0) plan.warnings.push(`PHOTO_LINK_FILL:${photoLinkRewrite}`);
+  const sheetFactRewrite = plan.entries.filter(e => sheetFact.has(sourceProductKey(e.after.record))).length;
+  if (sheetFactRewrite > 0) plan.warnings.push(`SHEET_FACT_FILL:${sheetFactRewrite}`);
+  if (sheetFactConflicts > 0) plan.warnings.push(`SHEET_FACT_CONFLICT:${sheetFactConflicts}`);
   // 입구 매핑(제조사·모델 채움)은 «양성» 표식(fillSourceIdentity)을 받은 항목에서만 일어난다: 사유(SOURCE_IDENTITY)가 있는 기존 문서와 신규 편입(ENROLL)만, 회차당
   // OPTIONS_REWRITE_CAP 대까지(키 순서). 사유 없는 UPDATE·재노출은 쓰기가 일어나도 채우지 않으므로 상한을 우회하지 못한다. 쓰기가 «채움뿐»인 초과분은 계획에서 뺀다.
   // 신규 편입(ENROLL)도 같은 상한에 센다(Codex #685 (b)): 편입은 쓰기가 어차피 일어나지만 maker·model 채움은 입구 매핑이므로 채움 몫에 포함한다.
-  const fillEntries = plan.entries.filter(e => e.before?.rewriteReasons?.some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
+  const fillEntries = plan.entries.filter(e => reasonsOf(e).some(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC')
     || (e.kind === 'ENROLL' && (typeof e.after.record.raw?.source_maker === 'string' || typeof e.after.record.raw?.source_model === 'string'
       || (!!e.after.record.raw?.spec && typeof e.after.record.raw.spec === 'object' && Object.keys(e.after.record.raw.spec as object).length > 0))))
     // 채움 우선순위: 노출되는(after.listable) 문서가 먼저, 같은 군 안에서는 키 순서(결정적). 노출 중인 차의 빈 제원이 비노출 차보다 먼저 채워진다.
     .sort((a, b) => Number(!!b.after.listable) - Number(!!a.after.listable) || sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
   const overFill = fillEntries.slice(optionsCap);   // 채움 상한도 옵션 상한 설정(기본 100, 최대 400)을 따른다 — 첫 적용 때 여러 회차로 늘어지지 않게
   for (const e of fillEntries.slice(0, optionsCap)) e.after.fillSourceIdentity = true;
+  // 정체성 정제(VEHICLE_IDENTITY): «양성 표식»을 받은 기존 문서만 정제한다(상한은 회차당 optionsCap, 키 순서). 가격 변경·재노출 등으로 이미 쓰는 문서도 표식이 없으면 정제하지 않아
+  // 상한을 우회하지 못한다. 옵션 전용 쓰기는 위 합산 예산이 먼저 이월한다. 정제 대상은 다음 회차에 사유가 그대로 남아 순서대로 처리된다(되풀이 아님: 정제되면 사유가 사라진다).
+  // 선정 전에 «실제 정제될 수 있는 공개 문서»로 제한한다(Codex #704 잔여): 하향·비노출·철회 문서는 쓰기에서 정제를 건너뛰므로 상한을 소모해 뒤쪽 정상 문서를 굶기면 안 된다.
+  const refineEntries = plan.entries.filter(e => e.kind !== 'ENROLL' && e.after.listable && (e.after.publication_withdrawal === null || e.after.publication_withdrawal === undefined)
+    && reasonsOf(e).includes('VEHICLE_IDENTITY'))
+    .sort((a, b) => sourceProductKey(a.after.record).localeCompare(sourceProductKey(b.after.record)));
+  for (const e of refineEntries.slice(0, optionsCap)) e.after.refineIdentity = true;
+  // 상한을 못 받은 잠금 문서 이름 항목은 계획에서 뺀다(양성 표식 없는 identityOnly 는 쓸 칸이 없어 적용이 중단되므로). 다음 회차에 사유가 남아 순서대로 처리된다.
+  plan.entries = plan.entries.filter(e => !(e.after.identityOnly === true && e.after.refineIdentity !== true));
+  if (refineEntries.length > optionsCap) plan.warnings.push(`VEHICLE_IDENTITY_DEFERRED:${refineEntries.length - optionsCap}:cap${optionsCap}`);
   if (overFill.length) {
     const drop = new Set<(typeof plan.entries)[number]>();
     for (const e of overFill) {
-      const onlyFill = e.kind === 'UPDATE' && !!e.before?.rewriteReasons?.length && e.before.rewriteReasons.every(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
+      const onlyFill = e.kind === 'UPDATE' && !!e.before && reasonsOf(e).length > 0 && reasonsOf(e).every(r => r === 'SOURCE_IDENTITY' || r === 'SOURCE_SPEC') && e.before.listable === e.after.listable && deepEqual(facts(e.before.record), facts(e.after.record));
       if (onlyFill) drop.add(e);
     }
     plan.entries = plan.entries.filter(e => !drop.has(e));
@@ -297,11 +471,11 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   }
   const sourceIdentityRewrite = fillEntries.length - overFill.length;
   if (sourceIdentityRewrite > 0) plan.warnings.push(`SOURCE_IDENTITY_REWRITE:${sourceIdentityRewrite}`);
-  const identityRefine = plan.entries.filter(e => e.before?.rewriteReasons?.includes('VEHICLE_IDENTITY')).length;
+  const identityRefine = plan.entries.filter(e => reasonsOf(e).includes('VEHICLE_IDENTITY')).length;
   if (identityRefine > 0) plan.warnings.push(`VEHICLE_IDENTITY_REFINE:${identityRefine}`);
   if (snapshot.identityMasterDigest && plan.entries.length) plan.warnings.push(`IDENTITY_MASTER:${snapshot.identityMasterDigest.slice(0, 12)}`);
   // 정합 보고는 계획 시점(적용 전) 원천 판매 가능 집합 ↔ ERP5 노출 집합의 차이다. 계획 digest 에는 넣지 않는다(보고 전용).
-  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products) };
+  return { plan, digest: stableDigest(plan), writes: 0 as const, heldReasons: heldBy, reconciliation: reconcileSource(evidence.records, snapshot.products), reasonCensus };
 }
 
 export async function applySourceCycle(commands: CycleCommands, input: CyclePlan,
@@ -336,10 +510,10 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
       // 저장소가 쓴 문서를 그대로(표식 포함) 돌려주는 구현도 있어 되읽은 쪽에서도 같은 표식을 뺀다.
       // rewriteReasons 는 읽기 경로가 «현재 문서 상태»로 계산하는 표시일 뿐 쓰기 결과의 일부가 아니다(2026-10-16 17:00 RP012 REEXPOSE 8건: 채움 상한 밖의 재노출 문서는 쓴 뒤에도
       // 아직 채울 칸이 남아 읽기 경로가 사유를 다시 계산해 되읽기가 «불일치»로 보였다). 계획 표식과 함께 양쪽 비교에서 뺀다.
-      const { fillSourceIdentity: _planFlag, rewriteReasons: _planReasons, ...afterStable } = e.after;
-      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, rewriteReasons: _readReasons, ...rest }) => rest)(reread) : reread;
+      const { fillSourceIdentity: _planFlag, refineIdentity: _planRefine, identityOnly: _planIdOnly, identityHold: _planIdHold, sheetIdentity: _planSheetId, rewriteReasons: _planReasons, specRefillKeys: _planRefill, specMasterFuel: _planMaster, specMasterSpecs: _planMasterSpecs, reviewedSpec: _planReviewed, policyLinkCode: _planLink, photoLinkFill: _planPhoto, sheetFactState: _planFactState, sheetFactFill: _planFactFill, ...afterStable } = e.after;
+      const rereadStable = reread ? (({ fillSourceIdentity: _readFlag, refineIdentity: _readRefine, identityOnly: _readIdOnly, identityHold: _readIdHold, sheetIdentity: _readSheetId, rewriteReasons: _readReasons, specRefillKeys: _readRefill, specMasterFuel: _readMaster, specMasterSpecs: _readMasterSpecs, reviewedSpec: _readReviewed, policyLinkCode: _readLink, photoLinkFill: _readPhoto, sheetFactState: _readFactState, sheetFactFill: _readFactFill, ...rest }) => rest)(reread) : reread;
       if (!deepEqual(rereadStable, afterStable)) {
-        const strip = (value: unknown) => { const { fillSourceIdentity: _f, rewriteReasons: _r, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
+        const strip = (value: unknown) => { const { fillSourceIdentity: _f, refineIdentity: _g, identityOnly: _io, identityHold: _ih, sheetIdentity: _sid, rewriteReasons: _r, specRefillKeys: _k, specMasterFuel: _m, specMasterSpecs: _ms, reviewedSpec: _reviewed, policyLinkCode: _link, photoLinkFill: _photo, sheetFactState: _factState, sheetFactFill: _factFill, ...rest } = (value ?? {}) as Record<string, unknown>; return rest; };
         const a = strip(e.after), b = strip(reread);
         const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !deepEqual(a[k] ?? null, b[k] ?? null)).map(k => k.replace(/[^A-Za-z0-9_]/g, '')).sort();
         uncertainDetail = `READBACK_MISMATCH:${e.kind}:${fields.join('+') || 'NONE'}`; uncertain.push(key); break;

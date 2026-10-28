@@ -1,10 +1,16 @@
-import { sharedSheetEngine } from './shared-sheet-engine.js';
+import { sharedSheetEngine, sharedSheetPhotoLinks, type SharedSheetSpecOptions } from './shared-sheet-engine.js';
+import { sharedSheetFactNumber, sharedSheetFactRegistration } from '../domain/shared-sheet-fact-parsing.js';
+import { explicitSeatCount, SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, isValidSheetPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type { VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import { sheetIdentityOf } from '../domain/sheet-identity.js';
+import { sheetFactsOf } from '../domain/sheet-facts.js';
 
 const amount = (v: unknown): SourceAmount => v === 0 ? { state: 'ZERO', value: 0 } : typeof v === 'number' && Number.isSafeInteger(v) && v > 0
   ? { state: 'KNOWN', value: v } : { state: 'UNKNOWN', value: null };
@@ -60,7 +66,10 @@ export function plateUidPlugin<T>(plugin: CyclePlugin<T>): CyclePlugin<T> {
 }
 export type Visibility = { sheets?: Array<{ properties?: { title?: string; hidden?: boolean; gridProperties?: { rowCount?: number } };
   data?: Array<{ startRow?: number; rowMetadata?: Array<{ hiddenByUser?: boolean; hiddenByFilter?: boolean }> }> }> };
-export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility): CycleCapture {
+export function f05NativeCapture(source: string, capture: SharedSheetCapture, meta: Visibility,
+  sourceYearMaster?: Pick<VehicleIdentityRefiner, 'digest' | 'match' | 'allowsYear' | 'sourceYearEvidence' | 'sourceYearUids'>,
+  options?: SharedSheetSpecOptions): CycleCapture {
+  const photoLinks = sharedSheetPhotoLinks(capture).links;
   const copy = structuredClone(capture), holds: string[] = [], positions = new Map<string, { scope: string; row: number; cells: unknown[]; headers: unknown[]; fp: string | null }>();
   const scopes = [...new Set(sharedSheetChannels.filter(c => c.code === source).map(c => c.tab))];
   // Transport coverage is independent of UID/normalization holds.
@@ -143,7 +152,7 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
     }
   }
   copy.digest = sharedSheetCaptureDigest(copy);
-  const engine = sharedSheetEngine(async () => copy);
+  const engine = sharedSheetEngine(async () => copy, () => capture.readTime, sourceYearMaster, options);
   const converted = engine.toRecords({ raw: copy, observedAt: copy.readTime, attemptedAt: copy.readTime, complete, error: null });
   const zeroRent = converted.records.reduce((n, r) => n + (typeof r.raw.rent_zero_terms === 'number' ? r.raw.rent_zero_terms : 0), 0);
   return { observedAt: capture.readTime, complete, completedScopes: complete ? scopes : [], visibilityComplete: complete,
@@ -153,7 +162,16 @@ export function f05NativeCapture(source: string, capture: SharedSheetCapture, me
       return { scope: pos.scope, record: { ...record, raw: { cells: pos.cells, headers: pos.headers, source: 'shared-sheet',
         source_tab: pos.scope, source_row: pos.row, sheet_uid: record.plate ? null : record.uid,
         ...productTypeFromCell(pos.headers, pos.cells, '상품구분'),
-        ...(pos.fp ? { row_fingerprint: pos.fp } : {}) } } }; }) };
+        // 연식 게이트를 통과하지 않은 시트 제원에는 마스터 근거 칸이 없다 — 없는 칸은 싣지 않는다.
+        ...(record.raw.spec ? { spec: record.raw.spec, ...(record.raw.spec_master_digest !== undefined ? {
+          spec_master_digest: record.raw.spec_master_digest, spec_master_id: record.raw.spec_master_id } : {}) } : {}),
+        ...(pos.fp ? { row_fingerprint: pos.fp } : {}),
+        // 차량번호 칸 사진 폴더 링크: 원본 수집본 전체(모든 공급사 행)로 판정한다 — 다른 공급사 행에 같은 폴더가 붙은 경우도 거절하려면 행을 비운 사본으로는 안 된다.
+        ...(photoLinks.get(`${pos.scope}|${pos.row}`) ? { sheet_photo_link: photoLinks.get(`${pos.scope}|${pos.row}`) } : {}),
+        // 시트의 차종 4칸 후보(마스터 행과 정확히 일치할 때만 정제기가 쓴다).
+        ...(sheetIdentityOf(pos.headers, pos.cells) ? { sheet_identity: sheetIdentityOf(pos.headers, pos.cells) } : {}),
+        // 구동방식·원산지 후보(검증 통과한 칸만, 원문 cells 는 그대로).
+        ...(sheetFactsOf(pos.headers, pos.cells) ? { sheet_facts: sheetFactsOf(pos.headers, pos.cells) } : {}) } } }; }) };
 }
 /** 원천 자기 칸의 상품 구분 값이 중앙 어휘와 «정확히» 같을 때만 raw.product_type 으로 낸다(추정·변환 없음: 어휘 밖이면 비워 두어 «없음» 으로 남긴다). */
 const PRODUCT_TYPE_VOCABULARY = new Set(['신차렌트', '중고렌트', '재렌트', '신차구독', '중고구독', '재구독', '오공구독', '픽업구독', '오플구독']);
@@ -167,8 +185,35 @@ export function productTypeFromCell(headers: readonly unknown[], cells: readonly
   return PRODUCT_TYPE_VOCABULARY.has(mapped) ? { product_type: mapped } : {};
 }
 export type AicaTable = { title: string; values: unknown[][] };
-/** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference. */
-export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility): CycleCapture {
+const AICA_UNRESOLVED = /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/;
+/** 아이카 장기 행의 차 한 대 사실(연료·외장·내장·Km·최초등록·배기량·명시 인승) → 기존 제원 키(raw.spec). 연식은 모델연도(MY) 표기가 명시된 경우에만 만든다(최초등록에서 연식 추정 금지).
+ * 형식 규칙(SPEC_FORMAT_RULES)·연료 별칭(canonicalFuel)을 통과한 값만, 전기·수소는 배기량 제외. 빈 칸에만 쓰는 것은 기존 쓰기 경로가 맡는다. */
+export function aicaSpecFacts(get: (header: string) => unknown, vehicleText: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const put = (key: string, value: string | null) => { if (value && SPEC_FORMAT_RULES[key]?.(value)) out[key] = value; };
+  const str = (v: unknown) => typeof v === 'string' ? v.trim() : '';
+  // UNFORMATTED 읽기라 숫자 칸은 숫자로 온다(정수만). 글자 칸은 공통 시트와 같은 숫자 파서(쉼표·단위 허용)로 읽는다.
+  const integer = (v: unknown, unit: string) => typeof v === 'number' ? (Number.isSafeInteger(v) && v >= 0 ? String(v) : null)
+    : typeof v === 'string' && v.trim() ? (n => n === null ? null : String(n))(sharedSheetFactNumber(v.trim(), unit)) : null;
+  put('fuel_type', canonicalFuel(get('연료'), vehicleText));
+  for (const [key, header] of [['ext_color', '외장'], ['int_color', '내장']] as const) {
+    const value = str(get(header));
+    if (!AICA_UNRESOLVED.test(value)) put(key, value);
+  }
+  put('mileage', integer(get('Km'), 'km'));
+  put('seats', explicitSeatCount(vehicleText));
+  // 모델연도(MY): 차종분류·트림에 «25MY» 처럼 명시된 것만(정확히 하나일 때). 최초등록에서 연식을 추정하지 않는다.
+  const myTokens = [...vehicleText.normalize('NFKC').matchAll(/(?<![0-9A-Za-z])(\d{2})\s?MY(?![A-Za-z])/giu)].map(m => 2000 + Number(m[1]));
+  if (new Set(myTokens).size === 1) put('year', String(myTokens[0]));
+  const registration = get('최초등록');
+  put('first_registration_date', typeof registration === 'number' || typeof registration === 'string'
+    ? sharedSheetFactRegistration(String(registration).trim(), registration) : null);
+  if (!['전기', '수소'].includes(out.fuel_type ?? '')) put('engine_cc', integer(get('배기량'), 'cc'));
+  return out;
+}
+/** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference.
+ * options.sheetSpec(기본 꺼짐): 켜면 장기 행의 제원 사실을 raw.spec 으로 넘긴다(aicaSpecFacts). 월렌트 모델 줄은 차 한 대가 아니라 넘기지 않는다. */
+export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility, options?: { sheetSpec?: boolean }): CycleCapture {
   const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0, zeroRent = 0;
   const notes: string[] = [];
@@ -267,12 +312,14 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
       if (!plate && isAssignedPlate(plateCell)) { monthlyHolds.push('PLATE_INVALID'); continue; }
       // 대여료 해석 불가·범위 밖: 행은 그대로 내보내(TERMS_HOLD) 기존 문서를 지키고, 사유를 보류로 드러낸다.
       if (rentReview) rentReviewHolds.push('RENT_REVIEW_REQUIRED');
+      const spec = options?.sheetSpec === true ? aicaSpecFacts(get, vehicleText) : {};
       rows.push({ scope: title, record: { sourceId: 'RP004', uid: plate ?? '', plate,
         vehicleText,
         status: { raw: String(get('배차상태') ?? ''), saleAvailable: null }, terms, observedAt,
         raw: { cells: structuredClone(cells), headers, sheet_uid: null, source: 'aica-sheet', source_tab: title,
           source_row: index + 2, product_group: 'LONG_TERM', ...productTypeFromCell(headers, cells, '구분'),
-          original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])) },
+          original: Object.fromEntries(headers.map((header, column) => [header, cells[column] ?? null])),
+          ...(Object.keys(spec).length ? { spec } : {}) },
         vehicleHold: ['VEHICLE_MASTER_REVIEW_REQUIRED'] } });
     }
   }

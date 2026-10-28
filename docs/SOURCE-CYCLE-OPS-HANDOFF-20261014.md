@@ -31,8 +31,28 @@
 ## 5. 운영 설정(비밀 제외)
 - 이안카 RP031 단독 잠: 60분 간격(:05 KST), 정시 전체 회차는 :00.
 - 손오공 로그인 0 유지(`SONOGONG_COLLECT_ENABLED=false`), RP012 는 관측 전용.
-- 엔진 교체 시: 실행 중 node 프로세스가 없을 때 `git checkout --detach origin/main` → `tsc -p tsconfig.json`, 직전 커밋을 `fd-cycle-prev-commit.txt` 에 기록.
+- 엔진 교체 시: §7 «엔진 교체 절차»를 따른다(순수 `tsc` 만 돌리면 안 된다 — 2026-10-17 사고).
+- **ERP5-CARD 이름 정정 적용 스크립트는 기본값이 시험(쓰기 없음)이고, 쓰기는 `--apply` 가 있을 때만 한다**(2026-10-17 사고: 시험용 `--no-window` 실행이 r2-01 을 실제 적용함, 커맨드 센터 지시). 수동 plan 반영 스크립트(`RUN_PLAN`)도 기본 끔이며, 수동 plan 은 원천을 다시 읽고 RAW·관측 상태를 저장한다(상품 변경만 없음).
 - 중지(연속 실패 3회) 상태 초기화는 해당 원천 `*.state.json` 의 failures/stopped 를 되돌리되 백업(`.before-reset-날짜`)을 남긴다.
+- **신선도 면제(`SOURCE_CYCLE_FRESHNESS_EXEMPT`)는 근거와 기한 없이 두지 않는다**(커맨드 센터 2026-10-17). 값 형식 `원천=사유>해제조건원천` 의 해제 조건(`>RPxxx`)이 없으면 영원히 풀리지 않고, 그동안 그 원천의 STALE·ERROR·정체·에스컬레이션 경보가 전부 꺼진다. 쓰려면 사유·승인자·기한을 이 문서에 적는다.
+- **손오공(RP012) 신선도 임계 = 정체 135분·에스컬레이션 240분**(`SOURCE_CYCLE_FRESHNESS_THRESHOLDS = 'RP012=135:240:SONOGONG_API_STAGNANT'`, 2026-10-17 커맨드 센터 승인). 근거: 회차 1시간·최소 읽기 간격 45분 구조에서 읽기 위치가 늦게 잡힌 다음 회차는 간격 보류로 건너뛰므로, 정상 엔진에서도 관측 간격이 약 10회에 한 번 90분을 넘는다(최근 48시간 44회 중 90분 초과 4회, 중앙값 60분, 구조 최악 ≈120분). 90분 기준은 이 최악보다 낮아 오경보를 낳았다.
+- **옛 면제 `RP012=SONOGONG_LOCKED` 제거**(2026-10-17, 백업 `env.ps1.before-sono-exempt-20261017`): 10-14 손오공 API 전환 때 들어간 일시 조치(예외 기능 커밋 2cd4ba6e, 전환 문서 SONOGONG-API-ENGINE-SWITCH-20261014.md 31행 «첫 정상 회차에서 자연히 빠진다»)였고 해제 조건이 없어 90/180 정체 경보를 가렸다. 이 줄 자체의 승인 기록은 찾지 못했다. 같은 날 17:07 에 RP012 가 90분(STALE)을 넘었으나 면제로 신선도가 HEALTHY 로 나와 경보가 열리지 않았다. 읽기 전용 평가(assessFreshness, 실제 하트비트): 관측+100분 FRESH, +140분 정체 경보·UNHEALTHY, +250분 에스컬레이션 — 옛 설정은 같은 구간 내내 HEALTHY.
+
+## 7. 엔진 교체 절차 (2026-10-17 사고 뒤 확정 — 커맨드 센터 지시)
+
+2026-10-17 15:48 #732 교체 때 `dist-new` 를 `tsc` 만으로 빌드해 `npm run build` 의 두 번째 단계(복사)가 빠졌다 → 런타임이 `dist/scripts/supplier-input-sheet.mjs` 를 못 찾아
+ERR_MODULE_NOT_FOUND 로 사전점검 전에 종료(기록 없음, 예약 작업 결과 1), 15:50 감시 회차 실패. 복사 대상 4파일: `dist/scripts/supplier-input-sheet.mjs` · `dist/scripts/sheet-presentation.mjs` ·
+`dist/contracts/supplier-input-sheet-spec.v1.json` · `dist/contracts/f01-f86-sheet-spec.v1.json`.
+
+1. 회차 미실행 확인: `source-cycle-runtime` node 프로세스 0 (정시 :00·감시 :50 ±10분은 피한다).
+2. 직전 커밋 기록: `git rev-parse HEAD > <비공개 디렉터리>/fd-cycle-prev-commit.txt`.
+3. `git fetch origin main && git checkout --detach origin/main`.
+4. **빌드는 `npm.cmd run build` 전체**(tsc + 4파일 복사). 라이브 공백을 줄이려면 `npx tsc -p tsconfig.json --outDir dist-new` 뒤 같은 4파일을 `dist-new` 에 복사하고
+   이름 바꾸기(`dist` → `dist-prev-<커밋>`, `dist-new` → `dist`).
+5. **읽기 전용 import 되읽기**(필수): `node -e "import('file:///C:/dev/fd-cycle/dist/src/runtime/source-cycle-runtime.js').then(()=>console.log('import ok'))"` — 모듈 누락 0.
+6. 수동 plan 1회(쓰기 없음): `node dist/src/runtime/source-cycle-runtime.js --plan <파일> --source RP013` 이 DRY_RUN 과 identityRefine 로드를 보이면 통과.
+7. 이전 `dist-prev-<커밋>` 은 다음 회차 정상 확인까지 보존(되돌림 = 이름 바꾸기).
+8. 교체 사실·시각·커밋·백업 이름을 커맨드 센터와 수집 Codex 채널에 한 줄 통보(운영 dist SHA 변경을 «원인 불명 drift»로 오인하지 않게).
 
 ## 6. 열린 후속
 - 마스터 비차단 편입(rp006/rp012 정보 부족 판정에서 마스터 계열 사유를 matchState 표시로 이동).

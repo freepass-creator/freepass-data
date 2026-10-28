@@ -6,7 +6,8 @@
  * 키가 없으면 네트워크 호출 0(SONOGONG_API_NOT_CONFIGURED). 이 모듈을 import 하는 것만으로 인증·접속하지 않는다. */
 import type { SourceAmount, SourceProductRecord, SourceTerm } from '../domain/source-engine.js';
 import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
-import { fuelName } from './normalize-sonogong.js';
+import { SONOGONG_RENT_RULE, truncateSonogongRent } from './normalize-sonogong.js';
+import { canonicalFuel } from '../domain/fuel-alias.js';
 import { computeSupplierRuleDeposit, supplierDepositPolicy } from '../domain/supplier-deposit-policy.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { cachedDetailFor, DETAIL_CACHE_VERSION, fullRefreshDue, type DetailCache } from './sonogong-detail-cache.js';
@@ -15,13 +16,19 @@ export const SONOGONG_API_POLICY = Object.freeze({
   allowedHost: 'sokrc.com', pathPrefix: '/api/partner/', pageSize: 50, maxPages: 20, minIntervalMs: 1_500, timeoutMs: 20_000,
   maxDetails: 600, minPassIntervalMinutes: 45,   // 정시 회차는 읽기 «시작»(회차 앞 단계·상류 갱신 대기 후) 시각이 기준이라 55 분이면 다음 정시에 번갈아 걸렸다(B3Q 10-16): 45 분 = 같은 정시 중복 읽기만 막고 15분 여유를 둔다
 });
-export const SONOGONG_API_TABS = ['rent', 'sub', 'pick'] as const;
-export type SonogongApiTab = typeof SONOGONG_API_TABS[number];
+/** 명세의 전체 탭. 읽는 탭은 SONOGONG_API_TABS 뿐이다. */
+export const SONOGONG_API_ALL_TABS = ['rent', 'sub', 'pick'] as const;
+export type SonogongApiTab = typeof SONOGONG_API_ALL_TABS[number];
+/** 읽는 탭(우선순위 순): 중고렌트·오공구독만. 픽업구독(pick)은 읽지 않는다 — 대표 2026-10-28 «손오공은 중고렌트랑 중고구독만», «픽업구독 일단 다 내려».
+ * 이미 노출된 픽업구독 문서는 엔진 계획이 SONOGONG_WITHDRAWN_PRODUCT_TYPES 로 내린다(DECISION_WITHDRAWN). */
+export const SONOGONG_API_TABS: readonly SonogongApiTab[] = ['rent', 'sub'];
 /** 탭별 «반납형» 가격 유형 — 명세 tabPriceUsage. 인수형은 raw 에 원문으로만 보존한다(우리 쪽 인수형 정책 대기). */
 const RETURN_TYPE: Record<SonogongApiTab, string> = { rent: 'RENT_RETURN', sub: 'SUBSCRIBE_RETURN', pick: 'SUBSCRIBE_RETURN' };
 const MONTHS = [12, 24, 36, 48, 60] as const;
 /** 탭 → 상품 구분(구독·픽업구독을 화면에서 구분). 소비처 어휘: 중고렌트·오공구독·픽업구독. */
 const PRODUCT_TYPE_BY_TAB: Record<SonogongApiTab, string> = { rent: '중고렌트', sub: '오공구독', pick: '픽업구독' };
+/** 대표 결정으로 노출하지 않는 손오공 상품 구분(읽지 않는 탭의 상품 구분). 저장 기록 raw.product_type 이 이 값인 노출 문서는 매 회차 DECISION_WITHDRAWN 으로 내린다. */
+export const SONOGONG_WITHDRAWN_PRODUCT_TYPES: readonly string[] = SONOGONG_API_ALL_TABS.filter(t => !SONOGONG_API_TABS.includes(t)).map(t => PRODUCT_TYPE_BY_TAB[t]);
 
 export class SonogongApiError extends Error {
   constructor(readonly code: string, readonly status?: number) { super(code); this.name = 'SonogongApiError'; }
@@ -250,9 +257,15 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       const terms: SourceTerm[] = [];
       const policy = supplierDepositPolicy('RP012', tab);
       for (const months of MONTHS) {
-        const rent = parseSonogongAmount(monthly[String(months)]);
-        if (rent.unparseable) amountUnparseable++;
-        if (rent.amount.state !== 'KNOWN') continue;
+        const parsedRent = parseSonogongAmount(monthly[String(months)]);
+        if (parsedRent.unparseable) amountUnparseable++;
+        if (parsedRent.amount.state !== 'KNOWN') continue;
+        // 대여료 정리값 = 천원 미만 절사(normalize-sonogong 의 SONOGONG_RENT_TRUNCATE_UNIT 하나, 대표 2026-10-19). 원문은 record.raw.prices 에 그대로 남고,
+        // 바뀐 항은 term.raw.source_monthly_rent 에 원문 값을 함께 둔다. 보증금 산출식도 절사한 대여료로 계산한다(손오공 자체 보증금과 같은 기준).
+        const sourceRent = parsedRent.amount.value;
+        const truncatedRent = truncateSonogongRent(sourceRent);
+        if (truncatedRent === null) { amountUnparseable++; continue; }   // 천원 미만 양수 — 0 원(무료)으로 바꾸지 않는다
+        const rent = { amount: { state: 'KNOWN' as const, value: truncatedRent } };
         // 공급사 정책 정제(domain/supplier-deposit-policy, 대표 2026-10-14 «값이 숫자로 존재하거나 산출식으로 존재한다»):
         // 양수 원문 금액 = KNOWN(모든 탭). 원문 0·빈칸 = 자리채움(API 에 무보증 표시 칸 없음) → sub·pick 은 손오공 정책 «월 대여료 × 약정연수(최대 3개월)»
         // 계산값(KNOWN, raw.deposit_rule), rent 는 UNKNOWN. 어느 경우도 ZERO 가 되지 않는다.
@@ -263,7 +276,8 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
           if (parsed.unparseable) amountUnparseable++;
           apiDeposit = parsed.amount;
         }
-        const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab] };
+        const raw: Record<string, unknown> = { priceType: RETURN_TYPE[tab],
+          ...(truncatedRent !== sourceRent ? { source_monthly_rent: sourceRent, rent_rule: SONOGONG_RENT_RULE } : {}) };
         // 숫자가 먼저, 숫자가 없을 때 산출식(«값이 숫자로 존재하거나 산출식으로 존재», READ-RUNTIME «양수 원문 금액 우선»):
         // 양수 원문 금액은 어느 탭이든 KNOWN(원문 금액, 계산 표식 없음). 구독 항의 규칙 값이 다르면 raw.rule_deposit 와 경고로만 남긴다.
         if (apiDeposit?.state === 'KNOWN') {
@@ -287,9 +301,12 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
       // 내장색(상세 interiorColor, 없으면 목록): 대표 2026-10-16 화면 대조 «제원 칸이 전부 비어 있다». 문자열이 아니면 칸을 비운다.
       const interior = typeof detail?.interiorColor === 'string' && detail.interiorColor.trim() ? detail.interiorColor.trim() : typeof row.interiorColor === 'string' ? row.interiorColor.trim() : '';
       if (interior) spec.int_color = interior;
-      // 연료: 공통 허용 목록·별칭(normalize-sonogong 의 표)으로만 바꾼다. 모르면 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
+      // 연료: 연료 별칭 표(domain/fuel-alias, 차종 기준 한 장 제원 목록)로만 바꾼다 — «가솔린+전기»→하이브리드, «전기(EV)»→전기(대표 2026-10-19).
+      // 모르거나 차명과 어긋나면(«1.6 HEV» 인데 «휘발유») 칸을 비운다(원문은 raw.list.fuel 에 그대로 남는다).
+      const fuelCarName = typeof detail?.carName === 'string' && detail.carName.trim() ? detail.carName.trim()
+        : [row.brand, row.model, row.detailName].filter(x => typeof x === 'string' && x).join(' ');
       if (typeof row.fuel === 'string' && row.fuel.trim()) {
-        const fuel = fuelName(row.fuel);
+        const fuel = canonicalFuel(row.fuel, fuelCarName);
         if (fuel) spec.fuel_type = fuel; else fuelUnresolved++;
       }
       // 제조연월은 최초등록일이 아니다: manufacture_year_month 로 따로 두고, 최초등록일은 상세에 실제 칸이 있을 때만 쓴다.
@@ -356,7 +373,7 @@ export async function readSonogongApi(client: SonogongApiClient, opts: { now?: (
 
 /** 손오공 사진 주소 목록(원천 순서 그대로): 상세 images[].url(상세가 없거나 images 가 배열이 아니면 목록 images[].url), 그것이 비면 목록 thumbnailUrl.
  * https·사용자정보 없음·길이 ≤ SONOGONG_PHOTO_POLICY.maxUrlLength 만, 중복 제거, 최대 maxPhotos 장. 없으면 빈 배열(사진 없음 — 기존 사진을 지우는 근거가 아니다). */
-export const SONOGONG_PHOTO_POLICY = Object.freeze({ maxPhotos: 20, maxUrlLength: 1000 });
+export const SONOGONG_PHOTO_POLICY = Object.freeze({ maxPhotos: 50, maxUrlLength: 1000 });
 export function sonogongPhotoUrls(detail: Record<string, unknown> | null | undefined, row: Record<string, unknown>): string[] {
   const clean = (v: unknown): string | null => {
     if (typeof v !== 'string') return null;

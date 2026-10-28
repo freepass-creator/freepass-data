@@ -4,7 +4,7 @@
  * 18:00 회차 입구 매핑·제원 적용 뒤 같은 캡처 방식으로 다시 돌려 «전/후» 를 비교한다. 전체 번호·원문 값 전체는 출력하지 않는다. 종료 코드: 0 정상 · 2 설정 오류. */
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { decodeErp5Value, type Erp5SourceCapture } from '../adapters/erp5-source-capture.js';
+import { plainProductsFromErp5Capture } from '../adapters/erp5-capture-plain.js';
 import { conformanceLines, sonogongSpecConformance } from '../application/sonogong-spec-conformance.js';
 
 export function reportSonogongConformanceCli(argv: string[], log: (line: string) => void = console.log): number {
@@ -21,16 +21,11 @@ export function reportSonogongConformanceCli(argv: string[], log: (line: string)
       return data && typeof data === 'object' && !Array.isArray(data) ? [data as Record<string, unknown>] : [];
     });
   } else {
-    let capture: Erp5SourceCapture;
-    try { capture = JSON.parse(readFileSync(path!, 'utf8')) as Erp5SourceCapture; } catch { log('설정 오류: 캡처 JSON 을 읽을 수 없음'); return 2; }
-    const docs = capture?.collections?.products?.documents;
-    if (capture?.version !== 'erp5-source-capture/1' || !Array.isArray(docs)) { log('설정 오류: erp5-source-capture/1 상품 목록 없음'); return 2; }
-    plain = docs.flatMap(doc => {
-      const fields = (doc as { fields?: Record<string, unknown> }).fields ?? {};
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(fields)) { try { out[key] = decodeErp5Value(value); } catch { /* 해석 못 하는 값은 비워 둔다 */ } }
-      return [out];
-    });
+    let capture: unknown;
+    try { capture = JSON.parse(readFileSync(path!, 'utf8')); } catch { log('설정 오류: 캡처 JSON 을 읽을 수 없음'); return 2; }
+    const decoded = plainProductsFromErp5Capture(capture);
+    if (!decoded) { log('설정 오류: erp5-source-capture/1 상품 목록 없음'); return 2; }
+    plain = decoded;
   }
   const report = sonogongSpecConformance(plain);
   if (argv.includes('--json')) log(JSON.stringify(report));

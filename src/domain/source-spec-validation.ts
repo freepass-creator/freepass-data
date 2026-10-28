@@ -1,0 +1,76 @@
+/** 규격 검증(대표 2026-10-16 승인, 손오공 규격 일치): 쓰기 직전 순수 검증 — 위반 «칸만» 보류하고 원문(raw.list·raw.detail)은 그대로 둔다. 값을 고쳐 쓰지 않는다.
+ * 기본 꺼짐(원천별 SOURCE_CYCLE_SPEC_VALIDATION_SOURCES). 설계: docs/SONOGONG-SPEC-CONFORMANCE-20261016.md §3. 점검 보고(SONOGONG_CHECKS)와 같은 정의를 쓴다. */
+import type { SourceAmount, SourceProductRecord, SourceTerm } from './source-engine.js';
+
+export const SPEC_FUEL_VALUES: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
+const ELECTRIC = new Set(['전기', '수소']);
+const calendar = (v: string): boolean => {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(v);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]);
+  if (y < 1950 || y > 2100 || mo < 1 || mo > 12) return false;
+  if (m[3] === undefined) return true;
+  const d = Number(m[3]), leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  return d >= 1 && d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]!;
+};
+/** 칸별 값 형식(문자열 값 기준). 허용 값 밖이면 그 칸만 보류. */
+export const SPEC_FORMAT_RULES: Readonly<Record<string, (v: string) => boolean>> = {
+  fuel_type: v => SPEC_FUEL_VALUES.has(v),
+  year: v => /^(19|20)\d{2}$/.test(v),
+  manufacture_year_month: v => /^(19|20)\d{2}-(0[1-9]|1[0-2])$/.test(v),
+  first_registration_date: calendar,
+  engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
+  mileage: v => /^\d{1,7}$/.test(v),
+  seats: v => /^\d{1,2}$/.test(v) && Number(v) >= 1,
+  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+};
+/** 공급사 차명에 독립된 «N인승»이 명시된 경우만 읽는다. 모델로 추정하지 않으며 범위·대안·부정·변경 표기는 보류한다. */
+export function explicitSeatCount(vehicleText: unknown): string | null {
+  if (typeof vehicleText !== 'string') return null;
+  const text = vehicleText.normalize('NFKC');
+  if (/(?:아님|아닌|제외|개조|변경|예정|추정|미확인|확인\s*필요|미정|모름|선택|이상|이하|부터|까지|약\s*\d+\s*인승|인승\s*[?？])/u.test(text)) return null;
+  // «7/9인승», «7~9인승», «7인승/9인승»은 뒤 숫자 하나로 읽지 않는다.
+  if (/\d\s*(?:[~～∼–—\-/,+·]+|또는|및)\s*\d+\s*인승|인승\s*[~～∼–—\-/,+·]/u.test(text)) return null;
+  const mentions = [...text.matchAll(/\d+\s*인승/gu)];
+  const tokens = [...text.matchAll(/(?<![\p{L}\p{N}.,/~～∼–—+\-])([1-9]\d?)\s*인승(?![\p{L}\p{N}])/gu)];
+  if (!tokens.length || tokens.length !== mentions.length) return null;
+  const values = new Set(tokens.map(m => m[1]!));
+  const value = tokens[0]![1]!;
+  return values.size === 1 && SPEC_FORMAT_RULES.seats!(value) ? value : null;
+}
+export const DEPOSIT_MIN_POSITIVE_KRW = 10_000;
+export const DEPOSIT_MAX_KRW = 100_000_000;
+
+export type SpecViolation = { field: string; reason: string };
+/** 위반 칸을 뺀 «복사본» 레코드와 위반 목록. 위반이 없으면 같은 객체를 돌려준다. */
+export function validateSourceSpec(record: SourceProductRecord): { record: SourceProductRecord; violations: SpecViolation[] } {
+  const violations: SpecViolation[] = [];
+  const rawSpec = record.raw?.spec;
+  let spec: Record<string, string> | null = null;
+  if (rawSpec && typeof rawSpec === 'object' && !Array.isArray(rawSpec)) {
+    const kept: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawSpec as Record<string, unknown>)) {
+      const rule = SPEC_FORMAT_RULES[key];
+      if (typeof value !== 'string') { violations.push({ field: key, reason: 'NOT_STRING' }); continue; }
+      if (rule && !rule(value.trim())) { violations.push({ field: key, reason: 'FORMAT' }); continue; }
+      kept[key] = value;
+    }
+    if (ELECTRIC.has(kept.fuel_type ?? '') && kept.engine_cc !== undefined) { violations.push({ field: 'engine_cc', reason: 'ELECTRIC_WITH_CC' }); delete kept.engine_cc; }
+    spec = kept;
+  }
+  let terms: SourceTerm[] | null = null;
+  record.terms.forEach((term, index) => {
+    const amount = term.deposit;
+    if (amount.state !== 'KNOWN') return;
+    const bad = !Number.isInteger(amount.value) || amount.value > DEPOSIT_MAX_KRW || (amount.value > 0 && amount.value < DEPOSIT_MIN_POSITIVE_KRW);
+    if (!bad) return;
+    violations.push({ field: 'deposit', reason: 'KRW_UNIT_OR_RANGE' });
+    terms ??= record.terms.map(t => ({ ...t, raw: { ...t.raw } }));
+    // 위반 보증금은 값을 비우고(UNKNOWN) 원천 값은 이 항의 raw 에만 남긴다(고쳐 쓰지 않음).
+    const unknown: SourceAmount = { state: 'UNKNOWN', value: null };
+    terms[index] = { ...terms[index]!, deposit: unknown, raw: { ...terms[index]!.raw, deposit_rejected: amount.value } };
+  });
+  if (!violations.length) return { record, violations };
+  return { record: { ...record, terms: terms ?? record.terms, raw: { ...record.raw, ...(spec ? { spec } : {}) } }, violations };
+}

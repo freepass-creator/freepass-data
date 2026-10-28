@@ -290,6 +290,16 @@ describe('canonical per-term economics precompute', () => {
     input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 500001;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.state).toBe('KNOWN');
   });
+  it('applies RP004 payout-equals-billing only to the zero-deposit term', () => {
+    const input = offer(); input.supplierId = 'RP004';
+    const [withDeposit, depositFree] = precomputeOfferEconomics(input, 'USED_RENT', '가솔린');
+    expect(withDeposit!.supplierBillingFee.amount?.amount).toBe(798000);
+    expect(withDeposit!.channelPayoutFee.amount?.amount).toBe(672000);
+    expect(withDeposit!.channelPayoutFee.sourceRefs).not.toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+    expect(depositFree!.supplierBillingFee.amount?.amount).toBe(500000);
+    expect(depositFree!.channelPayoutFee.amount?.amount).toBe(500000);
+    expect(depositFree!.channelPayoutFee.sourceRefs).toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+  });
 });
 
 
@@ -348,7 +358,8 @@ describe('F04 explicit canonical evidence', () => {
       priceTerms: [{ termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' }],
     }, 'OGONG_SUBSCRIPTION')[0]!;
     expect(fixedQ12.supplierBillingFee).toMatchObject({ amount: { amount: 700000 }, vatAmount: 70000 });
-    expect(fixedQ12.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, vatAmount: 80000 });
+    expect(fixedQ12.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, vatAmount: null,
+      reasonCode: 'PAYOUT_EXCEEDS_BILLING' });
 
     const other = precomputeOfferEconomics({
       id: 'synthetic', supplierId: 'RP013',

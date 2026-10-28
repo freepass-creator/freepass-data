@@ -237,6 +237,10 @@
         "mileage": { "$ref": "#/$defs/nonNegativeNumber" },
         "battery_capacity": { "$ref": "#/$defs/nonNegativeNumber" },
         "annual_mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "origin": {
+          "description": "원산지(선택 필드, 제조사 기준 읽기 전용 파생): 국산·수입, null = 확인 필요. 알려진 혼재 모델은 확정하지 않음.",
+          "enum": ["국산", "수입", null]
+        },
         "first_registration_date": {
           "type": [
             "string",
@@ -284,7 +288,7 @@
         "image_url": { "$ref": "#/$defs/url" },
         "image_urls": {
           "type": "array",
-          "maxItems": 200,
+          "maxItems": 50,
           "items": {
             "type": "string",
             "maxLength": 500,
@@ -296,7 +300,7 @@
           "description": "사본 서빙이 보장된 승인 사진 수(이안카 압축 사본 refs 가 검증됐을 때만 > 0). 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. 없으면(구버전 응답) 0 으로 본다.",
           "type": "integer",
           "minimum": 0,
-          "maximum": 200
+          "maximum": 50
         },
         "source_raw_name": {
           "description": "공급사 원문 차명 표기(선택 필드, 표시용 읽기 전용 파생). 정제 칸이 비어 있고 refine_state 가 PENDING 일 때 «정제 대기»와 함께 쓴다.",

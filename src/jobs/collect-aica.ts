@@ -2,11 +2,13 @@ import { pathToFileURL } from 'node:url';
 import { aicaSourceAdapter } from '../adapters/supplier-source-capture.js';
 import { aicaSheetsGridReader } from '../infra/aica-sheet-reader.js';
 import { collectSupplierSource, type AicaGridBinding, type AicaGridObservation, type SourceIntakeBatch } from '../domain/source-intake.js';
+import { ensureWriterLease } from '../runtime/ensure-writer-lease.js';
 
 export async function captureAica(input: {
   bindings: readonly AicaGridBinding[]; expectedFreshnessSeconds: number | null;
   applyRaw: boolean; approved: boolean;
   verifyBoundTabs?: boolean;
+  env?: NodeJS.ProcessEnv;
 }, ports: {
   readGrid?: (binding: AicaGridBinding) => Promise<AicaGridObservation>;
   ingestRawBatch?: (batch: SourceIntakeBatch) => Promise<unknown>;
@@ -19,6 +21,7 @@ export async function captureAica(input: {
   const { batch, evidence } = await collectSupplierSource(adapter, ports.now?.());
   if (input.applyRaw) {
     if (evidence.status !== 'RAW_READY') throw new Error('AICA_RAW_SOURCE_HOLD');
+    await ensureWriterLease(input.env ?? process.env, 'aica-raw');
     const ingest = ports.ingestRawBatch ?? (async (value: SourceIntakeBatch) => {
       const { createSourceIngestDataAccessRuntime } = await import('./data-access-runtime.js');
       return (await createSourceIngestDataAccessRuntime()).ingestRawBatch(value);
@@ -39,11 +42,15 @@ export async function aicaCaptureCommand(args: string[], env: NodeJS.ProcessEnv 
   const freshness = env.AICA_EXPECTED_FRESHNESS_SECONDS === undefined ? null : Number(env.AICA_EXPECTED_FRESHNESS_SECONDS);
   if (freshness !== null && (!Number.isSafeInteger(freshness) || freshness <= 0)) throw new Error('AICA_FRESHNESS_INVALID');
   return captureAica({ bindings, expectedFreshnessSeconds: freshness, applyRaw: args.includes('--apply-raw'),
-    approved: env.AICA_RAW_INGEST_APPROVED === 'true', verifyBoundTabs: env.AICA_VERIFY_BOUND_TABS === 'true' });
+    approved: env.AICA_RAW_INGEST_APPROVED === 'true', verifyBoundTabs: env.AICA_VERIFY_BOUND_TABS === 'true', env });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   aicaCaptureCommand(process.argv.slice(2)).then(report => {
     console.log(JSON.stringify(report));
     if (report.issues.length) process.exitCode = 2;
-  }).catch(() => { console.error(JSON.stringify({ issues: ['AICA_CAPTURE_HOLD'] })); process.exitCode = 2; });
+  }).catch((error: unknown) => {
+    // 오류 메시지는 모두 고정 코드(AICA_*·DATA_GOOGLE_AUTH_UNAVAILABLE)라 그대로 남겨 차단 원인을 구분한다. 알 수 없는 오류는 일반 코드로.
+    const code = error instanceof Error && /^[A-Z][A-Z0-9_]{3,63}$/.test(error.message) ? error.message : 'UNEXPECTED';
+    console.error(JSON.stringify({ issues: ['AICA_CAPTURE_HOLD', code] })); process.exitCode = 2;
+  });
 }

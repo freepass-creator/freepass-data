@@ -53,6 +53,7 @@ import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-fi
 import { createVehicleUidMigrationFirestoreWriter } from '../infra/vehicle-uid-migration-firestore-writer.js';
 import { readPeriodFeeLedgerPlanInputs, listActivePeriodFeeLedgerRows } from '../infra/period-fee-ledger-firestore-reader.js';
 import { PeriodFeeLedgerFirestoreWriter } from '../infra/period-fee-ledger-firestore-writer.js';
+import { PayoutFeeSnapshotFirestoreStore } from '../infra/payout-fee-snapshot-firestore.js';
 import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
@@ -226,6 +227,19 @@ export function createPeriodFeeLedgerApplyRuntime() {
   return {
     store: new PeriodFeeLedgerFirestoreWriter(),
     access: runtime.access,
+  };
+}
+
+export function createPayoutFeeSnapshotRuntime() {
+  const readAccess = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const writeAccess = createJobDataAccessRuntime().access;
+  return {
+    store: new PayoutFeeSnapshotFirestoreStore(),
+    // 기본 계획의 writes=0을 지키며, apply 감사만 영구 Data Access 로그를 쓴다.
+    access: {
+      read: readAccess.read.bind(readAccess),
+      write: writeAccess.write.bind(writeAccess),
+    },
   };
 }
 
@@ -780,4 +794,10 @@ export async function createContractLockRuntime() {
       summarize: (value) => ({ count: value === 'RELEASED' ? 1 : 0, digest: stableDigest({ requestDigest, value }) }),
     }, () => releaseContractLock(input)),
   };
+}
+
+export async function createContractStandardsRuntime() {
+  return { store: await createFirestoreDataStore(),
+    readAccess: new DataAccessGateway(new MemoryDataAccessLogStore()),
+    access: new DataAccessGateway(createFirestoreDataAccessLogStore()) };
 }

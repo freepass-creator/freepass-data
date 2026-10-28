@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { captureFromBatchGet, type CaptureDateStats, sharedSheetCaptureRanges, supplierEnteredFromErp5, withSupplements, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../adapters/shared-sheet-capture.js';
+import { captureFromBatchGet, type CaptureDateStats, sharedSheetCaptureRanges, sharedSheetPlateLinkRanges, supplierEnteredFromErp5, withSupplements, SHEETS_GRID_META_FIELDS, SHEETS_PLATE_LINK_FIELDS,
+  type SheetsBatchGet, type SheetsGridMeta, type SheetsPlateLinkGrid } from '../adapters/shared-sheet-capture.js';
 import type { SupplierEnteredRecord, SheetCorrection } from '../adapters/shared-sheet-source.js';
-import { readSheetsBatchGet, readSheetsMetadata } from '../infra/shared-sheet-capture-reader.js';
+import { readSheetsBatchGet, readSheetsGridFields, readSheetsMetadata } from '../infra/shared-sheet-capture-reader.js';
 import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
 import { captureVehicleMasterSnapshotReadOnly } from './data-access-runtime.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
@@ -21,9 +22,13 @@ export async function captureSharedSheetReadOnly(id: string, stats: CaptureDateS
       const meta = await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS) as SheetsGridMeta;
       const before = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
       const shown = await readSheetsBatchGet(id, ranges) as SheetsBatchGet;
+      // 차량번호 칸 링크(사진 폴더): 앞뒤 실제 값 읽기 사이에서 한 번(차량번호 열만·최소 필드). 실패해도 수집은 계속한다(링크 없이) — 사진은 보조 정보다.
+      const links = await Promise.resolve().then(() => readSheetsGridFields(id, sharedSheetPlateLinkRanges(), SHEETS_PLATE_LINK_FIELDS))
+        .then(x => x as SheetsPlateLinkGrid, () => null);
       const after = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
-      stats.datesFromSerial = 0;
-      return captureFromBatchGet(id, shown, meta, readTime, before, after, stats);
+      stats.datesFromSerial = 0; delete stats.plateLinks; delete stats.plateLinksDropped; delete stats.plateLinksUnavailable;
+      if (links === null) stats.plateLinksUnavailable = true;
+      return captureFromBatchGet(id, shown, meta, readTime, before, after, stats, links ?? { spreadsheetId: id });
     } catch (e) {
       if (attempt >= 3 || !(e instanceof Error) || !retryable.test(e.message)) throw e;
       await new Promise(r => setTimeout(r, 30_000));
@@ -34,7 +39,7 @@ export async function captureSharedSheetReadOnly(id: string, stats: CaptureDateS
 /** Capture the 15-tab shared input sheet into a private capture v1 file. stdout carries counts only (no plates/fees). */
 export async function main(args = process.argv.slice(2)) {
   const get = (k: string) => { const i = args.indexOf(k); const v = i >= 0 ? args[i + 1] : undefined; return v && !v.startsWith('--') ? v : undefined; };
-  const known = new Set(['--spreadsheet', '--out', '--from-batchget', '--from-batchget-serials', '--from-batchget-serials-after', '--grid-meta', '--read-time', '--erp5-capture', '--supplement']);
+  const known = new Set(['--spreadsheet', '--out', '--from-batchget', '--from-batchget-serials', '--from-batchget-serials-after', '--grid-meta', '--read-time', '--erp5-capture', '--supplement', '--plate-links']);
   for (let i = 0; i < args.length; i += 2) if (!known.has(args[i]!) || !get(args[i]!)) throw new Error('INVALID_ARGUMENT');
   const id = get('--spreadsheet'), out = get('--out');
   if (!id || !out) throw new Error('SPREADSHEET_AND_OUT_REQUIRED');
@@ -45,7 +50,7 @@ export async function main(args = process.argv.slice(2)) {
   const stats: CaptureDateStats = { datesFromSerial: 0 };
   const capture = local
     ? captureFromBatchGet(id, await json('--from-batchget'), await json('--grid-meta'), get('--read-time')!,
-      await json('--from-batchget-serials'), await json('--from-batchget-serials-after'), stats)
+      await json('--from-batchget-serials'), await json('--from-batchget-serials-after'), stats, await json('--plate-links'))
     : await captureSharedSheetReadOnly(id, stats);
   // Layer ②: products.원문 from an existing ERP5 capture, plus a reviewed supplement (sheet backup rows · correction history).
   const erp5 = get('--erp5-capture'), supplementPath = get('--supplement');
@@ -63,7 +68,8 @@ export async function main(args = process.argv.slice(2)) {
   await writePrivateArtifact(out, sealed);
   console.log(JSON.stringify({ schema: sealed.schema, tabs: sealed.tabs.length, records: batch.records.length,
     supplierEntered: sealed.supplierEntered?.length ?? 0, corrections: sealed.corrections?.length ?? 0,
-    datesFromSerial: stats.datesFromSerial,
+    datesFromSerial: stats.datesFromSerial, plateLinks: sealed.plateLinks?.length ?? 0,
+    ...(stats.plateLinksDropped ? { plateLinksDropped: stats.plateLinksDropped } : {}), ...(stats.plateLinksUnavailable ? { plateLinksUnavailable: true } : {}),
     readTime: sealed.readTime, digest: sealed.digest }, null, 2));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

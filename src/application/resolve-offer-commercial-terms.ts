@@ -309,6 +309,7 @@ export function precomputeOfferEconomics(
       ...(resolvedTargetSettlement.conflict ? { subscriptionFormConflict: true as const } : {}),
       supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
+      depositState: term.depositState,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
       ...automaticSonokongEvidence,
       ...(explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
@@ -373,12 +374,14 @@ export function precomputeOfferEconomics(
           (result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' && term.termMonths !== 12)) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
-        const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
+        const appliedTerm = /NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(12|24|36|48|60)\)/.exec(result.note ?? '')?.[1];
+        const ruleTermMonths = appliedTerm ? Number(appliedTerm) : term.termMonths;
+        const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === ruleTermMonths &&
           rule.id.startsWith('STANDARD_RERENT_') && 'rateBasisPoints' in rule);
         const sonokongPickup60Rate = result.ruleId === `SONOKONG_PICKUP_60_${side}_RENT_X_TERM`
           ? side === 'BILLING' ? 275 : 200
           : null;
-        const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === term.termMonths) : payout;
+        const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === ruleTermMonths) : payout;
         const rate = sonokongPickup60Rate ?? (row && 'rateBasisPoints' in row ? row.rateBasisPoints : null);
         if (rate == null) return unknown('CALCULATION_RULE_REQUIRED');
         const expectedAmount = result.ruleId?.startsWith('SONOKONG_') || result.note?.startsWith('SONOKONG_')
@@ -400,14 +403,23 @@ export function precomputeOfferEconomics(
         ...(result.state === 'CALCULATED_APPROX' ? { approximate: true, note: result.note ?? null } : {}) };
     };
     const deposit = structuredClone(term.deposit ?? null);
+    const supplierBillingFee = convert(resolveSupplierBillingFee(args), 'BILLING');
+    let channelPayoutFee = convert(resolveSalesCommission(args), 'PAYOUT');
+    const billingAmount = supplierBillingFee.state === 'KNOWN' || supplierBillingFee.state === 'ZERO' ? supplierBillingFee.amount?.amount : null;
+    const payoutAmount = channelPayoutFee.state === 'KNOWN' || channelPayoutFee.state === 'ZERO' ? channelPayoutFee.amount?.amount : null;
+    if (billingAmount !== null && billingAmount !== undefined && payoutAmount !== null && payoutAmount !== undefined && payoutAmount > billingAmount) {
+      const { referenceRentBasis: _guardedReference, ...guardedPayout } = channelPayoutFee;
+      channelPayoutFee = { ...guardedPayout, state: 'UNKNOWN', amount: null, calculation: null,
+        sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'PAYOUT_EXCEEDS_BILLING' };
+    }
     return {
       termKey: term.termKey, termMonths: term.termMonths, monthlyRent: structuredClone(term.monthlyRent),
       depositCalculation: { state: term.depositState, amount: deposit,
         calculation: deposit ? { kind: 'FIXED', amount: structuredClone(deposit) } : null,
         sourceRefs: deposit && (term.depositState === 'KNOWN' || term.depositState === 'ZERO') ? [priceRef] : [],
         priceSourceRefs: [priceRef] },
-      supplierBillingFee: convert(resolveSupplierBillingFee(args), 'BILLING'),
-      channelPayoutFee: convert(resolveSalesCommission(args), 'PAYOUT'),
+      supplierBillingFee,
+      channelPayoutFee,
     };
   });
 }

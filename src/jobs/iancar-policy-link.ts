@@ -12,7 +12,11 @@ import { createJobDataAccessRuntime } from './data-access-runtime.js';
 
 const args = process.argv.slice(2);
 const arg = (name: string) => args.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-for (const a of args) if (a !== '--apply' && !/^--(expected-digest|restore|expect-policy-document-changes)=/.test(a)) throw new Error(`UNKNOWN_OPTION ${a.split('=')[0]}`);
+for (const a of args) if (a !== '--apply' && !/^--(expected-digest|restore|expect-policy-document-changes|scope)=/.test(a)) throw new Error(`UNKNOWN_OPTION ${a.split('=')[0]}`);
+// --scope=null-policy-only: policy_code 가 비어 있는 노출 상품만 공통 정책에 연결(이미 정책이 있는 상품·정책 문서는 불변, 정책 문서 변경 0). 기본(생략) = 전부(#565 원래 동작).
+const scopeArg = arg('scope');
+if (scopeArg !== undefined && !['null-policy-only', 'all', 's-from-null', 's-relink'].includes(scopeArg)) throw new Error('SCOPE_INVALID');
+const scope = scopeArg === 'null-policy-only' ? 'NULL_POLICY_ONLY' as const : scopeArg === 's-from-null' ? 'S_FROM_NULL' as const : scopeArg === 's-relink' ? 'S_RELINK' as const : 'ALL' as const;
 const expected = arg('expected-digest');
 if (expected !== undefined && !/^[a-f0-9]{64}$/.test(expected)) throw new Error('EXPECTED_DIGEST_INVALID');
 
@@ -57,12 +61,13 @@ if (args.includes('--apply')) {
   if (!expected) throw new Error('EXPECTED_DIGEST_REQUIRED');
   const policyChanges = arg('expect-policy-document-changes');
   if (policyChanges !== '0' && policyChanges !== '1') throw new Error('EXPECT_POLICY_DOCUMENT_CHANGES_REQUIRED');
+  if (scope !== 'ALL' && policyChanges !== '0') throw new Error('NULL_POLICY_ONLY_REQUIRES_ZERO_POLICY_DOCUMENT_CHANGES');
   const result = await runtime.access.write({ context, operation: 'WRITE_IANCAR_POLICY_LINK', resource, requestDigest: stableDigest({ expected, policyChanges }),
-    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => applyIancarPolicyLink({ expectedPlanDigest: expected, expectedPolicyDocumentChanges: Number(policyChanges), fetchTerms }));
+    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => applyIancarPolicyLink({ expectedPlanDigest: expected, expectedPolicyDocumentChanges: Number(policyChanges), fetchTerms, scope }));
   console.log(JSON.stringify(result, null, 2));
 } else {
   const plan = await runtime.access.read({ context, operation: 'READ_IANCAR_POLICY_LINK_PLAN', resource,
-    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => planIancarPolicyLinkFromFirestore({ fetchTerms }));
+    summarize: value => ({ count: value.counts.toLink, digest: value.planDigest }) }, () => planIancarPolicyLinkFromFirestore({ fetchTerms, scope }));
   // 상품 문서 ID 에 차량번호가 들어 있을 수 있어 요약에는 ID 를 싣지 않는다(개수·패치 예시·사유 분포만).
   const reasons: Record<string, number> = {};
   for (const row of plan.withoutSourceTerms) reasons[row.reason] = (reasons[row.reason] ?? 0) + 1;

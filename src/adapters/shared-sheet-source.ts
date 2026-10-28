@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type { SheetPlateLink } from '../domain/sheet-photo-link.js';
 
 export type SheetCell = string | number | boolean | null;
 export type SharedSheetCapture = {
@@ -15,6 +16,9 @@ export type SharedSheetCapture = {
   supplierEntered?: SupplierEnteredRecord[];
   /** Cell edits made on the shared sheet by people/AI sessions (who·when·before→after). */
   corrections?: SheetCorrection[];
+  /** «차량번호» 칸에 붙은 링크 원문(공급사 사진 폴더 링크) — 칸 값(values)과 따로, 링크가 있는 행만. row 는 시트 행 번호(머리글 = 1).
+   * 같은 읽기 묶음(앞뒤 실제 값 동일) 안에서 읽었고, 링크 칸의 표시 글자가 그 행 차량번호와 같은 것만 남는다. 판정(폴더만·중복 거절)은 엔진이 한다. */
+  plateLinks?: SheetPlateLink[];
 };
 export type SupplierEnteredRecord = { supplierCode: string; plate: string; source: 'ERP5_PRODUCTS_SOURCE_TEXT' | 'SHEET_BACKUP'; sourceRef: string;
   observedAt: string; values: Record<string, unknown> };
@@ -49,11 +53,13 @@ const configuredTabs = [...spec.changeControl.activeSupplierTabs, ...spec.change
 if (stableDigest(registeredTabs) !== stableDigest(configuredTabs)) throw new Error('SHARED_SHEET_SCOPE_CONTRACT_INVALID');
 export const sharedSheetChannels = sharedSheetRegisteredChannels.filter(channel =>
   (spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
-/** 탭·시트의 회사명 칸 → 공급사 채널. 등록 회사명 또는 규격이 승인한 별칭(aliases)만 매핑하고, 다른 이름은 추론하지 않는다. */
+/** A populated exclusive supplier tab has one registered owner even if its company cell is blank.
+ * Shared tabs still require the registered company/alias; an unknown nonblank name is never replaced. */
 export function sharedSheetChannelOf(tab: string, company: unknown) {
   const name = String(company ?? '').trim();
-  return sharedSheetChannels.find(c => c.tab === tab &&
-    (c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name)));
+  const registered = sharedSheetChannels.filter(c => c.tab === tab);
+  return registered.find(c => c.companyName === name || ((c as { aliases?: readonly string[] }).aliases ?? []).includes(name))
+    ?? (!name && registered.length === 1 && sharedSheetRegisteredChannels.filter(c => c.tab === tab).length === 1 ? registered[0] : undefined);
 }
 export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
   !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
@@ -122,6 +128,8 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
       payload: { values: structuredClone(r.values), tab: r.tab.title, row: r.index + 1, readTime: r.tab.readTime,
         spreadsheetId: c.spreadsheetId, revision: c.revision ?? null, captureDigest: digest, rowDigest,
         supplierCode: r.supplierCode, quarantine,
+        ...(r.supplierCode && !String(r.values[0] ?? '').trim()
+          ? { supplierCodeBasis: 'REGISTERED_EXCLUSIVE_TAB_OWNER', supplierRegistryDigest: SHARED_SHEET_SPEC_DIGEST } : {}),
         // Evidence beside the row, outside rowDigest/fingerprint: the sheet values themselves stay the RAW of record.
         ...(rowKey && entered.has(rowKey) ? { supplierEntered: entered.get(rowKey)![0] } : {}),
         ...(rowKey && corrections.has(rowKey) ? { corrections: corrections.get(rowKey) } : {}) } };

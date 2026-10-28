@@ -2,13 +2,13 @@ import { sourceFeeLineage } from '../application/kakao-catalog-reference.js';
 import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, SHARED_SHEET_COLOR_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
 import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentityInputs, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
-import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
+import { reviewSourceChange, applyReviewedSourceChange, isSaneOperationalOdometerChange } from '../application/reviewed-source-change.js';
 import { auditOfferEconomicsTerms, precomputeOfferEconomics } from '../application/resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from '../application/kakao-catalog-reference.js';
 import { decideSourceHead, type SourceRun, type SourceHead } from '../domain/source.js';
@@ -64,7 +64,7 @@ export function assertReviewedPlanGeneration(expected: string, before: string, a
     throw new Error('REVIEWED_PLAN_GENERATION_CHANGED');
 }
 /** Capture observation times/digests are not supplier facts. Correction times and supplier provenance identities remain significant. */
-export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: SharedSheetCapture, now = Date.now()) {
+export function assertLiveSharedSheetMatches(plan: Pick<SharedSheetPlan, 'capture'>, live: SharedSheetCapture, now = Date.now(), requireMaster = true) {
   buildSharedSheetBatch(plan.capture); buildSharedSheetBatch(live);
   if (Date.parse(live.readTime) <= Date.parse(plan.capture.readTime)) throw new Error('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
   if ([live.readTime, ...live.tabs.map(t => t.readTime)].some(at => Date.parse(at) > now || now - Date.parse(at) > 120_000))
@@ -77,8 +77,10 @@ export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: Shared
   if (stableDigest(semantic(plan.capture)) !== stableDigest(semantic(live)))
     throw new Error('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
   const master = live.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined;
-  if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
-  verifiedMasterRecords(master, now);
+  if (requireMaster) {
+    if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+    verifiedMasterRecords(master, now);
+  }
 }
 /**
  * The sealed master snapshot must be fresh at the entry fence (CLI start). After that fence an apply may legitimately run for
@@ -95,14 +97,19 @@ export function identityResolver(inputs: VehicleIdentityInputs | undefined, inFl
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear, ...(row.specs ? { specs: row.specs } : {}) });
 }
-function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false) {
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false, inFlight = false, sourceObservationsOnly = false) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
   const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
-  const master = snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, { includeSupplierColors });
+  const master = (() => {
+    try { return snapshot ? { records: verifiedMasterRecords(snapshot, sealedNow(snapshot, inFlight)), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined; }
+    catch (error) { if (!sourceObservationsOnly) throw error; return undefined; }
+  })();
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs, inFlight), master, {
+    includeSupplierColors, ...(sourceObservationsOnly ? { sourceEngineRentRules: true } : {}),
+  });
   const normalize: typeof normalizeBase = raw => {
     const normalized = normalizeBase(raw);
     return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};
@@ -114,7 +121,54 @@ function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityI
     rawCount: p.rawRecords.length, candidateCount: normalized.length,
     lineageCount: normalized.reduce((n, x) => n + x.lineage.length, 0), warningCount: normalized.filter(x => x.record.status !== 'VALID').length };
   const head: SourceHead = { sourceId: p.sourceId, runId: p.runId, observedAt: batch.observedAt, acceptedAt: batch.observedAt, checkpoint, coverage: batch.coverage };
-  return { ...p, batch, normalized, run, head, normalize };
+  return { ...p, batch, normalized, run, head, normalize, masterEvidenceState: master ? 'VERIFIED' as const : 'UNAVAILABLE_OR_UNVERIFIED' as const };
+}
+
+/** Existing F05 producer may persist every observed row without running physical
+ * Canonical commands. The caller retains the single collector lease and audited
+ * SourceIngestionStore gateway; this function creates no transport or writer.
+ */
+export async function ingestSharedSheetObservedRows(source: SourceIngestionStore, input: {
+  target: 'freepasserp5' | 'memory'; capture: SharedSheetCapture; liveCapture: SharedSheetCapture;
+  claimEffect?: (intent: { sourceId: string; runId: string; sourceDigest: string; observedAt: string }) => Promise<void>;
+}) {
+  if (!['freepasserp5', 'memory'].includes(input.target)) throw new Error('SHARED_SOURCE_TARGET_INVALID');
+  if (input.target === 'freepasserp5') assertCurrentSharedSheetSource(input.capture.spreadsheetId);
+  const now = Date.now();
+  if ([input.capture.readTime, ...input.capture.tabs.map(t => t.readTime)].some(at =>
+    !Number.isFinite(Date.parse(at)) || Date.parse(at) > now || now - Date.parse(at) > 120_000)) {
+    throw new Error('SHARED_SOURCE_CAPTURE_STALE');
+  }
+  // Missing identity authority HOLDs names, not the independently observed rows,
+  // prices or other atomic facts. Physical Canonical apply keeps its strict fence.
+  assertLiveSharedSheetMatches({ capture: input.capture }, input.liveCapture, now, false);
+  const p = prepared(input.capture, undefined, true, false, true);
+  await input.claimEffect?.({ sourceId: p.sourceId, runId: p.runId, sourceDigest: p.sourceChecksum, observedAt: input.capture.readTime });
+  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize, undefined, { writeConcurrency: 8 });
+  const head = await source.getSourceHead(p.sourceId);
+  if (run.headStatus !== 'CURRENT' || head?.runId !== run.runId) throw new Error('SHARED_SOURCE_HEAD_NOT_CURRENT');
+  const [raw, candidates, lineage] = await Promise.all([
+    source.listRaw(run.runId), source.listCandidates(run.runId), source.listLineage(run.runId),
+  ]);
+  const rawKey = (r: typeof raw[number]) => [r.rawRecordId, r.sourceRecordId, r.sourceFingerprint, r.payload];
+  const ordered = (rows: unknown[]) => rows.map(r => stableDigest(r)).sort();
+  const normalized = raw.map(r => p.normalize(r));
+  if (raw.length !== p.rawRecords.length || candidates.length !== raw.length ||
+      lineage.length !== run.lineageCount ||
+      stableDigest(ordered(raw.map(rawKey))) !== stableDigest(ordered(p.rawRecords.map(rawKey))) ||
+      stableDigest(ordered(candidates)) !== stableDigest(ordered(normalized.map(n => n.record))) ||
+      stableDigest(ordered(lineage)) !== stableDigest(ordered(normalized.flatMap(n => n.lineage)))) {
+    throw new Error('SHARED_SOURCE_READBACK_MISMATCH');
+  }
+  if (stableDigest(await source.getSourceHead(p.sourceId)) !== stableDigest(head)) throw new Error('SHARED_SOURCE_HEAD_DRIFT');
+  return { schema: 'freepass-data.shared-sheet-source-observation-receipt/v1' as const,
+    mode: 'SOURCE_OBSERVATIONS_ONLY' as const, status: 'SOURCE_HEAD_VERIFIED' as const,
+    sourceId: p.sourceId, runId: run.runId, observedAt: run.observedAt, rawRows: raw.length,
+    candidateRows: candidates.length, heldCandidateRows: candidates.filter(c => c.status !== 'VALID').length,
+    priceConditions: candidates.reduce((n, c) => n + c.candidate.priceTerms.length, 0),
+    lineageRows: lineage.length, coverage: run.coverage, canonicalWrites: 0,
+    publicationDecision: 'HOLD_PRESERVED' as const, sourceDigest: p.sourceChecksum, masterEvidenceState: p.masterEvidenceState,
+    verifiedAt: new Date().toISOString(), readback: { rawRows: raw.length, candidateRows: candidates.length, lineageRows: lineage.length, mismatches: 0 } };
 }
 function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogStore {
   // Read-only prospective evidence. No transaction or SourceIngestionStore write in planning.
@@ -232,7 +286,16 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           const fence = operationalRefresh ? { previousCandidateId: previous[0]!.candidateId,
             maxObservationAgeSeconds: OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS } : undefined;
           const review = await reviewSourceChange(prospective, bindingId, item.record.candidateId, fence);
+          // The operational-refresh apply mode owns supplier status, source facts and existing period rent only (see
+          // reviewed-source-change.ts «limited to known supplier status and existing period rent»). Any other reviewable change
+          // (odometer, deposit, mileage limit) is rejected there and, as the first CHANGE, aborted the whole run with
+          // CANONICAL_COMMAND_REJECTED. Hold that one vehicle at plan time instead; it stays under its own reviewed command.
+          // 주행거리는 감소·과대 증가(이상치)가 아니면 운영 갱신이 반영한다(isSaneOperationalOdometerChange).
+          const unsupported = fence ? [...new Set(review.diffs.filter(x => x.classification === 'REVIEWABLE' &&
+            !OPERATIONAL_REFRESH_ALLOWED_REASONS.has(x.reasonCode) &&
+            !(x.reasonCode === 'SOURCE_ODOMETER_CHANGE' && isSaneOperationalOdometerChange(x.before, x.after))).map(x => x.reasonCode))].sort() : [];
           if (review.blockedChangeIds.length) reasons.push(...review.diffs.filter(x => x.classification === 'BLOCKED').map(x => x.reasonCode));
+          else if (unsupported.length) reasons.push(...unsupported.map(code => `OPERATIONAL_REFRESH_UNSUPPORTED_CHANGE:${code}`));
           else {
             entry.action = 'CHANGE';
             entry.change = { ...base, bindingId, expectedBindingRevision: review.bindingRevision,
@@ -329,6 +392,31 @@ const COMMAND_FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/invalid|illegal|malformed|schema|unsupported|must|required/i, 'INVALID_INPUT'],
   [/deadline|timeout|unavailable|econn|network/i, 'TRANSPORT'],
 ];
+/** 검토 명령 거절의 «고정 문구 → 고정 코드». 문구는 reviewed-source-change.ts 의 상수뿐(식별자·값이 섞인 문구는 목록에 없다). */
+const REVIEWED_REJECTION_REASONS: ReadonlyArray<readonly [string, string]> = [
+  ['Operational refresh is limited to', 'OPERATIONAL_UNSUPPORTED_OPERATION'],
+  ['Existing rent diverges', 'EXISTING_RENT_DIVERGES'],
+  ['Existing status is unknown or diverges', 'EXISTING_STATUS_DIVERGES'],
+  ['Source facts contain human divergence', 'SOURCE_FACTS_DIVERGE'],
+  ['Previous candidate does not match', 'PREVIOUS_CANDIDATE_MISMATCH'],
+  ['Operational source evidence is stale', 'OPERATIONAL_EVIDENCE_STALE_OR_INCOMPLETE'],
+  ['Operational refresh lineage does not match', 'OPERATIONAL_LINEAGE_MISMATCH'],
+  ['Known registered supplier status', 'SUPPLIER_STATUS_OR_ASSET_MISSING'],
+  ['Catalog writer ownership changed', 'WRITER_OWNERSHIP_CHANGED'],
+  ['Candidate is not from the accepted current source head', 'CANDIDATE_NOT_CURRENT_HEAD'],
+  ['Candidate source identity does not match', 'BINDING_IDENTITY_MISMATCH'],
+  ['Existing Canonical', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Existing VehicleAsset binding', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Product has a VehicleAsset that is not represented', 'EXISTING_CANONICAL_INCONSISTENT'],
+  ['Existing economics', 'EXISTING_ECONOMICS_INCONSISTENT'],
+  ['Existing FIXED economics', 'FIXED_ECONOMICS_DIFFER'],
+  ['Changed rent has no identical', 'CHANGED_RENT_NO_ECONOMICS_RULE'],
+  ['Rejected candidate cannot', 'CANDIDATE_REJECTED'],
+];
+export function reviewedRejectionReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  return REVIEWED_REJECTION_REASONS.find(([prefix]) => message.startsWith(prefix))?.[1] ?? 'UNLISTED';
+}
 export function commandFailureDetail(error: unknown, kind: 'CREATE' | 'CHANGE' | 'UNKNOWN') {
   const message = error instanceof Error ? error.message : '';
   const cls = error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? error.name : 'NonError';
@@ -354,6 +442,9 @@ export const OPERATIONAL_REFRESH_MAX_OBSERVATION_AGE_SECONDS = 3600;
 const PER_ENTRY_REJECTION_CODES: ReadonlySet<string> = new Set(
   ['REVIEWED_SOURCE_CHANGE_REJECTED', 'REVIEWED_SOURCE_CHANGE_CONFLICT', 'REVIEWED_SOURCE_CHANGE_BLOCKED',
     'REVIEWED_SOURCE_CHANGE_APPROVAL_MISMATCH']);
+/** Diff reason codes the operational-refresh apply mode accepts (must match assertOperationalRefresh in reviewed-source-change.ts). */
+const OPERATIONAL_REFRESH_ALLOWED_REASONS: ReadonlySet<string> = new Set(
+  ['SOURCE_EXPOSURE_CHANGE', 'SOURCE_ASSET_STATUS_CHANGE', 'SOURCE_VEHICLE_FACTS_CHANGE', 'SOURCE_MONTHLY_RENT_CHANGE']);
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
@@ -382,7 +473,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
   let commandKind: 'CREATE' | 'CHANGE' | 'UNKNOWN' = 'UNKNOWN';
-  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {};
+  const rejected = new Set<string>(), rejectedByCode: Record<string, number> = {}, rejectedByReason: Record<string, number> = {};
   for (const entry of plan.entries) {
     if (entry.action === 'HOLD') { held++; continue; }
     if (entry.action === 'NO_CHANGE') { noChange++; continue; }
@@ -401,6 +492,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       if (typeof code === 'string' && PER_ENTRY_REJECTION_CODES.has(code)) {
         held++; rejected.add(entry.recordId);
         const key = `${commandKind}:${code}`; rejectedByCode[key] = (rejectedByCode[key] ?? 0) + 1;
+        const why = `${code}:${reviewedRejectionReason(error)}`; rejectedByReason[why] = (rejectedByReason[why] ?? 0) + 1;
         continue;
       }
       // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
@@ -430,8 +522,18 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         !auditOfferEconomicsTerms(offer).invalidFacts.length) {
       for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
         const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
-        if (previous?.state === 'UNKNOWN' || previous?.state === 'NOT_APPLICABLE' ||
-            (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE'))
+        // The operational refresh owns status and changed rent only. A term whose rent did not change keeps its stored
+        // economics exactly (a later fee-policy version is applied by the separate economics recompute, not by this run),
+        // so the readback must compare it with the pre-run value, never with a fresh recompute under a newer policy.
+        // The apply step recomputes a dependent fee from the rent of the fee's reference term (referenceRentBasis.termKey),
+        // not from its own term, so «unchanged» must be judged on that same term or a changed reference rent would be mistaken
+        // for an unchanged one (reviewed-source-change.ts basisKey).
+        const basisKey = previous?.referenceRentBasis?.termKey ?? term.termKey;
+        const rentBefore = before.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentNow = c.priceTerms.find(x => x.termKey === basisKey)?.monthlyRent;
+        const rentUnchanged = rentBefore !== undefined && rentNow !== undefined && stableDigest(rentBefore) === stableDigest(rentNow);
+        if (previous && (rentUnchanged || previous.state === 'UNKNOWN' || previous.state === 'NOT_APPLICABLE' ||
+            (previous.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')))
           term[side] = structuredClone(previous);
       }
     }
@@ -446,7 +548,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   }
   return { report: { mode: 'APPLY', status: readbackMismatches ? 'HOLD' : held ? 'PARTIAL_HOLD' : 'APPLIED',
     committed, noChange, held, remaining: 0,
-    ...(Object.keys(rejectedByCode).length ? { rejectedByCode } : {}),
+    ...(Object.keys(rejectedByCode).length ? { rejectedByCode, rejectedByReason } : {}),
     reconciliation: { stage: 'CANONICAL_READBACK', suppliedTerms, storedTerms, heldTerms, readbackMismatches,
       equal: suppliedTerms === storedTerms && readbackMismatches === 0 } } };
 }

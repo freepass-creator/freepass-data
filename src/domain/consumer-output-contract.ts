@@ -1,6 +1,52 @@
 import { createHash } from 'node:crypto';
-import type { CommercialType } from './catalog.js';
+// Published album count only; source evidence and approval checks retain their authority.
+export const PUBLIC_VEHICLE_PHOTO_LIMIT = 50;
+import type { CommercialType, PriceTerm } from './catalog.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
+import sheetSpecification from '../../contracts/f01-f86-sheet-spec.v1.json' with { type: 'json' };
+import { depositInstant, parseErp5CompatibilityPriceKey } from './deposit-evidence.js';
+
+export const F01_PRICE_SELECTION = sheetSpecification.f01PriceSelection;
+
+/** F01-only selection of already validated, source-bound price terms. No writes or calculation. */
+export function selectF01PriceTerms(input: { supplierId: string; sourceRef: string; observedAt: string;
+  terms: readonly (PriceTerm & { settlement: 'RETURN' | 'BUYOUT' | 'UNKNOWN' })[] }, now = Date.now()) {
+  const excluded: Array<{ termKey: string; termMonths: number; reason: string }> = [];
+  const candidates: Array<(typeof input.terms)[number]> = [];
+  const sourceBound = Boolean(input.sourceRef.trim()) && depositInstant(input.observedAt) && Date.parse(input.observedAt) <= now;
+  for (const term of input.terms) {
+    const parsed = parseErp5CompatibilityPriceKey(term.termKey);
+    let reason: string | null = !sourceBound ? 'SOURCE_EVIDENCE_MISSING' :
+      !parsed || parsed.months !== term.termMonths ? 'TERM_KEY_UNRESOLVED' :
+      !F01_PRICE_SELECTION.allowedMonths.includes(term.termMonths) ? 'PERIOD_EXCLUDED' :
+      !term.settlement || term.settlement === 'UNKNOWN' ? 'SETTLEMENT_EVIDENCE_MISSING' :
+      term.settlement !== F01_PRICE_SELECTION.settlement ? 'NOT_RETURN' :
+      parsed.settlement !== term.settlement ? 'SETTLEMENT_CONFLICT' :
+      term.monthlyRent.currency !== F01_PRICE_SELECTION.currency || !Number.isSafeInteger(term.monthlyRent.amount) || term.monthlyRent.amount <= 0 ? 'RENT_UNCONFIRMED' : null;
+    if (!reason && parsed?.mileageKm != null && term.mileageLimitKmPerYear != null && parsed.mileageKm !== term.mileageLimitKmPerYear) reason = 'MILEAGE_CONFLICT';
+    if (!reason && parsed?.contractedMileage?.period === 'month' && term.mileageLimitKmPerYear != null) reason = 'MILEAGE_CONFLICT';
+    if (!reason && input.supplierId === F01_PRICE_SELECTION.autoplusSupplierId &&
+      (parsed?.contractedMileage?.period === 'month' || (parsed?.mileageKm ?? term.mileageLimitKmPerYear) !== F01_PRICE_SELECTION.autoplusAnnualMileageKm)) reason = 'AUTOPLUS_NOT_ANNUAL_20000';
+    if (reason) excluded.push({ termKey: term.termKey, termMonths: term.termMonths, reason }); else candidates.push(term);
+  }
+  const cells = F01_PRICE_SELECTION.allowedMonths.map(months => {
+    const rows = candidates.filter(t => t.termMonths === months);
+    if (rows.length > 1) for (const row of rows) excluded.push({termKey:row.termKey,termMonths:row.termMonths,reason:'MULTIPLE_SOURCE_TUPLES'});
+    const holds = excluded.filter(e => !['NOT_RETURN','PERIOD_EXCLUDED','AUTOPLUS_NOT_ANNUAL_20000'].includes(e.reason) &&
+      (e.termMonths === months || parseErp5CompatibilityPriceKey(e.termKey)?.months === months));
+    const term = rows.length === 1 && holds.length === 0 ? rows[0]! : null;
+    const parsed = term ? parseErp5CompatibilityPriceKey(term.termKey) : undefined;
+    const contractedMileage = parsed?.contractedMileage ?? (parsed?.mileageKm != null ? {km:parsed.mileageKm,period:'year' as const} :
+      term?.mileageLimitKmPerYear != null ? {km:term.mileageLimitKmPerYear,period:'year' as const} : null);
+    const knownDeposit = term && term.deposit?.currency === 'KRW' && Number.isSafeInteger(term.deposit.amount) &&
+      ((term.depositState === 'KNOWN' && term.deposit.amount > 0) || (term.depositState === 'ZERO' && term.deposit.amount === 0));
+    return { months, state: !sourceBound || holds.length ? 'HOLD' as const : term ? 'READY' as const : 'ABSENT' as const,
+      reasons: !sourceBound ? ['SOURCE_EVIDENCE_MISSING'] : holds.map(h=>h.reason), contractedMileage, termKey: term?.termKey ?? null, rent: term?.monthlyRent.amount ?? null,
+      deposit: knownDeposit ? term!.deposit!.amount : null, depositState: term ? knownDeposit ? term.depositState : 'UNKNOWN' : null,
+      sourceRef: term ? input.sourceRef : null, observedAt: term ? input.observedAt : null };
+  });
+  return { contractVersion:F01_PRICE_SELECTION.version, workbook:'F01' as const, cells, excluded };
+}
 
 export const F86_OUTPUT_CONTRACT = {
   contractId: 'f86-hahuhho-v1',
@@ -236,7 +282,7 @@ export function isIancarCopyPhotoProduct(product: Rec | undefined): boolean {
 }
 /** 공개 응답용 «승인 사본 수»(이안카 한정, 종전 이름). 공급사 불문은 approvedPhotoCount. */
 export function approvedIancarPhotoCount(product: Rec | undefined): number {
-  return isIancarCopyPhotoProduct(product) ? (product!.photo_original_refs as unknown[]).length : 0;
+  return isIancarCopyPhotoProduct(product) ? Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, (product!.photo_original_refs as unknown[]).length) : 0;
 }
 
 /** 공급사 공통 사본 서빙(2026-10-15 설계 승인): 사본 서빙을 허용하는 공급사 목록(허용표). 표에 없는 공급사는 종전 동작 그대로다(fail-closed).
@@ -268,7 +314,7 @@ export function isSupplierCopyPhotoProduct(product: Rec | undefined, suppliers: 
 }
 /** 공개 응답용 «승인 사본 수»(공급사 불문): 사본 서빙이 보장될 때(= isSupplierCopyPhotoProduct)만 refs 수, 아니면 0. 소비처는 이 값이 > 0 일 때만 사진 주소를 만든다. */
 export function approvedPhotoCount(product: Rec | undefined, suppliers: ReadonlySet<string> = DEFAULT_PHOTO_COPY_SUPPLIERS): number {
-  return isSupplierCopyPhotoProduct(product, suppliers) ? (product!.photo_original_refs as unknown[]).length : 0;
+  return isSupplierCopyPhotoProduct(product, suppliers) ? Math.min(PUBLIC_VEHICLE_PHOTO_LIMIT, (product!.photo_original_refs as unknown[]).length) : 0;
 }
 
 /** ID 기반 서빙 게이트용: 상품 문서에 등록된 ONE 사진 ID 목록(중복·빈 값 없음, 1~200개). 없으면 게이트 대상 아님. */

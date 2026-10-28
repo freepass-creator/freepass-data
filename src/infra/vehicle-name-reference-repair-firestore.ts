@@ -17,6 +17,9 @@ export type VehicleNameRepairItem = {
 };
 export type VehicleProductIdentityRepairItem = {
   id: string;
+  /** 'MODEL' = 모델 수준 정정(2026-10-16, AI 정제 모델만 확정 건): to.maker·to.model 은 활성 마스터에 존재해야 하고 sub_model 은 from 과 «글자 그대로» 같게 유지(바꾸지 않음),
+   * from.model 은 빈칸이어야 한다. 그 밖의 안전선(승인 digest·백업·lastUpdateTime·되읽기·사람 입력 거절)은 전체 정정과 같다. 없으면 종전(세 칸 모두 정확히 하나의 활성 마스터). */
+  level?: 'MODEL';
   from: { maker: string; model: string; sub_model: string };
   to: { maker: string; model: string; sub_model: string };
   evidence: string;
@@ -39,6 +42,9 @@ export type ProductSourceCorrectionItem = {
 };
 
 export type VehicleNameRepairPlan = {
+  kind?: 'PRODUCT_IDENTITY_CORRECTION';
+  projectId?: string;
+  productIdentityCorrections?: ProductIdentityCorrection[];
   sourceDigest: string;
   masterRepairs: VehicleNameRepairItem[];
   productRepairs: VehicleNameRepairItem[];
@@ -205,7 +211,9 @@ const matchesProductIdentityFromField = (stored: unknown, from: string) => from 
 const matchesIdentityFrom = (stored: Record<string, unknown> | undefined, from: VehicleProductIdentityRepairItem['from']) =>
   PRODUCT_IDENTITY_FIELDS.every((field) => matchesProductIdentityFromField(stored?.[field], from[field]));
 const productIdentityToObject = (item: VehicleProductIdentityRepairItem) => ({
-  maker: clean(item.to.maker), model: clean(item.to.model), sub_model: clean(item.to.sub_model),
+  maker: clean(item.to.maker), model: clean(item.to.model),
+  // 모델 수준은 세부모델을 «저장된 글자 그대로» 유지한다(정규화해 쓰면 의도하지 않은 변경이 된다).
+  sub_model: item.level === 'MODEL' ? item.to.sub_model : clean(item.to.sub_model),
 });
 const sameProductSourceCorrection = (stored: unknown, item: ProductSourceCorrectionItem, sourceDigest: string) => {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
@@ -227,6 +235,7 @@ const currentCorrectionKeptInHistory = (current: unknown, history: Record<string
   current === undefined || current === null || history.some((entry) => stableDigest(entry) === stableDigest(current));
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
+  if (plan.kind !== undefined || plan.productIdentityCorrections !== undefined) return validateIdentityCorrectionPlan(plan);
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
@@ -352,9 +361,20 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const side of ['from', 'to'] as const) {
       for (const field of PRODUCT_IDENTITY_FIELDS) if (typeof item[side]?.[field] !== 'string') throw new Error(`productIdentity ${item.id} ${side}.${field} must be a string`);
     }
+    if (item.level !== undefined && item.level !== 'MODEL') throw new Error(`productIdentity ${item.id} level must be MODEL when present`);
+    const modelLevel = item.level === 'MODEL';
     for (const field of PRODUCT_IDENTITY_FIELDS) {
-      if (!clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      // 모델 수준에서 저장 세부모델이 «빈칸»이면 to.sub_model 도 빈칸으로 둔다(제조사·모델 채우기만, 제목이 비어 있는 시트 공급사 문서). 칸은 쓰지 않는다.
+      const keepsBlankSubModel = modelLevel && field === 'sub_model' && item.from.sub_model === '' && item.to.sub_model === '';
+      if (!clean(item.to[field]) && !keepsBlankSubModel) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      // 모델 수준에서 sub_model 은 «현재 저장값 그대로»를 유지하므로(원문형 문자열일 수 있다) 정규화 요구를 걸지 않고 from 과 같음을 요구한다.
+      if (modelLevel && field === 'sub_model') continue;
       if (item.to[field] !== clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} must be normalized text`);
+    }
+    if (modelLevel) {
+      if (item.to.sub_model !== item.from.sub_model) throw new Error(`productIdentity ${item.id} MODEL level must keep sub_model unchanged`);
+      if (item.from.model !== '') throw new Error(`productIdentity ${item.id} MODEL level requires blank from.model`);
+      if (item.from.maker !== '' && item.from.maker !== item.to.maker) throw new Error(`productIdentity ${item.id} MODEL level must not change a stored maker`);
     }
     if (PRODUCT_IDENTITY_FIELDS.every((field) => clean(item.from[field]) === clean(item.to[field]))) throw new Error(`no-op productIdentity:${item.id}`);
   }
@@ -477,8 +497,233 @@ export function hasHumanOrConfirmedMarker(data: Record<string, unknown> | undefi
 const aliasNormalizationAllowedFor = (data: Record<string, unknown> | undefined, from: { maker: string; model: string; sub_model: string }, to: { maker: string; model: string; sub_model: string }) =>
   isAliasNormalizationCandidate(from, to) && !hasHumanOrConfirmedMarker(data);
 
-export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined } = {}) {
+const CORRECTION_FIELDS = ['maker', 'model', 'sub_model', 'trim_name'] as const;
+/** Omitted key = missing field; null and empty string are distinct, including in reverse plans. */
+type ExactIdentity = Partial<Record<(typeof CORRECTION_FIELDS)[number], string | null>>;
+type ReviewedTime = { seconds: number; nanoseconds: number };
+/** 확정값 정정은 번호판이 문서 id 인 상품만 대상(번호판 없는 id 는 거부). */
+const PLATE_ID = /^\d{2,3}[가-힣]\d{4}$/;
+/** 보존 원문(products.원문)에서 차량번호가 들어 있을 수 있는 칸(경로). 공급사 원문 형식이 둘이다: 전체.차량번호 / 최상위 차번. */
+const ORIGINAL_PLATE_FIELDS: ReadonlyArray<readonly string[]> = [['전체', '차량번호'], ['차번']];
+type CorrectionSource = { source: string; authoredAt: string; retrievedAt: string; contentDigest: string; archiveRef: string;
+  /** 정정 원문만: archiveRef 가 가리키는 보관 기록에 적힌 차량번호(검토자 선언 — 원문_정정에는 이 칸이 없다). */
+  archiveVehicleNumber?: string };
+export type ProductIdentityCorrection = {
+  id: string; from: ExactIdentity; to: ExactIdentity; expectedUpdateTime: ReviewedTime; reason: string;
+  evidence: {
+    original: CorrectionSource; correction: CorrectionSource;
+    /** 차량 동일성은 이름이 아니라 번호로 묶는다: 상품 문서 id == 원문.전체.차량번호 == 정정 보관 기록의 번호. */
+    vehicleNumber: string;
+    correctsOriginalDigest: string; correctedFields: Array<(typeof CORRECTION_FIELDS)[number]>;
+    resolvedIdentity: ExactIdentity;
+    /** Reviewed conflicts, including higher-priority evidence; nonempty always HOLD. */
+    conflicts: string[];
+  };
+  master: { id: string; trimId: string; contentDigest: string; trimContentDigest: string };
+  /** Reverse only this committed event's changed fields, never a whole-document restore. */
+  rollbackOf?: string;
+};
+const exactIdentity = (data: Record<string, unknown>): ExactIdentity => Object.fromEntries(
+  CORRECTION_FIELDS.filter((f) => Object.hasOwn(data, f)).map((f) => [f, data[f]]),
+) as ExactIdentity;
+const sameIdentity = (a: ExactIdentity, b: ExactIdentity) => stableDigest(a) === stableDigest(b);
+const timestampValue = (value: unknown): ReviewedTime | null => {
+  if (!value || typeof value !== 'object') return null;
+  const { seconds, nanoseconds } = value as ReviewedTime;
+  return Number.isSafeInteger(seconds) && Number.isInteger(nanoseconds) && nanoseconds >= 0 && nanoseconds < 1e9
+    ? { seconds, nanoseconds } : null;
+};
+const sameTime = (a: unknown, b: unknown) => timestampValue(a) !== null && timestampValue(b) !== null
+  && stableDigest(timestampValue(a)) === stableDigest(timestampValue(b));
+/** 정확한 버전 연결: 한 트랜잭션의 모든 쓰기는 같은 서버 확정 시각(updateTime)을 받는다. 감사 문서는 create 전용이라 그 updateTime 이 «원래 커밋한 그 버전»이다 — 상품 updateTime 이 그것과 정확히 같을 때만 «그 커밋 그대로»로 본다(서버 타임스탬프 committedAt 은 수 ms 달라 쓰지 않는다). 시각 근사는 쓰지 않는다. */
+const digestOk = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+const textOk = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+const objectOk = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const identityShape = (v: unknown) => objectOk(v) && Object.entries(v).every(([k, value]) =>
+  (CORRECTION_FIELDS as readonly string[]).includes(k) && (value === null || typeof value === 'string'));
+const changedIdentityFields = (item: ProductIdentityCorrection) => CORRECTION_FIELDS.filter((f) =>
+  Object.hasOwn(item.from, f) !== Object.hasOwn(item.to, f) || item.from[f] !== item.to[f]);
+export const vehicleNameRepairPlanDigest = (plan: VehicleNameRepairPlan) => plan.kind === 'PRODUCT_IDENTITY_CORRECTION'
+  ? stableDigest({ kind: plan.kind, projectId: plan.projectId, plan }) : stableDigest(plan);
+const correctionAuditMatches = (event: Record<string, unknown> | undefined, plan: VehicleNameRepairPlan, item: ProductIdentityCorrection) => {
+  if (!event) return false;
+  const planDigest = vehicleNameRepairPlanDigest(plan);
+  const expected = {
+    eventId: `pic_${stableDigest({ planDigest, id: item.id })}`, commandId: `product-identity-correction:${planDigest}`,
+    entityType: 'products', entityId: item.id, projectId: plan.projectId, planDigest, itemDigest: stableDigest(item),
+    action: item.rollbackOf ? 'PRODUCT_IDENTITY_CORRECTION_REVERSED' : 'PRODUCT_IDENTITY_CORRECTED',
+    before: item.from, after: item.to, evidence: item.evidence, evidenceDigest: stableDigest(item.evidence),
+    master: item.master, masterDigest: stableDigest(item.master), expectedUpdateTime: item.expectedUpdateTime,
+    reason: item.reason, authorizationId: `AUTHORIZE_PRODUCT_IDENTITY_CORRECTION:${planDigest}`,
+    actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+  };
+  return Object.entries(expected).every(([key, value]) => stableDigest(event[key] ?? null) === stableDigest(value))
+    && (event.rollbackOf ?? null) === (item.rollbackOf ?? null) && textOk(event.occurredAt);
+};
+
+function validateIdentityCorrectionPlan(plan: VehicleNameRepairPlan) {
+  if (plan.kind !== 'PRODUCT_IDENTITY_CORRECTION' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(plan.projectId ?? '')
+    || !textOk(plan.sourceDigest)) throw new Error('correction kind, projectId and sourceDigest required');
+  const allowed = new Set(['kind', 'projectId', 'sourceDigest', 'productIdentityCorrections', 'masterRepairs', 'productRepairs']);
+  if (!Array.isArray(plan.masterRepairs) || plan.masterRepairs.length || !Array.isArray(plan.productRepairs) || plan.productRepairs.length
+    || Object.keys(plan).some((k) => !allowed.has(k))) throw new Error('correction cannot mix with ordinary repairs or master changes');
+  const items = plan.productIdentityCorrections;
+  if (!Array.isArray(items) || !items.length || items.length > 10) throw new Error('correction batch must contain 1..10 products');
+  const ids = new Set<string>();
+  for (const item of items) {
+    if (!item || !isDocId(item.id) || ids.has(item.id)) throw new Error('invalid or duplicate correction id');
+    ids.add(item.id);
+    if (!identityShape(item.from) || !identityShape(item.to) || !changedIdentityFields(item).length
+      || !timestampValue(item.expectedUpdateTime) || !textOk(item.reason)) throw new Error('invalid correction identity, version or reason');
+    if (item.rollbackOf !== undefined && !/^pic_[a-f0-9]{64}$/.test(item.rollbackOf)) throw new Error('invalid rollback event');
+    if (!item.rollbackOf && CORRECTION_FIELDS.some((f) => !textOk(item.to[f]) || item.to[f] !== clean(item.to[f]))) {
+      throw new Error('correction to requires four normalized nonempty names');
+    }
+    const e = item.evidence;
+    if (!e || !Array.isArray(e.conflicts) || e.conflicts.length || !identityShape(e.resolvedIdentity)
+      || (!item.rollbackOf && !sameIdentity(e.resolvedIdentity, item.to))
+      || !textOk(e.vehicleNumber) || !PLATE_ID.test(e.vehicleNumber) || e.vehicleNumber !== item.id
+      || e.correction?.archiveVehicleNumber !== e.vehicleNumber
+      || !Array.isArray(e.correctedFields) || !e.correctedFields.length
+      || e.correctedFields.some((f) => !CORRECTION_FIELDS.includes(f))
+      || (!item.rollbackOf && changedIdentityFields(item).some((f) => !e.correctedFields.includes(f)))) throw new Error('unresolved correction evidence');
+    for (const source of [e.original, e.correction]) {
+      if (!source || !textOk(source.source) || !textOk(source.archiveRef) || !digestOk(source.contentDigest)
+        || !textOk(source.authoredAt) || !textOk(source.retrievedAt)
+        || !Number.isFinite(Date.parse(source.authoredAt)) || !Number.isFinite(Date.parse(source.retrievedAt))
+        || Date.parse(source.authoredAt) > Date.parse(source.retrievedAt)) throw new Error('incomplete correction source provenance');
+    }
+    if (e.correctsOriginalDigest !== e.original.contentDigest || e.original.contentDigest === e.correction.contentDigest
+      || e.correction.source !== '지지오토') throw new Error('correction must identify the original and 지지오토 source');
+    const m = item.master;
+    if (!m || !isDocId(m.id) || !isDocId(m.trimId) || !digestOk(m.contentDigest) || !digestOk(m.trimContentDigest)) {
+      throw new Error('correction master and trim fingerprints required');
+    }
+  }
+  if (items.some((i) => !!i.rollbackOf) && items.some((i) => !i.rollbackOf)) throw new Error('cannot mix correction and rollback');
+  return { masterCount: 0, productCount: 0, productIdentityCorrectionCount: items.length };
+}
+
+async function applyIdentityCorrections(plan: VehicleNameRepairPlan, approvedDigest?: string) {
+  // Freeze the reviewed input before the first await (caller mutation cannot change an approved write).
+  plan = structuredClone(plan);
+  const planDigest = vehicleNameRepairPlanDigest(plan);
+  if (approvedDigest !== planDigest) throw new Error('AUTHORIZE_PRODUCT_IDENTITY_CORRECTION exact plan digest required');
+  const app = getTargetFirebaseApp();
+  if (app.options.projectId !== plan.projectId) throw new Error('correction Firebase project mismatch');
+  const db = getFirestore(app);
+  const items = plan.productIdentityCorrections!;
+  const refs = items.map((i) => db.collection('products').doc(i.id));
+  const eventIds = items.map((i) => `pic_${stableDigest({ planDigest, id: i.id })}`);
+  const auditRefs = eventIds.map((id) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(id));
+  const before = await db.getAll(...refs);
+  const backupDir = join(homedir(), '.codex', 'private', 'freepass-data-vehicle-name-backups');
+  await mkdir(backupDir, { recursive: true });
+  const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+  const backupPath = join(backupDir, `${runId}.json`);
+  await writeFile(backupPath, JSON.stringify({ runId, planDigest, plan, documents: before.map((s) => ({
+    path: s.ref.path, data: s.data(), updateTime: timestampValue(s.updateTime),
+  })) }, null, 2), { flag: 'wx', mode: 0o600 });
+  const skippedAlreadyApplied = await db.runTransaction(async (tx) => {
+    const current = await tx.getAll(...refs);
+    const events = await tx.getAll(...auditRefs);
+    // Read all dependencies before any write. Queries are transaction reads, including uniqueness checks.
+    const masters = await tx.get(db.collection('vehicle_master').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+    if (masters.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error('correction master scan limit');
+    const trims = await tx.getAll(...items.map((i) => db.collection('vehicle_trim_master').doc(i.master.trimId)));
+    const trimSets = [];
+    for (const item of items) trimSets.push(await tx.get(db.collection('vehicle_trim_master').where('master_id', '==', item.master.id).limit(MAX_MASTER_IDENTITY_SCAN + 1)));
+    const reverseRefs = items.filter((i) => i.rollbackOf).map((i) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(i.rollbackOf!));
+    const reverseEvents = reverseRefs.length ? await tx.getAll(...reverseRefs) : [];
+    const writes: Array<{ update: Record<string, unknown>; audit: Record<string, unknown> }> = [];
+    for (const [index, item] of items.entries()) {
+      const snapshot = current[index]!;
+      const data = snapshot.data();
+      if (!snapshot.exists || !data) throw new Error('correction product missing');
+      const blocked = productWriteBlock(data);
+      if (blocked) throw new Error(`correction refused ${blocked}`);
+      const itemDigest = stableDigest(item);
+      const event = events[index]!.data();
+      if (events[index]!.exists) {
+        if (!correctionAuditMatches(event, plan, item)
+          || !sameIdentity(exactIdentity(data), item.to) || event?.afterDocumentDigest !== stableDigest(data)
+          || !sameTime(snapshot.updateTime, events[index]!.updateTime)) throw new Error('correction replay audit/result mismatch');
+        continue;
+      }
+      if (!sameTime(snapshot.updateTime, item.expectedUpdateTime) || !sameIdentity(exactIdentity(data), item.from)) throw new Error('correction from/version changed');
+      if (!sameTime(snapshot.updateTime, before[index]!.updateTime) || stableDigest(data) !== stableDigest(before[index]!.data())) throw new Error('correction changed since backup');
+      const e = item.evidence;
+      const original = data.원문, correction = data.원문_정정;
+      if (!objectOk(original) || !objectOk(correction) || stableDigest(original) !== e.original.contentDigest
+        || stableDigest(correction) !== e.correction.contentDigest) throw new Error('correction evidence changed');
+      // 차량 동일성: 상품 문서 id(번호판) == 원문.전체.차량번호 (상품에 car_number 가 있으면 그것도). 원문_정정은 지문 + 보관 기록 번호(계획의 archiveVehicleNumber)로 묶는다.
+      const sameNumber = (v: unknown) => typeof v === 'string' && v.replace(/\s/g, '') === item.id;
+      // 보존 원문의 차량번호 칸은 ORIGINAL_PLATE_FIELDS 한 곳에서만 정한다. 하나 이상 있어야 하고, 있는 칸은 모두 같아야 통과한다.
+      const originalPlates = ORIGINAL_PLATE_FIELDS.map((path) => path.reduce<unknown>((v, key) => (objectOk(v) ? v[key] : undefined), original)).filter((v) => v !== undefined);
+      if (!PLATE_ID.test(item.id) || e.vehicleNumber !== item.id || !originalPlates.length || !originalPlates.every(sameNumber)
+        || (data.car_number !== undefined && !sameNumber(data.car_number))) throw new Error('correction evidence vehicle mismatch');
+      if (item.rollbackOf) {
+        const prior = reverseEvents[index]?.data();
+        if (!prior || prior.action !== 'PRODUCT_IDENTITY_CORRECTED' || prior.projectId !== plan.projectId || prior.entityId !== item.id
+          || !sameIdentity(prior.after as ExactIdentity, item.from) || !sameIdentity(prior.before as ExactIdentity, item.to)
+          || prior.afterDocumentDigest !== stableDigest(data) || !sameTime(snapshot.updateTime, reverseEvents[index]!.updateTime)
+          || prior.evidenceDigest !== stableDigest(e) || prior.masterDigest !== stableDigest(item.master)) throw new Error('rollback no longer matches committed correction');
+      } else {
+        const candidates = masters.docs.filter((s) => s.data().retired !== true
+          && PRODUCT_IDENTITY_FIELDS.every((f) => s.data()[f] === item.to[f]));
+        const master = candidates[0];
+        const trim = trims[index]!;
+        const rows = trimSets[index]!;
+        const matchingTrims = rows.docs.filter((s) => s.data().retired !== true && s.data().trim === item.to.trim_name);
+        if (candidates.length !== 1 || master?.id !== item.master.id || stableDigest(master.data()) !== item.master.contentDigest) throw new Error('correction master ambiguous, retired or changed');
+        if (rows.docs.length > MAX_MASTER_IDENTITY_SCAN || matchingTrims.length !== 1 || matchingTrims[0]!.id !== item.master.trimId
+          || !trim.exists || trim.data()?.retired === true || trim.data()?.master_id !== item.master.id
+          || trim.data()?.trim !== item.to.trim_name || PRODUCT_IDENTITY_FIELDS.some((f) => trim.data()?.[f] !== item.to[f])
+          || stableDigest(trim.data()) !== item.master.trimContentDigest) throw new Error('correction trim ambiguous, mismatched or changed');
+      }
+      const after = { ...data };
+      const update: Record<string, unknown> = {};
+      for (const field of changedIdentityFields(item)) {
+        // 저장된 칸을 지우지 않는다(data-access boundary: 지우기 금지). 바꾸는 칸은 반드시 값으로 채운다 —
+        // 원래 없던 칸으로 되돌리는 역계획은 여기서 거부하고 사람이 확인한다.
+        if (!Object.hasOwn(item.to, field)) throw new Error(`correction must set changed field ${field} (field deletion is not allowed)`);
+        after[field] = item.to[field]; update[field] = item.to[field];
+      }
+      writes.push({ update, audit: {
+        eventId: eventIds[index], commandId: `product-identity-correction:${planDigest}`, entityType: 'products', entityId: item.id,
+        action: item.rollbackOf ? 'PRODUCT_IDENTITY_CORRECTION_REVERSED' : 'PRODUCT_IDENTITY_CORRECTED',
+        projectId: plan.projectId, planDigest, itemDigest, before: item.from, after: item.to,
+        afterDocumentDigest: stableDigest(after), expectedUpdateTime: item.expectedUpdateTime,
+        evidence: e, evidenceDigest: stableDigest(e), master: item.master, masterDigest: stableDigest(item.master),
+        reason: item.reason, authorizationId: `AUTHORIZE_PRODUCT_IDENTITY_CORRECTION:${planDigest}`,
+        actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+        occurredAt: new Date().toISOString(), committedAt: FieldValue.serverTimestamp(),
+        ...(item.rollbackOf ? { rollbackOf: item.rollbackOf } : {}),
+      } });
+    }
+    // A committed batch is all-or-nothing. A partial receipt set is corruption, never a reason to finish the remainder.
+    if (writes.length && writes.length !== items.length) throw new Error('partial correction audit batch');
+    writes.forEach((w, i) => {
+      tx.update(refs[i]!, w.update, { lastUpdateTime: current[i]!.updateTime! });
+      tx.create(auditRefs[i]!, w.audit);
+    });
+    return items.length - writes.length;
+  });
+  const readback = await db.getAll(...refs);
+  const audits = await db.getAll(...auditRefs);
+  readback.forEach((s, i) => {
+    const event = audits[i]!.data();
+    if (!s.exists || !audits[i]!.exists || !correctionAuditMatches(event, plan, items[i]!)
+      || !sameIdentity(exactIdentity(s.data()!), items[i]!.to) || event?.afterDocumentDigest !== stableDigest(s.data())
+      || !sameTime(s.updateTime, audits[i]!.updateTime)) throw new Error('correction readback mismatch; reconcile before retry');
+  });
+  return { runId, backupPath, masterCount: 0, productCount: 0, productIdentityCorrectionCount: items.length,
+    skippedAlreadyApplied, readbackCount: readback.length, auditCount: audits.length };
+}
+
+export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan, options: { approvedPlanDigest?: string | undefined; approvedCorrectionDigest?: string | undefined } = {}) {
   const counts = validateVehicleNameRepairPlan(plan);
+  if (plan.kind === 'PRODUCT_IDENTITY_CORRECTION') return applyIdentityCorrections(plan, options.approvedCorrectionDigest);
   const planDigest = stableDigest(plan);
   // 승인 digest 는 적용기 자신이 대조한다(Codex (e)): 주어졌다면 계획 digest 와 같아야 하고, 상품 정체성 정정은 승인 digest 없이 적용하지 않는다.
   if (options.approvedPlanDigest !== undefined && options.approvedPlanDigest !== planDigest) throw new Error('approved plan digest mismatch');
@@ -706,7 +951,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     for (const field of PRODUCT_IDENTITY_FIELDS) {
       if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
-      entry.fields[field] = clean(item.to[field]);
+      // 모델 수준은 세부모델을 저장된 글자 그대로 쓴다(정규화해 쓰면 의도하지 않은 변경). 저장 세부모델이 빈칸이면 그 칸은 쓰지 않는다.
+      if (item.level === 'MODEL' && field === 'sub_model' && item.from.sub_model === '') continue;
+      entry.fields[field] = item.level === 'MODEL' && field === 'sub_model' ? item.to[field] : clean(item.to[field]);
     }
     byPath[ref.path] = entry;
   }
@@ -829,11 +1076,19 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       };
       for (const doc of stored.docs) addActive(identityKeyFrom(doc.data()), doc.id, doc.data().retired);
       for (const c of plan.masterCreates ?? []) addActive(masterNameKey(c.data), c.id);
-      const miss = identityTargets.find((x) => (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
+      // 모델 수준 항목은 제조사·모델 쌍이 활성 마스터에 «존재»하면 된다(세부모델은 바꾸지 않으므로 마스터 세부모델과 대조하지 않는다).
+      const activeModels = new Set<string>();
+      for (const doc of stored.docs) if (doc.data().retired !== true) activeModels.add(`${clean(doc.data().maker)}|${clean(doc.data().model)}`);
+      for (const c of plan.masterCreates ?? []) activeModels.add(`${clean(c.data.maker)}|${clean(c.data.model)}`);
+      const miss = identityTargets.find((x) => x.item.level === 'MODEL'
+        ? !activeModels.has(`${clean(x.item.to.maker)}|${clean(x.item.to.model)}`)
+        : (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
       if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
       // 사람 입력 보존 안전선을 «별칭 정규화» 로만 푼다: 덮어쓰기 불가(확정·사람 입력) from 은 대상 마스터의 등록 별칭이고 그 별칭을 가진 활성 마스터가 대상 하나뿐일 때만.
       identityTargets.forEach((x, index) => {
         if (identityFromOverwritable(identityCurrent[index]?.data(), x.item.from)) return;
+        // 모델 수준은 별칭 정규화 예외를 쓰지 않는다: 덮어쓰기 불가(사람 입력·확정)면 그대로 거절.
+        if (x.item.level === 'MODEL') throw new Error(`transaction productIdentity from is a manual or confirmed value ${x.ref.path}`);
         const from = clean(x.item.from.sub_model);
         const targetKey = identityKeyFrom(x.item.to);
         const family = (doc: { data: () => Record<string, unknown> }) => clean(doc.data().maker) === clean(x.item.to.maker) && clean(doc.data().model) === clean(x.item.to.model);
@@ -1077,7 +1332,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   identityReadback.forEach((snapshot, index) => {
     const want = productIdentityToObject(identityTargets[index]!.item);
     const data = snapshot.data();
-    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => clean(data?.[field]) !== want[field])) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
+    const modelLevel = identityTargets[index]!.item.level === 'MODEL';
+    const blankSub = modelLevel && identityTargets[index]!.item.from.sub_model === '';   // 쓰지 않은 칸: 저장값이 빈칸/없음 그대로인지만 본다
+    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => {
+      if (blankSub && field === 'sub_model') return clean(data?.[field]) !== '';
+      return modelLevel && field === 'sub_model' ? data?.[field] !== want[field] : clean(data?.[field]) !== want[field];
+    })) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
   });
   const sourceCorrectionReadback = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   sourceCorrectionReadback.forEach((snapshot, index) => {

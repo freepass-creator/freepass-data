@@ -20,11 +20,11 @@ describe('trusted read runtime source selection', () => {
     ] as const) {
     const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo "$MOCK_TREE"; else echo '${selected}'; fi;; show) if [ "$2" = -s ]; then echo "$MOCK_PARENT"; else echo PROBE_FROM_TRUSTED_MAIN; fi;; write-tree) echo '${tree}';; ls-tree) printf 'fixture\\0';; ls-files) if [ "$MOCK_FILE_MISMATCH" = true ]; then printf 'other\\0'; else printf 'fixture\\0'; fi;; esac; }\n` +
       `tar() { :; }\n` +
-      `npm() { echo "NPM $*"; if [ "$1" = test ]; then test -z "\${IANCAR_PHOTO_ID_GATE_SUPPLIERS+x}" && test -z "\${REQUESTED_RUNTIME_SOURCE_SHA+x}" || return 1; fi; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
+      `npm() { echo; echo "NPM $*"; if [ "$1" = test ]; then test -z "\${IANCAR_PHOTO_ID_GATE_SUPPLIERS+x}" && test -z "\${REQUESTED_RUNTIME_SOURCE_SHA+x}" || return 1; fi; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
       `env() { test "$1/$2/$3/$4" = '-u/IANCAR_PHOTO_ID_GATE_SUPPLIERS/-u/REQUESTED_RUNTIME_SOURCE_SHA' || return 1; shift 4; (unset IANCAR_PHOTO_ID_GATE_SUPPLIERS REQUESTED_RUNTIME_SOURCE_SHA; "$@"); }\n` +
       `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; if [ "$1" = run ]; then test -r "$probe_file" || return 1; if [ "$MOCK_NATIVE_FAIL" = true ]; then return 1; fi; fi; fi; }\n` +
       `jq() { cat >/dev/null; }\n`;
-    const dir = mkdtempSync(join(tmpdir(), 'selected-photo-check-'));
+    const dir = mkdtempSync(join(tmpdir(), 'selected-photo-NPM-check-'));
     try {
       for (const [failed, label, mismatch, actualTree, actualParent, nativeFail, pass] of [
         ['false', selected, 'false', tree, parent, 'false', true],
@@ -48,7 +48,8 @@ describe('trusted read runtime source selection', () => {
         } });
         expect(result.status === 0, result.stderr).toBe(pass);
         expect(result.stdout.includes('PUBLICATION_ALLOWED')).toBe(pass);
-        if (mismatch === 'true' || actualTree !== tree || actualParent !== parent) expect(result.stdout).not.toContain('NPM');
+        // cmp can print NPM inside a temporary path; only the mock invocation line proves execution.
+        if (mismatch === 'true' || actualTree !== tree || actualParent !== parent) expect(result.stdout).not.toMatch(/^NPM(?:\s|$)/m);
         else {
           expect(result.stdout).toContain('NPM run test:delivery-owner');
           expect(result.stdout).toContain(selected !== '57abb8a978457b87068c3c9c9d76cc8116934bd5' ? 'NPM exec -- vitest run tests/vehicle-photo-rendition.test.ts' : 'NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');

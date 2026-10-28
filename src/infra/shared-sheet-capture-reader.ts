@@ -88,6 +88,16 @@ export async function readSheetsMetadata(spreadsheetId: string, fields: string, 
   return sheetsGet(url, ports);
 }
 
+/** spreadsheets.get over the given ranges with a grid-data field mask (e.g. one column's display text + links). GET only, no values API. */
+export async function readSheetsGridFields(spreadsheetId: string, ranges: string[], fields: string, ports: Ports = {}): Promise<unknown> {
+  if (!ranges.length || !fields.includes('rowData')) throw new Error('SHEETS_GRID_REQUEST_INVALID');
+  const url = sheetsUrl(spreadsheetId);
+  for (const r of ranges) url.searchParams.append('ranges', r);
+  url.searchParams.set('includeGridData', 'true');
+  url.searchParams.set('fields', fields);
+  return sheetsGet(url, ports);
+}
+
 /** One bearer-authorized values.batchGet over the given ranges. Returns the raw response; conversion lives in adapters.
  * render 'SERIAL' reads the real cell values (dates as serial numbers) — used only to keep the year of date cells whose
  * display format hides it (입고일자 mm-dd). */
