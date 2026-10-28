@@ -79,15 +79,24 @@ function isValidDepositSourceWaiverBasis(value: unknown): value is DepositEviden
     || (record.field === 'source_cycle_record.terms' && record.source === SOURCE_ENGINE_WRITER && depositInstant(record.at)));
 }
 
+/** 아이언 홈페이지 보증금 글자(term.raw.deposit_text): «무보증»이 있고, 글자 안의 숫자가 전부 0일 때만 무보증 글자로 본다(금액이 하나라도 있으면 엇갈림).
+ * 예: «보증금 0원 무보증, 운전경력증명서, …» 는 무보증, «보증금 300만원(무보증 가능)» 은 아니다. */
+export function ironDepositWaiverText(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.includes('무보증')) return false;
+  return [...value.matchAll(/\d[\d,]*/g)].every(m => Number(m[0].replaceAll(',', '')) === 0);
+}
+
 /** Existing shared-sheet writer evidence only. Never infer waiver from numeric zero or a legacy RAW snapshot.
- * 아이카(RP004) 시트도 같은 엔진 작성 기록이다(대표 10-28 «아이카 무보증 50만 전액»): 그 항의 원문 «장기보증» 칸(term.raw.deposit)이 정확히 «무보증»일 때만. */
+ * 아이카(RP004) 시트도 같은 엔진 작성 기록이다(대표 10-28 «아이카 무보증 50만 전액»): 그 항의 원문 «장기보증» 칸(term.raw.deposit)이 정확히 «무보증»일 때만.
+ * 아이언(RP006) 홈페이지도 같다(PC3 커맨드 10-28): 그 항의 보증금 글자(term.raw.deposit_text)가 무보증 글자일 때만(ironDepositWaiverText). */
 export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, sourceAmount: unknown,
   months: unknown, rent: unknown, now = new Date().toISOString()): DepositEvidenceBasis | undefined {
   const mark = product.source_cycle_write, record = product.source_cycle_record;
   const aica = depositRecord(record) && depositRecord(record.raw) && record.raw.source === 'aica-sheet' && record.sourceId === 'RP004';
+  const iron = depositRecord(record) && depositRecord(record.raw) && record.raw.source === 'ironrentcar-web' && record.sourceId === 'RP006';
   if (!depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER || !depositRecord(record)
-    || !depositRecord(record.raw) || (record.raw.source !== 'shared-sheet' && !aica)
-    || (!aica && !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId))) || ['RP012', 'RP031'].includes(String(record.sourceId))
+    || !depositRecord(record.raw) || (record.raw.source !== 'shared-sheet' && !aica && !iron)
+    || (!aica && !iron && !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId))) || ['RP012', 'RP031'].includes(String(record.sourceId))
     || record.sourceId !== product.provider_company_code || typeof record.uid !== 'string' || !record.uid
     || (record.plate ?? null) !== (product.car_number ?? null)
     || product._deleted || product.deletedAt || product.publication_withdrawal || product.listable !== true
@@ -107,7 +116,8 @@ export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, s
   const raw = depositRecord(term) ? term.raw : undefined;
   if (!engineTerm(term) || term.monthlyRent.state !== 'KNOWN' || term.monthlyRent.value !== rent
     || term.deposit.state !== 'ZERO' || term.deposit.value !== 0 || !depositRecord(raw)
-    || (aica ? raw.deposit : raw[(months as number) <= 12 ? 'shortDeposit' : 'longDeposit']) !== '무보증') return undefined;
+    || (iron ? !ironDepositWaiverText(raw.deposit_text)
+      : (aica ? raw.deposit : raw[(months as number) <= 12 ? 'shortDeposit' : 'longDeposit']) !== '무보증')) return undefined;
   const stored = depositRecord(product.price) ? product.price[String(months)] : undefined;
   if (!depositRecord(stored) || stored.rent !== rent || stored.deposit !== 0) return undefined;
   return { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: record.observedAt };
