@@ -737,7 +737,7 @@ describe('Kakao sales commission facts', () => {
       state: 'CALCULATED', ruleId: 'AUTOPLUS_SUBSCRIPTION_FIXED', amount: 800000, totalAmount: 880000,
     });
     expect(resolveSalesCommission({ supplierId: 'RP004', productType: '중고렌트', fuel: '전기', termMonths: 6, monthlyRent: 700000 })).toMatchObject({
-      state: 'CALCULATED', ruleId: 'IANCAR_EV_PAYOUT_EQUALS_BILLING_FIXED', amount: 1000000,
+      state: 'CALCULATED', ruleId: 'IANCAR_EV_FIXED', amount: 800000,
     });
   });
 
@@ -771,9 +771,7 @@ describe('Kakao billing, payout and margin facts', () => {
         expect(resolveSupplierBillingFee(input), `${supplierId}/${termMonths}/billing`).toMatchObject(
           { state: 'CALCULATED', amount: billing },
         );
-        expect(resolveSalesCommission(input), `${supplierId}/${termMonths}/payout`).toMatchObject({
-          state: 'CALCULATED', amount: supplierId === 'RP004' ? billing : payout,
-        });
+        expect(resolveSalesCommission(input), `${supplierId}/${termMonths}/payout`).toMatchObject({ state: 'CALCULATED', amount: payout });
       }
     }
   });
@@ -810,20 +808,24 @@ describe('Kakao billing, payout and margin facts', () => {
     }
   });
 
-  it('applies switch rules and the 2026-10-28 RP004 payout-equals-billing decision', () => {
+  it('applies switch rules and limits the 2026-10-28 RP004 payout-equals-billing decision to zero deposit', () => {
     const switchInput = { supplierId: 'RP014', productType: '중고구독', termMonths: 36, monthlyRent: 800000 };
     expect(resolveSupplierBillingFee(switchInput)).toMatchObject({ state: 'CALCULATED', amount: 1080000 });
     expect(resolveSalesCommission({ ...switchInput, fuel: '가솔린' })).toMatchObject({ state: 'CALCULATED', amount: 864000 });
 
     const iancarInput = { supplierId: 'RP004', productType: '중고렌트', termMonths: 6, monthlyRent: 700000, fuel: '가솔린' };
     expect(resolveSupplierBillingFee(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 400000 });
-    expect(resolveSalesCommission(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 400000 });
-    expect(resolveSalesCommission(iancarInput).sourceRefs).toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+    expect(resolveSalesCommission(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 300000 });
+    expect(resolveSalesCommission(iancarInput).sourceRefs).not.toContain('ledger:2026-10-28-rp004-payout-equals-billing');
     const depositFree = { ...iancarInput, termMonths: 12, depositState: 'ZERO' as const };
     expect(resolveSupplierBillingFee(depositFree)).toMatchObject({ state: 'CALCULATED', amount: 500000 });
     expect(resolveSalesCommission(depositFree)).toMatchObject({ state: 'CALCULATED', amount: 500000 });
-    const unknown = { ...iancarInput, termMonths: 1 };
-    expect(resolveSalesCommission(unknown)).toMatchObject(resolveSupplierBillingFee(unknown));
+    expect(resolveSalesCommission(depositFree).sourceRefs).toContain('ledger:2026-10-28-rp004-payout-equals-billing');
+    const withDeposit = { ...iancarInput, termMonths: 36, depositState: 'KNOWN' as const };
+    expect(resolveSalesCommission(withDeposit)).toMatchObject({ state: 'CALCULATED', amount: 756000 });
+    const unknown = { ...iancarInput, termMonths: 36, depositState: 'UNKNOWN' as const };
+    expect(resolveSalesCommission(unknown)).toMatchObject({ state: 'CALCULATED', amount: 756000 });
+    expect(resolveSalesCommission(unknown).sourceRefs).not.toContain('ledger:2026-10-28-rp004-payout-equals-billing');
   });
 
   it('does not invent margin for human-decided or absent F04 rules', () => {
@@ -1014,8 +1016,7 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(both({ ...base, supplierId: 'RP004', productType, vehicleValue: 40000000 }).every(r => r.state === 'UNKNOWN')).toBe(true);
   });
   it.each(['선출고','재렌트','장기렌트'])('4/5: Aica EV includes %s', productType => {
-    // 2026-10-28 대표 결정: RP004 지급은 같은 조건 청구 전액이다.
-    expect(amounts({ ...base, supplierId: 'RP004', productType })).toEqual([1000000,1000000]);
+    expect(amounts({ ...base, supplierId: 'RP004', productType })).toEqual([1000000,800000]);
   });
   it('5: aliases follow explicit ERP feeKindOf forms; conflicting subtype fails closed', () => {
     expect(amounts({ ...base, supplierId: 'RP013', productType: '선출고', vehicleValue: 40000000 })).toEqual([1400000,1200000]);
@@ -1152,12 +1153,12 @@ describe('F04 2026-10-04 alignment regression', () => {
       expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
     ]);
   });
-  it('7: RP004 payout-confirmed agreement follows billing UNKNOWN under payout-equals-billing decision', () => {
+  it('7: a payout-confirmed agreement pays only the payout; billing stays unknown even with vehicle input', () => {
     const input = { ...base, supplierId: 'RP004', productType: '선출고', vehicleValue: 40000000,
       individualAgreement: { ...agreement, sourceRow: 163 as const, status: 'PAYOUT_CONFIRMED' as const, billing: 999000, payout: 333000 } };
-    expect(resolveSalesCommission(input)).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_BILLING_BASIS_UNCONFIRMED' });
+    expect(resolveSalesCommission(input)).toMatchObject({ state: 'CALCULATED', amount: 333000, ruleId: 'INDIVIDUAL_AGREEMENT_PAYOUT' });
     expect(resolveSupplierBillingFee(input).reasonCode).toBe('INDIVIDUAL_BILLING_BASIS_UNCONFIRMED');
-    expect(resolveSalesCommission(input).sourceRefs).toBeUndefined();
+    expect(resolveSalesCommission(input).sourceRefs).toEqual(['F04:수수료표!A163:M163']);
   });
   it('8: mindcar stays not applicable, never zero', () => {
     expect(both({ ...base, supplierId: 'RP034' }).every(r => r.state === 'NOT_APPLICABLE' && r.amount === null)).toBe(true);
