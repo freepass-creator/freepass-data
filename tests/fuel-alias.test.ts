@@ -8,6 +8,14 @@ describe('연료 별칭 표(대표 2026-10-19)', () => {
     const cases: Array<[string, string]> = [['가솔린+전기', '하이브리드'], ['휘발유', '가솔린'], ['경유', '디젤'], ['전기차', '전기'], ['전기(EV)', '전기'], ['EV', '전기'],
       ['HEV', '하이브리드'], ['PHEV', '플러그인 하이브리드'], ['플러그인하이브리드', '플러그인 하이브리드'], ['바이퓨얼', '가솔린+LPG'], ['lpg', 'LPG'], [' 가솔린 ', '가솔린']];
     for (const [raw, want] of cases) expect(canonicalFuel(raw), raw).toBe(want);
+    // 손오공 API 영문 코드(2026-10-23 RP012 한 대): 대소문자 무시, 차명과 어긋나면 그대로 보류
+    expect(canonicalFuel('GASOLINE')).toBe('가솔린');
+    expect(canonicalFuel('gasoline')).toBe('가솔린');
+    expect(canonicalFuel('GASOLINE', '현대_싼타페_1.6 HEV AWD')).toBeNull();
+    expect(canonicalFuel('GASOLINE', '메르세데스-벤츠 E250 아방가르드')).toBe('가솔린');
+    expect(canonicalFuel('GASOLINE', '기아 니로 플러그인 하이브리드')).toBeNull();   // PHEV 차명과 어긋나면 보류
+    expect(canonicalFuel('ＧＡＳＯＬＩＮＥ')).toBe('가솔린');   // 전각도 NFKC 로 같다
+    expect(canonicalFuel(' Gasoline ')).toBe('가솔린');
     for (const v of SPEC_FUEL_VALUES) expect(canonicalFuel(v)).toBe(v);
     for (const bad of ['GSL', '', '가솔린/디젤', '수소+전기', null, 3]) expect(canonicalFuel(bad)).toBeNull();
   });

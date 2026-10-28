@@ -3,7 +3,7 @@ import { sharedSheetFactNumber, sharedSheetFactRegistration } from '../domain/sh
 import { explicitSeatCount, SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
-import { sourceCyclePlugin, AICA_SCOPES, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
+import { sourceCyclePlugin, AICA_SCOPES, aicaActualTab, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
 import { isAssignedPlate, isValidSheetPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 import { isNoPriceText, isPlausibleMonthlyRent } from '../domain/source-rent-text.js';
 import type { SourceAmount, SourceProductRecord } from '../domain/source-engine.js';
@@ -213,7 +213,7 @@ export function aicaSpecFacts(get: (header: string) => unknown, vehicleText: str
 }
 /** SPEC3B: explicit native headers; RAW cells remain unchanged. No vehicle-master inference.
  * options.sheetSpec(기본 꺼짐): 켜면 장기 행의 제원 사실을 raw.spec 으로 넘긴다(aicaSpecFacts). 월렌트 모델 줄은 차 한 대가 아니라 넘기지 않는다. */
-export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility, options?: { sheetSpec?: boolean }): CycleCapture {
+export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?: Visibility, options?: { sheetSpec?: boolean; skipMonthly?: boolean }): CycleCapture {
   const rows: CycleCapture['rows'] = [], completedScopes: string[] = [], monthlyHolds: string[] = [], unparseableMonthlyUids = new Set<string>();
   let visibilityComplete = true, observationOnlyCount = 0, zeroRent = 0;
   const notes: string[] = [];
@@ -234,8 +234,10 @@ export function aicaNativeCapture(tables: AicaTable[], observedAt: string, meta?
   };
   const rentReviewHolds: string[] = [];
   for (const title of AICA_SCOPES) {
+    // 월렌트 제외(대표 2026-10-23 «아이카 월렌트는 상품에서 빼자»): 탭을 읽지도 검증하지도 않고 완료 범위로만 센다(탭 이름·머리글 변동이 장기 상품 회차를 막지 않게). 되돌림 = skipMonthly 끔.
+    if (title === '월렌트' && options?.skipMonthly === true) { completedScopes.push(title); continue; }
     const table = tables.find(t => t.title === title), headers = table?.values[0]?.map(v => String(v).trim());
-    const sheet = meta?.sheets?.find(s => s.properties?.title === title);
+    const sheet = meta?.sheets?.find(s => s.properties?.title === aicaActualTab(title)) ?? meta?.sheets?.find(s => s.properties?.title === title);
     const grid = sheet?.data?.find(d => (d.startRow ?? 0) === 0);
     if (!table || !headers) continue;
     if (!sheet || !grid || !Array.isArray(grid.rowMetadata) || grid.rowMetadata.length < table.values.length ||

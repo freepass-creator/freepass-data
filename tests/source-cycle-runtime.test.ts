@@ -685,6 +685,23 @@ describe('native mappings and UID', () => {
     expect((await aicaRead(f)).records.filter(r => r.raw.product_group === 'MONTHLY_RENT').map(r => r.uid).sort())
       .toEqual(monthly.map(r => r.uid).sort());
   });
+  it('skipMonthly (대표 2026-10-23 아이카 월렌트 제외): 월렌트 상품 0건·장기 상품 그대로·범위는 완료로 센다, 끄면 기존 동작', async () => {
+    const f = aicaFixture();
+    f.tables[3]!.values = [['차종', '1개월', '비고'], ['Model A', '345,678', ''], ['Model B', -1]];
+    f.meta.sheets[3]!.properties.gridProperties.rowCount = f.tables[3]!.values.length;
+    f.meta.sheets[3]!.data[0]!.rowMetadata = f.tables[3]!.values.map(() => ({ hiddenByUser: false, hiddenByFilter: false }));
+    const on = aicaNativeCapture(f.tables, time, f.meta, { skipMonthly: true });
+    const off = aicaNativeCapture(f.tables, time, f.meta);
+    const longOnly = (c: typeof on) => c.rows.filter(r => r.record.raw.product_group !== 'MONTHLY_RENT').map(r => r.record.uid);
+    expect(on.rows.filter(r => r.record.raw.product_group === 'MONTHLY_RENT')).toHaveLength(0);
+    expect(on.heldCount).toBe(0); expect(on.complete).toBe(true);
+    expect(off.rows.filter(r => r.record.raw.product_group === 'MONTHLY_RENT')).toHaveLength(1);
+    expect(off.heldCount).toBe(1);
+    expect(longOnly(on)).toEqual(longOnly(off)); expect(longOnly(on)).toHaveLength(2);
+    // 월렌트 탭이 아예 없어도(읽지 않음) 완전 읽기로 센다 — 탭 이름 변동이 장기 상품 회차를 막지 않는다.
+    const none = aicaNativeCapture(f.tables.filter(t => t.title !== '월렌트'), time, f.meta, { skipMonthly: true });
+    expect(none.complete).toBe(true); expect(none.rows).toHaveLength(2);
+  });
   it.each(['', '  ', null, undefined])('SPEC3C creates only the populated 48-month period (blank=%s)', async blank => {
     const out = await aicaRead(aicaFixture([aicaRow({ '36개월': blank, '48개월': '456,789', '60개월': blank })]));
     expect(out.records[0]!.terms.map(t => t.months)).toEqual([48]);
