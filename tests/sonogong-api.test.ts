@@ -50,7 +50,7 @@ describe('손오공 공식 API 어댑터', () => {
       expect(() => createSonogongApiClient({ ...bad, fetch: f as never })).toThrow('SONOGONG_API_NOT_CONFIGURED');
     expect(f).not.toHaveBeenCalled();
   });
-  it('중고렌트·오공구독 두 탭 목록+상세를 직렬·간격 두고 읽고(픽업구독 탭은 요청하지 않는다) 반납형 요금·상세 보증금·계약중 상태를 매핑한다', async () => {
+  it('오공구독(sub) 탭 하나만 목록+상세를 직렬·간격 두고 읽고(중고렌트·픽업구독 탭은 요청하지 않는다) 반납형 요금·상세 보증금·계약중 상태를 매핑한다', async () => {
     const w = world(ok);
     const read = await readSonogongApi(w.client);
     expect(read.complete).toBe(true);
@@ -60,9 +60,10 @@ describe('손오공 공식 API 어댑터', () => {
     expect(read.generatedAt).toBe('2026-10-14T06:00:00.000Z');
     expect(read.observedAt).not.toBe(read.generatedAt);
     expect(Date.now() - Date.parse(read.observedAt)).toBeLessThan(60_000);
-    expect(w.calls.filter(c => c.startsWith('/api/partner/v1/vehicles?')).length).toBe(2);
-    expect(w.calls.some(c => c.includes('tab=pick'))).toBe(false);   // 대표 2026-10-28 «손오공은 중고렌트랑 중고구독만»
-    expect(read.tabsRead).toEqual(['rent', 'sub']);
+    expect(w.calls.filter(c => c.startsWith('/api/partner/v1/vehicles?')).length).toBe(1);
+    // 대표 2026-10-28 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»: 중고렌트·픽업구독 탭은 요청 자체를 하지 않는다
+    expect(w.calls.some(c => c.includes('tab=pick') || c.includes('tab=rent'))).toBe(false);
+    expect(read.tabsRead).toEqual(['sub']);
     expect(w.sleeps.length).toBe(w.calls.length);
     const by = Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r]));
     expect(by['1111']!.status).toEqual({ raw: '출고가능', saleAvailable: true });
@@ -93,7 +94,8 @@ describe('손오공 공식 API 어댑터', () => {
       const id = Number(u.pathname.split('/').at(-1));
       return json(detail(id, id === 1 ? '100하1111' : '100하2222'));
     });
-    const read = await readSonogongApi(w.client);
+    // 운영은 sub 한 탭만 읽는다(대표 2026-10-28). 여러 탭 우선순위 판정은 시험용 탭 지정으로 계속 고정한다.
+    const read = await readSonogongApi(w.client, { tabs: ['rent', 'sub'] });
     expect(read.complete).toBe(true);
     expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['1111', 'rent'], ['2222', 'sub']]);
     // 구독 항의 API 양수 보증금(원문 금액 채택)이 정책 계산값과 다른 건수를 검토 경고로 센다(12·36·60개월 — 2222 의 상세)
@@ -184,7 +186,7 @@ describe('손오공 공식 API 어댑터', () => {
     };
     const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(list(u.searchParams.get('tab')))
-      : json((() => { const id = Number(u.pathname.split('/').at(-1)); return detail(id, id % 2 ? '100하1111' : '100하2222'); })())).client);
+      : json((() => { const id = Number(u.pathname.split('/').at(-1)); return detail(id, id % 2 ? '100하1111' : '100하2222'); })())).client, { tabs: ['rent', 'sub'] });
     const by =Object.fromEntries(read.records.map(r => [r.plate!.slice(-4), r.status.raw]));
     expect(by['1111']).toBe('계약중');
     expect(by['2222']).toBe('계약중');
@@ -213,7 +215,7 @@ describe('손오공 공식 API 어댑터', () => {
       deposit: { 12: '1,000,000', 24: 0, 48: -5, 60: 1 } } };
     const read = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'rent' ? [row(1, '100하1111', { prices, tab: 'rent' })] : [])
-      : json(detail(1, '100하1111', { prices }))).client);
+      : json(detail(1, '100하1111', { prices }))).client, { tabs: ['rent', 'sub'] });   // 운영은 rent 를 읽지 않는다(대표 2026-10-28) — 정책 판정만 고정
     expect(read.complete).toBe(true);
     expect(read.records[0]!.terms.map(t => [t.months, t.monthlyRent.value, t.deposit.state, t.deposit.value, t.raw.deposit_rule])).toEqual([
       [12, 512000, 'KNOWN', 1000000, undefined], [24, 480000, 'UNKNOWN', null, undefined], [48, 650000, 'UNKNOWN', null, undefined]]);
@@ -264,7 +266,7 @@ describe('손오공 공식 API 어댑터', () => {
     const tabsDiffer = await readSonogongApi(world(u => u.pathname.endsWith('/vehicles')
       ? json(u.searchParams.get('tab') === 'sub' ? [row(1, '100하1111')] : [],
         { generatedAt: u.searchParams.get('tab') === 'sub' ? '2026-10-14T07:00:00.000Z' : '2026-10-14T06:00:00.000Z', totalCount: u.searchParams.get('tab') === 'sub' ? 1 : 0 })
-      : json(detail(1, '100하1111'))).client);
+      : json(detail(1, '100하1111'))).client, { tabs: ['rent', 'sub'] });
     expect(tabsDiffer.complete).toBe(true);
     expect(tabsDiffer.notes).toContain('TAB_GENERATIONS_DIFFER');
     expect(tabsDiffer.generatedAt).toBe('2026-10-14T06:00:00.000Z');
@@ -348,7 +350,7 @@ describe('손오공 공식 API 어댑터', () => {
       }
       const id = Number(u.pathname.split('/').at(-1));
       return json(detail(id, `100하${String(id % 10).repeat(4)}`));
-    }).client);
+    }).client, { tabs: ['rent', 'sub'] });
     expect(read.records.map(r => [r.plate!.slice(-4), r.raw.tab])).toEqual([['3333', 'rent'], ['1111', 'sub'], ['2222', 'sub']]);
     expect(read.held.map(h => h.reason)).toEqual(['STATUS_UNKNOWN', 'ID_MISSING']);
     expect(read.notes).toContain('CROSS_TAB_DUPLICATE:1');   // sub 3333(rent 채택). pick 1111 은 요청 자체를 하지 않는다
@@ -359,9 +361,9 @@ describe('손오공 공식 API 어댑터', () => {
     expect(sonogongApiRowFloor(10, 200)).toBe(160);
     expect(SONOGONG_API_POLICY.pageSize).toBeLessThanOrEqual(50);
     expect(SONOGONG_API_POLICY.minIntervalMs).toBeGreaterThanOrEqual(1000);
-    // 대표 2026-10-28: 읽는 탭 = 중고렌트·오공구독, 결정 하향 구분 = 픽업구독
-    expect(SONOGONG_API_TABS).toEqual(['rent', 'sub']);
-    expect(SONOGONG_WITHDRAWN_PRODUCT_TYPES).toEqual(['픽업구독']);
+    // 대표 2026-10-28 «ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»: 읽는 탭 = 오공구독, 결정 하향 구분 = 중고렌트·픽업구독
+    expect(SONOGONG_API_TABS).toEqual(['sub']);
+    expect(SONOGONG_WITHDRAWN_PRODUCT_TYPES).toEqual(['중고렌트', '픽업구독']);
   });
 });
 

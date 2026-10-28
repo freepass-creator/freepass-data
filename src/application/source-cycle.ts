@@ -101,7 +101,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     return after;
   };
   let identityHolds = false, depositPreserved = 0, uidBridged = 0;
-  // 대표 결정으로 노출하지 않는 상품 구분(손오공 픽업구독, 대표 2026-10-28): 저장 기록 raw.product_type 으로 가린다.
+  // 대표 결정으로 노출하지 않는 상품 구분(손오공 중고렌트·픽업구독, 대표 2026-10-28): 저장 기록 raw.product_type 으로 가린다.
   const decisionTypes = new Set(config.decisionWithdrawnProductTypes ?? []);
   const decisionTyped = (r: SourceProductRecord) => decisionTypes.size > 0 && decisionTypes.has(String(r.raw?.product_type ?? ''));
   // 이번 원천이 «허용된 구분»으로 내놓은 문서 키(번호 잇기 뒤 키 포함). 구분이 바뀐 차(예: 픽업구독 → 오공구독)는 결정 하향하지 않고 보통 경로가 갱신한다.
@@ -308,7 +308,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
   // Missing/unidentified rows may hide any UID: never infer absence from a partial normalization.
   const absenceUnsafe = evidence.heldCount - (evidence.benignHeldCount ?? 0) > 0 || identityHolds || plan.unassignedPlateCount > 0;
   if (absenceUnsafe) plan.warnings.push('ABSENCE_DOWNGRADE_SKIPPED');
-  // 결정 하향(대표 2026-10-28 «픽업구독 일단 다 내려»): 원천에 있고 없고를 추론하지 않으므로 읽기 완전성·보류와 무관하게 계획한다. 이번 원천이 허용된 구분으로 내놓은 차,
+  // 결정 하향(대표 2026-10-28 «픽업구독 일단 다 내려» → «손오공 구독은 연동하고 나머지는 다 내리고»): 원천에 있고 없고를 추론하지 않으므로 읽기 완전성·보류와 무관하게 계획한다. 이번 원천이 허용된 구분으로 내놓은 차,
   // 계약 잠금·가격 드리프트 문서는 내리지 않는다(기존 부재 하향과 같은 보호, 잠금은 건수만 경고로 남긴다). 사유 DECISION_WITHDRAWN 은 비율 가드 대상이 아니다.
   const decisionDown = new Set<string>();
   let decisionKept = 0;

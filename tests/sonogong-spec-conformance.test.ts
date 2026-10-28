@@ -10,7 +10,7 @@ import { SPEC_FORMAT_RULES } from '../src/domain/source-spec-validation.js';
 const doc = (plate: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   provider_company_code: 'RP012', listable: true, car_number: plate, maker: '기아', model: '타스만', sub_model: '타스만 2.5T', trim_name: '', year: '2026',
   first_registration_date: '2026-03', fuel_type: '가솔린', engine_cc: '2497', seats: '5', ext_color: '빨간색', int_color: '블랙', mileage: '7113',
-  price: { '36': { rent: 700000, deposit: 1000000 } }, product_type: '중고렌트', status_kind: '출고가능', api_options_state: 'PRESENT', image_urls: ['https://x/1.jpg'], ...extra });
+  price: { '36': { rent: 700000, deposit: 1000000 } }, product_type: '오공구독', status_kind: '출고가능', api_options_state: 'PRESENT', image_urls: ['https://x/1.jpg'], ...extra });
 const field = (r: ReturnType<typeof sonogongSpecConformance>, name: string) => r.fields.find(f => f.field === name)!;
 
 describe('손오공 규격 일치 점검', () => {
@@ -54,10 +54,11 @@ describe('손오공 규격 일치 점검', () => {
     }
   });
 
-  it('픽업구독이 노출돼 있으면 결정 하향 대상(대표 10-28)으로 위반을 센다, 중고렌트·오공구독은 정상', () => {
-    const r = sonogongSpecConformance([doc('88아8888', { product_type: '픽업구독' }), doc('99자9999', { product_type: '오공구독' }), doc('10차1010')]);
-    expect(field(r, 'product_type').violations).toBe(1);
-    expect(field(r, 'product_type').examples[0]).toMatchObject({ l4: '8888', why: expect.stringContaining('결정 하향') });
+  it('중고렌트·픽업구독이 노출돼 있으면 결정 하향 대상(대표 10-28 «손오공 구독은 연동하고 나머지는 다 내리고»)으로 위반을 센다, 오공구독만 정상', () => {
+    const r = sonogongSpecConformance([doc('88아8888', { product_type: '픽업구독' }), doc('77사7778', { product_type: '중고렌트' }), doc('99자9999', { product_type: '오공구독' }), doc('10차1010')]);
+    expect(field(r, 'product_type').violations).toBe(2);
+    expect(field(r, 'product_type').examples.map(e => [e.l4, e.why])).toEqual(expect.arrayContaining([
+      ['8888', expect.stringContaining('결정 하향 대상 구분(픽업구독')], ['7778', expect.stringContaining('결정 하향 대상 구분(중고렌트')]]));
   });
 
   it('출력 줄에는 채움률·위반 건수·사례가 있고 값이 없는 칸은 빈칸으로 센다', () => {

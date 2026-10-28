@@ -8,5 +8,5 @@
   원문(`raw.list`·`raw.detail`)과 기존 문서 값은 건드리지 않는다. 값을 고쳐 쓰지 않는다.
 - 경고 줄: `SPEC_VIOLATION:<필드>:<건수>`(번호 없음). 회차 요약 경고에 합산된다.
 - 회차 보류: 위반 레코드가 읽은 차의 20% 를 넘고 5건 이상이면 `SPEC_FORMAT_DRIFT` 차단 — 쓰기 0, 원천 형식 변경 의심(공급사 응답 형식 확인 후 규칙 또는 어댑터 조정).
-- 규칙 한 곳(2026-10-28): 점검 보고(`report:sonogong-conformance`)의 `SONOGONG_CHECKS` 는 칸 형식·보증금 범위를 `src/domain/source-spec-validation.ts`(`SPEC_FORMAT_RULES`·`DEPOSIT_*`)에서 그대로 가져다 쓴다 — 규칙은 그 파일 한 곳만 바꾼다(두 판정이 같다는 시험이 고정). 상품 구분은 대표 10-28 결정대로 중고렌트·오공구독만 정상, 픽업구독 노출은 위반으로 센다.
+- 규칙 한 곳(2026-10-28): 점검 보고(`report:sonogong-conformance`)의 `SONOGONG_CHECKS` 는 칸 형식·보증금 범위를 `src/domain/source-spec-validation.ts`(`SPEC_FORMAT_RULES`·`DEPOSIT_*`)에서 그대로 가져다 쓴다 — 규칙은 그 파일 한 곳만 바꾼다(두 판정이 같다는 시험이 고정). 상품 구분은 대표 10-28 결정(«ㅇㅇ 손오공 구독은 연동하고 나머지는 다 내리고»)대로 오공구독만 정상, 중고렌트·픽업구독 노출은 위반으로 센다.
 - 손오공 API 는 구동·변속기·인승·출고 가능일을 구조 필드로 주지 않는다(B3Q 전수 확인, 355문서) — 입구 매핑 칸에 넣지 않고 차종 마스터에서 가져오는 쪽으로 간다.
