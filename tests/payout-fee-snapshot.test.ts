@@ -177,4 +177,53 @@ describe('영업자 지급수수료 박제 계획', () => {
     documents.set('2026-10-28__one', { ...documents.get('2026-10-28__one')!, contentDigest: 'conflict' });
     await expect(applyPayoutFeeSnapshotPlan(store, planned)).rejects.toThrow('PAYOUT_SNAPSHOT_EXISTING_DOCUMENT_CONFLICT');
   });
+
+  // 대표 10-28 «아이카 무보증 50만 전액»: 가격 보증금 0 + 엔진 원천 기록(aica-sheet 장기보증 «무보증»)이면 무보증으로 읽는다.
+  const aicaDepositFree = (overrides: Record<string, unknown> = {}) => {
+    const at = '2026-10-28T00:30:05.860Z';
+    return product('RP004', {
+      car_number: '109호0001', status: '출고가능', price: { '48': { rent: 510000, deposit: 0, mileage: '3만km' } },
+      source_cycle_write: { by: 'source-engine', at },
+      source_cycle_record: { sourceId: 'RP004', uid: '109호0001', plate: '109호0001', observedAt: at,
+        status: { raw: '출고가능', saleAvailable: true }, raw: { source: 'aica-sheet', source_tab: '장기특별이벤트' },
+        terms: [{ months: 48, mileage: '3만km', monthlyRent: { state: 'KNOWN', value: 510000 }, deposit: { state: 'ZERO', value: 0 },
+          raw: { rent: 510000, deposit: '무보증' } }] },
+      ...overrides,
+    });
+  };
+
+  it('아이카 원천 기록이 «무보증»이면 지급 50만(=청구)이고 사다리로 계산하지 않는다', () => {
+    const term = plan({ aica: aicaDepositFree() }).documents[0]!.terms[0]!;
+    expect(term).toMatchObject({ state: 'KNOWN', amount: 500000, ruleId: 'IANCAR_DEPOSIT_FREE_PAYOUT_EQUALS_BILLING_FIXED' });
+    expect(term.computedFrom.deposit?.state).toBe('ZERO');
+  });
+
+  it('아이카 원문 장기보증이 금액이거나 엔진 기록이 무보증이 아니면 무보증으로 단정하지 않는다', () => {
+    const conflicting = aicaDepositFree({ 원문: { 전체: { 장기보증: '500,000' } } });
+    expect(plan({ aica: conflicting }).documents[0]!.terms[0]!.computedFrom.deposit?.state).not.toBe('ZERO');
+    const paid: Record<string, unknown> = aicaDepositFree();
+    (paid.source_cycle_record as { terms: { raw: Record<string, unknown> }[] }).terms[0]!.raw.deposit = 1000000;
+    const term = plan({ aica: paid }).documents[0]!.terms[0]!;
+    expect(term.computedFrom.deposit?.state).toBe('UNKNOWN');
+    expect(term.ruleId).not.toBe('IANCAR_DEPOSIT_FREE_PAYOUT_EQUALS_BILLING_FIXED');
+  });
+
+  it('오토플러스 «오플구독»은 F04 구독 정액(일반 80만·전기 130만)으로 지급하고 청구를 넘지 않는다', () => {
+    const result = plan({
+      gas: product('RP023', { product_type: '오플구독', price: { '12': { rent: 700000, deposit: 1400000 } } }),
+      ev: product('RP023', { product_type: '오플구독', fuel_type: '전기', price: { '24': { rent: 700000, deposit: 1400000 } } }),
+      noFuel: product('RP023', { product_type: '오플구독', fuel_type: '', price: { '12': { rent: 700000, deposit: 1400000 } } }),
+    });
+    const term = (id: string) => result.documents.find(row => row.productId === id)!.terms[0]!;
+    expect(term('gas')).toMatchObject({ state: 'KNOWN', amount: 800000, ruleId: 'AUTOPLUS_SUBSCRIPTION_FIXED' });
+    expect(term('ev')).toMatchObject({ state: 'KNOWN', amount: 1300000, ruleId: 'AUTOPLUS_EV_SUBSCRIPTION_PAYOUT' });
+    expect(term('noFuel')).toMatchObject({ state: 'UNKNOWN', reasonCode: 'FUEL_REQUIRED_FOR_SUPPLIER_RULE' });
+    expect(result.payoutExceedsBillingCounts).toEqual({});
+  });
+
+  it('«오플구독»이 RP023 이 아닌 공급사에 붙으면 중고구독 규칙으로 계산하지 않는다', () => {
+    const term = plan({ other: product('RP013', { product_type: '오플구독', price: { '12': { rent: 700000, deposit: 1400000 } } }) })
+      .documents[0]!.terms[0]!;
+    expect(term).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'PRODUCT_TYPE_REQUIRED' });
+  });
 });

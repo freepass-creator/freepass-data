@@ -79,13 +79,15 @@ function isValidDepositSourceWaiverBasis(value: unknown): value is DepositEviden
     || (record.field === 'source_cycle_record.terms' && record.source === SOURCE_ENGINE_WRITER && depositInstant(record.at)));
 }
 
-/** Existing shared-sheet writer evidence only. Never infer waiver from numeric zero or a legacy RAW snapshot. */
+/** Existing shared-sheet writer evidence only. Never infer waiver from numeric zero or a legacy RAW snapshot.
+ * 아이카(RP004) 시트도 같은 엔진 작성 기록이다(대표 10-28 «아이카 무보증 50만 전액»): 그 항의 원문 «장기보증» 칸(term.raw.deposit)이 정확히 «무보증»일 때만. */
 export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, sourceAmount: unknown,
   months: unknown, rent: unknown, now = new Date().toISOString()): DepositEvidenceBasis | undefined {
   const mark = product.source_cycle_write, record = product.source_cycle_record;
+  const aica = depositRecord(record) && depositRecord(record.raw) && record.raw.source === 'aica-sheet' && record.sourceId === 'RP004';
   if (!depositRecord(mark) || mark.by !== SOURCE_ENGINE_WRITER || !depositRecord(record)
-    || !depositRecord(record.raw) || record.raw.source !== 'shared-sheet'
-    || !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId)) || ['RP012', 'RP031'].includes(String(record.sourceId))
+    || !depositRecord(record.raw) || (record.raw.source !== 'shared-sheet' && !aica)
+    || (!aica && !SHARED_SHEET_SUPPLIERS.has(String(record.sourceId))) || ['RP012', 'RP031'].includes(String(record.sourceId))
     || record.sourceId !== product.provider_company_code || typeof record.uid !== 'string' || !record.uid
     || (record.plate ?? null) !== (product.car_number ?? null)
     || product._deleted || product.deletedAt || product.publication_withdrawal || product.listable !== true
@@ -96,6 +98,8 @@ export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, s
     || !Number.isSafeInteger(months) || (months as number) <= 0 || !Number.isSafeInteger(rent) || (rent as number) <= 0
     || !Array.isArray(record.terms)) return undefined;
   if ((product._key !== undefined && product._key !== record.uid) || !depositRecord(record.status) || record.status.saleAvailable !== true) return undefined;
+  // 아이카: 같은 문서의 원문 «장기보증» 칸이 금액 등 다른 글자면 엔진 기록 «무보증»과 엇갈린다 — 무보증으로 단정하지 않는다.
+  if (aica && !['', '무보증'].includes(depositText(readProductPath(product, '원문.전체.장기보증')))) return undefined;
   const matching = record.terms.filter((term: unknown) => depositRecord(term) && term.months === months);
   // Ambiguous mileage/settlement variants must be resolved by the caller's exact term, never selected by rent alone.
   if (matching.length !== 1) return undefined;
@@ -103,7 +107,7 @@ export function sharedSheetEngineWaiverBasis(product: Record<string, unknown>, s
   const raw = depositRecord(term) ? term.raw : undefined;
   if (!engineTerm(term) || term.monthlyRent.state !== 'KNOWN' || term.monthlyRent.value !== rent
     || term.deposit.state !== 'ZERO' || term.deposit.value !== 0 || !depositRecord(raw)
-    || raw[(months as number) <= 12 ? 'shortDeposit' : 'longDeposit'] !== '무보증') return undefined;
+    || (aica ? raw.deposit : raw[(months as number) <= 12 ? 'shortDeposit' : 'longDeposit']) !== '무보증') return undefined;
   const stored = depositRecord(product.price) ? product.price[String(months)] : undefined;
   if (!depositRecord(stored) || stored.rent !== rent || stored.deposit !== 0) return undefined;
   return { field: 'source_cycle_record.terms', text: '무보증', source: SOURCE_ENGINE_WRITER, at: record.observedAt };

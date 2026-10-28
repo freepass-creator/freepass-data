@@ -38,10 +38,14 @@ export type PayoutFeeSnapshotPlan = {
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
 const plateOf = (product: Rec) => text(product.car_number) ?? text(product.plate) ?? text(product.vehicle_number);
 const emptyCounts = (): StateCounts => ({ KNOWN: 0, ZERO: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 });
-const commercialType = (value: unknown): CommercialType | undefined => ({
+const commercialType = (value: unknown, supplierId?: string): CommercialType | undefined =>
+  text(value) === '오플구독' && supplierId !== 'RP023' ? undefined : ({
   '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '재렌트': 'USED_RENT',
   '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION', '구독': 'USED_SUBSCRIPTION',
   '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION',
+  // 오토플러스(RP023) 구독만. 수수료는 공급사 규칙(F04 123행 구독 정액 · 161행 전기 구독)이 «구독»이면 기간 무관으로 정한다.
+  // 다른 공급사에 붙은 «오플구독»은 중고구독 일반 규칙으로 새지 않게 상품구분 미정(PRODUCT_TYPE_REQUIRED)으로 둔다.
+  '오플구독': 'USED_SUBSCRIPTION',
 } as Record<string, CommercialType>)[text(value) ?? ''];
 
 function exactEvidence(productId: string, product: Rec, evidence: readonly PayoutFeeEvidence[]) {
@@ -107,7 +111,7 @@ export function planPayoutFeeSnapshots(input: {
       depositState: term.depositState, mileageLimitKmPerYear: term.mileageLimitKmPerYear,
     })) };
     const engineEvidence = Object.fromEntries(Object.entries(rawEvidence).map(([key, value]) => [`source:${key}`, value]));
-    const economics = new Map(precomputeOfferEconomics(offer, commercialType(effectiveProduct.product_type), text(effectiveProduct.fuel_type), engineEvidence)
+    const economics = new Map(precomputeOfferEconomics(offer, commercialType(effectiveProduct.product_type, supplierId), text(effectiveProduct.fuel_type), engineEvidence)
       .map(term => [term.termKey, supplierId === 'RP031' && (term.termMonths ?? Number.POSITIVE_INFINITY) < 12 && (inferredProductType || inferredSubtype)
         ? { ...term.channelPayoutFee, state: 'UNKNOWN' as const, amount: null, calculation: null, sourceRefs: [],
           vatAmount: null, totalAmount: null, reasonCode: 'IANCAR_SHORT_TERM_BASIS_REQUIRED' }
