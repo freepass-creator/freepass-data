@@ -6,8 +6,8 @@ export type SheetFactKey = (typeof SHEET_FACT_KEYS)[number];
 export type SheetFacts = Partial<Record<SheetFactKey, string | number>>;
 /** 차량가격(consumer_price, 대표 2026-10-23 승인): 정수 원, 5,000,000~300,000,000. 세금 포함 여부는 단정하지 않고 시트 원문 값 그대로. */
 export const CONSUMER_PRICE_MIN = 5_000_000, CONSUMER_PRICE_MAX = 300_000_000;
-/** 자손한도(self_body_accident, 대표 2026-10-28 «맞춰주세요»): F05 차 줄 값을 정수 원으로. 사망·후유장애 한도로 본다(부상 한도 나눔은 표시 쪽).
- *  범위 1백만~100억. «1억/50»·«사망 1억 부상 1500만» 처럼 한 금액이 아니면 후보에서 뺀다(추정 금지). */
+/** 자손한도(self_body_accident, 대표 2026-10-28 «맞춰주세요»·«그냥 숫자만 넣자 … 1억이면 총액기준으로»): F05 차 줄 값을 총액 기준 한도 숫자 하나(정수 원)로.
+ *  자손·자상 구분이나 사망·부상 나눔은 하지 않는다. 범위 1백만~100억. «1억/50»·«사망 1억 부상 1500만» 처럼 한 금액이 아니면 후보에서 뺀다(추정 금지). */
 export const SELF_BODY_LIMIT_MIN = 1_000_000, SELF_BODY_LIMIT_MAX = 10_000_000_000;
 /** 엔진이 주인인 칸: F05 차 줄 값이 우선이라(대표 10-28) 문서 값과 다르면 충돌이 아니라 F05 값으로 바꾼다. 다른 칸은 종전대로 빈 칸만 채운다. */
 export const SHEET_FACT_SOURCE_OWNED: ReadonlySet<SheetFactKey> = new Set(['self_body_accident']);
