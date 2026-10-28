@@ -78,6 +78,29 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 ## 수수료 연동 기준 — 사용자 결정 2026-09-30
 
+### 공급사 정책 한 번 정의 → 상품·기간 전체 적용 (2026-10-28)
+
+`KAKAO_COMMISSION_POLICY`의 기존 확정 규칙이 계산 정본이다. `getSupplierCommissionPolicy(supplierId)`와
+`listSupplierCommissionPolicies()`는 같은 정본의 공급사별 배정표다. 표준 기간표를 공급사마다 복제하지 않는다.
+상품에는 공급사 코드와 기간·월료·차량가액 등 입력을 두며, 저장된 기간 수수료에는 배정표의
+`supplierPolicyDigest`만 붙인다. 공급사 청구와 영업채널 지급은 같은 정책을 선택하되 각각의 금액 규칙을 쓴다.
+아이언·우리캐피탈 신차의 기존 승인된 선출고 기본값도 원천·Canonical 계산이 같은 배정에서 읽는다.
+명시적인 견적출고·개별 합의는 기본값보다 우선하며, 빠진 차량가액·보증금 등급을 추정하지 않는다.
+
+정책 변경 시 차량 ID를 나열하지 않고 기존 실행기의 `--supplier-ids`로 해당 공급사 전체 상품·기간을
+계획한다. 판매·출고 상태로 제외하지 않는다. `--changed-only`는 결과가 달라진 상품만 계획에 넣고,
+정책 버전·공급사 범위·입력 revision·예상 저장값을 같은 검토 계획에 고정한다.
+
+```powershell
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore --supplier-ids RP021,RP013 --changed-only --out <private-report.json>
+```
+
+비공개 보고서의 `plan`을 별도 비공개 JSON으로 저장해 기존 `--apply --plan ... --policy-id ...
+--expected-plan-digest ... --approval-ref ...` 절차를 사용한다. 적용 때 공급사 범위를 새로 넘길 수 없다.
+기존 writer 소유권·transaction·revision·감사·가격 보존·저장 되읽기를 유지한다. 재계획이 0건이면
+같은 정책과 입력의 반복 적용 대상이 없는 것이다. 신규 예약은 만들지 않으며 정책 변경은 이 일괄 적용
+경로로 저장한 후 소비처가 저장값을 읽는다. 실제 지급·청구 사건과 사람의 정산 입력은 바꾸지 않는다.
+
 `sourceRefs`는 KNOWN·ZERO 금액의 규칙·실사용 계산 근거만 담고 UNKNOWN·NOT_APPLICABLE이면 비운다. 가격 출처는 수수료·보증금 모두 별도 `priceSourceRefs`에 둔다.
 
 2026-10-28 수수료 결정(같은 날 정정): 아이카(RP004)는 보증금 상태가 `ZERO`인 무보증 상품만 청구·지급 공급가액을 500,000원으로 같게 적용한다(`ledger:2026-10-28-rp004-payout-equals-billing`). 보증금이 있거나 상태가 `UNKNOWN`이면 무보증으로 단정하지 않고 기존 지급 사다리를 따른다. 모든 공급사는 한 기간의 계산된 지급이 계산된 청구보다 크면 지급만 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 막고, 어느 한쪽이 UNKNOWN이면 개입하지 않는다. 아이언(RP006) 재렌트 청구와 지급은 12개월 이상 비정형 기간에 가장 가까운 짧은 표준 기간(12/24/36/48/60) 규칙을 함께 적용하며, 다른 공급사 청구에는 확장하지 않는다.

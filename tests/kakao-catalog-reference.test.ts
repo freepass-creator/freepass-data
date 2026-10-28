@@ -629,7 +629,11 @@ describe('2026-10-04 confirmed commission policy', () => {
   it('keeps standard terms and unrelated UNKNOWN reasons unchanged', () => {
     expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '중고렌트', termMonths: 24 }).sourceRefs)
       .not.toContain('ledger:59c7c3ba');
+    // 비정형 기간이 무관한 UNKNOWN 을 계산값으로 바꾸지 않는다. 아이언(RP006)은 공급사 정책 기본 신차 유형(선출고, 대표 10-12, #798)이라
+    // 차량가액이 없으면 VEHICLE_VALUE_REQUIRED, 기본 유형이 없는 공급사는 지금처럼 NEW_PRODUCT_SUBTYPE_REQUIRED.
     expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '신차렌트', termMonths: 31 }))
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'VEHICLE_VALUE_REQUIRED' });
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP013', productType: '신차렌트', termMonths: 31 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'NEW_PRODUCT_SUBTYPE_REQUIRED' });
   });
   it('keeps confirmed Iron fees and excludes Mindcar', () => {
