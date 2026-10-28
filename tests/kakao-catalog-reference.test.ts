@@ -622,18 +622,20 @@ describe('2026-10-04 confirmed commission policy', () => {
       'ledger:59c7c3ba', `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${termMonths}→${appliedTerm})`,
     ]));
   });
-  it('keeps non-RP006 nonstandard billing unchanged', () => {
-    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', productType: '중고렌트', termMonths: 31 }))
+  it('keeps nonstandard billing unchanged for suppliers outside RP006 and the basic companies', () => {
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP008', productType: '중고렌트', termMonths: 31 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'TERM_NOT_IN_F04_COMMISSION_POLICY' });
   });
   it('keeps standard terms and unrelated UNKNOWN reasons unchanged', () => {
     expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '중고렌트', termMonths: 24 }).sourceRefs)
       .not.toContain('ledger:59c7c3ba');
     // 비정형 기간이 무관한 UNKNOWN 을 계산값으로 바꾸지 않는다. 아이언(RP006)은 공급사 정책 기본 신차 유형(선출고, 대표 10-12, #798)이라
-    // 차량가액이 없으면 VEHICLE_VALUE_REQUIRED, 기본 유형이 없는 공급사는 지금처럼 NEW_PRODUCT_SUBTYPE_REQUIRED.
+    // 차량가액이 없으면 VEHICLE_VALUE_REQUIRED(기본 회사도 대표 10-28 표준표로 선출고), 기본 유형이 없는 공급사는 지금처럼 NEW_PRODUCT_SUBTYPE_REQUIRED.
     expect(resolveSalesCommission({ ...base, supplierId: 'RP006', productType: '신차렌트', termMonths: 31 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'VEHICLE_VALUE_REQUIRED' });
     expect(resolveSalesCommission({ ...base, supplierId: 'RP013', productType: '신차렌트', termMonths: 31 }))
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'VEHICLE_VALUE_REQUIRED' });
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP008', productType: '신차렌트', termMonths: 31 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'NEW_PRODUCT_SUBTYPE_REQUIRED' });
   });
   it('keeps confirmed Iron fees and excludes Mindcar', () => {
@@ -1171,7 +1173,9 @@ describe('F04 2026-10-04 alignment regression', () => {
     for (const supplierId of KAKAO_COMMISSION_POLICY.standardSupplierIds) {
       const results = both({ ...base, supplierId, productType: '장기렌트', termMonths });
       const billing = results[0]!, payout = results[1]!;
-      expect(billing.state).toBe(supplierId === 'RP006' ? 'CALCULATED' : 'UNKNOWN');
+      // 청구 비정형 기간: 아이언(#801) + 기본 회사(대표 10-28 표준표)만 가까운 짧은 표준 기간, 나머지는 그대로 UNKNOWN.
+      const basicCompany = KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId);
+      expect(billing.state).toBe(supplierId === 'RP006' || basicCompany ? 'CALCULATED' : 'UNKNOWN');
       expect(payout).toMatchObject({ state: 'CALCULATED' });
     }
     expect(both({ ...base, supplierId: 'RP012', termMonths }).every(r => r.state === 'UNKNOWN')).toBe(true);
@@ -1200,7 +1204,7 @@ describe('F04 2026-10-04 alignment regression', () => {
 });
 
 describe('F04 source references and term scope (2026-10-04 review)', () => {
-  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
+  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-10-28-contract-writer-standard-fee|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
   it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
     const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
     const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
@@ -1558,7 +1562,9 @@ describe('아이언·우리캐피탈 신차렌트 선출고 기준 (대표 10-12
   });
   it('우리캐피탈은 3.5% 청구·3.0% 지급(F04 50행)', () => {
     const t = fees('RP020');
-    expect(t.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1400000, sourceRefs: ['F04:수수료표!A50:M50'] });
+    // 우리캐피탈은 기본 회사라 대표 10-28 표준표 근거가 함께 붙는다(금액은 같다).
+    expect(t.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1400000,
+      sourceRefs: ['F04:수수료표!A50:M50', 'ledger:2026-10-28-contract-writer-standard-fee'] });
     expect(t.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 1200000 });
   });
   it('원문에 견적출고가 명시되면 선출고로 덮지 않는다', () => {
