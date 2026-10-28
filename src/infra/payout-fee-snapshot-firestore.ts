@@ -8,7 +8,10 @@ export const PAYOUT_FEE_SNAPSHOT_COLLECTION = 'product_payout_fee_snapshots';
 export const isIancarProductDocumentId = (value: string) => /^iancar_[0-9a-f]+$/.test(value);
 
 export class PayoutFeeSnapshotFirestoreStore implements PayoutFeeSnapshotStore, ChannelPayoutReader {
-  constructor(private readonly db: Firestore = getFirestore(getTargetFirebaseApp())) {}
+  // 연결은 처음 쓸 때 만든다(게이트웨이 시작·시험에서 대상 프로젝트 없이 생성돼도 실패하지 않게).
+  private database: Firestore | undefined;
+  constructor(database?: Firestore) { this.database = database; }
+  private get db(): Firestore { return this.database ??= getFirestore(getTargetFirebaseApp()); }
 
   async readInputs(): Promise<PayoutFeeSnapshotInput> {
     const [products, policies] = await Promise.all([this.db.collection('products').get(), this.db.collection('policy').get()]);
