@@ -491,12 +491,25 @@ export const KAKAO_COMMISSION_POLICY = {
   sonokong60Evidence: { sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
   roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
   /** 뮤카(RP035, 2026-10-05 발급) 구독 — freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행. 일반·픽업 공통.
-   * 청구(프리패스 몫) = 차량 기준가 × 1%(전 기간). 지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)(전 기간).
-   * 별도 지급 재원 — 청구 − 지급 마진으로 계산하지 않는다. «분납 완납 전 미지급»은 계약 단계의 지급 가능 상태로 따로 다룬다. */
+   * 청구(프리패스 몫) = 차량 기준가 × 1%(전 기간). 지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 상한)(전 기간).
+   * 별도 지급 재원 — 청구 − 지급 마진으로 계산하지 않는다. «분납 완납 전 미지급»은 계약 단계의 지급 가능 상태로 따로 다룬다.
+   * 대표 2026-10-28 «뮤카 테슬라 수수료 150만원 … 프로모션 차종은 150이야»: 선납 정액은 뮤카 잔가표 6차 brands 값(차종 구분별),
+   * 추가보증금 상한은 잔가표 5차 50만(gnafit pricing/policy-config-sixth·fifth-20261015). 10-03 «12개월 100만·24개월 이상 120만·40만» 대체.
+   * 분납 줄은 10-05 폐지 전 계약에만 쓰는 옛 값 그대로(차종 구분 없음, 상한 40만). */
   mewcar: {
     supplierId: 'RP035', sourceRows: [169, 170], billingBasisPoints: 100,
-    payout: { PREPAID: { 12: 1000000, 24: 1200000, 36: 1200000, 48: 1200000, 60: 1200000 }, INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 } },
-    extraDepositPercent: 10, extraDepositCap: 400000, separateFunding: true,
+    payout: {
+      PREPAID: {
+        DOMESTIC: { 12: 900000, 24: 1200000, 36: 1200000, 48: 1200000, 60: 1200000 },
+        PREMIUM: { 12: 1000000, 24: 1500000, 36: 1500000, 48: 1500000, 60: 1500000 },
+      },
+      INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 },
+    },
+    extraDepositPercent: 10, extraDepositCap: 500000, installmentExtraDepositCap: 400000, separateFunding: true,
+    brandFeeSourceRef: 'ledger:2026-10-28-mewcar-ga-fee-brands',
+    /** 잔가표 6차 수신 2026-10-15 15:16(KST, 같은 날 아침 5차는 프리미엄 140만). 계약일이 이날 이전이면 어느 차수 값인지 몰라 «확인 필요»로 멈춘다.
+     * 계약일이 없는 현재 상품·견적은 현행 값. 옛 엔진 값(12개월 100만 일괄)은 그때도 국산 90만과 어긋나 과거 계약에 쓰지 않는다. */
+    prepaidBrandFeeContractFrom: '2026-10-16',
     /** 2026-10-05 뮤카 조건 변경: 보증금 분납 폐지 + 영업 분납 정액 줄 삭제. 효력일(포함) 이후 계약일의 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다.
      * 그 전 계약(계약일 < 효력일)은 위 INSTALLMENT 옛 정액으로 계산한다. 선납 정액·추가보증금 10%(40만 한도)·프리패스 1% 는 그대로. */
     installmentAbolishedFrom: '2026-10-05',
@@ -758,6 +771,8 @@ export type CommissionInput = {
   contractDate?: string;
   /** 뮤카: 추가보증금(원, 없으면 0 을 명시). 모르면 넣지 않는다 — 계산하지 않는다. */
   extraDeposit?: number;
+  /** 뮤카 선납 GA 정액의 차종 구분 — DOMESTIC = 국산, PREMIUM = 제네시스·수입·테슬라·카니발 하이리무진. mewcarBrandClassFromSource 로만 정한다. */
+  mewcarBrandClass?: 'DOMESTIC' | 'PREMIUM';
   /** A suspected individual promotion must not silently use the general rule. */
   individualException?: boolean;
   /** Legacy private input name. Its shape is intentionally unsupported; callers must migrate to individualAgreement. */
@@ -854,10 +869,52 @@ function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLI
     if (!isCalendarDate(input.contractDate)) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
     if (input.contractDate! >= rule.installmentAbolishedFrom) return unknownCommission('MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED');
   }
+  const prepaid = input.depositPayment === 'PREPAID';
   if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
-  const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), rule.extraDepositCap);
-  const baseAmount = input.depositPayment === 'PREPAID' ? rule.payout.PREPAID[term] : rule.payout.INSTALLMENT[term as 12 | 24 | 36 | 48];
-  return calculatedCommission(`MEWCAR_GA_${input.depositPayment}_${term}_PAYOUT`, baseAmount + addition, 'EXCLUDED');
+  if (prepaid && input.contractDate !== undefined) {
+    if (!isCalendarDate(input.contractDate)) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
+    if (input.contractDate < rule.prepaidBrandFeeContractFrom) return unknownCommission('MEWCAR_PREPAID_PRE_BRAND_RULE_CONFIRM_REQUIRED');
+  }
+  // 선납 정액은 차종 구분별(대표 10-28) — 구분을 모르면 둘 중 하나로 고르지 않는다.
+  if (prepaid && input.mewcarBrandClass !== 'DOMESTIC' && input.mewcarBrandClass !== 'PREMIUM') return unknownCommission('MEWCAR_BRAND_CLASS_REQUIRED');
+  const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), prepaid ? rule.extraDepositCap : rule.installmentExtraDepositCap);
+  const baseAmount = prepaid ? rule.payout.PREPAID[input.mewcarBrandClass!][term] : rule.payout.INSTALLMENT[term as 12 | 24 | 36 | 48];
+  return calculatedCommission(prepaid ? `MEWCAR_GA_PREPAID_${input.mewcarBrandClass}_${term}_PAYOUT` : `MEWCAR_GA_INSTALLMENT_${term}_PAYOUT`,
+    baseAmount + addition, 'EXCLUDED');
+}
+
+/** 국내에서만 만드는 제조사(origin 수입이면 어긋남) / 국산으로 볼 수 있는 제조사 전체(르노·쉐보레는 수입 차종도 있어 origin 을 따른다). */
+const MEWCAR_DOMESTIC_ONLY_MAKERS = /^(현대|기아|KGM|KG모빌리티|쌍용)$/;
+const MEWCAR_DOMESTIC_MAKERS = /^(현대|기아|KGM|KG모빌리티|쌍용|르노|르노코리아|르노삼성|쉐보레|한국GM)$/;
+/**
+ * 뮤카 선납 GA 정액의 차종 구분을 상품 칸에서만 읽는다(gnafit latestBrandPolicy 와 같은 갈래).
+ * 테슬라·제네시스 = maker(국산/수입 어느 쪽이어도 같은 PREMIUM 값이라 origin 이 비어도 정한다, 어긋나면 멈춤),
+ * 국산/수입 = origin, 카니발 하이리무진 = sub_model·trim_name(정형 칸) 우선, model·car_name 은 정형 칸이 비었을 때만.
+ * origin 이 없거나 maker 와 어긋나거나 차명이 없거나 이름이 서로 다르면 구분하지 않는다(추정 금지 → MEWCAR_BRAND_CLASS_REQUIRED).
+ */
+export function mewcarBrandClassFromSource(source: Rec): 'DOMESTIC' | 'PREMIUM' | undefined {
+  const maker = text(source.maker);
+  const origin = text(source.origin);
+  if (!maker) return undefined;
+  const tesla = /^(테슬라|tesla)$/i.test(maker), genesis = /^(제네시스|genesis)$/i.test(maker);
+  if (tesla) return origin === '' || origin === '수입' ? 'PREMIUM' : undefined;
+  if (genesis) return origin === '' || origin === '국산' ? 'PREMIUM' : undefined;
+  if (origin === '수입') return MEWCAR_DOMESTIC_ONLY_MAKERS.test(maker) ? undefined : 'PREMIUM';
+  if (origin !== '국산' || !MEWCAR_DOMESTIC_MAKERS.test(maker)) return undefined;
+  const structured = [source.sub_model, source.trim_name].map(text).filter(Boolean);
+  const free = [source.model, source.car_name].map(text).filter(Boolean);
+  // 차명이 없으면 카니발 하이리무진인지 알 수 없다.
+  if (!structured.length && !free.length) return undefined;
+  const carnival = (name: string) => /카니발|carnival/i.test(name);
+  if (![...structured, ...free].some(carnival)) return 'DOMESTIC';
+  // 모델과 세부모델이 카니발 여부에서 갈리면(예: 모델 쏘렌토·세부모델 카니발) 어느 차인지 모른다.
+  const model = text(source.model), subModel = text(source.sub_model);
+  if (model && subModel && carnival(model) !== carnival(subModel)) return undefined;
+  const highLimousine = (name: string) => /하이[\s-]*리무진|(?:high|hi)[\s-]*limousine/i.test(name);
+  if (structured.some(highLimousine)) return 'PREMIUM';
+  if (!free.some(highLimousine)) return 'DOMESTIC';
+  // 정형 칸(세부모델·트림)은 하이리무진이 아닌데 자유 이름만 하이리무진이면 어느 쪽인지 모른다.
+  return structured.length ? undefined : 'PREMIUM';
 }
 
 function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
@@ -1044,6 +1101,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     ...(side === 'PAYOUT' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
     ...(side === 'BILLING' && input.supplierId === 'RP006' && result.note?.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(') ? ['ledger:59c7c3ba'] : []),
     ...(contractWriterStandardApplied(input, side, result) ? [KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.contractWriterStandard.sourceRef] : []),
+    ...(id.startsWith('MEWCAR_GA_PREPAID_') ? [KAKAO_COMMISSION_POLICY.mewcar.brandFeeSourceRef] : []),
     ...(side === 'PAYOUT' && input.supplierId === 'RP004' && input.depositState === 'ZERO'
       ? ['ledger:2026-10-28-rp004-payout-equals-billing'] : []),
   ];
@@ -1104,7 +1162,7 @@ const assetStatus = (value: unknown) => ({
 
 export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
   'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' |
-  'depositPayment' | 'extraDeposit' | 'contractDate' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
+  'depositPayment' | 'extraDeposit' | 'mewcarBrandClass' | 'contractDate' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
 
 export function resolveReferencePolicyContext(source: Rec, policies: Record<string, Rec> = {}) {
   const policyId = text(source.policy_code) || null;
@@ -1223,14 +1281,18 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       }, q12Candidates)
       : {};
     const subscriptionForm = resolvedSubscriptionForm.subscriptionForm;
+    const sourceMewcarBrandClass = supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId ? mewcarBrandClassFromSource(source) : undefined;
     const automaticCommissionEvidence = {
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && automaticQ12 && !evidenceByTerm[sourceKey]?.q12Basis ? { q12Basis: automaticQ12 } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && subscriptionForm ? { subscriptionForm } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && resolvedSubscriptionForm.conflict ? { subscriptionFormConflict: true as const } : {}),
-    } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm' | 'subscriptionFormConflict'>>;
-    const { q12Basis: _ignoredInvalidQ12Basis, ...evidenceWithoutQ12 } = evidenceByTerm[sourceKey] ?? {};
-    const effectiveEvidence = explicitQ12Result.reasonCode ? evidenceWithoutQ12 : evidenceByTerm[sourceKey];
+      // 뮤카 차종 구분은 상품 칸에서만 — 증거 입력이 따로 넘긴 값은 아래 effectiveEvidence 에서 뺀다.
+      ...(sourceMewcarBrandClass ? { mewcarBrandClass: sourceMewcarBrandClass } : {}),
+    } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm' | 'subscriptionFormConflict' | 'mewcarBrandClass'>>;
+    const { mewcarBrandClass: _sourceOnlyBrandClass, ...termEvidence } = evidenceByTerm[sourceKey] ?? {};
+    const { q12Basis: _ignoredInvalidQ12Basis, ...evidenceWithoutQ12 } = termEvidence;
+    const effectiveEvidence = explicitQ12Result.reasonCode ? evidenceWithoutQ12 : termEvidence;
     const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {
       termMonths: parsed.months,
       monthlyRent,

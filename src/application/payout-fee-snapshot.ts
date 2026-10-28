@@ -1,4 +1,4 @@
-import { buildKakaoCatalogReferenceProduct, explicitNewProductSubtypeFromSource, KAKAO_COMMISSION_POLICY, type CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
+import { buildKakaoCatalogReferenceProduct, explicitNewProductSubtypeFromSource, KAKAO_COMMISSION_POLICY, mewcarBrandClassFromSource, type CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -98,9 +98,15 @@ export function planPayoutFeeSnapshots(input: {
     const explicitSubtype = explicitNewProductSubtypeFromSource(effectiveProduct) ?? matched?.newProductSubtype;
     const inferredSubtype = input.stockNewAsPredelivery && commercialType(effectiveProduct.product_type) === 'NEW_RENT'
       && !!plateOf(effectiveProduct) && !explicitSubtype ? 'NEW_PREDELIVERY' as const : null;
-    const rawEvidence = evidenceByPriceKey(effectiveProduct, inferredSubtype
+    const evidenceByKey = evidenceByPriceKey(effectiveProduct, inferredSubtype
       ? { ...(matched ?? { productId, confidence: 'high' as const }), newProductSubtype: inferredSubtype }
       : matched);
+    // 뮤카 선납 정액의 차종 구분은 상품 칸에서만 읽어 지급 계산에도 같은 값을 넘긴다(모르면 넘기지 않음 → UNKNOWN).
+    const mewcarBrandClass = supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId ? mewcarBrandClassFromSource(effectiveProduct) : undefined;
+    const rawEvidence: CommissionEvidenceByTerm = Object.fromEntries(Object.entries(evidenceByKey).map(([key, value]) => {
+      const { mewcarBrandClass: _sourceOnly, ...rest } = value;
+      return [key, mewcarBrandClass ? { ...rest, mewcarBrandClass } : rest];
+    }));
     if (matched?.vehicleValue && Object.values(rawEvidence).length) evidenceAppliedCounts.vehicleValue++;
     if (matched?.newProductSubtype && commercialType(effectiveProduct.product_type) === 'NEW_RENT' && Object.values(rawEvidence).length) evidenceAppliedCounts.subtype++;
     if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId && matched?.depositPayment && Object.values(rawEvidence).length) evidenceAppliedCounts.mewcar++;
