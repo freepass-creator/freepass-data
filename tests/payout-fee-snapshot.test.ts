@@ -56,6 +56,14 @@ describe('영업자 지급수수료 박제 계획', () => {
     expect(first.planDigest).toBe(second.planDigest);
   });
 
+  it('계획 출력은 역마진 차단 건수를 공급사별로만 집계한다', () => {
+    const products = { mew: product('RP035', { product_type: '구독', price: { '12': { rent: 600000, deposit: 1000000 } } }) };
+    const result = plan(products, [{ productId: 'mew', confidence: 'high', vehicleValue: 1000000,
+      depositPayment: 'PREPAID', extraDeposit: 0 }]);
+    expect(result.payoutExceedsBillingCounts).toEqual({ RP035: 1 });
+    expect(JSON.stringify(result.payoutExceedsBillingCounts)).not.toContain('mew');
+  });
+
   it('뮤카 선납 0원 추가보증금은 명시 옵션일 때만 기본 증거로 쓴다', async () => {
     const products = { mew: product('RP035', { product_type: '구독', price: { '60': { rent: 600000, deposit: 1000000 } } }) };
     const store: PayoutFeeSnapshotStore = { readInputs: async () => ({ products, policies: {} }), readDocument: async () => null, createDocument: async () => {} };

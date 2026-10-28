@@ -348,7 +348,8 @@ describe('F04 explicit canonical evidence', () => {
       priceTerms: [{ termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' }],
     }, 'OGONG_SUBSCRIPTION')[0]!;
     expect(fixedQ12.supplierBillingFee).toMatchObject({ amount: { amount: 700000 }, vatAmount: 70000 });
-    expect(fixedQ12.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, vatAmount: 80000 });
+    expect(fixedQ12.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, vatAmount: null,
+      reasonCode: 'PAYOUT_EXCEEDS_BILLING' });
 
     const other = precomputeOfferEconomics({
       id: 'synthetic', supplierId: 'RP013',
