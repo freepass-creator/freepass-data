@@ -55,17 +55,20 @@ export async function applyPayoutFeeSnapshotPlan(store: PayoutFeeSnapshotStore, 
 }
 
 function parseArgs(argv: string[]) {
-  let apply = false, mewcarPrepaidDefault = false, expectedDigest: string | null = null, evidencePath: string | null = null, snapshotDate: string | null = null;
+  let apply = false, mewcarPrepaidDefault = false, inferProductTypeByMileage = false, stockNewAsPredelivery = false;
+  let expectedDigest: string | null = null, evidencePath: string | null = null, snapshotDate: string | null = null;
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index]!;
     if (value === '--apply') apply = true;
     else if (value === '--mewcar-prepaid-default') mewcarPrepaidDefault = true;
+    else if (value === '--infer-product-type-by-mileage') inferProductTypeByMileage = true;
+    else if (value === '--stock-new-as-predelivery') stockNewAsPredelivery = true;
     else if (value.startsWith('--expected-digest=')) expectedDigest = value.slice('--expected-digest='.length);
     else if (value === '--evidence') evidencePath = argv[++index] ?? null;
     else if (value === '--snapshot-date') snapshotDate = argv[++index] ?? null;
     else throw new Error('PAYOUT_SNAPSHOT_ARGUMENT_INVALID');
   }
-  return { apply, mewcarPrepaidDefault, expectedDigest, evidencePath, snapshotDate };
+  return { apply, mewcarPrepaidDefault, inferProductTypeByMileage, stockNewAsPredelivery, expectedDigest, evidencePath, snapshotDate };
 }
 
 export async function runPayoutFeeSnapshotJob(input: {
@@ -82,9 +85,11 @@ export async function runPayoutFeeSnapshotJob(input: {
     operation: args.apply ? 'WRITE_PAYOUT_FEE_SNAPSHOTS' : 'READ_PAYOUT_FEE_SNAPSHOT_PLAN', resource: { kind: 'SOURCE', name: 'products+policy' },
     summarize: (value: unknown) => ({ digest: stableDigest(value) }) };
   const source = await input.access.read(spec, () => input.store.readInputs());
-  const plan = planPayoutFeeSnapshots({ snapshotDate: date, ...source, evidence, mewcarPrepaidDefault: args.mewcarPrepaidDefault });
+  const plan = planPayoutFeeSnapshots({ snapshotDate: date, ...source, evidence, mewcarPrepaidDefault: args.mewcarPrepaidDefault,
+    inferProductTypeByMileage: args.inferProductTypeByMileage, stockNewAsPredelivery: args.stockNewAsPredelivery });
   if (!args.apply) return { status: 'PLANNED', writes: 0, supplierCounts: plan.supplierCounts,
     evidenceAppliedCounts: plan.evidenceAppliedCounts, nonstandardTermRuleCounts: plan.nonstandardTermRuleCounts,
+    inferredCounts: plan.inferredCounts,
     payoutExceedsBillingCounts: plan.payoutExceedsBillingCounts,
     planDigest: plan.planDigest };
   if (!args.expectedDigest || !digestPattern.test(args.expectedDigest) || args.expectedDigest !== plan.planDigest) throw new Error('PAYOUT_SNAPSHOT_EXPECTED_DIGEST_MISMATCH');

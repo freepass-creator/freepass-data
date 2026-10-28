@@ -1,7 +1,8 @@
-import { buildKakaoCatalogReferenceProduct, KAKAO_COMMISSION_POLICY, type CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
+import { buildKakaoCatalogReferenceProduct, explicitNewProductSubtypeFromSource, KAKAO_COMMISSION_POLICY, type CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { legacyProductMileageKm } from '../adapters/legacy-normalizer.js';
 
 type Rec = Record<string, unknown>;
 import type { PayoutFeeSnapshotDocument, PayoutFeeSnapshotTerm, PayoutFeeState } from '../ports/payout-fee-snapshot-store.js';
@@ -28,6 +29,7 @@ export type PayoutFeeSnapshotPlan = {
   documents: PayoutFeeSnapshotDocument[];
   supplierCounts: Record<string, StateCounts>;
   evidenceAppliedCounts: { vehicleValue: number; subtype: number; mewcar: number };
+  inferredCounts: Record<string, { productType: number; subtype: number }>;
   nonstandardTermRuleCounts: Record<string, number>;
   payoutExceedsBillingCounts: Record<string, number>;
   planDigest: string;
@@ -69,32 +71,47 @@ export function planPayoutFeeSnapshots(input: {
   policies?: Record<string, Rec>;
   evidence?: readonly PayoutFeeEvidence[];
   mewcarPrepaidDefault?: boolean;
+  inferProductTypeByMileage?: boolean;
+  stockNewAsPredelivery?: boolean;
 }): PayoutFeeSnapshotPlan {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.snapshotDate)) throw new Error('PAYOUT_SNAPSHOT_DATE_INVALID');
   const evidence = input.evidence ?? [];
   const evidenceAppliedCounts = { vehicleValue: 0, subtype: 0, mewcar: 0 };
   const nonstandardTermRuleCounts: Record<string, number> = {};
   const payoutExceedsBillingCounts: Record<string, number> = {};
+  const inferredCounts: Record<string, { productType: number; subtype: number }> = {};
   const drafts: Omit<PayoutFeeSnapshotDocument, 'planDigest'>[] = [];
   for (const [productId, product] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b, 'en-US'))) {
     const supplierId = text(product.provider_company_code) ?? text(product.supplierId) ?? 'UNKNOWN';
+    const mileageKm = input.inferProductTypeByMileage && !text(product.product_type) ? legacyProductMileageKm(product) : undefined;
+    const inferredProductType = mileageKm === undefined ? null : mileageKm > 1000 ? '재렌트' : '신차렌트';
+    // 원천 문서는 바꾸지 않고 이번 계산에 넘길 복사본만 보완한다.
+    const effectiveProduct = inferredProductType ? { ...product, product_type: inferredProductType } : product;
     const explicit = exactEvidence(productId, product, evidence);
     const matched = explicit ?? (input.mewcarPrepaidDefault && supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId
       ? { productId, confidence: 'high' as const, depositPayment: 'PREPAID' as const, extraDeposit: 0 }
       : null);
-    const rawEvidence = evidenceByPriceKey(product, matched);
+    const explicitSubtype = explicitNewProductSubtypeFromSource(effectiveProduct) ?? matched?.newProductSubtype;
+    const inferredSubtype = input.stockNewAsPredelivery && commercialType(effectiveProduct.product_type) === 'NEW_RENT'
+      && !!plateOf(effectiveProduct) && !explicitSubtype ? 'NEW_PREDELIVERY' as const : null;
+    const rawEvidence = evidenceByPriceKey(effectiveProduct, inferredSubtype
+      ? { ...(matched ?? { productId, confidence: 'high' as const }), newProductSubtype: inferredSubtype }
+      : matched);
     if (matched?.vehicleValue && Object.values(rawEvidence).length) evidenceAppliedCounts.vehicleValue++;
-    if (matched?.newProductSubtype && commercialType(product.product_type) === 'NEW_RENT' && Object.values(rawEvidence).length) evidenceAppliedCounts.subtype++;
+    if (matched?.newProductSubtype && commercialType(effectiveProduct.product_type) === 'NEW_RENT' && Object.values(rawEvidence).length) evidenceAppliedCounts.subtype++;
     if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId && matched?.depositPayment && Object.values(rawEvidence).length) evidenceAppliedCounts.mewcar++;
-    const projected = buildKakaoCatalogReferenceProduct(productId, product, rawEvidence, input.policies ?? {}, undefined, 'COLLECTED');
+    const projected = buildKakaoCatalogReferenceProduct(productId, effectiveProduct, rawEvidence, input.policies ?? {}, undefined, 'COLLECTED');
     const projectedTerms = projected?.offers.flatMap(offer => offer.priceTerms) ?? [];
     const offer = { id: `payout-snapshot:${productId}`, supplierId, priceTerms: projectedTerms.map(term => ({
       termKey: term.termKey, termMonths: term.termMonths, monthlyRent: term.monthlyRent, deposit: term.deposit,
       depositState: term.depositState, mileageLimitKmPerYear: term.mileageLimitKmPerYear,
     })) };
     const engineEvidence = Object.fromEntries(Object.entries(rawEvidence).map(([key, value]) => [`source:${key}`, value]));
-    const economics = new Map(precomputeOfferEconomics(offer, commercialType(product.product_type), text(product.fuel_type), engineEvidence)
-      .map(term => [term.termKey, term.channelPayoutFee]));
+    const economics = new Map(precomputeOfferEconomics(offer, commercialType(effectiveProduct.product_type), text(effectiveProduct.fuel_type), engineEvidence)
+      .map(term => [term.termKey, supplierId === 'RP031' && (term.termMonths ?? Number.POSITIVE_INFINITY) < 12 && (inferredProductType || inferredSubtype)
+        ? { ...term.channelPayoutFee, state: 'UNKNOWN' as const, amount: null, calculation: null, sourceRefs: [],
+          vatAmount: null, totalAmount: null, reasonCode: 'IANCAR_SHORT_TERM_BASIS_REQUIRED' }
+        : term.channelPayoutFee]));
     const terms: PayoutFeeSnapshotTerm[] = (projected?.offers ?? []).flatMap(offer => offer.priceTerms.map(term => {
       const fee = economics.get(term.termKey)!;
       const sourceKey = term.termKey.startsWith('source:') ? term.termKey.slice(7) : term.termKey;
@@ -103,6 +120,8 @@ export function planPayoutFeeSnapshots(input: {
       const deposit = rawPrice && typeof rawPrice === 'object' ? rawPrice.deposit : null;
       const evidenceRefs = [...new Set([
         ...(Array.isArray(fee.sourceRefs) ? fee.sourceRefs : []),
+        ...(inferredProductType ? ['INFERRED_PRODUCT_TYPE_BY_MILEAGE'] : []),
+        ...(inferredSubtype ? ['INFERRED_SUBTYPE_STOCK_NEW_PREDELIVERY'] : []),
         ...(matched?.priceSource ? [`price-source:${matched.priceSource}`] : []),
         ...(matched?.evidenceUrl ? [`evidence-url:${matched.evidenceUrl}`] : []),
       ])].sort();
@@ -111,6 +130,11 @@ export function planPayoutFeeSnapshots(input: {
       }
       if (fee.reasonCode === 'PAYOUT_EXCEEDS_BILLING') {
         payoutExceedsBillingCounts[supplierId] = (payoutExceedsBillingCounts[supplierId] ?? 0) + 1;
+      }
+      if (inferredProductType || inferredSubtype) {
+        inferredCounts[supplierId] ??= { productType: 0, subtype: 0 };
+        if (inferredProductType) inferredCounts[supplierId]!.productType++;
+        if (inferredSubtype) inferredCounts[supplierId]!.subtype++;
       }
       return {
         productId, supplierId, termKey: term.termKey, termMonths: term.termMonths,
@@ -141,6 +165,7 @@ export function planPayoutFeeSnapshots(input: {
   return { schema: 'product-payout-fee-snapshot-plan/v1', snapshotDate: input.snapshotDate, documents,
     supplierCounts: Object.fromEntries(Object.entries(supplierCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     evidenceAppliedCounts,
+    inferredCounts: Object.fromEntries(Object.entries(inferredCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     nonstandardTermRuleCounts: Object.fromEntries(Object.entries(nonstandardTermRuleCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     payoutExceedsBillingCounts: Object.fromEntries(Object.entries(payoutExceedsBillingCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
     planDigest };
