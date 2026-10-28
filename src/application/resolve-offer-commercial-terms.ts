@@ -373,12 +373,14 @@ export function precomputeOfferEconomics(
           (result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' && term.termMonths !== 12)) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
-        const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
+        const appliedTerm = /NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(12|24|36|48|60)\)/.exec(result.note ?? '')?.[1];
+        const ruleTermMonths = appliedTerm ? Number(appliedTerm) : term.termMonths;
+        const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === ruleTermMonths &&
           rule.id.startsWith('STANDARD_RERENT_') && 'rateBasisPoints' in rule);
         const sonokongPickup60Rate = result.ruleId === `SONOKONG_PICKUP_60_${side}_RENT_X_TERM`
           ? side === 'BILLING' ? 275 : 200
           : null;
-        const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === term.termMonths) : payout;
+        const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === ruleTermMonths) : payout;
         const rate = sonokongPickup60Rate ?? (row && 'rateBasisPoints' in row ? row.rateBasisPoints : null);
         if (rate == null) return unknown('CALCULATION_RULE_REQUIRED');
         const expectedAmount = result.ruleId?.startsWith('SONOKONG_') || result.note?.startsWith('SONOKONG_')

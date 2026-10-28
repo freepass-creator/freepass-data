@@ -27,6 +27,8 @@ export type PayoutFeeSnapshotPlan = {
   snapshotDate: string;
   documents: PayoutFeeSnapshotDocument[];
   supplierCounts: Record<string, StateCounts>;
+  evidenceAppliedCounts: { vehicleValue: number; subtype: number; mewcar: number };
+  nonstandardTermRuleCounts: Record<string, number>;
   planDigest: string;
 };
 
@@ -41,7 +43,7 @@ const commercialType = (value: unknown): CommercialType | undefined => ({
 
 function exactEvidence(productId: string, product: Rec, evidence: readonly PayoutFeeEvidence[]) {
   const plate = plateOf(product);
-  const matches = evidence.filter(item => item.confidence === 'high' &&
+  const matches = evidence.filter(item => item.confidence !== 'low' &&
     (item.productId === productId || (!!plate && item.plate === plate)));
   return matches.length === 1 ? matches[0]! : null;
 }
@@ -51,7 +53,7 @@ function evidenceByPriceKey(product: Rec, evidence: PayoutFeeEvidence | null): C
   const price = product.price && typeof product.price === 'object' && !Array.isArray(product.price) ? product.price as Rec : {};
   const value = {
     ...(Number.isSafeInteger(evidence.vehicleValue) && evidence.vehicleValue! > 0 ? { vehicleValue: evidence.vehicleValue } : {}),
-    ...(evidence.newProductSubtype ? { newProductSubtype: evidence.newProductSubtype } : {}),
+    ...(evidence.newProductSubtype && commercialType(product.product_type) === 'NEW_RENT' ? { newProductSubtype: evidence.newProductSubtype } : {}),
     ...(evidence.depositPayment ? { depositPayment: evidence.depositPayment } : {}),
     ...(Number.isSafeInteger(evidence.extraDeposit) && evidence.extraDeposit! >= 0 ? { extraDeposit: evidence.extraDeposit } : {}),
     ...(evidence.contractDate ? { contractDate: evidence.contractDate } : {}),
@@ -65,14 +67,23 @@ export function planPayoutFeeSnapshots(input: {
   products: Record<string, Rec>;
   policies?: Record<string, Rec>;
   evidence?: readonly PayoutFeeEvidence[];
+  mewcarPrepaidDefault?: boolean;
 }): PayoutFeeSnapshotPlan {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.snapshotDate)) throw new Error('PAYOUT_SNAPSHOT_DATE_INVALID');
   const evidence = input.evidence ?? [];
+  const evidenceAppliedCounts = { vehicleValue: 0, subtype: 0, mewcar: 0 };
+  const nonstandardTermRuleCounts: Record<string, number> = {};
   const drafts: Omit<PayoutFeeSnapshotDocument, 'planDigest'>[] = [];
   for (const [productId, product] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b, 'en-US'))) {
     const supplierId = text(product.provider_company_code) ?? text(product.supplierId) ?? 'UNKNOWN';
-    const matched = exactEvidence(productId, product, evidence);
+    const explicit = exactEvidence(productId, product, evidence);
+    const matched = explicit ?? (input.mewcarPrepaidDefault && supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId
+      ? { productId, confidence: 'high' as const, depositPayment: 'PREPAID' as const, extraDeposit: 0 }
+      : null);
     const rawEvidence = evidenceByPriceKey(product, matched);
+    if (matched?.vehicleValue && Object.values(rawEvidence).length) evidenceAppliedCounts.vehicleValue++;
+    if (matched?.newProductSubtype && commercialType(product.product_type) === 'NEW_RENT' && Object.values(rawEvidence).length) evidenceAppliedCounts.subtype++;
+    if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId && matched?.depositPayment && Object.values(rawEvidence).length) evidenceAppliedCounts.mewcar++;
     const projected = buildKakaoCatalogReferenceProduct(productId, product, rawEvidence, input.policies ?? {}, undefined, 'COLLECTED');
     const projectedTerms = projected?.offers.flatMap(offer => offer.priceTerms) ?? [];
     const offer = { id: `payout-snapshot:${productId}`, supplierId, priceTerms: projectedTerms.map(term => ({
@@ -93,6 +104,9 @@ export function planPayoutFeeSnapshots(input: {
         ...(matched?.priceSource ? [`price-source:${matched.priceSource}`] : []),
         ...(matched?.evidenceUrl ? [`evidence-url:${matched.evidenceUrl}`] : []),
       ])].sort();
+      if (evidenceRefs.some(ref => ref.startsWith('NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD('))) {
+        nonstandardTermRuleCounts[supplierId] = (nonstandardTermRuleCounts[supplierId] ?? 0) + 1;
+      }
       return {
         productId, supplierId, termKey: term.termKey, termMonths: term.termMonths,
         state: fee.state, amount: Number.isSafeInteger(fee.amount?.amount) ? fee.amount!.amount : null,
@@ -120,5 +134,8 @@ export function planPayoutFeeSnapshots(input: {
     supplierCounts[document.supplierId]![term.state]++;
   }
   return { schema: 'product-payout-fee-snapshot-plan/v1', snapshotDate: input.snapshotDate, documents,
-    supplierCounts: Object.fromEntries(Object.entries(supplierCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))), planDigest };
+    supplierCounts: Object.fromEntries(Object.entries(supplierCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
+    evidenceAppliedCounts,
+    nonstandardTermRuleCounts: Object.fromEntries(Object.entries(nonstandardTermRuleCounts).sort(([a], [b]) => a.localeCompare(b, 'en-US'))),
+    planDigest };
 }

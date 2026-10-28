@@ -244,6 +244,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-28 영업자 지급수수료 박제 규칙 확장 — ledger 59c7c3ba
+
+- 목적 / 대상 revision: `work/freepass-data/payout-nonstandard-terms-20261028` @ `2e612b3fb1339247ed7c533db367bfca39ce933c` 기준. 대표 2026-10-28 「제안대로 채워」 결정을 기존 F04 수수료 엔진·`precomputeOfferEconomics`·지급수수료 박제 job에 확장한다.
+- 변경: 사다리 공급사의 영업자 `PAYOUT`에만 12·24·36·48·60 중 가장 가까운 짧은 표준 기간 요율을 적용하고 `ledger:59c7c3ba`·`NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(원기간→적용기간)`을 남긴다. 12개월 미만·이안카 단기·구독 예외·청구는 기존 경계를 유지한다. 뮤카 60개월 선납은 48개월과 같은 120만원 + 추가보증금 10%(최대 40만원)으로 확장했다.
+- 박제 job: Firestore `products` 전체 입력·`provider_company_code` 우선·`listable` 표시 보존을 재확인했다. 기존 `PayoutFeeEvidence[]`와 `plate/가격원/확신도/근거URL/carName/연식` 신차 가격 배열을 받고, 낮음은 제외하며 일치 `NEW_RENT` 차량에만 `NEW_PREDELIVERY`를 준다. `--mewcar-prepaid-default`는 명시한 때만 PREPAID·추가보증금 0을 증거로 취급한다. 계획 출력에 증거 종류별·공급사별 비정형 기간 적용 건수를 ID 없이 추가했다.
+- 검증: `npx tsc --noEmit -p .` PASS; `vitest` 관련 181 PASS; `check-data-access-boundary` PASS; `check-architecture` PASS; `git diff --check` PASS. 네트워크·Firestore 읽기/쓰기·커밋 없음.
+- 남음 / next_start_here: 운영 증거 파일 경로로 dry-run 계획을 만들 때 `docs/READ-RUNTIME.md#상품별·기간별-영업자-지급수수료-일-박제`를 따라 증거 적용 건수·UNKNOWN 사유·planDigest를 대조한다. 이 작업은 실제 운영 데이터와 apply를 수행하지 않았다.
+
 ### 2026-10-27 PC3 supplier held-contract policy publication — C1026-563c22ec
 
 - Representative authorization: PC3 remains the Data main owner; PC0 executes remotely on PC3 under the bounded child of C1026-827079b8. The currently held final supplier contract is the company standard, not an individually issued customer contract. Existing per-contract supplier preapproval remains in esign.
