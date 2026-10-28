@@ -1245,10 +1245,18 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     for (const termMonths of [12, 24, 36, 48]) expect(resolveSupplierBillingFee({ ...base, termMonths })).toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_FREEPASS_SHARE_BILLING', amount: 400000, vatTreatment: 'EXCLUDED' });
     { const { vehicleValue: _omit, ...noBase } = base; expect(resolveSupplierBillingFee(noBase)).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_BASE_PRICE_REQUIRED' }); }
   });
-  it('지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)', () => {
+  it('지급(영업 GA) = 선납 차종 구분별 정액 + min(추가보증금 × 10%, 50만) / 옛 분납 정액 + min(10%, 40만)', () => {
     const pay = (over: object) => resolveSalesCommission({ ...base, ...over });
-    expect(pay({ termMonths: 12, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_12_PAYOUT', amount: 1000000 });
-    expect(pay({ termMonths: 48, depositPayment: 'PREPAID', extraDeposit: 1000000 })).toMatchObject({ amount: 1300000 });
+    // 대표 10-28 · 뮤카 잔가표 6차 brands: 국산 12개월 90만·24~60개월 120만 / 제네시스·수입·테슬라·카니발 하이리무진 100만·150만
+    for (const [mewcarBrandClass, amounts] of [['DOMESTIC', [900000, 1200000, 1200000, 1200000, 1200000]], ['PREMIUM', [1000000, 1500000, 1500000, 1500000, 1500000]]] as const) {
+      [12, 24, 36, 48, 60].forEach((termMonths, i) => expect(pay({ termMonths, depositPayment: 'PREPAID', extraDeposit: 0, mewcarBrandClass }))
+        .toMatchObject({ state: 'CALCULATED', ruleId: `MEWCAR_GA_PREPAID_${mewcarBrandClass}_${termMonths}_PAYOUT`, amount: amounts[i], vatTreatment: 'EXCLUDED' }));
+    }
+    expect(pay({ termMonths: 48, depositPayment: 'PREPAID', extraDeposit: 1000000, mewcarBrandClass: 'DOMESTIC' })).toMatchObject({ amount: 1300000 });
+    // 10-23 «모델y 기본수수료 150, 최대수수료는 200만원(추가보증금 500만원기준)» — 상한 50만(잔가표 5차)
+    expect(pay({ termMonths: 36, depositPayment: 'PREPAID', extraDeposit: 5000000, mewcarBrandClass: 'PREMIUM' })).toMatchObject({ amount: 2000000 });
+    expect(pay({ termMonths: 36, depositPayment: 'PREPAID', extraDeposit: 9000000, mewcarBrandClass: 'PREMIUM' })).toMatchObject({ amount: 2000000 });
+    expect(pay({ termMonths: 36, depositPayment: 'PREPAID', extraDeposit: 0, mewcarBrandClass: 'PREMIUM' }).sourceRefs).toContain('ledger:2026-10-28-mewcar-ga-fee-brands');
     // 분납은 효력일(2026-10-05) 전 계약만 옛 정액으로 계산한다.
     expect(pay({ termMonths: 12, depositPayment: 'INSTALLMENT', extraDeposit: 2000000, contractDate: '2026-10-04' })).toMatchObject({ ruleId: 'MEWCAR_GA_INSTALLMENT_12_PAYOUT', amount: 1000000 });
     expect(pay({ termMonths: 36, depositPayment: 'INSTALLMENT', extraDeposit: 9000000, contractDate: '2026-09-30' })).toMatchObject({ amount: 1400000 }); // 가산 상한 40만
@@ -1258,10 +1266,12 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     expect(resolveSalesCommission({ ...base, depositPayment: 'PREPAID' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_EXTRA_DEPOSIT_REQUIRED' });
     expect(resolveSalesCommission({ ...base, termMonths: 60 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_DEPOSIT_PAYMENT_REQUIRED' });
     expect(resolveSupplierBillingFee({ ...base, productType: '재렌트' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_SUBSCRIPTION_ONLY' });
+    // 선납인데 차종 구분을 모르면 국산/프리미엄 어느 쪽으로도 계산하지 않는다.
+    expect(resolveSalesCommission({ ...base, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_BRAND_CLASS_REQUIRED' });
   });
-  it.each([[0, 1200000], [1000000, 1300000], [5000000, 1600000]])('60개월 선납 추가보증금 %s원은 %s원을 지급한다', (extraDeposit, amount) => {
-    expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit }))
-      .toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_GA_PREPAID_60_PAYOUT', amount });
+  it.each([[0, 1200000], [1000000, 1300000], [5000000, 1700000]])('60개월 국산 선납 추가보증금 %s원은 %s원을 지급한다', (extraDeposit, amount) => {
+    expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit, mewcarBrandClass: 'DOMESTIC' }))
+      .toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_GA_PREPAID_DOMESTIC_60_PAYOUT', amount });
     expect(resolveSupplierBillingFee({ ...base, termMonths: 60 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
   });
   it('2026-10-05 이후 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다(계약일 모르면 멈춤, 선납·청구는 그대로)', () => {
@@ -1278,9 +1288,12 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     for (const contractDate of [undefined, '', '2026-10-5', '2026-13-01', 'x']) {
       expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
     }
-    // 선납 정액·추가보증금 10%(40만 한도)·프리패스 1% 는 계약일과 무관하게 그대로
-    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 0, contractDate: '2026-10-06' })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_24_PAYOUT', amount: 1200000 });
-    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 9000000, contractDate: '2026-10-06' })).toMatchObject({ amount: 1600000 });
+    // 선납은 분납 폐지와 무관 — 단 10-28 차종 구분 정액은 잔가표 6차(10-15 오후) 뒤 계약에만, 그 전 계약은 어느 차수 값인지 확인 필요
+    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 0, contractDate: '2026-10-16', mewcarBrandClass: 'DOMESTIC' })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_DOMESTIC_24_PAYOUT', amount: 1200000 });
+    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 9000000, contractDate: '2026-10-20', mewcarBrandClass: 'DOMESTIC' })).toMatchObject({ amount: 1700000 });
+    for (const contractDate of ['2026-10-06', '2026-10-15'])
+      expect(pay({ depositPayment: 'PREPAID', extraDeposit: 0, contractDate, mewcarBrandClass: 'DOMESTIC' })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_PREPAID_PRE_BRAND_RULE_CONFIRM_REQUIRED' });
+    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 0, contractDate: '2026-02-30', mewcarBrandClass: 'DOMESTIC' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
     expect(resolveSupplierBillingFee({ ...base, contractDate: '2026-10-06' })).toMatchObject({ state: 'CALCULATED', amount: 400000 });
   });
   it('개별 예외 표시가 있으면 일반 정액을 내지 않는다', () => {
