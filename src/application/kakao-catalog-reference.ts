@@ -1020,7 +1020,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP004') {
     if (billing && input.depositState === 'ZERO') return fixed('IANCAR_DEPOSIT_FREE_BILLING_FIXED', 500000);
     if (!subscription && (rerent || input.newProductSubtype === 'NEW_PREDELIVERY') && !text(input.fuel)) return unknownCommission('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
-    if (!subscription && (rerent || (productType === '신차렌트' && input.newProductSubtype === 'NEW_PREDELIVERY')) && /전기/.test(input.fuel ?? '')) return fixedRule(billing ? 'IANCAR_EV_BILLING_FIXED' : 'IANCAR_EV_FIXED');
+    if (!subscription && (rerent || (productType === '신차렌트' && input.newProductSubtype === 'NEW_PREDELIVERY')) && isExactElectricFuel(input.fuel)) return fixedRule(billing ? 'IANCAR_EV_BILLING_FIXED' : 'IANCAR_EV_FIXED');
     if (rerent && termMonths === 6) return fixedRule(billing ? 'IANCAR_RERENT_6_MONTH_BILLING_FIXED' : 'IANCAR_RERENT_6_MONTH_FIXED');
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }

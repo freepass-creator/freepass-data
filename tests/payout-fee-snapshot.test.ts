@@ -230,6 +230,15 @@ describe('영업자 지급수수료 박제 계획', () => {
     expect(term('ev')).toMatchObject({ state: 'KNOWN', amount: 1300000, ruleId: 'AUTOPLUS_EV_SUBSCRIPTION_PAYOUT' });
   });
 
+  it('아이카 전기차 정액(80만)은 연료가 정확히 «전기»일 때만 — «가솔린+전기»·하이브리드는 표준 사다리', () => {
+    const rerent = (fuel: string) => product('RP004', { fuel_type: fuel, price: { '48': { rent: 600000, deposit: 1000000 } } });
+    const result = plan({ mixed: rerent('가솔린+전기'), hybrid: rerent('하이브리드'), ev: rerent(' 전기 ') });
+    const term = (id: string) => result.documents.find(row => row.productId === id)!.terms[0]!;
+    expect(term('ev')).toMatchObject({ state: 'KNOWN', amount: 800000, ruleId: 'IANCAR_EV_FIXED' });
+    for (const id of ['mixed', 'hybrid']) expect(term(id).ruleId).not.toBe('IANCAR_EV_FIXED');
+    expect(term('mixed').amount).toBe(term('hybrid').amount);
+  });
+
   it('«오플구독»이 RP023 이 아닌 공급사에 붙으면 중고구독 규칙으로 계산하지 않는다', () => {
     const term = plan({ other: product('RP013', { product_type: '오플구독', price: { '12': { rent: 700000, deposit: 1400000 } } }) })
       .documents[0]!.terms[0]!;
