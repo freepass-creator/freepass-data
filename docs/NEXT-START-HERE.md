@@ -1,5 +1,12 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-28 PC3 F05 자손한도 → products.self_body_accident (대표 10-28 «맞춰주세요», 차 줄 값 우선)
+
+- 시트 사실 칸에 `self_body_accident`(헤더 «자손한도») 추가: F05 금액 표기(1억원·1억5천만원·5천만원·1천5백만원·1,500만원)를 정수 원으로, 한 금액이 아니면 후보 아님. 엔진이 주인인 칸이라 문서 값과 다르면 충돌이 아니라 F05 값으로 바꾼다(`SHEET_FACT_SOURCE_OWNED`). 다른 시트 사실 칸은 종전대로 빈 칸만.
+- 켜기는 운영 환경값: `SOURCE_CYCLE_SHEET_FACT_KEYS` 에 `self_body_accident`, `SOURCE_CYCLE_SHEET_FACT_SOURCES` 에 공급사 코드. 기본 꺼짐. 회차 상한(SHEET_FACT)·노출·계약 잠금·원천 기록 문턱은 기존 그대로.
+- F05 칸이 비면 문서를 건드리지 않는다(표시는 정책 값). 한 번 쓴 값을 F05 가 비웠을 때 지우는 일은 하지 않는다 — 후속 과제.
+- 표시(«사망·후유장애 X / 부상 Y», 상품 값 우선)는 ERP5 `public/catalog-model.js`·`/sheet` 몫(PC1). 10-28 읽기 전용 대조: F05 값이 있는 노출 차 84대 중 78대가 쓰기 대상(계약 잠금 5·원천 기록 없음 1 제외).
+
 ## 2026-10-28 PC3 뮤카(RP035) 영업 GA 지급 — 잔가표 6차 차종 구분 (대표 10-28 «프로모션 차종은 150»)
 
 - 선납: 국산 12개월 90만·24~60개월 120만 / 제네시스·수입·테슬라·카니발 하이리무진 12개월 100만·24~60개월 150만, + min(추가보증금×10%, 50만). 근거 `ledger:2026-10-28-mewcar-ga-fee-brands`, gnafit `pricing/policy-config-sixth·fifth-20261015.js`·`policy-20261011.js latestBrandPolicy`.

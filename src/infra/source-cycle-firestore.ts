@@ -18,7 +18,7 @@ import { refillableSpecValues, MASTER_SPEC_KEYS, masterSpecValid, masterSpecFill
 import { policyLinkCodeFor, policyLinkReason } from '../domain/supplier-default-policy-link.js';
 import { photoLinkFillState, sheetPhotoLinkFields } from '../domain/sheet-photo-link.js';
 import { validSheetIdentity, type SheetIdentity } from '../domain/sheet-identity.js';
-import { sheetFactFields, sheetFactState, isBlankFact, SHEET_FACT_KEYS, type SheetFactKey } from '../domain/sheet-facts.js';
+import { sheetFactFields, sheetFactState, isBlankFact, validSheetFacts, SHEET_FACT_KEYS, SHEET_FACT_SOURCE_OWNED, type SheetFactKey } from '../domain/sheet-facts.js';
 import { hostname } from 'node:os';
 import { productRevisionModeOf, type ProductRevisionActor } from '../domain/product-revision.js';
 import { recordProductRevision, productRevisionSinkOf, localProductRevisionSink, restProductRevisionSink, type ProductRevisionRecordResult } from './product-revision-writer.js';
@@ -878,7 +878,12 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         throw new Error('SUPPLIER_NAME_REQUIRED');
       const fields = native(after, current ? decodeFields(current.fields) : {});
       // 계획이 고른 시트 사실 칸은 «지금도 비어 있는데 안 쓰였다면» 실패다(채움 누락을 성공으로 오인하지 않는다). 그 사이 사람이 채웠으면 건너뛴 것이라 정상.
-      for (const key of after.sheetFactFill ?? []) if (!(key in fields) && current && isBlankFact(decodeFields(current.fields)[key])) throw new Error('SHEET_FACT_NOT_WRITTEN');
+      // 엔진이 주인인 칸(F05 자손한도)은 «지금 값이 후보와 다른데 안 쓰였다면» 실패다.
+      for (const key of (after.sheetFactFill ?? []) as SheetFactKey[]) {
+        if (key in fields || !current) continue;
+        const now = decodeFields(current.fields)[key];
+        if (isBlankFact(now) || (SHEET_FACT_SOURCE_OWNED.has(key) && now !== validSheetFacts(after.record.raw?.sheet_facts)?.[key])) throw new Error('SHEET_FACT_NOT_WRITTEN');
+      }
       if (after.identityOnly === true && (!Object.keys(fields).length || Object.keys(fields).some(k => !(IDENTITY_ONLY_FIELDS as readonly string[]).includes(k)))) throw new Error('IDENTITY_ONLY_FIELDS_INVALID');
       const query = new URLSearchParams(current ? { 'currentDocument.updateTime': current.updateTime } : { 'currentDocument.exists': 'false' });
       for (const field of Object.keys(fields)) query.append('updateMask.fieldPaths', fieldPath(field));
