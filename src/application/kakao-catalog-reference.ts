@@ -989,7 +989,8 @@ const assetStatus = (value: unknown) => ({
 } as const)[text(value)] ?? null;
 
 export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
-  'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
+  'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' |
+  'depositPayment' | 'extraDeposit' | 'contractDate' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
 
 export function resolveReferencePolicyContext(source: Rec, policies: Record<string, Rec> = {}) {
   const policyId = text(source.policy_code) || null;
