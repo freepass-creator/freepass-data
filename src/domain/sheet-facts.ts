@@ -12,12 +12,18 @@ export const SELF_BODY_LIMIT_MIN = 1_000_000, SELF_BODY_LIMIT_MAX = 10_000_000_0
 /** 엔진이 주인인 칸: F05 차 줄 값이 우선이라(대표 10-28) 문서 값과 다르면 충돌이 아니라 F05 값으로 바꾼다. 다른 칸은 종전대로 빈 칸만 채운다. */
 export const SHEET_FACT_SOURCE_OWNED: ReadonlySet<SheetFactKey> = new Set(['self_body_accident']);
 
-/** «1억원»·«1억5천만원»·«5천만원»·«1천5백만원»·«1,500만원»·«100,000,000» → 정수 원. 한 금액으로 읽히지 않으면 null. */
+/** «1억원»·«1.5억»·«1억5천만원»·«5천만원»·«1천5백만원»·«1,500만원»·«100,000,000» → 정수 원. 한 금액으로 읽히지 않으면 null.
+ *  괄호는 «(총액)»·«(전체)» 만 총액 표시로 받아 뗀다. «(1인당)» 등 다른 괄호는 총액이 아니라 null(표시는 정책 값) — PC1 검토 10-28. */
 export function koreanWonAmount(value: string): number | null {
+  const unwrapped = value.trim().replace(/\s*[(（]\s*(?:총액|전체)\s*[)）]\s*$/, '');
+  if (/[()（）]/.test(unwrapped)) return null;
   // 쉼표는 천 단위 구분일 때만(«1,5억»·«1,,500만» 은 금액이 아니다).
-  if ((value.match(/[\d,]+/g) ?? []).some(run => run.includes(',') && !/^\d{1,3}(?:,\d{3})+$/.test(run))) return null;
-  const t = value.replace(/[,\s]/g, '').replace(/원$/, '');
+  if ((unwrapped.match(/[\d,]+/g) ?? []).some(run => run.includes(',') && !/^\d{1,3}(?:,\d{3})+$/.test(run))) return null;
+  const t = unwrapped.replace(/[,\s]/g, '').replace(/원$/, '');
   if (/^\d{1,12}$/.test(t)) return Number(t);
+  // 소수 억(«1.5억» = 1억5천만원): 억 하나만, 소수 8자리까지(원 단위 정수로 떨어지게). 뒤에 만 단위를 섞지 않는다.
+  const decimal = /^(\d+)\.(\d{1,8})억$/.exec(t);
+  if (decimal) return Number(decimal[1]) * 100_000_000 + Number(decimal[2]!.padEnd(8, '0'));
   const m = /^(?:(\d+)억)?(?:(?:(\d+)천)?(?:(\d+)백)?(\d+)?만)?$/.exec(t);
   if (!m || !t || (!m[1] && !m[2] && !m[3] && !m[4])) return null;
   const man = Number(m[2] ?? 0) * 1000 + Number(m[3] ?? 0) * 100 + Number(m[4] ?? 0);
