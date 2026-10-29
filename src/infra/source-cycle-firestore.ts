@@ -659,6 +659,8 @@ const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
   token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields>; writeMonthlyProductType?: boolean; writeApiOptions?: boolean; sourceIdentitySources?: readonly string[]; identityRefine?: boolean;
+  /** Runtime opt-in: retain fresh own-supplier completeness and check incoming IDs for foreign ownership. */
+  scopedProductReads?: boolean;
   /** 제원 채움만 켤 공급사(입구 매핑 없이 빈 제원 칸 채움·다시 채움, 대표 2026-10-19). 입구 매핑 공급사는 이 목록과 상관없이 제원도 채운다. */
   specFillSources?: readonly string[];
   /** 시트 사실 빈 칸 채움(구동방식·원산지)을 켤 공급사 코드와 칸(기본 꺼짐, 대표 2026-10-23 승인 순서대로 단계마다 켠다). */
@@ -792,7 +794,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
       await flush();
       return { stored: entries.length, absentMarked };
     },
-    async list(source) {
+    async list(source, candidateUids) {
       await ready();
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
       const products: CycleProduct[] = [], drifted: string[] = [], heldDrift: string[] = [], foreign: string[] = []; let page = ''; const pages = new Set<string>();
@@ -814,11 +816,23 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (reviewedApprovals.size) for (const field of ['원문_정정', '원문_정정_이력']) query.append('mask.fieldPaths', fieldPath(field));
         // 옛 이안카 발행 근거는 크다(요금 근거 포함): 관측 기준 시각 한 칸만 읽는다(legacyObservedAt).
         query.append('mask.fieldPaths', 'iancar_phase_one.sourceSyncedAt');
-        const result = await request('/products?' + query);
+        const scoped = options.scopedProductReads === true && candidateUids !== undefined;
+        let result;
+        if (scoped) {
+          const rows = await request(':runQuery', 'POST', { structuredQuery: {
+            from: [{ collectionId: 'products' }],
+            where: { fieldFilter: { field: { fieldPath: 'provider_company_code' }, op: 'EQUAL', value: { stringValue: source } } },
+            select: { fields: query.getAll('mask.fieldPaths').map(fieldPath => ({ fieldPath })) },
+          } });
+          if (!Array.isArray(rows) || !rows.length || rows.some(r => !r || r.error || (!r.document && typeof r.readTime !== 'string')))
+            throw new Error('CATALOG_INCOMPLETE');
+          result = { documents: rows.flatMap(r => r.document ? [r.document] : []) };
+        } else result = await request('/products?' + query);
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
         for (const d of (result.documents ?? []) as Doc[]) {
           const f = decodeFields(d.fields);
           if (f.provider_company_code !== source) {
+            if (scoped) throw new Error('CATALOG_INCOMPLETE');
             // 다른 공급사 문서의 ID(= uid): 같은 번호의 편입을 계획 단계에서 보류하는 근거(PLATE_OWNED_BY_OTHER_SUPPLIER).
             const id = typeof d.name === 'string' ? decodeURIComponent(d.name.split('/').at(-1) ?? '') : '';
             if (id) foreign.push(id);
@@ -831,6 +845,29 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
+      if (options.scopedProductReads === true && candidateUids !== undefined) {
+        const own = new Set(products.map(p => p.record.uid));
+        const candidates = [...new Set(candidateUids)].filter(uid => !own.has(uid));
+        const resource = (uid: string) => { docPath(uid); return `${base.slice('https://firestore.googleapis.com/v1/'.length)}/products/${uid}`; };
+        for (let offset = 0; offset < candidates.length; offset += 100) {
+          const names = new Map(candidates.slice(offset, offset + 100).map(uid => [resource(uid), uid]));
+          const rows = await request(':batchGet', 'POST', { documents: [...names.keys()], mask: { fieldPaths: ['provider_company_code'] } });
+          if (!Array.isArray(rows)) throw new Error('CATALOG_INCOMPLETE');
+          const seen = new Set<string>();
+          for (const row of rows) {
+            const name = row?.found?.name ?? row?.missing;
+            if (row?.error || typeof name !== 'string' || !names.has(name) || seen.has(name) || (!!row.found === !!row.missing))
+              throw new Error('CATALOG_INCOMPLETE');
+            seen.add(name);
+            if (row.found) {
+              // Missing owner is foreign too. A newly appearing own document requires a fresh plan.
+              if (docSource(row.found) === source) throw new Error('CATALOG_INCOMPLETE');
+              foreign.push(names.get(name)!);
+            }
+          }
+          if (seen.size !== names.size) throw new Error('CATALOG_INCOMPLETE');
+        }
+      }
       const sheetRefiner = refineFor(source);
       return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(refiner ? { identityMasterDigest: refiner.digest } : {}),
         ...(sheetRefiner ? { sheetIdentityMatch: (record: SourceProductRecord, year: string) => !!validSheetIdentity(record.raw?.sheet_identity) && !!sheetRefiner.match({ rawName: textOf(record.vehicleText), year, ...sheetOf(record) }) } : {}),
@@ -914,7 +951,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     },
   };
   return { ...commands,
-    async documents(source: string) { await commands.list(source); return [...cache.values()].filter(d => decodeFields(d.fields).provider_company_code === source); },
+    async documents(source: string) { await commands.list(source, []); return [...cache.values()].filter(d => decodeFields(d.fields).provider_company_code === source); },
     async rollback(key: string, approval: string) {
       await ready();
       const b = await load(key), receipt = JSON.parse(await readFile(join(options.directory, `${stableDigest(key)}.receipt.json`), 'utf8'));

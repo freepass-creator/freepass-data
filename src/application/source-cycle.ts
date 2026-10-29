@@ -484,7 +484,7 @@ export async function applySourceCycle(commands: CycleCommands, input: CyclePlan
   if (!options.apply) return { status: 'DRY_RUN', writes: 0, verified: 0, uncertain: [] as string[], digest };
   if (options.digest !== digest || options.approval !== digest) throw new Error('CYCLE_APPROVED_DIGEST_REQUIRED');
   if (plan.blockers.length || options.now < plan.plannedAt || !Number.isFinite(options.now)) throw new Error('CYCLE_BLOCKED');
-  const snapshot = await commands.list(plan.config.sourceId);
+  const snapshot = await commands.list(plan.config.sourceId, plan.evidence.records.map(r => r.uid));
   const replay = planSourceCycle(plan.config, plan.evidence, snapshot, plan.plannedAt);
   if (!deepEqual(replay.plan, plan) || planSourceCycle(plan.config, plan.evidence, snapshot, options.now).plan.blockers.length ||
       plan.entries.some(e => e.after.listable && !sourceSaleAvailable(e.after.record, plan.config.family, options.now)))

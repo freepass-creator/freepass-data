@@ -20,6 +20,31 @@ export function decodeValue(v) {
 }
 export const decodeFields = fields => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, decodeValue(v)]));
 
+// Preserve all comparison inputs, including the complete raw and period-price maps.
+// Photo archives and unrelated stored metadata must not cross this diagnostic boundary.
+export const PARITY_PRODUCT_FIELDS = Object.freeze([
+  'provider_company_code', 'partner_code', 'car_number', 'listable', 'status_label_raw',
+  '원문', 'options', 'mileage', 'maker', 'model', 'fuel_type', 'ext_color', 'int_color',
+  'product_type', 'engine_cc', 'consumer_price', 'first_registration_date', 'price', 'year',
+]);
+
+export function parityProductPageQuery(pageToken = '') {
+  const query = new URLSearchParams({ pageSize: '300' });
+  for (const field of PARITY_PRODUCT_FIELDS) query.append('mask.fieldPaths', /^[A-Za-z_][A-Za-z_0-9]*$/.test(field) ? field : '`' + field + '`');
+  if (pageToken) query.set('pageToken', pageToken);
+  return query;
+}
+
+// One CLI invocation, one complete product observation. Rejections remain rejected:
+// never compare a partial page or silently retry a failed scan for the next supplier.
+export function createSupplierProductReader(loadProducts) {
+  let observation;
+  return async code => {
+    observation ??= Promise.resolve().then(loadProducts);
+    return (await observation).filter(f => (f.provider_company_code || f.partner_code) === code);
+  };
+}
+
 // 날짜: "23-6-5"·"25-03"·"2023-06-05"·"2023.6.5" → {y, m, d?}
 export function parseDate(v) {
   const m = /^(\d{2}|\d{4})\D+(\d{1,2})(?:\D+(\d{1,2}))?/.exec(String(v ?? '').trim());

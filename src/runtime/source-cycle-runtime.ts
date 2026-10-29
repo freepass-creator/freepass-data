@@ -207,7 +207,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
     : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.clockSkewSeconds ? `${r.status}:CLOCK_SKEW_${r.clockSkewSeconds}S` : r.status; return r.refiner; });
-  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
+  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher, scopedProductReads: true,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),

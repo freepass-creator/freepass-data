@@ -248,7 +248,7 @@ export async function runSourceCycle<T>(plugin: CyclePlugin<T>, commands: CycleC
       const built = planSourceCycle(plugin, { records: converted.records, complete: read.complete && !read.error,
         observedAt: read.observedAt, heldCount: converted.held.length,
         ...(benign ? { benignHeldCount: benign } : {}),
-        ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId), options.approvedPlan?.plannedAt ?? clock());
+        ...(unassigned ? { unassignedPlateCount: unassigned } : {}) }, await commands.list(plugin.sourceId, converted.records.map(r => r.uid)), options.approvedPlan?.plannedAt ?? clock());
       plan = built.plan;
       state.reconciliation = built.reconciliation;
       // 읽기 단계 보류 사유에 계획 단계 보류 사유를 합친다(같은 코드는 더한다).
