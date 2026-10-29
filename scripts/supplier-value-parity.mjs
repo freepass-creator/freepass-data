@@ -3,7 +3,7 @@
 // 사용: SUPPLIER_PARITY_SOURCES_JSON='[{"code":"RP004","label":"아이카","sheetId":"…","tabs":["중고재렌트"],"kind":"aica"},…]' node scripts/supplier-value-parity.mjs [--json] [--samples N]
 // 시트 ID 는 환경변수로만 받는다(공개 저장소에 쓰지 않는다). 차량번호는 마지막 4자리만 출력한다. gcloud·gws 로그인 필요.
 import { execFileSync } from 'node:child_process';
-import { FIELD_MAPS, compareSupplier, decodeFields } from './supplier-value-parity-lib.mjs';
+import { FIELD_MAPS, compareSupplier, decodeFields, createSupplierProductReader, parityProductPageQuery } from './supplier-value-parity-lib.mjs';
 
 const PROJECT = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const sources = JSON.parse(process.env.SUPPLIER_PARITY_SOURCES_JSON ?? 'null');
@@ -18,23 +18,23 @@ function readTab(sheetId, tab) {
   const [header, ...rows] = json.values ?? [];
   return rows.map((r, i) => ({ tab, row: i + 2, cells: Object.fromEntries(header.map((h, c) => [h, (r[c] ?? '').toString()])) }));
 }
-async function listProducts(code) {
+const listProducts = createSupplierProductReader(async () => {
   const out = [];
   let pageToken = '';
   do {
-    const q = new URLSearchParams({ pageSize: '300' });
-    const res = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/products?${q}${pageToken ? `&pageToken=${pageToken}` : ''}`,
+    const q = parityProductPageQuery(pageToken);
+    const res = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/products?${q}`,
       { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`FIRESTORE_READ_${res.status}`);
     const body = await res.json();
     for (const d of body.documents ?? []) {
       const f = decodeFields(d.fields ?? {});
-      if ((f.provider_company_code || f.partner_code) === code) out.push(f);
+      out.push(f);
     }
     pageToken = body.nextPageToken ?? '';
   } while (pageToken);
   return out;
-}
+});
 
 const report = [];
 for (const s of sources) {

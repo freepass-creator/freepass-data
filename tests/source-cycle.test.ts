@@ -13,7 +13,7 @@ import { runSourceCycle, sourceCycleCli } from '../src/jobs/source-cycle.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { validateSourceRecord, sourceSaleAvailable, salePriceMap, compactRaw, type SourceProductRecord } from '../src/domain/source-engine.js';
 import type { SourceClockDiagnostic } from '../src/ports/source-cycle.js';
-import { nativeCycleFields } from '../src/infra/source-cycle-firestore.js';
+import { nativeCycleFields, firestoreCycleCommands, encodeFields, decodeFields } from '../src/infra/source-cycle-firestore.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 
 const time = '2026-10-12T00:00:00.000Z', now = Date.parse(time);
@@ -24,6 +24,64 @@ const record = (uid: string, status = '게시'): SourceProductRecord => ({ sourc
 const product = (uid: string, listable = true): CycleProduct => ({ record: record(uid), listable, locked_by_contract: false,
   publication_withdrawal: null, publication_withdrawal_prior: null });
 const evidence = (records: SourceProductRecord[], complete = true): CycleEvidence => ({ records, complete, observedAt: time, heldCount: 0 });
+
+describe('supplier-scoped catalog reads retain fresh enrollment collision checks', () => {
+  const base = 'projects/synthetic-test/databases/(default)/documents';
+  const doc = (uid: string, fields: Record<string, unknown>) => ({ name: `${base}/products/${uid}`, updateTime: time, fields: encodeFields(fields) });
+  const own = (uid: string) => doc(uid, nativeCycleFields(product(uid)));
+  function reader(scoped: boolean, docs: ReturnType<typeof doc>[], transform?: (rows: unknown[], batch: boolean) => unknown[]) {
+    const calls: { kind: string; docs: number; body: any }[] = [];
+    const fetcher = (async (input, init) => {
+      const url = new URL(String(input)), body = init?.body ? JSON.parse(String(init.body)) : null;
+      if (url.pathname.endsWith(':runQuery')) {
+        expect(body.structuredQuery.where.fieldFilter).toEqual({ field: { fieldPath: 'provider_company_code' }, op: 'EQUAL', value: { stringValue: config.sourceId } });
+        expect(body.structuredQuery.select.fields).toContainEqual({ fieldPath: 'source_cycle_record' });
+        const selected = docs.filter(d => decodeFields(d.fields).provider_company_code === config.sourceId);
+        const rows = selected.length ? selected.map(document => ({ document, readTime: time })) : [{ readTime: time }];
+        calls.push({ kind: 'query', docs: selected.length, body });
+        return Response.json(transform ? transform(rows, false) : rows);
+      }
+      if (url.pathname.endsWith(':batchGet')) {
+        expect(body.mask.fieldPaths).toEqual(['provider_company_code']);
+        const rows = body.documents.map((name: string) => { const found = docs.find(d => d.name === name); return found ? { found } : { missing: name }; });
+        calls.push({ kind: 'batch', docs: rows.length, body });
+        return Response.json(transform ? transform(rows, true) : rows);
+      }
+      if (url.pathname.endsWith('/products')) { calls.push({ kind: 'scan', docs: docs.length, body }); return Response.json({ documents: docs }); }
+      throw new Error('UNEXPECTED_TEST_REQUEST');
+    }) as typeof fetch;
+    return { calls, commands: firestoreCycleCommands({ env: { FIREBASE_PROJECT_ID: 'synthetic-test' }, directory: 'unused-test-backup', token: async () => 'synthetic', fetcher, scopedProductReads: scoped }) };
+  }
+  it('reads own full set and only missing incoming IDs; same plan, absent downgrades and foreign/null-owner holds', async () => {
+    const docs = [own('existing'), own('absent'), doc('collision', { provider_company_code: 'OTHER' }), doc('unowned', {})];
+    for (let i = 0; i < 100; i++) docs.push(doc(`unrelated-${i}`, { provider_company_code: 'OTHER', photo_cache: { large: 'x'.repeat(1000) } }));
+    const records = ['existing', 'new', 'collision', 'unowned'].map(uid => record(uid));
+    const legacy = reader(false, docs), scoped = reader(true, docs);
+    const all = await legacy.commands.list(config.sourceId);
+    const bounded = await scoped.commands.list(config.sourceId, records.map(r => r.uid));
+    expect(planSourceCycle(config, evidence(records), bounded, now)).toEqual(planSourceCycle(config, evidence(records), all, now));
+    expect(bounded.products.map(p => p.record.uid)).toEqual(['existing', 'absent']);
+    expect(bounded.foreignUids).toEqual(['collision', 'unowned']);
+    expect(scoped.calls.map(c => c.kind)).toEqual(['query', 'batch']);
+    expect(scoped.calls.reduce((n, c) => n + c.docs, 0)).toBe(5);
+    expect(legacy.calls[0]!.docs).toBe(104);
+    expect(scoped.commands.readMetrics()).toMatchObject({ fullListRequests: 0, supplierQueries: 1, candidateBatches: 1, documents: 4, missing: 1 });
+    expect(legacy.commands.readMetrics()).toMatchObject({ fullListRequests: 1, documents: 104 });
+    expect(scoped.commands.readMetrics().jsonBytes).toBeLessThan(legacy.commands.readMetrics().jsonBytes);
+    await scoped.commands.list(config.sourceId, []);
+    expect(scoped.calls.filter(c => c.kind === 'query')).toHaveLength(2); // no stale cross-call cache
+  });
+  it.each(['missing-result', 'duplicate-result', 'error-result', 'new-own'])('fails closed on incomplete/conflicting candidate read: %s', async mode => {
+    const docs = [own('existing'), doc('collision', { provider_company_code: 'OTHER' })];
+    const scoped = reader(true, docs, (rows, batch) => !batch ? rows : mode === 'missing-result' ? [] : mode === 'duplicate-result' ? [...rows, ...rows]
+      : mode === 'error-result' ? [{ error: { code: 503 } }] : [{ found: own('collision') }]);
+    await expect(scoped.commands.list(config.sourceId, ['collision'])).rejects.toThrow('CATALOG_INCOMPLETE');
+  });
+  it('accepts confirmed empty supplier query, but rejects query errors', async () => {
+    expect((await reader(true, []).commands.list(config.sourceId, [])).products).toEqual([]);
+    await expect(reader(true, [], () => [{ error: { code: 503 } }]).commands.list(config.sourceId, [])).rejects.toThrow('CATALOG_INCOMPLETE');
+  });
+});
 function memory(initial: CycleProduct[] = []) {
   const data = new Map(initial.map(p => [p.record.uid, structuredClone(p)]));
   const backups = new Map<string, CycleProduct | null>();

@@ -28,7 +28,7 @@ import { summarizeSonogong } from '../adapters/sonogong-observe.js';
 import { runSourceCycle, runUnattendedSourceCycle } from '../jobs/source-cycle.js';
 import { leaseConfigFromEnv } from '../domain/writer-lease.js';
 import { writerLeaseStore } from '../infra/writer-lease-firestore.js';
-import type { CyclePlan, CycleControl, VehicleIdentityRefiner } from '../ports/source-cycle.js';
+import type { CyclePlan, CycleControl, CycleCommands, VehicleIdentityRefiner } from '../ports/source-cycle.js';
 import { captureVehicleMasterSnapshotReadOnly, withSharedSheetCatalogAccess } from '../jobs/data-access-runtime.js';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { identityMastersFromVehicleMaster, refineEngineIdentity } from '../application/identity-promotion-plan.js';
@@ -207,7 +207,7 @@ export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, f
   let identityLoad: Promise<VehicleIdentityRefiner | null> | null = null;
   const identity = () => identityLoad ??= identityStatus === 'DISABLED' ? Promise.resolve(null)
     : loadIdentityRefiner(loadVehicleMaster).then(r => { identityStatus = r.clockSkewSeconds ? `${r.status}:CLOCK_SKEW_${r.clockSkewSeconds}S` : r.status; return r.refiner; });
-  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
+  const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher, scopedProductReads: true,
     // 오토플러스 홈피 쓰기 스위치가 켜지면 RP023 만 쓰기 허용(손오공 RP012 는 ERP4 승인 등록 경로가 쓰므로 계속 관측 전용).
     // 손오공 공식 API 쓰기(대표 2026-10-14): 스위치 SOURCE_CYCLE_SONOGONG_API=1 «과» 키·기준 주소가 모두 있을 때만 RP012 쓰기를 연다 — 키가 없으면 호출 0·관측 전용 유지.
     observationSources: [...(sonogongApiEnabled(env) ? [] : ['RP012']),
@@ -756,7 +756,8 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
     /** 신선도 판정을 종료 코드에 쓰지 않은 사유 코드(SKIPPED_ALL_LOCKED = 모든 원천이 다른 회차의 잠금으로 건너뜀). */
     freshnessNote?: string;
     /** 정체성 정제 상태: ENABLED:<마스터 digest 앞 12> · SKIPPED:<사유 코드>(정제 안 함 = 지금 동작) · DISABLED · NOT_LOADED(목록을 읽지 않음). */
-    identityRefine?: string; sourceObservations?: F05SourceObservationReport | F05SourceObservationFailure } = { started: new Date().toISOString(), finished: '', exit: 0 };
+    identityRefine?: string; sourceObservations?: F05SourceObservationReport | F05SourceObservationFailure;
+    catalogReadMetrics?: ReturnType<NonNullable<CycleCommands['readMetrics']>> } = { started: new Date().toISOString(), finished: '', exit: 0 };
   const alert = (reason: string) => appendFile(join(directory, 'alerts.jsonl'),
     JSON.stringify({ source: 'RUNNER', reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
   await mkdir(directory, { recursive: true });
@@ -840,6 +841,7 @@ export async function runUnattended(args: string[], env: NodeJS.ProcessEnv, acce
           digest: 'planDigest' in result ? result.planDigest : null, ...(exposure ? { exposure } : {}) });
       }
       record.identityRefine = runtime.identityStatus();
+      record.catalogReadMetrics = runtime.commands.readMetrics?.();
       const lines = async (name: string) => (await readFile(join(directory, name), 'utf8').catch(() => '')).split('\n');
       record.freshness = assessFreshness(await lines('heartbeats.jsonl'), await lines('alerts.jsonl'),
         { maxAgeMinutes: Number(env.SOURCE_CYCLE_MAX_AGE_MINUTES ?? '120'), only: selected.map(p => p.sourceId),

@@ -257,6 +257,18 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-29 Firestore 반복 조회 비용 — 공급사 범위 읽기 준비
+
+- 목적/원건: 대표 PC0 `01a141fa-b09a-7151-bbd8-b15b25a01878`, 비용 전용 작업방 `01a185ab-1803-7a82-818a-f510e868bb85`. 원본 C checkout/dirty/Claude/서비스/예약 보존, 별도 D worktree 사용. 중앙 진입은 `INSTALLED_FILE_DRIFT` HOLD로 자동 인수하지 않았고 이 직접 지시 범위에서 작업. 최신 main `e6ab6b51e690b647250d56f0aa54974c72992c79`, Issue24/open PR 중 구현 경합 없음, Academy READY. 구현 커밋 `3ea46a3a4f099e41f909132cb695607c98be53fa`.
+- 실제 관측: 2026-10-29 12:20 KST 기준 직전 24h Firestore QUERY 문서 읽기 26,777,599, LOOKUP 66,952. 별도 API 응답 크기 집계에서 일반 OAuth GetOrListDocuments 약159GiB/97,728호출, ERP5 reader 서비스 계정 약21GiB/54,706호출. 이는 서로 다른 지표/관측창이며 청구 전송량·원인별 문서 수와 동일시하지 않는다. 600건으로 제한한 Cloud Run 요청 표본(02:20~03:15 UTC)에서는 erp-com/catalog-compat 58회/328,271,552bytes. 원문 응답/고객 정보/비밀은 증거에 저장하지 않았다.
+- 운영 원인 근거: PC3 기존 로그에서 최근24h F05 286회+기타82회, 코드상 전체 상품 목록 조회에 대응하는 단계 약6,358회. 공급사마다 계획·적용 전 전체 products를 읽으며 다른 공급사 소유 충돌 확인 때문에 기존 단순 공급사 필터만으로 대체할 수 없었다. 6,358은 코드/로그 계산이며 실제 RPC/청구 수가 아니다. PC1 과거 수집 예약은 비활성이고 10-23 이후 기록 갱신 없음. 일반 OAuth의 PC/계정별 전체 귀속은 아직 미확정.
+- 변경: 기존 CycleCommands/list와 runner/apply를 확장. runtime의 scopedProductReads에서는 provider_company_code 동등 쿼리로 자기 공급사 전체+동일 필드 선택, 이미 소유하지 않은 incoming UID만 100개씩 batchGet하여 foreignUids 확인. 소유자 칸 없는 문서도 foreign, 누락/중복/오류 응답·새 자기소유 문서는 fail-closed. 적용 직전 재조회·부재 하향·CAS·백업·되읽기·단일 writer 유지, TTL/예약 변경 없음. documents(source)도 자기 공급사만 읽음. 옵션 없는 이전 adapter 호출은 기존 경로 유지.
+- 별도 중복 제거: supplier-value-parity는 공급사별 전체 조회를 한 CLI 실행의 lazy 단일 관측으로 공유하고 비교에 필요한19개 최상위 필드만 선택. price/원문 map은 보존. 실제 반복 실행 담당/운영 활성 사본은 미확인이므로 이 수정만으로 비용 주원인 해결이라 하지 않는다.
+- 검증: 합성104문서 사례에서 scoped 읽기5문서로 동일 계획/부재 하향/foreign 및 소유자누락 충돌 유지. 관련 Vitest250 PASS/기존1 SKIP, parity Node9 PASS. Claude 설계/구현 실제 ANSWERED/exit0, 한글 ID 응답명 우려는 RP006 실조회 limit1+batchGet1의 동일 name/owner로 확인. RP031도 각1건 확인, 운영 전량 조회/쓰기0. 전체 check의 첫 신규 테스트 타입 오류는 수정했고, 이후 전체 Vitest4619 PASS/7 FAIL/19 SKIP는 jq 부재·병렬 자식프로세스 시간초과로 대상 재검증 중. 전체 PASS를 선언하지 않음.
+- 운영 HOLD: Cloud Run read는 `freepass-data-read-00057-brc` 100% 그대로. PC3 E:/freepass-data/runtime은 clean main이나 5분 F05 C:/dev/fd-f05-source-head-20261019는 `2e956f95`+dirty9/추가6, 비용 패치와3파일 경합 및 APPLY_UNCERTAIN 되읽기 보완이 있으므로 통째 main 덮기 금지. 기존 담당자가 보완을 보존해 운영 dist 밖에서 통합·시험 후 회차 종료/공유 프로세스 부재를 확인하는 반영 절차를 준비한다. 현재 코드 준비와 운영 절감을 구분.
+- RTDB: 폐기/재연결 금지 정본 유지. 관리 API metadata 조회는 quota-project 헤더 보완 후에도 API 비활성403으로 실 인스턴스 상태 미확인. API 활성/RTDB 데이터 조회/복원0. Firestore 비용 관측으로 RTDB 실폐기 여부를 대신 판정하지 않는다.
+- 증거/next_start_here: `D:/dev-artifacts/freepass-data/read-cost-20261029/` monitoring.json, transfer.json, hourly.json, request-summary.json, bounded-live*.json, claude-cycle-implementation.txt, cycle-tests.txt. 다음은 전체 검사 대상 재검증→PR/기존 PC3 dirty 보완 통합→기존 정상 주기 활성 코드 지문·읽기 범위·응답/계획 동등성 확인. 실제 청구 절감은 지연된 비용과 이후 집계로 별도 확인하고, 이전 빌드/dirty 보완을 rollback 자료로 보존.
+
 ### 2026-10-28 영업자 지급수수료 박제 규칙 확장 — ledger 59c7c3ba
 
 - 목적 / 대상 revision: `work/freepass-data/payout-nonstandard-terms-20261028` @ `2e612b3fb1339247ed7c533db367bfca39ce933c` 기준. 대표 2026-10-28 「제안대로 채워」 결정을 기존 F04 수수료 엔진·`precomputeOfferEconomics`·지급수수료 박제 job에 확장한다.

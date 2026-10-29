@@ -1,6 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FIELD_MAPS, compareSupplier, parseDate, _judgeForTest as judge } from '../scripts/supplier-value-parity-lib.mjs';
+import { FIELD_MAPS, compareSupplier, parseDate, createSupplierProductReader, PARITY_PRODUCT_FIELDS, parityProductPageQuery, _judgeForTest as judge } from '../scripts/supplier-value-parity-lib.mjs';
+
+test('모든 비교 매퍼가 읽는 상품 필드를 mask가 포함하고 사진·비관련 원문은 전송하지 않음', () => {
+  const reads = new Set();
+  const record = new Proxy({}, { get: (_, key) => { reads.add(key); return undefined; } });
+  for (const map of Object.values(FIELD_MAPS)) for (const field of map.fields) field.data(record);
+  for (const field of [...reads, 'car_number', 'listable', 'provider_company_code', 'partner_code']) assert.ok(PARITY_PRODUCT_FIELDS.includes(field), `missing comparison field: ${field}`);
+  const query = parityProductPageQuery('a+/=&token');
+  assert.equal(query.get('pageToken'), 'a+/=&token');
+  assert.equal(query.get('pageSize'), '300');
+  assert.deepEqual(query.getAll('mask.fieldPaths'), PARITY_PRODUCT_FIELDS.map(f => f === '원문' ? '`원문`' : f));
+  assert.ok(!query.getAll('mask.fieldPaths').includes('photo_original_refs'));
+});
+
+test('공급사 여러 개와 동시 호출도 실행당 products 전량 읽기는 한 번, 공급사 판정은 기존과 동일', async () => {
+  let scans = 0;
+  const products = [{ provider_company_code: 'A', partner_code: 'B' }, { partner_code: 'B' }, { provider_company_code: '', partner_code: 'B' }];
+  const read = createSupplierProductReader(async () => { scans++; return products; });
+  const [a, b, empty] = await Promise.all([read('A'), read('B'), read('C')]);
+  assert.equal(scans, 1);
+  assert.deepEqual(a, products.filter(f => (f.provider_company_code || f.partner_code) === 'A'));
+  assert.deepEqual(b, products.filter(f => (f.provider_company_code || f.partner_code) === 'B'));
+  assert.deepEqual(empty, []);
+  await read('A'); assert.equal(scans, 1);
+  const nextRun = createSupplierProductReader(async () => { scans++; return products; });
+  await nextRun('A'); assert.equal(scans, 2);
+});
+
+test('불완전한 전체 읽기는 다음 공급사에서도 실패하며 추가 조회나 부분 성공 없음', async () => {
+  let scans = 0;
+  const read = createSupplierProductReader(async () => { scans++; throw new Error('FIRESTORE_READ_503'); });
+  await assert.rejects(read('A'), /FIRESTORE_READ_503/);
+  await assert.rejects(read('B'), /FIRESTORE_READ_503/);
+  assert.equal(scans, 1);
+});
 
 test('날짜는 형식이 달라도 같은 날이면 일치', () => {
   assert.deepEqual(parseDate('23-6-5'), { y: 2023, m: 6, d: 5 });

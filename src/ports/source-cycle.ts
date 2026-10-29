@@ -104,7 +104,9 @@ export type VehicleIdentityRefiner = { digest: string; match(input: { rawName: s
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {
-  list(sourceId: string): Promise<CycleSnapshot>;
+  /** Local catalog transport counters only; no IDs, values or credentials. JSON bytes are not billable wire bytes. */
+  readMetrics?(): { fullListRequests: number; supplierQueries: number; candidateBatches: number; documents: number; missing: number; jsonBytes: number };
+  list(sourceId: string, candidateUids?: readonly string[]): Promise<CycleSnapshot>;
   read(sourceId: string, uid: string): Promise<CycleProduct | null>;
   backup(key: string, before: CycleProduct | null): Promise<void>;
   readBackup(key: string): Promise<CycleProduct | null>;
