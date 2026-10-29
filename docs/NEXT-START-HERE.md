@@ -257,6 +257,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-29 Firestore 비용 수정 main 병합·운영 활성화
+
+- 정식 PR **#826**, main `2d625871bb963a8e6959e26189fcf9375279525c`(구현 `3ea46a3a`, 숫자 집계 `1fa968f1`). 처음 #825는 가지 규칙 실패로 닫혔으며 같은 개발선을 `work/freepass-data/firestore-read-cost-20261029`로 정정했다. #826 canon PASS, Linux Core CI `40813555415` SUCCESS, Vitest **4,632 PASS/기존13 SKIP/실패0**. Windows의 기존 배포검증5초 timeout은 단독 재현되며 Linux 성공으로 Windows 실패를 지우지 않는다. 테스트 기대·제한 변경0.
+- 실제 Claude 설계/구현/숫자집계 검토 ANSWERED/exit0. PC3 기존 Claude가 이번 비용 반영의 단일 writer를 Codex로 확인했고, 완료 신호 전 E 빌드/checkout을 하지 않겠다고 실제 응답했다. 원Task/owner를 자동 인수하지 않았다.
+- PC3가 F05 원본9 dirty+추가6파일과 dist를 지문으로 보존하고 별도 후보에서 기존 APPLY_UNCERTAIN 복구 보완을 유지한 채 최소 통합했다. F05 후보 관련272 PASS/기존1 SKIP. 운영 원본 source15파일은 변경하지 않고 두 경로의 컴파일된 모듈4개와 parity 스크립트2개만 교체했다. 활성 컴파일은 main 비용 변경+각 경로 기존 로컬 보완의 조합이므로 순수 main checkout 배포로 표현하지 않는다.
+- F05 `C:/dev/fd-f05-source-head-20261019`: **12:57:25~26 KST 활성화**, 관련 프로세스 부재/다음 예약95초의 안전창 확인. 강제 실행 없이 **12:59 정상 회차 완료**, `fullListRequests=0`, `supplierQueries=23`, 반환 문서362, JSON 재직렬화 약2.82MB. 종료 코드와 공급사별 처리 상태는 직전 회차와 동일. 이 계수는 해당 회차의 catalog 조회 누계이며 Firestore 청구 단위나 wire bytes가 아니다.
+- E `E:/freepass-data/runtime`: 기존 RP031/13:00 일반회차/후속 사진 점검이 종료된 뒤 **13:02:21~23 KST 활성화**, 다음 예약까지 약12분의 안전창 확인. 일반회차에 기존 HOLD1건이 있었음을 반영 전 증거로 보존. 이 기록 시점에는 13:15 최초 정상 회차의 후속 검증 대기이며, 최신 실제 결과는 아래 status.json을 읽는다. 수집·사진 프로세스 강제 종료/예약/계정/권한 변경0, Cloud Run read 서비스와 ACTIVE release 변경0.
+- 관측/판정: F05의 공급사별 전체 목록 재조회 제거는 실제 정상 회차로 확인. E 정상 회차·이후 Monitoring은 별도 단계이고, 월 청구 절감 금액/비율은 아직 확정하지 않는다. OAuth 지표를 특정 사용자/PC의 전량 과금으로 귀속하지 않는다. RTDB는 폐기 정본 유지/API 비활성 metadata403·실인스턴스 미확인, 복원/연결0.
+- **next_start_here / 최신 증거**: PC0 `D:/dev-artifacts/freepass-data/read-cost-20261029/status.json`을 먼저 읽고 상태와 최신 영수증 포인터 확인. PC3 후보·원복·지문·반영 안전창 증거는 `E:/freepass-data/cost825-stage-20261029/`(이름의825는 준비폴더 역사이며 정식PR826). 원래 dist/원본15파일/후속 영수증은 삭제하지 않는다. rollback은 준비된 이전 compiled/parity 파일 지문을 같은 안전창에서 복원하는 별도 조치이며 데이터 원복이나 기존 HOLD 해소를 뜻하지 않는다. 다음 재빌드 전에는 원본 source에 보존된 로컬 보완과 비용 patch를 다시 대조해 활성 compiled 개선이 유실되지 않게 한다.
+
 ### 2026-10-29 Firestore 반복 조회 비용 — 공급사 범위 읽기 준비
 
 - 목적/원건: 대표 PC0 `01a141fa-b09a-7151-bbd8-b15b25a01878`, 비용 전용 작업방 `01a185ab-1803-7a82-818a-f510e868bb85`. 원본 C checkout/dirty/Claude/서비스/예약 보존, 별도 D worktree 사용. 중앙 진입은 `INSTALLED_FILE_DRIFT` HOLD로 자동 인수하지 않았고 이 직접 지시 범위에서 작업. 최신 main `e6ab6b51e690b647250d56f0aa54974c72992c79`, Issue24/open PR 중 구현 경합 없음, Academy READY. 구현 커밋 `3ea46a3a4f099e41f909132cb695607c98be53fa`.
