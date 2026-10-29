@@ -56,6 +56,8 @@ export const plateKeyOf = (plate: string): string =>
 /** 파일 무결성: 올릴 때 남긴 로컬 sha256 표식이 드라이브 체크섬과 같다(id·원본 표식과 무관 — id 회전에 영향받지 않음). */
 const intact = (f: DriveFileInfo) => !!f.sha256 && f.copySha256 === f.sha256;
 /** 다른 차량의 파일이 아니다: 차량 표식이 없으면(옛 파일럿 파일) 폴더가 «이름 첫 토큰 = 번호»로 이미 고른 것이라 허용, 있으면 이 차량의 해시와 같아야 한다. */
+/** 원본 표식(id)이 현재와 달라도 내용 확인 후 재사용할 수 있는 파일: 이 잡이 올린 파일(srcKey 있음) + 무결성 + 차량 표식이 정확히 같음(표식 없는 옛 파일은 제외). */
+const reusableByContent = (f: DriveFileInfo, plateKey: string) => f.srcKey !== null && intact(f) && f.plateKey === plateKey;
 const ownedBy = (f: DriveFileInfo, plateKey: string) => f.plateKey === undefined || f.plateKey === null || f.plateKey === plateKey;
 const emptyCounts = (): Record<VehicleCopyStatus, number> =>
   ({ COPIED: 0, PLANNED_COPY: 0, SKIPPED_SAME: 0, SKIPPED_EXISTING: 0, SKIPPED_STALE: 0, NO_TARGET: 0, NEEDS_REPLACEMENT: 0, AMBIGUOUS_FOLDER: 0, FAILED: 0, NOT_ATTEMPTED: 0 });
@@ -68,7 +70,7 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
   const write = mode !== 'DRY_RUN';
   const vehicles = (await deps.source.listVehicles()).slice().sort((a, b) => a.plate.localeCompare(b.plate, 'ko') || a.vehicleId.localeCompare(b.vehicleId));
   result.vehicles = vehicles.length;
-  let lastCall = 0, consecutiveFailures = 0, consecutiveStale = 0, attempts = 0, withPhotos = 0;
+  let lastCall = 0, consecutiveFailures = 0, consecutiveStale = 0, attempts = 0, withPhotos = 0, downloads = 0;
   const pace = async () => {   // 공급사 호출 사이 최소 간격(첫 호출 전에는 기다리지 않는다)
     if (lastCall) { const wait = lastCall + limits.intervalMs - deps.now(); if (wait > 0) await deps.sleep(wait); }
     lastCall = deps.now();
@@ -128,6 +130,7 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       const byName = new Map((folder?.files ?? []).map(f => [f.name, f]));
       const folderFiles = folder?.files ?? [];
       const missing: number[] = [];
+      const verify: number[] = [];
       let conflict = false;
       if (folder?.fingerprint) {
         // 끝까지 복사가 끝난 폴더(완료 표식 있음): 공급사 사진 id 는 회차마다 회전하므로 id·원본 표식은 비교하지 않는다.
@@ -146,20 +149,36 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       selected.forEach((id, index) => {
         const existing = byName.get(fileName(index));
         if (!existing) missing.push(index);
-        else if (!isComplete(existing, id) || !ownedBy(existing, plateKey)) conflict = true;   // 같은 이름인데 원본이 다르거나 완료 표식이 없거나 다른 차량 표식인 파일 → 교체 보류(삭제·덮어쓰기 없음)
+        else if (!ownedBy(existing, plateKey)) conflict = true;   // 다른 차량 표식인 파일 → 교체 보류(삭제·덮어쓰기 없음)
+        else if (isComplete(existing, id)) return;
+        else if (reusableByContent(existing, plateKey)) verify.push(index);   // 원본 표식(id)만 회전했을 수 있다 — 내용으로 확인한 뒤에만 인정
+        else conflict = true;   // 완료 표식이 없거나 무결성이 깨진 파일 → 교체 보류
       });
       if (conflict || folderFiles.length > selected.length) {
         record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length); continue;   // 교체는 별도 승인 경로: 쓰기·삭제 없음
       }
-      if (!write) { record(vehicle.plate, 'PLANNED_COPY', selected.length, 0); continue; }
+      if (!write) { record(vehicle.plate, 'PLANNED_COPY', selected.length, 0, verify.length ? 'REUSE_VERIFY_PENDING' : undefined); continue; }
 
-      // 한 차량을 쪼개지 않는다: 이번 회차 사진 상한을 넘기면(첫 차량 제외) 여기서 종료.
-      if (result.photosWritten > 0 && result.photosWritten + missing.length > limits.maxPhotos) return finish('MAX_PHOTOS');
+      // 한 차량을 쪼개지 않는다: 이번 회차 다운로드 상한(확인용 + 누락 파일)을 넘기면(첫 차량 제외) 여기서 종료.
+      if (downloads > 0 && downloads + verify.length + missing.length > limits.maxPhotos) return finish('MAX_PHOTOS');
+
+      // 원본 표식이 달라진 기존 부분 파일: 지금 원천의 같은 순번 사진을 현행 설정으로 압축한 sha256 이 드라이브 파일과 같을 때만 재사용한다(쓰기 0).
+      // 하나라도 다르면 이 차량은 업로드 전에 전부 보류 — 삭제·덮어쓰기 없음.
+      let reuseMismatch = false;
+      for (const index of verify) {
+        await pace();
+        downloads++;
+        const compressed = await deps.compress(await deps.source.download(vehicle, selected[index]!));
+        if (createHash('sha256').update(compressed.bytes).digest('hex') !== byName.get(fileName(index))!.sha256) { reuseMismatch = true; break; }
+      }
+      if (reuseMismatch) { record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length, 0, 'REUSE_CONTENT_MISMATCH'); continue; }
+
       attempts++;
       let written = 0;
       for (const index of missing) {
         const id = selected[index]!;
         await pace();
+        downloads++;
         const original = await deps.source.download(vehicle, id);
         const compressed = await deps.compress(original);
         await deps.drive.upload(folder!.folderId, fileName(index), compressed.bytes, srcKeyOf(id), plateKey);
