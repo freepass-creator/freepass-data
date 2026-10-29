@@ -149,6 +149,33 @@ describe('이안카 사진 → 드라이브 복사(오케스트레이션)', () =
       expect(w.calls.upload).toBe(0); expect(w.calls.fingerprint).toBe(0);
     });
 
+    it('several rotated files where a later one differs: holds before any upload even though the first matched', async () => {
+      const second = { ...rotated('12가1001', 'zzz'), fileId: 'f1', name: '02.jpg' };
+      const w = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b', 'c'] }, folders: { '12가1001': [{ folderId: 'P1', name: '12가1001', fingerprint: null, files: [rotated('12가1001', 'a'), second] }] } });
+      const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+      expect(r.rows[0]).toMatchObject({ status: 'NEEDS_REPLACEMENT', code: 'REUSE_CONTENT_MISMATCH' });
+      expect(w.calls.upload).toBe(0); expect(w.calls.fingerprint).toBe(0);
+    });
+
+    it('a 429 while verifying stops the run at once: the next vehicle is not touched', async () => {
+      const w = world({ vehicles: [veh(1), veh(2)], photos: { V1: ['a', 'b'], V2: ['c', 'd'] }, folders: folderOf('12가1001', rotated('12가1001', 'a')),
+        failDownload: () => 'IANCAR_ONE_API_HTTP_429' });
+      const r = await runIancarPhotoCopy(w.deps, 'FULL', limits());
+      expect(r.stop).toBe('RATE_LIMITED'); expect(r.rows).toHaveLength(1);
+      expect(w.log.filter(l => l.startsWith('detail:'))).toEqual(['detail:V1']);
+      expect(w.calls.upload).toBe(0);
+    });
+
+    it('verification downloads and missing-file downloads share the per-run photo budget (first vehicle always allowed, vehicles never split)', async () => {
+      const w = world({ vehicles: [veh(1), veh(2)], photos: { V1: ['a', 'b', 'c'], V2: ['d', 'e', 'f'] },
+        folders: { ...folderOf('12가1001', rotated('12가1001', 'a')), ...{ '12가1002': [{ folderId: 'P2', name: '12가1002', fingerprint: null, files: [rotated('12가1002', 'd')] }] } } });
+      const r = await runIancarPhotoCopy(w.deps, 'FULL', limits({ maxPhotos: 4 }));
+      // 첫 차량: 확인 1 + 누락 2 = 3 다운로드. 둘째: 3 + 3 > 4 → 쪼개지 않고 종료.
+      expect(r.rows.map(x => x.status)).toEqual(['COPIED']);
+      expect(r.stop).toBe('MAX_PHOTOS');
+      expect(w.log.filter(l => l.startsWith('download:'))).toEqual(['download:a', 'download:b', 'download:c']);
+    });
+
     it('another vehicle\'s mark, a missing mark, or a broken integrity mark are held without even downloading', async () => {
       for (const over of [{ plateKey: plateKeyOf('99가9999') }, { plateKey: null }, { copySha256: 'bad' }]) {
         const w = world({ vehicles: [veh(1)], photos: { V1: ['a', 'b'] }, folders: folderOf('12가1001', rotated('12가1001', 'a', over)) });

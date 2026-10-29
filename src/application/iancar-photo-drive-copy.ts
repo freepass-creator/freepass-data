@@ -70,7 +70,7 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
   const write = mode !== 'DRY_RUN';
   const vehicles = (await deps.source.listVehicles()).slice().sort((a, b) => a.plate.localeCompare(b.plate, 'ko') || a.vehicleId.localeCompare(b.vehicleId));
   result.vehicles = vehicles.length;
-  let lastCall = 0, consecutiveFailures = 0, consecutiveStale = 0, attempts = 0, withPhotos = 0;
+  let lastCall = 0, consecutiveFailures = 0, consecutiveStale = 0, attempts = 0, withPhotos = 0, downloads = 0;
   const pace = async () => {   // 공급사 호출 사이 최소 간격(첫 호출 전에는 기다리지 않는다)
     if (lastCall) { const wait = lastCall + limits.intervalMs - deps.now(); if (wait > 0) await deps.sleep(wait); }
     lastCall = deps.now();
@@ -159,23 +159,26 @@ export async function runIancarPhotoCopy(deps: PhotoCopyDeps, mode: PhotoCopyMod
       }
       if (!write) { record(vehicle.plate, 'PLANNED_COPY', selected.length, 0, verify.length ? 'REUSE_VERIFY_PENDING' : undefined); continue; }
 
+      // 한 차량을 쪼개지 않는다: 이번 회차 다운로드 상한(확인용 + 누락 파일)을 넘기면(첫 차량 제외) 여기서 종료.
+      if (downloads > 0 && downloads + verify.length + missing.length > limits.maxPhotos) return finish('MAX_PHOTOS');
+
       // 원본 표식이 달라진 기존 부분 파일: 지금 원천의 같은 순번 사진을 현행 설정으로 압축한 sha256 이 드라이브 파일과 같을 때만 재사용한다(쓰기 0).
       // 하나라도 다르면 이 차량은 업로드 전에 전부 보류 — 삭제·덮어쓰기 없음.
       let reuseMismatch = false;
       for (const index of verify) {
         await pace();
+        downloads++;
         const compressed = await deps.compress(await deps.source.download(vehicle, selected[index]!));
         if (createHash('sha256').update(compressed.bytes).digest('hex') !== byName.get(fileName(index))!.sha256) { reuseMismatch = true; break; }
       }
       if (reuseMismatch) { record(vehicle.plate, 'NEEDS_REPLACEMENT', selected.length, 0, 'REUSE_CONTENT_MISMATCH'); continue; }
 
-      // 한 차량을 쪼개지 않는다: 이번 회차 사진 상한을 넘기면(첫 차량 제외) 여기서 종료.
-      if (result.photosWritten > 0 && result.photosWritten + missing.length > limits.maxPhotos) return finish('MAX_PHOTOS');
       attempts++;
       let written = 0;
       for (const index of missing) {
         const id = selected[index]!;
         await pace();
+        downloads++;
         const original = await deps.source.download(vehicle, id);
         const compressed = await deps.compress(original);
         await deps.drive.upload(folder!.folderId, fileName(index), compressed.bytes, srcKeyOf(id), plateKey);
