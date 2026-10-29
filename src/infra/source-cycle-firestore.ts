@@ -673,6 +673,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   identity?: () => Promise<VehicleIdentityRefiner | null> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
   const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
+  const readMetrics = { fullListRequests: 0, supplierQueries: 0, candidateBatches: 0, documents: 0, missing: 0, jsonBytes: 0 };
   const monthly = options.writeMonthlyProductType === true;
   const apiOptions = options.writeApiOptions === true;
   const srcIdentity: ReadonlySet<string> | null = options.sourceIdentitySources?.length ? new Set(options.sourceIdentitySources) : null;
@@ -819,6 +820,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         const scoped = options.scopedProductReads === true && candidateUids !== undefined;
         let result;
         if (scoped) {
+          readMetrics.supplierQueries++;
           const rows = await request(':runQuery', 'POST', { structuredQuery: {
             from: [{ collectionId: 'products' }],
             where: { fieldFilter: { field: { fieldPath: 'provider_company_code' }, op: 'EQUAL', value: { stringValue: source } } },
@@ -827,8 +829,14 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           if (!Array.isArray(rows) || !rows.length || rows.some(r => !r || r.error || (!r.document && typeof r.readTime !== 'string')))
             throw new Error('CATALOG_INCOMPLETE');
           result = { documents: rows.flatMap(r => r.document ? [r.document] : []) };
-        } else result = await request('/products?' + query);
+          readMetrics.jsonBytes += Buffer.byteLength(JSON.stringify(rows));
+        } else {
+          readMetrics.fullListRequests++;
+          result = await request('/products?' + query);
+          readMetrics.jsonBytes += Buffer.byteLength(JSON.stringify(result));
+        }
         if (!result || (!Array.isArray(result.documents) && result.documents !== undefined)) throw new Error('CATALOG_INCOMPLETE');
+        readMetrics.documents += result.documents?.length ?? 0;
         for (const d of (result.documents ?? []) as Doc[]) {
           const f = decodeFields(d.fields);
           if (f.provider_company_code !== source) {
@@ -851,8 +859,10 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
         const resource = (uid: string) => { docPath(uid); return `${base.slice('https://firestore.googleapis.com/v1/'.length)}/products/${uid}`; };
         for (let offset = 0; offset < candidates.length; offset += 100) {
           const names = new Map(candidates.slice(offset, offset + 100).map(uid => [resource(uid), uid]));
+          readMetrics.candidateBatches++;
           const rows = await request(':batchGet', 'POST', { documents: [...names.keys()], mask: { fieldPaths: ['provider_company_code'] } });
           if (!Array.isArray(rows)) throw new Error('CATALOG_INCOMPLETE');
+          readMetrics.jsonBytes += Buffer.byteLength(JSON.stringify(rows));
           const seen = new Set<string>();
           for (const row of rows) {
             const name = row?.found?.name ?? row?.missing;
@@ -860,10 +870,11 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
               throw new Error('CATALOG_INCOMPLETE');
             seen.add(name);
             if (row.found) {
+              readMetrics.documents++;
               // Missing owner is foreign too. A newly appearing own document requires a fresh plan.
               if (docSource(row.found) === source) throw new Error('CATALOG_INCOMPLETE');
               foreign.push(names.get(name)!);
-            }
+            } else readMetrics.missing++;
           }
           if (seen.size !== names.size) throw new Error('CATALOG_INCOMPLETE');
         }
@@ -951,6 +962,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
     },
   };
   return { ...commands,
+    readMetrics: () => ({ ...readMetrics }),
     async documents(source: string) { await commands.list(source, []); return [...cache.values()].filter(d => decodeFields(d.fields).provider_company_code === source); },
     async rollback(key: string, approval: string) {
       await ready();

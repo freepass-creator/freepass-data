@@ -65,6 +65,9 @@ describe('supplier-scoped catalog reads retain fresh enrollment collision checks
     expect(scoped.calls.map(c => c.kind)).toEqual(['query', 'batch']);
     expect(scoped.calls.reduce((n, c) => n + c.docs, 0)).toBe(5);
     expect(legacy.calls[0]!.docs).toBe(104);
+    expect(scoped.commands.readMetrics()).toMatchObject({ fullListRequests: 0, supplierQueries: 1, candidateBatches: 1, documents: 4, missing: 1 });
+    expect(legacy.commands.readMetrics()).toMatchObject({ fullListRequests: 1, documents: 104 });
+    expect(scoped.commands.readMetrics().jsonBytes).toBeLessThan(legacy.commands.readMetrics().jsonBytes);
     await scoped.commands.list(config.sourceId, []);
     expect(scoped.calls.filter(c => c.kind === 'query')).toHaveLength(2); // no stale cross-call cache
   });
