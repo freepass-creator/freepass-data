@@ -1,3 +1,4 @@
+import { releasableLockToken } from '../domain/contract-lock-release-update.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
@@ -31,7 +32,6 @@ export type ContractLockDecision =
   | { plate: string; decision: 'HOLD'; reason: string };
 
 export const CONTRACT_LOCK_EVIDENCE_MAX_AGE_MS = 15 * 60 * 1000;
-const RELEASABLE_LOCK_VALUE = 'LEDGER';
 /** 해제 증거는 최소한 이 탭들을 «모두» 조회해 성공했어야 한다(분납·완납에 살아 있는 계약이 있으면 해제하면 안 된다). */
 export const CONTRACT_LOCK_REQUIRED_OTHER_TABS = ['분납실적', '완납실적'] as const;
 
@@ -104,8 +104,9 @@ export function decideContractLockRelease(
   const hold = (reason: string): ContractLockDecision => ({ plate: item.plate, decision: 'HOLD', reason });
   if (!product) return hold('PRODUCT_NOT_FOUND');
   if (product.provider_company_code !== item.supplierCode) return hold('SUPPLIER_MISMATCH');
-  if (product.locked_by_contract !== RELEASABLE_LOCK_VALUE) return hold('LOCK_VALUE_NOT_LEDGER');
-  if (product._ledger_lock_at !== item.expectedLockAt) return hold('LOCK_TIME_CHANGED');
+  const token = releasableLockToken(product);
+  if (!token) return hold('LOCK_VALUE_NOT_LEDGER');
+  if (token.value !== item.expectedLockAt) return hold('LOCK_TIME_CHANGED');
   if (!evidence) return hold('SHEET_EVIDENCE_MISSING');
   if (!isContractLockEvidenceFresh(evidence, now)) return hold('SHEET_EVIDENCE_STALE');
   if (!Array.isArray(evidence.otherTabsRead) || !CONTRACT_LOCK_REQUIRED_OTHER_TABS.every(tab => evidence.otherTabsRead.includes(tab))) return hold('SHEET_EVIDENCE_MISSING');
