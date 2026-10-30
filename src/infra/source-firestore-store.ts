@@ -6,6 +6,7 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
 import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { observeSourceEvent, finishSourceEvent, type SourceEventReceipt } from '../domain/source-event.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 const C = {
   sources: FIRESTORE_COLLECTIONS.source.definitions,
@@ -15,6 +16,21 @@ const C = {
   candidates: FIRESTORE_COLLECTIONS.source.candidates,
   lineage: FIRESTORE_COLLECTIONS.source.lineage
 } as const;
+
+const feeComparable = (record: FieldLineageRecord) => {
+  const { runId: _runId, observedAt: _observedAt, createdRunId: _createdRunId,
+    createdObservedAt: _createdObservedAt, ...content } = record;
+  return content;
+};
+const sameFeeContent = (left: FieldLineageRecord, right: FieldLineageRecord) =>
+  stableDigest(feeComparable(left)) === stableDigest(feeComparable(right));
+const validFeeMetadata = (record: FieldLineageRecord) => !!record.createdRunId && !!record.createdObservedAt
+  && record.createdRunId === record.runId && record.createdObservedAt === record.observedAt;
+const alreadyExists = (error: unknown) => {
+  const value = error as { code?: unknown; message?: unknown };
+  return value?.code === 6 || value?.code === 'already-exists' || value?.code === 'ALREADY_EXISTS'
+    || (typeof value?.message === 'string' && /ALREADY_EXISTS/i.test(value.message));
+};
 
 export class FirestoreSourceStore implements SourceIngestionStore {
   constructor(private readonly db: Firestore) {}
@@ -62,6 +78,27 @@ export class FirestoreSourceStore implements SourceIngestionStore {
   }
   async appendLineage(record: FieldLineageRecord) {
     await this.db.collection(C.lineage).doc(record.lineageRecordId).create(record);
+  }
+  async ensureFeeLineage(record: FieldLineageRecord) {
+    if (!record.lineageRecordId.startsWith('source_fee_')) throw new Error('SOURCE_FEE_LINEAGE_ID_REQUIRED');
+    if (!validFeeMetadata(record)) throw new Error('SOURCE_FEE_LINEAGE_CONFLICT');
+    const ref = this.db.collection(C.lineage).doc(record.lineageRecordId);
+    const current = await ref.get();
+    if (current.exists) {
+      if (!validFeeMetadata(current.data() as FieldLineageRecord) || !sameFeeContent(current.data() as FieldLineageRecord, record)) throw new Error('SOURCE_FEE_LINEAGE_CONFLICT');
+      return 'REUSED' as const;
+    }
+    try {
+      await ref.create(record);
+      return 'CREATED' as const;
+    } catch (error) {
+      if (!alreadyExists(error)) throw error;
+      const raced = await ref.get();
+      if (!raced.exists || !validFeeMetadata(raced.data() as FieldLineageRecord) || !sameFeeContent(raced.data() as FieldLineageRecord, record)) {
+        throw new Error('SOURCE_FEE_LINEAGE_CONFLICT');
+      }
+      return 'REUSED' as const;
+    }
   }
   async completeRun(input: Parameters<SourceIngestionStore['completeRun']>[0]) {
     return this.db.runTransaction(async (tx) => {
@@ -153,6 +190,10 @@ export class FirestoreSourceStore implements SourceIngestionStore {
   async listLineage(runId: string) {
     const snap = await this.db.collection(C.lineage).where('runId', '==', runId).get();
     return snap.docs.map((x) => x.data() as FieldLineageRecord);
+  }
+  async getLineageById(lineageRecordId: string) {
+    const snap = await this.db.collection(C.lineage).doc(lineageRecordId).get();
+    return snap.exists ? snap.data() as FieldLineageRecord : null;
   }
   async getCandidate(candidateId: string) {
     const snap = await this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)).get();

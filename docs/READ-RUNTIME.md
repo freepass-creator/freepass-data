@@ -599,6 +599,13 @@ The Data Health reader exposes only:
 
 The Health reader exposes no `stage`, `activate`, `transact`, `put*`, or other write surface.
 
+## Source fee lineage 재사용 전환
+
+- 새 reader를 먼저 배포해 실행 독립 `source_fee_*` ID 직접 조회와 기존 run별 문서 폴백을 함께 연다. 그 뒤 새 writer를 배포한다.
+- 입력·정책·fee engine 의미 버전이 같으면 새 capture/run도 최초 문서를 재사용하며, `lineageCount`에는 이번 run에서 실제 생성한 fee 문서만 포함한다.
+- `ingestRawSourceBatch`의 COMPLETED run 조기 반환은 유지한다. 정책 또는 `SOURCE_FEE_ENGINE_VERSION` 변경은 동일 capture를 재실행해 소급하지 않으며, 새 capture가 만든 새 run에서만 새 ID를 생성한다.
+- writer 롤백은 새 reader가 유지된 동안만 안전하다. reader를 구버전으로 되돌리면 새 writer가 만든 실행 독립 문서를 읽지 못할 수 있으므로, reader 롤백 범위는 writer 전환 전 또는 구형 run별 문서가 남은 구간으로 제한한다.
+
 ## Still required before live use
 
 1. Merge/finalize Catalog Data Health baseline.

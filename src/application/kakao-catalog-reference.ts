@@ -100,20 +100,28 @@ export function referenceObservationToCompatibilityProduct(row: ReturnType<typeo
 }
 
 /** Existing source owner and sealed input binding; never scan arbitrary RAW collections. */
-export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'> & Partial<Pick<SourceIngestionStore, 'listLineage'>>, options?: { storedFeesOnly: boolean }) {
+export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'> & Partial<Pick<SourceIngestionStore, 'listLineage' | 'getLineageById'>>, options?: { storedFeesOnly: boolean }) {
   const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
   const head = await store.getSourceHead(sourceId);
   if (!head) return { state: 'HOLD' as const, reasonCode: 'SOURCE_HEAD_MISSING', observations: [], sourceSnapshot: null };
   const run = await store.getRun(head.runId);
   if (!run || run.sourceId !== sourceId || run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT'
     || run.observedAt !== head.observedAt) throw new Error('REFERENCE_SOURCE_RUN_UNVERIFIED');
-  const [raw, candidates, feeLineage] = await Promise.all([store.listRaw(run.runId), store.listCandidates(run.runId), options?.storedFeesOnly && store.listLineage ? store.listLineage(run.runId) : Promise.resolve([])]);
+  const [raw, candidates, legacyFeeLineage] = await Promise.all([store.listRaw(run.runId), store.listCandidates(run.runId), options?.storedFeesOnly && store.listLineage ? store.listLineage(run.runId) : Promise.resolve([])]);
   if (raw.length !== run.rawCount || candidates.length !== run.candidateCount
     || new Set(raw.map(r => r.rawRecordId)).size !== raw.length
     || [...raw, ...candidates].some(r => r.runId !== run.runId || r.sourceId !== sourceId)
     || candidates.some(c => !raw.some(r => r.sourceRecordId === c.sourceRecordId && r.sourceFingerprint === c.sourceFingerprint))) {
     throw new Error('REFERENCE_SOURCE_READ_INCOMPLETE');
   }
+  const expectedFeeIds=options?.storedFeesOnly && store.getLineageById ? [...new Set(raw.flatMap(r=>{
+    const matches=candidates.filter(c=>c.sourceRecordId===r.sourceRecordId&&c.sourceFingerprint===r.sourceFingerprint);
+    return matches.length===1?sourceFeeLineage(r,matches[0]!).map(l=>l.lineageRecordId):[];
+  }))]:[];
+  const directFeeLineage=await Promise.all(expectedFeeIds.map(id=>store.getLineageById!(id)));
+  // 새 ID 직접 조회를 우선하고, 없는 ID만 현재 run의 옛 형식 목록에서 찾는다.
+  const feeLineage=[...new Map([...legacyFeeLineage,...directFeeLineage.filter((x):x is FieldLineageRecord=>x!==null)]
+    .map(item=>[item.lineageRecordId,item] as const)).values()];
   const observations = raw.map(r => {
     const matches = candidates.filter(c => c.sourceRecordId === r.sourceRecordId && c.sourceFingerprint === r.sourceFingerprint);
     return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined, options ? {...options, feeLineage} : undefined);
@@ -139,7 +147,9 @@ export function sourceFeePolicyContractDigest() {
   return stableDigest(rules);
 }
 const SOURCE_FEE_TRANSFORM = 'APPROVED_ENGINE_SOURCE_FEE';
-const sourceFeeInputDigest = (raw: RawRecord, record: NormalizedCandidateRecord, termKey: string) => {
+/** 계산 분기·반올림 등 의미가 바뀌면 반드시 올린다. 정책 데이터 버전과 별개다. */
+export const SOURCE_FEE_ENGINE_VERSION = 'source-fee-engine/2026-10-30-1';
+export const sourceFeeInputDigest = (raw: RawRecord, record: NormalizedCandidateRecord, termKey: string) => {
   const c=record.candidate, term=c.priceTerms.find(t=>t.termKey===termKey);
   const billin=['RP021','PT-0026'].includes(c.providerCompanyCode??'') && /SUBSCRIPTION/.test(c.commercialType??'');
   return stableDigest({fingerprint:raw.sourceFingerprint,supplier:c.providerCompanyCode??null,
@@ -148,26 +158,56 @@ const sourceFeeInputDigest = (raw: RawRecord, record: NormalizedCandidateRecord,
     ...(['RP004','RP023'].includes(c.providerCompanyCode??'') ? {fuel:c.vehicleFacts?.fields.fuel??null} : {})});
 };
 
+const stablePriceSourceRefs = (refs: readonly {field:string;row:number|null}[]) =>
+  refs.map(ref=>({field:ref.field,row:ref.row}));
+const feeLineageComparable = (record: FieldLineageRecord) => {
+  const {runId:_runId,observedAt:_observedAt,createdRunId:_createdRunId,
+    createdObservedAt:_createdObservedAt,...content}=record;
+  return content;
+};
+export const sourceFeeLineageMatchesExpected = (actual: FieldLineageRecord, expected: FieldLineageRecord) =>
+  stableDigest(feeLineageComparable(actual))===stableDigest(feeLineageComparable(expected));
+
+const validStoredFee=(fee:unknown): fee is CommissionResolution => {
+  if(!fee || typeof fee!=='object' || Array.isArray(fee)) return false;
+  const f=fee as CommissionResolution;
+  if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
+    (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
+    (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
+    (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
+  return (f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
+    Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
+    f.totalAmount===f.amount!+f.vatAmount! :
+    ['UNKNOWN','COORDINATION_REQUIRED','NOT_APPLICABLE'].includes(f.state) && f.amount===null && f.vatAmount===null && f.totalAmount===null;
+};
+
 /** Producer composition only. Persists derived facts without promoting candidate identity. */
-export function sourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord): FieldLineageRecord[] {
+export function sourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord,
+  feeEngineVersion=SOURCE_FEE_ENGINE_VERSION): FieldLineageRecord[] {
   const observation = projectReferenceObservation(raw, record);
   return record.candidate.priceTerms.flatMap(price => {
     const matches=observation.normalized.priceConditions.filter(t=>t.termMonths===price.termMonths &&
       t.monthlyRentAmount===price.monthlyRent.amount && t.mileageKm===(price.mileageLimitKmPerYear??null));
     if(matches.length!==1) return [];
-    const term=matches[0]!,termKey=price.termKey;
-    const value = { authority: 'APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT', currency: 'KRW', policyId: KAKAO_COMMISSION_POLICY.policyId, policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), policyContractDigest: sourceFeePolicyContractDigest(),
-      inputDigest: sourceFeeInputDigest(raw, record, termKey), observedAt: raw.observedAt, termKey,
-      supplierBillingFee: term.supplierBillingFee, channelPayoutFee: term.channelPayoutFee, priceSourceRefs: term.priceSourceRefs };
-    const id = `source_fee_${stableDigest({runId:raw.runId,candidateId:record.candidateId,termKey,value})}`;
+    const term=matches[0]!,termKey=price.termKey,inputDigest=sourceFeeInputDigest(raw, record, termKey);
+    const policyDigest=sourceFeePolicyContractDigest(),priceSourceRefs=stablePriceSourceRefs(term.priceSourceRefs);
+    const valueBase = { authority: 'APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT', currency: 'KRW', policyId: KAKAO_COMMISSION_POLICY.policyId,
+      policyDigest, policyContractDigest: sourceFeePolicyContractDigest(), inputDigest, feeEngineVersion, termKey,
+      supplierBillingFee: term.supplierBillingFee, channelPayoutFee: term.channelPayoutFee, priceSourceRefs };
+    const value={...valueBase,valueDigest:stableDigest(valueBase)};
+    const id = `source_fee_${stableDigest({sourceId:raw.sourceId,sourceRecordId:raw.sourceRecordId,
+      sourceFingerprint:raw.sourceFingerprint,termKey,inputDigest,policyDigest,feeEngineVersion})}`;
+    const stableCandidateId=`source_record_${stableDigest({sourceId:raw.sourceId,sourceRecordId:raw.sourceRecordId,
+      sourceFingerprint:raw.sourceFingerprint})}`;
     return [{lineageRecordId:id,lineageId:id,stage:'RAW_TO_NORMALIZED' as const,runId:raw.runId,sourceId:raw.sourceId,
       sourceRecordId:raw.sourceRecordId,sourceFingerprint:raw.sourceFingerprint,observedAt:raw.observedAt,
-      source:{fieldPath:'priceTerms',value:{priceSourceRefs:term.priceSourceRefs}},
-      normalized:{candidateId:record.candidateId,fieldPath:`derivedFees.${termKey}`,value},
-      transformId:SOURCE_FEE_TRANSFORM,transformVersion:KAKAO_COMMISSION_POLICY.policyId}];
+      createdRunId:raw.runId,createdObservedAt:raw.observedAt,
+      source:{fieldPath:'priceTerms',value:{priceSourceRefs}},
+      normalized:{candidateId:stableCandidateId,fieldPath:`derivedFees.${termKey}`,value},
+      transformId:SOURCE_FEE_TRANSFORM,transformVersion:feeEngineVersion}];
   });
 }
-function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord, termKey: string, lineage: readonly FieldLineageRecord[]) {
+function readLegacySourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord, termKey: string, lineage: readonly FieldLineageRecord[]) {
   const matches=lineage.filter(l=>l.transformId===SOURCE_FEE_TRANSFORM && l.runId===raw.runId && l.sourceId===raw.sourceId &&
     l.sourceRecordId===raw.sourceRecordId && l.sourceFingerprint===raw.sourceFingerprint && l.normalized?.candidateId===record.candidateId &&
     l.normalized.fieldPath===`derivedFees.${termKey}`);
@@ -179,19 +219,7 @@ function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord,
     !Array.isArray(v.priceSourceRefs) || !v.priceSourceRefs.length || v.priceSourceRefs.some(ref=>!ref || ref.runId!==raw.runId || ref.rawRecordId!==raw.rawRecordId || typeof ref.field!=='string' || !['payload.supplierCode',...sheetSpec.inputHeaders].includes(ref.field) || (ref.row!==null && (!Number.isSafeInteger(ref.row)||ref.row<=0))) ||
     l.lineageId!==l.lineageRecordId ||
     l.lineageRecordId!==`source_fee_${stableDigest({runId:raw.runId,candidateId:record.candidateId,termKey,value:v})}`) return null;
-  const valid=(fee:unknown): fee is CommissionResolution => {
-    if(!fee || typeof fee!=='object' || Array.isArray(fee)) return false;
-    const f=fee as CommissionResolution;
-    if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
-      (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
-      (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
-      (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
-    return (f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
-      Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
-      f.totalAmount===f.amount!+f.vatAmount! :
-      ['UNKNOWN','COORDINATION_REQUIRED','NOT_APPLICABLE'].includes(f.state) && f.amount===null && f.vatAmount===null && f.totalAmount===null;
-  };
-  if(!valid(v.supplierBillingFee)||!valid(v.channelPayoutFee))return null;
+  if(!validStoredFee(v.supplierBillingFee)||!validStoredFee(v.channelPayoutFee))return null;
   const refs=(v.priceSourceRefs as {runId:string;rawRecordId:string;field:string;row:number|null}[]).map(ref=>({runId:ref.runId,rawRecordId:ref.rawRecordId,field:ref.field,row:ref.row}));
   const evidence={authority:v.authority,currency:v.currency,policyId:v.policyId,policyDigest:v.policyDigest,policyContractDigest:v.policyContractDigest,
     inputDigest:v.inputDigest,observedAt:v.observedAt,lineageRecordId:l.lineageRecordId,priceSourceRefs:refs};
@@ -200,6 +228,32 @@ function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord,
     ...((f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') && f.sourceRefs?{sourceRefs:[...f.sourceRefs]}:{}),
     derivedEvidence:evidence});
   return {supplierBillingFee:fee(v.supplierBillingFee),channelPayoutFee:fee(v.channelPayoutFee)};
+}
+
+function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord, termKey: string, lineage: readonly FieldLineageRecord[]) {
+  const expected=sourceFeeLineage(raw,record).find(l=>l.normalized?.fieldPath===`derivedFees.${termKey}`);
+  if(expected){
+    const current=lineage.filter(l=>l.lineageRecordId===expected.lineageRecordId);
+    if(current.length>1)return null;
+    if(current.length===1){
+      const l=current[0]!,v=l.normalized?.value as Record<string,unknown>|undefined;
+      if(!v || l.lineageId!==l.lineageRecordId || l.createdRunId!==l.runId || l.createdObservedAt!==l.observedAt ||
+        !sourceFeeLineageMatchesExpected(l,expected) || typeof v.valueDigest!=='string' ||
+        v.valueDigest!==stableDigest(Object.fromEntries(Object.entries(v).filter(([key])=>key!=='valueDigest'))) ||
+        !validStoredFee(v.supplierBillingFee)||!validStoredFee(v.channelPayoutFee))return null;
+      const storedRefs=v.priceSourceRefs as {field:string;row:number|null}[];
+      const currentRow=Number.isSafeInteger(raw.payload.row)&&Number(raw.payload.row)>0?Number(raw.payload.row):null;
+      const refs=storedRefs.map(ref=>({runId:raw.runId,rawRecordId:raw.rawRecordId,field:ref.field,row:currentRow}));
+      const evidence={authority:v.authority,currency:v.currency,policyId:v.policyId,policyDigest:v.policyDigest,
+        policyContractDigest:v.policyContractDigest,inputDigest:v.inputDigest,observedAt:raw.observedAt,
+        lineageRecordId:l.lineageRecordId,priceSourceRefs:refs};
+      const fee=(f:CommissionResolution)=>({state:f.state,ruleId:f.ruleId,amount:f.amount,vatTreatment:f.vatTreatment,
+        vatAmount:f.vatAmount,totalAmount:f.totalAmount,reasonCode:f.reasonCode,
+        ...((f.state==='CALCULATED'||f.state==='CALCULATED_APPROX')&&f.sourceRefs?{sourceRefs:[...f.sourceRefs]}:{}),derivedEvidence:evidence});
+      return {supplierBillingFee:fee(v.supplierBillingFee as CommissionResolution),channelPayoutFee:fee(v.channelPayoutFee as CommissionResolution)};
+    }
+  }
+  return readLegacySourceFeeLineage(raw,record,termKey,lineage);
 }
 
 export function projectReferenceObservation(raw: RawRecord, record?: NormalizedCandidateRecord, options?: { storedFeesOnly: boolean; feeLineage?: readonly FieldLineageRecord[] }) {

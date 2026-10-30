@@ -47,4 +47,11 @@ export type FieldLineageRecord = {
 
   transformId: string;
   transformVersion: string;
+
+  /**
+   * 실행 독립 fee lineage를 처음 만든 run의 감사 메타다.
+   * 재사용 비교에서는 이 두 필드와 기존 runId/observedAt만 제외한다.
+   */
+  createdRunId?: string;
+  createdObservedAt?: string;
 };

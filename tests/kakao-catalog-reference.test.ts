@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { selectStoredProducts, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
 import { readStoredConsumerProducts } from '../src/application/kakao-catalog-reference.js';
 import { evidenceByTermForProduct } from '../src/application/vehicle-value-evidence.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
 
 describe('reference contract keeps existing deposit evidence codes readable',()=>{
   const schema=JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json',import.meta.url),'utf8'));
@@ -208,6 +209,74 @@ describe('current source observations in existing private reference', () => {
 
     expect((await store.listCandidates(input.runId))[0]!.status).toBe(record.status);
     expect(await store.listRaw(input.runId)).toEqual([input]);
+  });
+  it('reuses an execution-independent fee ID, versions the engine, and conflicts on different content',async()=>{
+    const raw=fixture('stable-fee','무보증'),values=[...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')]='중고렌트';values[sheetSpec.inputHeaders.indexOf('1개월')]='300000';
+    const first={...raw,payload:{...raw.payload,values,supplierCode:'RP030'}},firstRecord=normalizeSharedSheet(first).record;
+    const second={...first,runId:'fixture-run-2',rawRecordId:'fixture-run-2:stable-fee',observedAt:'2026-10-11T01:00:00Z'};
+    const secondRecord=normalizeSharedSheet(second).record;
+    const firstFee=sourceFeeLineage(first,firstRecord),secondFee=sourceFeeLineage(second,secondRecord);
+    expect(secondFee.map(x=>x.lineageRecordId)).toEqual(firstFee.map(x=>x.lineageRecordId));
+    const storedRefs=(firstFee[0]!.normalized!.value as Record<string,unknown>).priceSourceRefs as Record<string,unknown>[];
+    expect(storedRefs).toEqual(expect.arrayContaining([expect.objectContaining({field:'상품구분'})]));
+    expect(storedRefs.every(ref=>!('runId'in ref)&&!('rawRecordId'in ref))).toBe(true);
+    expect(sourceFeeLineage(first,firstRecord,'source-fee-engine/test-next')[0]!.lineageRecordId).not.toBe(firstFee[0]!.lineageRecordId);
+    const changed={...first,sourceFingerprint:'changed-fingerprint',payload:{...first.payload,values:[...values]}};
+    (changed.payload.values as string[])[sheetSpec.inputHeaders.indexOf('1개월')]='400000';
+    expect(sourceFeeLineage(changed,normalizeSharedSheet(changed).record)[0]!.lineageRecordId).not.toBe(firstFee[0]!.lineageRecordId);
+    const store=new MemorySourceStore();expect(await store.ensureFeeLineage(firstFee[0]!)).toBe('CREATED');
+    expect(await store.ensureFeeLineage(secondFee[0]!)).toBe('REUSED');
+    const conflict=structuredClone(secondFee[0]!),value=conflict.normalized!.value as Record<string,unknown>;
+    (value.supplierBillingFee as {amount:number}).amount++;
+    await expect(store.ensureFeeLineage(conflict)).rejects.toThrow('SOURCE_FEE_LINEAGE_CONFLICT');
+    await expect(store.appendLineage(firstFee[0]!)).rejects.toThrow('immutable');
+  });
+  it('reads reused fees from a newer run by ID and rebuilds current-run price references',async()=>{
+    const base=fixture('reader-reuse','무보증'),values=[...base.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')]='중고렌트';values[sheetSpec.inputHeaders.indexOf('1개월')]='300000';
+    const first={...base,payload:{...base.payload,values,supplierCode:'RP030'}},firstRecord=normalizeSharedSheet(first).record;
+    const store=new MemorySourceStore();
+    await store.beginRun({runId:first.runId,sourceId,status:'RUNNING',startedAt:at,coverage:{mode:'FULL',completeness:'COMPLETE'},headStatus:'PENDING',rawCount:0,candidateCount:0,warningCount:0});
+    await store.appendRaw(first);await store.appendCandidate(firstRecord);
+    const fees=sourceFeeLineage(first,firstRecord);for(const fee of fees)expect(await store.ensureFeeLineage(fee)).toBe('CREATED');
+    await store.completeRun({runId:first.runId,completedAt:at,observedAt:at,checkpoint:{sourceId,observedAt:at},coverage:{mode:'FULL',completeness:'COMPLETE'},rawCount:1,candidateCount:1,lineageCount:fees.length,warningCount:1});
+    const second={...first,runId:'fixture-run-new',rawRecordId:'fixture-run-new:reader-reuse',observedAt:'2026-10-11T01:00:00Z'},secondRecord=normalizeSharedSheet(second).record;
+    await store.beginRun({runId:second.runId,sourceId,status:'RUNNING',startedAt:second.observedAt,coverage:{mode:'FULL',completeness:'COMPLETE'},headStatus:'PENDING',rawCount:0,candidateCount:0,warningCount:0});
+    await store.appendRaw(second);await store.appendCandidate(secondRecord);
+    for(const fee of sourceFeeLineage(second,secondRecord))expect(await store.ensureFeeLineage(fee)).toBe('REUSED');
+    await store.completeRun({runId:second.runId,completedAt:second.observedAt,observedAt:second.observedAt,
+      checkpoint:{sourceId,observedAt:second.observedAt},coverage:{mode:'FULL',completeness:'COMPLETE'},rawCount:1,candidateCount:1,lineageCount:0,warningCount:1});
+    expect(await store.listLineage(second.runId)).toEqual([]);
+    const saved=await readCurrentReferenceObservations(store,{storedFeesOnly:true}),term=saved.observations[0]!.normalized.priceConditions.find(t=>t.termMonths===1)!;
+    expect(term.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:15000});
+    const refs=(term.supplierBillingFee as {derivedEvidence:{priceSourceRefs:{runId:string;rawRecordId:string}[]}}).derivedEvidence.priceSourceRefs;
+    expect(refs.every(ref=>ref.runId===second.runId&&ref.rawRecordId===second.rawRecordId)).toBe(true);
+  });
+  it('detects value tampering and keeps legacy run-scoped fee documents readable',async()=>{
+    const raw=fixture('legacy-fee','무보증'),values=[...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')]='중고렌트';values[sheetSpec.inputHeaders.indexOf('1개월')]='300000';
+    const input={...raw,payload:{...raw.payload,values,supplierCode:'RP030'}},record=normalizeSharedSheet(input).record;
+    const modern=sourceFeeLineage(input,record),tampered=structuredClone(modern);
+    const tamperedValue=tampered[0]!.normalized!.value as Record<string,unknown>;
+    (tamperedValue.supplierBillingFee as {amount:number}).amount++;
+    expect(projectReferenceObservation(input,record,{storedFeesOnly:true,feeLineage:tampered}).normalized.priceConditions
+      .find(t=>t.termMonths===1)!.supplierBillingFee.state).toBe('UNKNOWN');
+
+    const legacy=structuredClone(modern[0]!),v=legacy.normalized!.value as Record<string,unknown>;
+    delete v.feeEngineVersion;delete v.valueDigest;v.observedAt=input.observedAt;
+    v.priceSourceRefs=(v.priceSourceRefs as {field:string;row:number|null}[]).map(ref=>({runId:input.runId,rawRecordId:input.rawRecordId,...ref}));
+    legacy.normalized!.candidateId=record.candidateId;legacy.source.value={priceSourceRefs:v.priceSourceRefs};
+    legacy.transformVersion=KAKAO_COMMISSION_POLICY.policyId;
+    legacy.lineageRecordId=`source_fee_${stableDigest({runId:input.runId,candidateId:record.candidateId,termKey:v.termKey,value:v})}`;
+    legacy.lineageId=legacy.lineageRecordId;delete legacy.createdRunId;delete legacy.createdObservedAt;
+    const store=new MemorySourceStore();
+    await store.beginRun({runId:input.runId,sourceId,status:'RUNNING',startedAt:at,coverage:{mode:'FULL',completeness:'COMPLETE'},headStatus:'PENDING',rawCount:0,candidateCount:0,warningCount:0});
+    await store.appendRaw(input);await store.appendCandidate(record);await store.appendLineage(legacy);
+    await store.completeRun({runId:input.runId,completedAt:at,observedAt:at,checkpoint:{sourceId,observedAt:at},coverage:{mode:'FULL',completeness:'COMPLETE'},rawCount:1,candidateCount:1,lineageCount:1,warningCount:1});
+    const saved=await readCurrentReferenceObservations(store,{storedFeesOnly:true});
+    expect(saved.observations[0]!.normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee)
+      .toMatchObject({state:'CALCULATED',amount:15000});
   });
   it('stored-only source projection never replaces missing stored fees with engine calculations', () => {
     const raw = fixture('stored-only-row', '무보증');

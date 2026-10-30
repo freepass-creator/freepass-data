@@ -152,9 +152,15 @@ export async function ingestRawSourceBatch(
         const normalized = normalize(structuredClone(raw));
         if (!normalized) return;
         await store.appendCandidate(normalized.record);
-        for (const item of normalized.lineage) await store.appendLineage(item);
+        for (const item of normalized.lineage) {
+          if (item.lineageRecordId.startsWith('source_fee_')) {
+            if (await store.ensureFeeLineage(item) === 'CREATED') lineageCount++;
+          } else {
+            await store.appendLineage(item);
+            lineageCount++;
+          }
+        }
         candidateCount++;
-        lineageCount += normalized.lineage.length;
         if (normalized.record.status !== 'VALID') warningCount++;
       }
     };

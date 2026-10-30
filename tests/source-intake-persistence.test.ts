@@ -4,6 +4,7 @@ import { FirestoreSourceStore } from '../src/infra/source-firestore-store.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
+import type { FieldLineageRecord } from '../src/domain/lineage.js';
 
 describe('raw-first source intake', () => {
   const retryBatch = (observedAt = '2026-10-09T00:00:00.000Z') => ({
@@ -116,6 +117,31 @@ describe('raw-first source intake', () => {
     update.mockClear();
     await store.failRun({ ...input, error: 'second failure' });
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('lets concurrent Firestore fee ensures race from two misses into one create and one reuse',async()=>{
+    const rows=new Map<string,FieldLineageRecord>();let initialReads=0,release!:()=>void;
+    const bothRead=new Promise<void>(resolve=>release=resolve);
+    const ref=(id:string)=>({id,get:async()=>{
+      const exists=rows.has(id);
+      if(!exists&&initialReads<2){initialReads++;if(initialReads===2)release();await bothRead;}
+      return {exists,data:()=>structuredClone(rows.get(id))};
+    },create:async(value:FieldLineageRecord)=>{
+      if(rows.has(id)){const error=Object.assign(new Error('ALREADY_EXISTS'),{code:6});throw error;}
+      rows.set(id,structuredClone(value));
+    }});
+    const db={collection:()=>({doc:(id:string)=>ref(id)})} as unknown as Firestore;
+    const store=new FirestoreSourceStore(db),record:FieldLineageRecord={lineageRecordId:'source_fee_'+ 'a'.repeat(64),
+      lineageId:'source_fee_'+ 'a'.repeat(64),stage:'RAW_TO_NORMALIZED',runId:'run-a',sourceId:'source-a',
+      sourceRecordId:'row-a',sourceFingerprint:'b'.repeat(64),observedAt:'2026-10-30T00:00:00Z',
+      createdRunId:'run-a',createdObservedAt:'2026-10-30T00:00:00Z',source:{fieldPath:'priceTerms',value:{}},
+      normalized:{candidateId:'stable-candidate',fieldPath:'derivedFees.12',value:{valueDigest:'c'.repeat(64)}},
+      transformId:'APPROVED_ENGINE_SOURCE_FEE',transformVersion:'source-fee-engine/test'};
+    const second={...record,runId:'run-b',observedAt:'2026-10-30T01:00:00Z',createdRunId:'run-b',createdObservedAt:'2026-10-30T01:00:00Z'};
+    const results=await Promise.all([store.ensureFeeLineage(record),store.ensureFeeLineage(second)]);
+    expect([...results].sort()).toEqual(['CREATED','REUSED']);expect(rows).toHaveLength(1);
+    const winner=[record,second][results.indexOf('CREATED')]!;
+    expect([...rows.values()][0]).toMatchObject({createdRunId:winner.createdRunId,createdObservedAt:winner.createdObservedAt});
   });
 
   it('refuses a late Firestore completion after failure has already committed', async () => {
