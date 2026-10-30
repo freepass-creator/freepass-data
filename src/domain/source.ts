@@ -51,6 +51,7 @@ export type SourceRun = {
   headStatus: SourceRunHeadStatus;
   rawCount: number;
   candidateCount: number;
+  /** 이번 run에서 실제 생성한 fee lineage와 일반 lineage의 합. 재사용 fee는 세지 않는다. */
   lineageCount?: number;
   warningCount: number;
   error?: string | null;

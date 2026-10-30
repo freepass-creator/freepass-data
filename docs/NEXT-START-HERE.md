@@ -3510,3 +3510,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: RP004 지급을 같은 조건 청구 전액으로 바꾸고 무보증 500,000원 및 `ledger:2026-10-28-rp004-payout-equals-billing`을 연결했다. `precomputeOfferEconomics` 한 곳에서 지급>청구를 `UNKNOWN/PAYOUT_EXCEEDS_BILLING`으로 차단한다. RP006 재렌트 청구에도 12개월 이상 가장 가까운 짧은 표준 기간을 적용하고, 지급 박제 계획에 공급사별 `payoutExceedsBillingCounts`를 추가했다.
 - 검증: 관련 10파일 370 PASS; 전체 Vitest 4,461 PASS/24 FAIL/19 SKIP이며 24건은 샌드박스 자원·권한(`uv_os_get_passwd ENOMEM`, 사용자 홈/jq 권한, bash timeout/로컬 서버 기동) 실패다. `npx tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
 - 남음 / `next_start_here`: Claude 독립 검토는 `CLAUDE_EXECUTABLE_PROBE_FAILED(EPERM)`로 UNAVAILABLE이며 PASS로 세지 않았다. 전체 시험의 환경성 24 FAIL은 권한·자원이 허용된 동일 revision 환경에서 재확인한다. 제품 규칙 관련 알려진 실패는 0건이다.
+
+## 2026-10-30 source fee lineage 실행 간 재사용
+
+- 목적 / 대상 revision: `work/freepass-data/fee-lineage-dedupe-20261030`, 기준 `6b5d1802ca9f2c04d1709eadf8989f8f512704ea`; 커밋·네트워크·Firestore 접근 없음.
+- 변경: source fee ID에서 run/candidate 시각 의존성을 제거하고 입력·정책·fee engine 의미 버전에 결속했다. 최초 run 메타와 value digest를 보존하며, 메모리/Firestore 포트에 fee 전용 CREATED/REUSED ensure와 ID 직접 조회를 추가했다. 새 reader 우선·옛 run 문서 폴백, 현재 RAW 출처 재구성, 신규분/필요 fee 전체의 분리 무결성 검사를 적용했다. 일반 lineage 중복 거부는 유지했다.
+- 검증: 핵심 4파일 356 PASS; 확장 source/ingest 계열 801 PASS/2 환경 FAIL/1 SKIP. 환경 실패 2건은 무관한 `iancar-source-capture` 자식 프로세스의 `uv_os_get_passwd ENOMEM`이며 해당 파일 나머지 10 PASS. `npx.cmd tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
+- 남음 / `next_start_here`: 전환은 `docs/READ-RUNTIME.md`대로 새 reader를 먼저 배포한 뒤 writer를 전환한다. COMPLETED run에는 소급하지 않고 정책/engine 변경 뒤 새 capture에서만 새 ID를 만든다. 운영 배포·실 Firestore 비용 측정은 이번 범위 밖이며, Claude 검토는 네트워크 금지로 실행하지 않았다.

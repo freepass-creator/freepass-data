@@ -9,8 +9,18 @@ import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { observeSourceEvent, finishSourceEvent, type SourceEventReceipt } from '../domain/source-event.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
+const feeComparable = (record: FieldLineageRecord) => {
+  const { runId: _runId, observedAt: _observedAt, createdRunId: _createdRunId,
+    createdObservedAt: _createdObservedAt, ...content } = record;
+  return content;
+};
+const sameFeeContent = (left: FieldLineageRecord, right: FieldLineageRecord) =>
+  stableDigest(feeComparable(left)) === stableDigest(feeComparable(right));
+const validFeeMetadata = (record: FieldLineageRecord) => !!record.createdRunId && !!record.createdObservedAt
+  && record.createdRunId === record.runId && record.createdObservedAt === record.observedAt;
 
 export class MemorySourceStore implements SourceIngestionStore {
   private events = new Map<string, SourceEventReceipt>();
@@ -55,6 +65,18 @@ export class MemorySourceStore implements SourceIngestionStore {
   async appendLineage(record: FieldLineageRecord) {
     if (this.lineage.has(record.lineageRecordId)) throw new Error(`Lineage record is immutable: ${record.lineageRecordId}`);
     this.lineage.set(record.lineageRecordId, copy(record));
+  }
+
+  async ensureFeeLineage(record: FieldLineageRecord) {
+    if (!record.lineageRecordId.startsWith('source_fee_')) throw new Error('SOURCE_FEE_LINEAGE_ID_REQUIRED');
+    if (!validFeeMetadata(record)) throw new Error('SOURCE_FEE_LINEAGE_CONFLICT');
+    const existing = this.lineage.get(record.lineageRecordId);
+    if (existing) {
+      if (!validFeeMetadata(existing) || !sameFeeContent(existing, record)) throw new Error('SOURCE_FEE_LINEAGE_CONFLICT');
+      return 'REUSED' as const;
+    }
+    this.lineage.set(record.lineageRecordId, copy(record));
+    return 'CREATED' as const;
   }
 
   async completeRun(input: Parameters<SourceIngestionStore['completeRun']>[0]) {
@@ -128,6 +150,9 @@ export class MemorySourceStore implements SourceIngestionStore {
   }
   async listLineage(runId: string) {
     return copy([...this.lineage.values()].filter((x) => x.runId === runId));
+  }
+  async getLineageById(lineageRecordId: string) {
+    return copy(this.lineage.get(lineageRecordId) ?? null);
   }
   async getCandidate(candidateId: string) {
     return copy(this.candidates.get(candidateId) ?? null);

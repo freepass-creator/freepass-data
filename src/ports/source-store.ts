@@ -10,6 +10,8 @@ import type {
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import type { SourceEventClaim, SourceEventReceipt } from '../domain/source-event.js';
 
+export type FeeLineageEnsureResult = 'CREATED' | 'REUSED';
+
 /**
  * Source-run ingestion lifecycle only.
  *
@@ -28,6 +30,7 @@ export interface SourceIngestionStore {
   appendRaw(record: RawRecord): Promise<void>;
   appendCandidate(record: NormalizedCandidateRecord): Promise<void>;
   appendLineage(record: FieldLineageRecord): Promise<void>;
+  ensureFeeLineage(record: FieldLineageRecord): Promise<FeeLineageEnsureResult>;
   completeRun(input: {
     runId: string;
     completedAt: string;
@@ -46,6 +49,7 @@ export interface SourceIngestionStore {
   listRaw(runId: string): Promise<RawRecord[]>;
   listCandidates(runId: string): Promise<NormalizedCandidateRecord[]>;
   listLineage(runId: string): Promise<FieldLineageRecord[]>;
+  getLineageById(lineageRecordId: string): Promise<FieldLineageRecord | null>;
   getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
   listCandidatesBySource(sourceId: string): Promise<NormalizedCandidateRecord[]>;
 }

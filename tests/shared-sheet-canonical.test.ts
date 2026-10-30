@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest, stableRecordSetDigest, stableValue } from '../src/shared/stable-digest.js';
+import { projectReferenceObservation } from '../src/application/kakao-catalog-reference.js';
 
 it('checks the actual Linux Actions producer collation before accepting preserved digests', () => {
   if (process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true') return;
@@ -119,6 +120,49 @@ describe('same F05 producer source observations without physical Canonical comma
     const replay=await ingestSharedSheetObservedRows(source,input);expect(replay.runId).toBe(result.runId);
     expect(await source.listRaw(replay.runId)).toHaveLength(1);
   });
+  it('reuses every fee document on a new run and reads it with current RAW references',async()=>{
+    const source=new MemorySourceStore(),firstInput=fresh(),first=await ingestSharedSheetObservedRows(source,firstInput);
+    const firstFees=(await source.listLineage(first.runId)).filter(l=>l.lineageRecordId.startsWith('source_fee_'));
+    const ensure=vi.spyOn(source,'ensureFeeLineage');
+    const secondInput=fresh();secondInput.capture.readTime=new Date(Date.parse(firstInput.capture.readTime)+500).toISOString();
+    for(const tab of secondInput.capture.tabs)tab.readTime=secondInput.capture.readTime;
+    secondInput.liveCapture.readTime=new Date(Date.parse(secondInput.capture.readTime)+500).toISOString();
+    for(const tab of secondInput.liveCapture.tabs)tab.readTime=secondInput.liveCapture.readTime;
+    secondInput.capture.digest=sharedSheetCaptureDigest(secondInput.capture);secondInput.liveCapture.digest=sharedSheetCaptureDigest(secondInput.liveCapture);
+    const second=await ingestSharedSheetObservedRows(source,secondInput),secondRun=(await source.getRun(second.runId))!;
+    expect(second.runId).not.toBe(first.runId);expect(ensure.mock.results.map(r=>r.value)).toHaveLength(firstFees.length);
+    await expect(Promise.all(ensure.mock.results.map(r=>r.value))).resolves.toEqual(firstFees.map(()=> 'REUSED'));
+    expect((await source.listLineage(second.runId)).some(l=>l.lineageRecordId.startsWith('source_fee_'))).toBe(false);
+    expect(secondRun.lineageCount).toBe((await source.listLineage(second.runId)).length);
+    expect(await Promise.all(firstFees.map(l=>source.getLineageById(l.lineageRecordId)))).toEqual(firstFees);
+    const currentRaw=(await source.listRaw(second.runId))[0]!,currentCandidate=(await source.listCandidates(second.runId))[0]!;
+    const current=projectReferenceObservation(currentRaw,currentCandidate,{storedFeesOnly:true,feeLineage:firstFees});
+    const term=current.normalized.priceConditions.find(t=>t.termMonths===1)!;
+    expect(term.supplierBillingFee.state).toBe('CALCULATED');
+    const evidence=(term.supplierBillingFee as {derivedEvidence:{priceSourceRefs:{runId:string;rawRecordId:string}[]}}).derivedEvidence;
+    expect(evidence.priceSourceRefs.every(ref=>ref.runId===second.runId)).toBe(true);
+    expect(evidence.priceSourceRefs.every(ref=>ref.rawRecordId.startsWith(`${second.runId}:`))).toBe(true);
+  });
+  it.each(['missing','tampered'] as const)('fails reused-run integrity when a required fee is %s',async fault=>{
+    class FaultyFeeReadback extends MemorySourceStore {
+      enabled=false;
+      override async getLineageById(id:string){
+        const value=await super.getLineageById(id);
+        if(!this.enabled||!id.startsWith('source_fee_'))return value;
+        if(fault==='missing')return null;
+        const changed=structuredClone(value)!;
+        ((changed.normalized!.value as Record<string,unknown>).supplierBillingFee as {amount:number}).amount++;
+        return changed;
+      }
+    }
+    const source=new FaultyFeeReadback(),firstInput=fresh();await ingestSharedSheetObservedRows(source,firstInput);source.enabled=true;
+    const second=fresh();second.capture.readTime=new Date(Date.parse(firstInput.capture.readTime)+500).toISOString();
+    for(const tab of second.capture.tabs)tab.readTime=second.capture.readTime;
+    second.liveCapture.readTime=new Date(Date.parse(second.capture.readTime)+500).toISOString();
+    for(const tab of second.liveCapture.tabs)tab.readTime=second.liveCapture.readTime;
+    second.capture.digest=sharedSheetCaptureDigest(second.capture);second.liveCapture.digest=sharedSheetCaptureDigest(second.liveCapture);
+    await expect(ingestSharedSheetObservedRows(source,second)).rejects.toThrow('SHARED_SOURCE_READBACK_MISMATCH');
+  });
   it('stores registered exclusive-tab supplier provenance without filling its blank source cell or releasing identity HOLD',async()=>{
     const source=new MemorySourceStore(),input=fresh({회사명:'',제조사:'',모델:'',세부모델:'',세부트림:''});
     const before=structuredClone(input.capture);
@@ -158,6 +202,7 @@ describe('same F05 producer source observations without physical Canonical comma
   });
   it('advances the existing head for a newer observation and preserves the old RAW history',async()=>{
     const source=new MemorySourceStore(),first=await ingestSharedSheetObservedRows(source,fresh({차량번호:'123가4567'}));
+    const firstFeeIds=(await source.listLineage(first.runId)).filter(l=>l.lineageRecordId.startsWith('source_fee_')).map(l=>l.lineageRecordId);
     const next=fresh({차량번호:'123가4567','12개월':606000});
     next.capture.readTime=new Date(Date.now()-500).toISOString();for(const t of next.capture.tabs)t.readTime=next.capture.readTime;
     next.liveCapture.readTime=new Date(Date.now()-100).toISOString();for(const t of next.liveCapture.tabs)t.readTime=next.liveCapture.readTime;
@@ -168,6 +213,8 @@ describe('same F05 producer source observations without physical Canonical comma
     expect(await source.listRaw(first.runId)).toHaveLength(1);
     const raw=(await source.listRaw(second.runId))[0]!;expect(raw.firstObservedAt).toBe(first.observedAt);
     expect((await source.listCandidates(second.runId))[0]!.candidate.priceTerms.find(t=>t.termMonths===12)!.monthlyRent.amount).toBe(606000);
+    const secondFeeIds=(await source.listLineage(second.runId)).filter(l=>l.lineageRecordId.startsWith('source_fee_')).map(l=>l.lineageRecordId);
+    expect(secondFeeIds).toHaveLength(firstFeeIds.length);expect(secondFeeIds.some(id=>firstFeeIds.includes(id))).toBe(false);
   });
   it('uses the same native rent guard and preserves suspicious amounts only in RAW',async()=>{
     const source=new MemorySourceStore(),input=fresh({'12개월':48000});

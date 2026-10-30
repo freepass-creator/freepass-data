@@ -1,4 +1,4 @@
-import { sourceFeeLineage } from '../application/kakao-catalog-reference.js';
+import { sourceFeeLineage, sourceFeeLineageMatchesExpected } from '../application/kakao-catalog-reference.js';
 import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -153,11 +153,19 @@ export async function ingestSharedSheetObservedRows(source: SourceIngestionStore
   const rawKey = (r: typeof raw[number]) => [r.rawRecordId, r.sourceRecordId, r.sourceFingerprint, r.payload];
   const ordered = (rows: unknown[]) => rows.map(r => stableDigest(r)).sort();
   const normalized = raw.map(r => p.normalize(r));
+  const expectedLineage=normalized.flatMap(n=>n.lineage);
+  const expectedFee=expectedLineage.filter(l=>l.lineageRecordId.startsWith('source_fee_'));
+  const expectedRegular=expectedLineage.filter(l=>!l.lineageRecordId.startsWith('source_fee_'));
+  const storedFee=await Promise.all(expectedFee.map(l=>source.getLineageById(l.lineageRecordId)));
+  const allFeeValid=storedFee.every((actual,index)=>!!actual && actual.createdRunId===actual.runId &&
+    actual.createdObservedAt===actual.observedAt && sourceFeeLineageMatchesExpected(actual,expectedFee[index]!));
+  const createdFeeIds=new Set(storedFee.flatMap(l=>l&&l.createdRunId===run.runId?[l.lineageRecordId]:[]));
+  const expectedCreated=[...expectedRegular,...expectedFee.filter(l=>createdFeeIds.has(l.lineageRecordId))];
   if (raw.length !== p.rawRecords.length || candidates.length !== raw.length ||
       lineage.length !== run.lineageCount ||
       stableDigest(ordered(raw.map(rawKey))) !== stableDigest(ordered(p.rawRecords.map(rawKey))) ||
       stableDigest(ordered(candidates)) !== stableDigest(ordered(normalized.map(n => n.record))) ||
-      stableDigest(ordered(lineage)) !== stableDigest(ordered(normalized.flatMap(n => n.lineage)))) {
+      stableDigest(ordered(lineage)) !== stableDigest(ordered(expectedCreated)) || !allFeeValid) {
     throw new Error('SHARED_SOURCE_READBACK_MISMATCH');
   }
   if (stableDigest(await source.getSourceHead(p.sourceId)) !== stableDigest(head)) throw new Error('SHARED_SOURCE_HEAD_DRIFT');
