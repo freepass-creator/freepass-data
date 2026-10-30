@@ -16,7 +16,7 @@ const addFormats = (
     ? addFormatsModule
     : (addFormatsModule as unknown as { default: FormatsPlugin }).default
 ) as FormatsPlugin;
-const CACHE_MS = 45_000;
+const CACHE_MS = 300_000;   // 5분(커맨드 판정 10-30: 원천 갱신이 매시 단위라 지연 영향 없음, Firestore 읽기 비용)
 const TIMEOUT_MS = 5_000;
 const FEED_MAX_BYTES = 1_000_000;
 const QUOTE_MAX_BYTES = 512_000;

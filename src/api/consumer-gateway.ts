@@ -237,7 +237,7 @@ class ConsumerReadError extends Error {
 type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
 type PublicCatalogCompatProduct = PublicProduct & Record<string, unknown>;
 
-const PUBLIC_CACHE_MS = 45_000;
+const PUBLIC_CACHE_MS = 300_000;   // 5분(커맨드 판정 10-30: 원천 갱신이 매시 단위라 지연 영향 없음, Firestore 읽기 비용)
 const PUBLIC_TIMEOUT_MS = 5_000;
 const PUBLIC_RATE_LIMIT_WINDOW_MS = 60_000;
 const PUBLIC_RATE_LIMIT_MAX = 120;
