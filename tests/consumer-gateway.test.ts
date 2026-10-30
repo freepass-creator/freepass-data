@@ -1280,6 +1280,16 @@ describe('photo request budgets and opaque keys', () => {
     } finally { await app.close(); vi.unstubAllEnvs(); }
   });
 
+  it('공개 피드는 p·wl 이 달라도 같은 소비처의 전체 읽기를 캐시 한 번으로 쓴다(Firestore 읽기 비용)', async () => {
+    let reads = 0;
+    const reader = { read: async () => { reads++; return {} as never; } };
+    const { app } = withAccess(new MemoryDataStore(), [binding], undefined, reader as never);
+    try {
+      for (const p of ['a', 'b', 'c', undefined]) await app.inject({ url: '/v1/public/catalog/feed' + (p ? `?p=${p}` : ''), remoteAddress: '192.0.2.77' });
+      expect(reads).toBe(1);
+    } finally { await app.close(); }
+  });
+
   it.each(['-1', '4', '1.5', 'true', '', '01'])('rejects invalid trusted proxy hops %s', value => {
     vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', value);
     try { expect(() => withAccess(new MemoryDataStore(), [binding])).toThrow('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID'); }

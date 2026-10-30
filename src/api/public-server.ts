@@ -155,7 +155,7 @@ app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/feed', async (r
   try {
     const { p, wl } = normalize(request.query);
     const consumerId = publicConsumerIdFromWhitelabel(wl);
-    const response = buildPublicProductFeed(await readSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`), { p, wl });
+    const response = buildPublicProductFeed(await readSnapshot(consumerId, consumerId /* 읽기는 소비처 하나당 한 번: p·wl 은 읽은 뒤 걸러내므로 캐시 키에 넣지 않는다(문서 전체 읽기 중복 방지) */), { p, wl });
     if (response.products.length > 5000 || bytes(response) > FEED_MAX_BYTES || !validateFeed(response)) {
       return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
     }
@@ -176,7 +176,7 @@ app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/quote', async (
     const { p, wl, code } = normalize(request.query);
     if (!code) return reply.code(400).send({ error: '상품 코드가 없습니다.' });
     const consumerId = publicConsumerIdFromWhitelabel(wl);
-    const response = buildPublicProductQuote(await readSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`), code, { p, wl });
+    const response = buildPublicProductQuote(await readSnapshot(consumerId, consumerId /* 읽기는 소비처 하나당 한 번: p·wl 은 읽은 뒤 걸러내므로 캐시 키에 넣지 않는다(문서 전체 읽기 중복 방지) */), code, { p, wl });
     if (!response) return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
     if (bytes(response) > QUOTE_MAX_BYTES || !validateQuote(response)) return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
     return response;
