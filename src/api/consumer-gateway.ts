@@ -491,7 +491,7 @@ export function createConsumerGateway(
     try {
       const { p, wl } = normalizePublicQuery(request.query, registered);
       const consumerId = publicConsumerIdFromWhitelabel(wl);
-      const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+      const snapshot = await readPublicSnapshot(consumerId, consumerId /* 읽기는 소비처 하나당 한 번: p·wl 은 읽은 뒤 걸러내므로 캐시 키에 넣지 않는다(문서 전체 읽기 중복 방지) */);
       const response = buildPublicProductFeed(snapshot, { p, wl });
       if (response.products.length > 5000 || responseBytes(response) > PUBLIC_FEED_MAX_BYTES || !validatePublicProductFeed(response)) {
         return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
@@ -514,7 +514,7 @@ export function createConsumerGateway(
       const { p, wl, code } = normalizePublicQuery(request.query, registered);
       if (!code) return reply.code(400).send({ error: '상품 코드가 없습니다.' });
       const consumerId = publicConsumerIdFromWhitelabel(wl);
-      const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+      const snapshot = await readPublicSnapshot(consumerId, consumerId /* 읽기는 소비처 하나당 한 번: p·wl 은 읽은 뒤 걸러내므로 캐시 키에 넣지 않는다(문서 전체 읽기 중복 방지) */);
       const response = buildPublicProductQuote(snapshot, code, { p, wl });
       if (!response) return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
       if (responseBytes(response) > PUBLIC_QUOTE_MAX_BYTES || !validatePublicProductQuote(response)) {
