@@ -841,6 +841,7 @@ describe('Kakao billing, payout and margin facts', () => {
       [60, [1080000, 840000]],
     ]);
     for (const supplierId of new Set(supplierIds)) {
+      if (supplierId === 'RP031') continue; // 이안카는 10-31 결정으로 «월 렌트료 × 기간 배수» — 아래 별도 시험
       for (const [termMonths, [billing, payout]] of expected) {
         const input = { supplierId, productType: '중고렌트', termMonths, monthlyRent: 800000, fuel: '가솔린' };
         expect(resolveSupplierBillingFee(input), `${supplierId}/${termMonths}/billing`).toMatchObject(
@@ -1240,6 +1241,7 @@ describe('F04 2026-10-04 alignment regression', () => {
   });
   it.each([20,25,26,28,33,72,84])('unlisted term %s applies only the approved payout ladder fallback', termMonths => {
     for (const supplierId of KAKAO_COMMISSION_POLICY.standardSupplierIds) {
+      if (supplierId === 'RP031') continue; // 이안카는 표에 없는 기간을 «확인 필요»로 멈춘다(대표 10-31 배수표) — 아래 별도 시험
       const results = both({ ...base, supplierId, productType: '장기렌트', termMonths });
       const billing = results[0]!, payout = results[1]!;
       // 청구 비정형 기간: 아이언(#801) + 기본 회사(대표 10-28 표준표)만 가까운 짧은 표준 기간, 나머지는 그대로 UNKNOWN.
@@ -1665,5 +1667,22 @@ describe('원문 출고 방식과 증거 subtype 충돌', () => {
     const t = buildKakaoCatalogReferenceProduct('synthetic', product, { '36': { vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' } })!.offers[0]!.priceTerms[0]!;
     expect(t.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
     expect(t.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
+  });
+});
+
+describe('이안카(RP031) 월 렌트료 × 기간 배수 (대표 10-31)', () => {
+  const base = { supplierId: 'RP031', productType: '재렌트', termMonths: 12, monthlyRent: 1100000 };
+  it.each([[1, 55000], [3, 110000], [5, 275000], [12, 550000], [24, 825000], [36, 1100000], [48, 1375000], [60, 1650000]])(
+    '%i개월 청구는 VAT 포함 월 렌트료의 배수, 지급은 그 80%', (termMonths, total) => {
+      const billing = resolveSupplierBillingFee({ ...base, termMonths });
+      const payout = resolveSalesCommission({ ...base, termMonths });
+      expect(billing).toMatchObject({ state: 'CALCULATED', vatTreatment: 'INCLUDED', amount: Math.round(total / 1.1) });
+      expect(payout).toMatchObject({ state: 'CALCULATED', vatTreatment: 'INCLUDED', amount: Math.round(Math.round(total * 0.8) / 1.1) });
+      expect(billing.sourceRefs?.length).toBeGreaterThan(0);
+    });
+  it('구독도 같은 배수, 표에 없는 기간은 확인 필요, 다른 공급사는 그대로', () => {
+    expect(resolveSupplierBillingFee({ ...base, productType: '중고구독', termMonths: 36 })).toMatchObject({ state: 'CALCULATED', amount: 1000000 });
+    expect(resolveSupplierBillingFee({ ...base, termMonths: 18 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', termMonths: 12 })).toMatchObject({ amount: 600000, vatTreatment: 'EXCLUDED' });
   });
 });

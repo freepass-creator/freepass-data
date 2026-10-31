@@ -570,6 +570,9 @@ export const KAKAO_COMMISSION_POLICY = {
   },
 } as const;
 
+/** 이안카(RP031) 기간별 «월 렌트료 × 배수»(퍼센트). 대표 10-31 결정 — 1개월 0.05 · 3개월 0.10 · 5개월 0.25 · 12개월 0.50 · 24개월 0.75 · 36개월 1.00 · 48개월 1.25 · 60개월 1.50. */
+const IANCAR_RENT_MULTIPLE_PERCENT: Readonly<Record<number, number>> = { 1: 5, 3: 10, 5: 25, 12: 50, 24: 75, 36: 100, 48: 125, 60: 150 };
+
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
 
 /** One supplier assignment over the existing authority. Never a policy per vehicle. */
@@ -1078,6 +1081,12 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 6) return fixedRule(billing ? 'IANCAR_RERENT_6_MONTH_BILLING_FIXED' : 'IANCAR_RERENT_6_MONTH_FIXED');
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
+  // 이안카(RP031) 대표 10-31 결정: 청구 = 월 렌트료(VAT 포함) × 기간 배수, 영업자 지급 = 그 80%. 스타 재렌트처럼 VAT 포함 금액을 ÷1.1 로 공급가화.
+  if (supplierId === 'RP031' && (rerent || subscription)) {
+    const percent = IANCAR_RENT_MULTIPLE_PERCENT[termMonths];
+    if (percent === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    return fixed(`IANCAR_RENT_MULTIPLE_${termMonths}_${side}`, monthlyRent * percent * (billing ? 100 : 80) / 10000, 'INCLUDED');
+  }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
   // 기본 회사(대표 10-28 표준표)는 청구도 지급과 같이 비정형 기간을 가까운 짧은 표준 기간으로 본다 — 아이언(RP006)은 #801.
   const nonstandardBilling = side === 'BILLING' && (supplierId === 'RP006' || supplierPolicy?.basicSubscription === true);
@@ -1135,6 +1144,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     rows = index >= 0 ? [first + 2 + index] : [183,184,185,186,187,188,189];
   }
   else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
+  else if (input.supplierId === 'RP031' && /재렌트|중고렌트|장기렌트|구독/.test(product)) rows = [22, 23, 24, 25, 26, 27, 28];
   else if (id.startsWith('IANCAR_EV')) rows = [138];
   else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];
   else if (result.reasonCode === 'IANCAR_SHORT_TERM_BASIS_REQUIRED') rows = [131];
