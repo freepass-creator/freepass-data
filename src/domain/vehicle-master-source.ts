@@ -38,6 +38,9 @@ export type VehicleMasterParsedTrim = {
   trimName: string;
   fuelType: string | null;
   basePrice: number;
+  priceBefore?: number;
+  priceAfter?: number;
+  priceBasis?: string;
   currency: 'KRW';
   effectiveFrom?: string | null;
   baseItems: string[];

@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { createVehicleMasterReadOnlyDataAccessRuntime } from './data-access-runtime.js';
-import { assessEstimateMasterReadiness } from '../application/estimate-master-readiness.js';
 import type { EstimateMasterCanonicalBridge } from '../application/estimate-master-canonical.js';
 
 const S = (value: unknown) => String(value ?? '').trim();
@@ -28,8 +27,19 @@ const runtime = createVehicleMasterReadOnlyDataAccessRuntime({
   accessToken,
   evidenceBucket,
 });
-const build = await runtime.estimateMasterReadiness(bridge);
-const result = assessEstimateMasterReadiness(build);
+// The production SSOT explicitly remains vehicle_master + vehicle_trim_master.
+// Empty future graph nodes are not evidence that the operating master is empty.
+const operationalSource = await runtime.operationalEstimateReadiness();
+const result = {
+  contractVersion:'estimate-master-readiness-v1', schemaVersion:'1.0.0',
+  status:'BLOCKED', generatedAt:new Date().toISOString(), projectionId:'estimate-newcar-master',
+  activeReleaseAuthorized:false, publicationImplemented:false,
+  counts:{total:operationalSource.counts.products,active:0,hold:operationalSource.counts.products},activeRate:0,
+  inputDigest:operationalSource.inputDigest,
+  blockers:['ESTIMATE_RELEASE_NOT_PUBLISHED', ...operationalSource.holdReasons.map(row=>row.reason)],
+  holdReasons:operationalSource.holdReasons,
+  operationalSource,
+};
 
 process.stdout.write(JSON.stringify({
   ...result,

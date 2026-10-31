@@ -1,3 +1,5 @@
+import { readOperationalEstimateSourceSnapshot } from '../infra/estimate-operational-master-reader.js';
+import { inspectOperationalEstimateSource } from '../application/estimate-operational-master.js';
 import { readVehicleMasterSnapshot } from '../infra/erp5-compat-catalog-reader.js';
 export async function captureVehicleMasterSnapshotReadOnly() {
   return createJobDataAccessRuntime().access.read({
@@ -725,6 +727,17 @@ export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
   const store = createFirestoreVehicleMasterStore();
 
   return {
+    operationalEstimateReadiness: () => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-estimate-master-readiness', kind: 'SERVICE' },
+        clientId: 'job:check-estimate-master-readiness',
+        purpose: 'check current operational vehicle master and commercial source without migrating to the future node graph'
+      },
+      operation: 'READ_ESTIMATE_MASTER_READINESS',
+      resource: { kind: 'PROJECTION', name: 'estimate-newcar-master-readiness', projectionId: 'estimate-newcar-master' },
+      requestDigest: stableDigest({source:'OPERATIONAL_V1'}),
+      summarize: value => ({count:value.counts.products,digest:stableDigest(value),inputDigest:value.inputDigest}),
+    }, async () => inspectOperationalEstimateSource(await readOperationalEstimateSourceSnapshot()).summary),
     estimateMasterReadiness: (bridge: EstimateMasterCanonicalBridge = {}) => access.read({
       context: {
         actor: { id: 'service:freepass-data-estimate-master-readiness', kind: 'SERVICE' },
