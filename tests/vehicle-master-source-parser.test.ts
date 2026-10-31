@@ -187,3 +187,33 @@ describe('vehicle master source parsers', () => {
     expect(carnoon.canParse(input)).toBe(false);
   });
 });
+
+it('keeps official powertrain panels, tax bases and named option prices separate', () => {
+  const parser = new KiaOfficialPriceParser();
+  const result = parser.parse({
+    sourceDocumentId: 'test_official_panels',
+    sourceUrl: 'https://www.kia.com/kr/vehicles/sorento/price',
+    contentType: 'text/html',
+    bytes: Buffer.from(`<title>기아 쏘렌토 가격 - 공식</title><div>2027년형</div><div>2026년 10월 1일 기준</div>
+      <p>(2.5 가솔린 터보 프레스티지 5인승 기준)</p>
+      <li id="tabs-aem-item-1-tab"><button>2.5 가솔린 터보</button></li>
+      <li id="tabs-aem-item-2-tab"><button>터보 하이브리드(2WD)</button></li>
+      <div id="tabs-aem-item-1-tabpanel"><h3>프레스티지</h3><div>36,410,000</div><button>선택품목</button><li>파노라마 선루프 1,090,000</li><div>430,000</div><div>1,110,000</div>
+        <button>프레스티지</button><button>블랙 에디션</button><div>판매가격으로 구성된 프레스티지 가격정보</div><div>36,410,000</div>
+      </div>
+      <div id="tabs-aem-item-2-tabpanel"><h3>프레스티지</h3><div>세제혜택 전 판매가격</div><div>40,630,000</div><div>세제혜택 후 판매가격</div><div>39,630,000</div><button>선택품목</button><li>파노라마 선루프 1,090,000</li></div>`),
+  });
+  expect(result.records).toHaveLength(2);
+  const gas = result.records.find(r => r.fuelType === 'GASOLINE');
+  const hybrid = result.records.find(r => r.fuelType === 'HYBRID');
+  expect(gas?.basePrice).toBe(36410000);
+  expect(gas?.options).toHaveLength(1);
+  expect(gas?.options[0]?.name).toBe('파노라마 선루프');
+  expect(gas?.options[0]?.price).toBe(1090000);
+  expect(hybrid?.powertrainName).toBe('터보 하이브리드(2WD)');
+  expect(hybrid?.drivetrain).toBe('2WD');
+  expect(hybrid?.basePrice).toBe(39630000);
+  expect(hybrid?.priceBefore).toBe(40630000);
+  expect(hybrid?.priceAfter).toBe(39630000);
+  expect(hybrid?.priceBasis).toBe('세제혜택 후');
+});

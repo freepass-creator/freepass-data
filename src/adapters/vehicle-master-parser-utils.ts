@@ -54,7 +54,7 @@ export function splitOptionPrice(line: string): VehicleMasterParsedOption | null
   if (!match?.[1] || !match[2]) return null;
   const name = match[1].trim();
   const price = parseKrw(match[2]);
-  if (!name || price === null) return null;
+  if (!name || !/[가-힣A-Za-z]/.test(name) || price === null) return null;
   return { name, kind: classifyParsedOptionKind(name), price, sourceText: line };
 }
 
