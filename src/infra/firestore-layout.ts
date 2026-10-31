@@ -12,6 +12,7 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
   }),
   source: Object.freeze({
     definitions: 'sources',
+    vehicleMasterArchives: 'vehicle_master_source_archives',
     runs: 'source_runs',
     heads: 'source_heads',
     raw: 'raw_records',

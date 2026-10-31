@@ -1277,7 +1277,8 @@ export function createConsumerGateway(
             manifestId: release.manifestId,
             inputDigest: release.inputDigest,
             dataDigest: release.dataDigest,
-            revision: release.canonicalRevision,
+            revision: evidence.manifest.operationalEstimateProof?.publicationRevision ?? release.canonicalRevision,
+            ...(evidence.manifest.operationalEstimateProof ? { inputAuthority: evidence.manifest.operationalEstimateProof.authority, evidenceContract: evidence.manifest.operationalEstimateProof.contract } : {}),
             generatedAt: release.generatedAt,
             activatedAt: release.activatedAt
           }

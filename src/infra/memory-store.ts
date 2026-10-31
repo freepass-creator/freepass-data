@@ -1,3 +1,6 @@
+import type { EstimateNewcarMasterRecord } from '../domain/estimate-master.js';
+import { assertOperationalActivationSources } from '../shared/estimate-operational-proof.js';
+import type { OperationalEstimateSourceDocument, OperationalEstimateSourceWitness } from '../ports/estimate-operational-publication.js';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
@@ -44,6 +47,7 @@ import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity
 const copy = <T>(value: T): T => structuredClone(value);
 
 export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxStore, SheetDeliveryEvidenceStore {
+  constructor(private readonly operationalOptions: { readOperationalEstimateDocuments?: (witnesses:OperationalEstimateSourceWitness[])=>Promise<OperationalEstimateSourceDocument[]> } = {}) {}
   private models = new Map<string, VehicleModel>();
   private assets = new Map<string, VehicleAsset>();
   private products = new Map<string, Product>();
@@ -451,7 +455,22 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     const previousId = this.active.get(release.projectionId);
     if (guard?.expectedActiveReleaseId !== undefined && (previousId ?? null) !== guard.expectedActiveReleaseId)
       throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
-    if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
+    const operational = manifest.operationalEstimateProof;
+    if (guard?.operationalEstimate && (!operational || release.projectionId !== 'estimate-newcar-master'))
+      throw new Error('ESTIMATE_OPERATIONAL_PUBLICATION_APPROVAL_REQUIRED');
+    if (operational) {
+      if (operational.expectedActiveReleaseId !== (previousId ?? null) || guard?.expectedActiveReleaseId !== (previousId ?? null))
+        throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+      const previousRevision = previousId ? this.manifests.get(previousId)?.operationalEstimateProof?.publicationRevision ?? 0 : 0;
+      if (operational.publicationRevision !== previousRevision + 1) throw new Error('ESTIMATE_PUBLICATION_REVISION_CONFLICT');
+      if (!this.operationalOptions.readOperationalEstimateDocuments) throw new Error('ESTIMATE_OPERATIONAL_SOURCE_READER_REQUIRED');
+      const current = await this.operationalOptions.readOperationalEstimateDocuments(operational.documents);
+      assertOperationalActivationSources(operational,current,guard?.operationalEstimate,guard?.now() ?? '',release.data as EstimateNewcarMasterRecord[]);
+      // Awaited source reads cannot weaken active-pointer CAS in the memory adapter.
+      if ((this.active.get(release.projectionId) ?? null) !== operational.expectedActiveReleaseId)
+        throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+    }
+    if (previousId && previousId !== releaseId && !operational && (!guard?.claim || !guard.receipt))
       throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
