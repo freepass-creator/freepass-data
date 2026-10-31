@@ -3517,3 +3517,14 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: source fee ID에서 run/candidate 시각 의존성을 제거하고 입력·정책·fee engine 의미 버전에 결속했다. 최초 run 메타와 value digest를 보존하며, 메모리/Firestore 포트에 fee 전용 CREATED/REUSED ensure와 ID 직접 조회를 추가했다. 새 reader 우선·옛 run 문서 폴백, 현재 RAW 출처 재구성, 신규분/필요 fee 전체의 분리 무결성 검사를 적용했다. 일반 lineage 중복 거부는 유지했다.
 - 검증: 핵심 4파일 356 PASS; 확장 source/ingest 계열 801 PASS/2 환경 FAIL/1 SKIP. 환경 실패 2건은 무관한 `iancar-source-capture` 자식 프로세스의 `uv_os_get_passwd ENOMEM`이며 해당 파일 나머지 10 PASS. `npx.cmd tsc --noEmit -p .`, Data Access boundary, Architecture boundary, `git diff --check` PASS.
 - 남음 / `next_start_here`: 전환은 `docs/READ-RUNTIME.md`대로 새 reader를 먼저 배포한 뒤 writer를 전환한다. COMPLETED run에는 소급하지 않고 정책/engine 변경 뒤 새 capture에서만 새 ID를 만든다. 운영 배포·실 Firestore 비용 측정은 이번 범위 밖이며, Claude 검토는 네트워크 금지로 실행하지 않았다.
+
+
+## 2026-10-31 신차 견적 제조사 대조 — 기아 공식 파서 정정
+
+- 사용자 범위: 제조사 모델/파워트레인/세부트림/옵션/색상/가격을 정확히 유지하고 웰릭스·카매치와 대조. Estimate에 별도 차량 master를 만들지 않고 Data 원래 파서를 수정했다.
+- 기준 main: 5de2f5ec4b6cf9550178e045b903b1076b9df2a6. 겹치는 공식 가격 파서 PR 검색 결과 없음. 작업선 work/feature/official-price-parser-hardening, 구현 커밋 411414f.
+- 원문: https://www.kia.com/kr/vehicles/sorento/price, 2026-10-31 읽기, 원문 표시 The 2027 Sorento / 2026-10-01 기준. HTML SHA256 39415974d32dd13809521012e0aabeb7feeda4f28f6db95d8811addee9991e81. 기존 KiaOfficialPriceParser를 직접 호출한 메모리 점검이며 운영 RAW 적재/정본 승격은 실행하지 않았다.
+- 발견/정정: 전체 페이지를 첫 파워트레인으로 묶던 처리를 공식 tab-label/tabpanel 연결로 분리. 반응형 트림 선택 메뉴에서 다음 가격을 잘못 줍던 문제를 차단. 숫자로만 된 가격 줄을 옵션 이름으로 분리하던 splitOptionPrice 오류 수정. 하이브리드 세제혜택 전/후 가격을 구분하고 후 가격을 basePrice로 사용하며 전/후 근거를 선택 필드로 보존. parserVersion 1.2.0 → 1.3.0. 기존 ACTIVE release나 과거 parser 자료는 덮어쓰지 않았다.
+- 실제 원문 되읽기: 정정 전 24개 오분류/중복 후보 → 정정 후 3개 파워트레인 × 5개 트림 = 15개. 숫자 이름 옵션 0. 가솔린/하이브리드2WD/하이브리드전자식4WD 분리. 2WD 프레스티지 전40,630,000/후39,630,000원 구분 확인. 이 한 페이지의 파싱 확인이며 전 제조사/전 차종 전수 일치 판정은 아니다.
+- 테스트: vehicle-master-source-parser / vehicle-master-source-parse-persistence / vehicle-master-source-capture 총 13 PASS, diff-check PASS. 실행 환경 외부 tsx/vitest를 사용했다. 전체 Data build/전체 suite는 실행하지 않았다.
+- next_start_here: 기존 source capture → ingest/parse → canonical 승격 경로에서 parser1.3.0을 사용해 원문 lineage/가격 기준/옵션 배타·선행조건을 검토한다. 현대·제네시스 공식 자료, 운영 활성 Estimate master 전수 대조와 소비처 실제 조회는 미검증. Estimate에는 원본 출처/배타·선행/가격을 비교하는 읽기 전용 감사기와 제휴/표준 추정 비교를 연결했다.
