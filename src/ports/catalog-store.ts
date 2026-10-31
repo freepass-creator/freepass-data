@@ -1,3 +1,4 @@
+import type { OperationalEstimatePublishGuard } from './estimate-operational-publication.js';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
@@ -141,6 +142,7 @@ export interface CatalogStore {
 export type ProjectionPublishGuard = {
   now: () => string;
   expectedActiveReleaseId?: string | null;
+  operationalEstimate?: OperationalEstimatePublishGuard;
   sources: Array<{ sourceId: string; runId: string; digest: string; expiresAt: number }>;
   claim?: { eventId: string; lease: OutboxLease };
   delivery?: Pick<ProjectionDeliveryReceipt, 'eventId' | 'eventType' | 'targetRevision' | 'processedAt'>;

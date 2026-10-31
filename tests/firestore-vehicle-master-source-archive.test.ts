@@ -1,0 +1,10 @@
+import {describe,it,expect} from 'vitest';
+import {createHash} from 'node:crypto';
+import {FirestoreVehicleMasterSourceArchive} from '../src/infra/firestore-vehicle-master-source-archive.js';
+function setup(){let value:any=null;let writes=0;const tx={get:async()=>({exists:value!==null,data:()=>value}),create:(_ref:any,next:any)=>{value=next;writes++}};const db={collection:()=>({doc:()=>({})}),runTransaction:async(fn:any)=>fn(tx)};return{archive:new FirestoreVehicleMasterSourceArchive(db as any),state:()=>({value,writes})}}
+const source=()=>{const bytes=Buffer.from('<html>actual source bytes</html>');const sha=createHash('sha256').update(bytes).digest('hex');return{bytes,expectedSha256:sha,storagePath:`vehicle-master/source-documents/manufacturer_official/${sha}.html`}};
+describe('bounded Data source byte archive',()=>{
+ it('keeps exact source bytes immutable and idempotent without another credential',async()=>{const f=setup(),input=source();expect(await f.archive.archive(input)).toBe('CREATED');expect(await f.archive.archive(input)).toBe('UNCHANGED');expect(f.state().writes).toBe(1);expect(f.state().value.byteLength).toBe(input.bytes.length)});
+ it('rejects changed bytes, paths outside source namespace and excessive payload before writing',async()=>{const f=setup(),input=source();await expect(f.archive.archive({...input,bytes:Buffer.from('changed')})).rejects.toThrow('SHA256_MISMATCH');await expect(f.archive.archive({...input,storagePath:'catalog_products/x'})).rejects.toThrow('INVALID_PATH');const bytes=Buffer.alloc(5*1024*1024);await expect(f.archive.archive({...input,bytes,expectedSha256:createHash('sha256').update(bytes).digest('hex')})).rejects.toThrow('TOO_LARGE');expect(f.state().writes).toBe(0)});
+ it('reads and verifies stored compressed bytes rather than trusting its metadata',async()=>{const f=setup(),input=source();await f.archive.archive(input);f.state().value.bytes=Buffer.from('corrupt');await expect(f.archive.archive(input)).rejects.toThrow();expect(f.state().writes).toBe(1)});
+});

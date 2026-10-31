@@ -1,3 +1,6 @@
+import type { EstimateNewcarMasterRecord } from '../domain/estimate-master.js';
+import { assertOperationalActivationSources, operationalDocumentData } from '../shared/estimate-operational-proof.js';
+import type { OperationalEstimateSourceDocument } from '../ports/estimate-operational-publication.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
 import {
@@ -590,7 +593,27 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       if (projectionId === 'erp-public' && !previousId &&
           (guard?.expectedActiveReleaseId !== null || !guard?.claim || !guard.receipt))
         throw new Error('PROJECTION_FIRST_ACTIVATION_APPROVAL_REQUIRED');
-      if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
+      const operational = manifest.operationalEstimateProof;
+      if (guard?.operationalEstimate && (!operational || projectionId !== 'estimate-newcar-master'))
+        throw new Error('ESTIMATE_OPERATIONAL_PUBLICATION_APPROVAL_REQUIRED');
+      if (operational) {
+        if (operational.expectedActiveReleaseId !== previousId || guard?.expectedActiveReleaseId !== previousId)
+          throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+        const previousManifest = previousId ? await tx.get(this.db.collection(C.releaseManifests).doc(previousId)) : null;
+        const previousRevision = previousManifest?.exists
+          ? ((previousManifest.data() as ProjectionReleaseManifest).operationalEstimateProof?.publicationRevision ?? 0) : 0;
+        if (operational.publicationRevision !== previousRevision + 1) throw new Error('ESTIMATE_PUBLICATION_REVISION_CONFLICT');
+        const currentSources = await tx.getAll(...operational.documents.map(witness => this.db.collection(witness.collection).doc(witness.documentId)));
+        const current: OperationalEstimateSourceDocument[] = currentSources.map((document,index) => {
+          const witness = operational.documents[index]!;
+          if (!document.exists || !document.updateTime) throw new Error('ESTIMATE_OPERATIONAL_SOURCE_CHANGED');
+          return { collection:witness.collection,id:document.id,
+            data:operationalDocumentData(document.data()) as Record<string,unknown>,
+            updateTime:{seconds:document.updateTime.seconds,nanoseconds:document.updateTime.nanoseconds} };
+        });
+        assertOperationalActivationSources(operational,current,guard?.operationalEstimate,guard?.now() ?? '',(snap.data() as ProjectionRelease<EstimateNewcarMasterRecord>).data);
+      }
+      if (previousId && previousId !== releaseId && !operational && (!guard?.claim || !guard.receipt))
         throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
       if (projectionId === 'erp-public') await this.readPublishGuard(tx, guard);
       if (guard?.receipt) tx.create(this.db.collection(C.projectionDeliveryReceipts)

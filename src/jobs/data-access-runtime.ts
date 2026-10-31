@@ -1,3 +1,8 @@
+import { createEstimateRecoveryPersistence } from '../infra/estimate-recovery-persistence.js';
+import { persistFetchedVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
+import { runKiaRayEstimateRecovery, type EstimateRecoveryPorts } from '../application/kia-ray-estimate-recovery.js';
+import { deterministicVehicleMasterRecordId, sealVehicleMasterPipelineRecord } from '../domain/vehicle-master.js';
+import type { OperationalEstimateSourceDocument, OperationalEstimatePublicationPlan } from '../domain/estimate-operational-publication.js';
 import { readOperationalEstimateSourceSnapshot } from '../infra/estimate-operational-master-reader.js';
 import { inspectOperationalEstimateSource } from '../application/estimate-operational-master.js';
 import { readVehicleMasterSnapshot } from '../infra/erp5-compat-catalog-reader.js';
@@ -813,4 +818,45 @@ export async function createContractStandardsRuntime() {
   return { store: await createFirestoreDataStore(),
     readAccess: new DataAccessGateway(new MemoryDataAccessLogStore()),
     access: new DataAccessGateway(createFirestoreDataAccessLogStore()) };
+}
+
+/** Bounded recovery worker: current master reads, immutable official source capture,
+ * and the existing ProjectionStore publication path. No current master mutation. */
+export function createEstimateOperationalRecoveryRuntime() {
+  const {sourceStore,archive,readDocument}=createEstimateRecoveryPersistence();
+  const fetcher=createHttpVehicleMasterSourceFetcher({...process.env,VEHICLE_MASTER_SOURCE_HOSTS:'www.kia.com,kwpapi.kia.com',VEHICLE_MASTER_SOURCE_MAX_BYTES:'4194304'});
+  return {run:async(input:Parameters<typeof runKiaRayEstimateRecovery>[1])=>{
+    const access=new DataAccessGateway(input.mode==='inspect'?new MemoryDataAccessLogStore():createFirestoreDataAccessLogStore());
+    const projection=await createFirestoreDataStore();
+    const ports:EstimateRecoveryPorts={
+      snapshot:readOperationalEstimateSourceSnapshot,projection,now:()=>new Date().toISOString(),
+      capture:async(url,observedAt)=>{
+        const fetched=await fetcher.fetch(url);
+        if(fetched.finalUrl!==url)throw new Error('ESTIMATE_RECOVERY_SOURCE_REDIRECT_CHANGED');
+        const result=await persistFetchedVehicleMasterSource({archive,store:sourceStore},{sourceType:'MANUFACTURER_OFFICIAL',sourceName:'Kia official 2027 Ray factory configuration',sourceUrl:url,observedAt,metadata:{archiveDriver:'firestore-gzip/v1',scope:'kia-ray-2027-first-release'}},fetched);
+        const document=await readDocument('vehicle_master_source_documents',result.sourceDocument.sourceDocumentId);
+        return {url,bytes:fetched.bytes,document};
+      },
+      normalize:async(facts,observedAt,additional)=>{
+        const recordId=deterministicVehicleMasterRecordId('normalized',{scope:'estimate-manufacturer-facts/v1',sourceDocumentId:facts.sourceDocumentId,factsDigest:stableDigest(facts)});
+        const record=sealVehicleMasterPipelineRecord({kind:'NORMALIZED_RECORD',recordId,sourceDocumentId:facts.sourceDocumentId,observedAt,payload:{estimateFacts:facts}});
+        await sourceStore.putPipelineRecord(record);
+        return {sourceDocument:await readDocument('vehicle_master_source_documents',facts.sourceDocumentId),normalizedDocument:await readDocument('vehicle_master_normalized_records',recordId),normalizedFactsPath:'payload.estimateFacts',additionalSourceDocuments:additional};
+      },
+      savePlan:async(plan)=>{
+        const id=deterministicVehicleMasterRecordId('audit',{scope:'estimate-operational-recovery-plan/v1',planDigest:stableDigest(plan)});
+        await sourceStore.putPipelineRecord(sealVehicleMasterPipelineRecord({kind:'AUDIT_REPORT',recordId:id,sourceDocumentId:plan.proof.products[0]!.sourceDocumentId,observedAt:plan.generatedAt,payload:{contract:'estimate-operational-recovery-plan/v1',plan,planDigest:stableDigest(plan)}}));
+        return id;
+      },
+      loadPlan:async(id)=>{
+        const record=await sourceStore.getPipelineRecord('AUDIT_REPORT',id);
+        if(!record||record.payload.contract!=='estimate-operational-recovery-plan/v1')throw new Error('ESTIMATE_RECOVERY_REVIEWED_PLAN_MISSING');
+        const plan=record.payload.plan as OperationalEstimatePublicationPlan;
+        if(stableDigest(plan)!==record.payload.planDigest)throw new Error('ESTIMATE_RECOVERY_PERSISTED_PLAN_INVALID');
+        return plan;
+      },
+    };
+    const spec={context:{actor:{id:'service:freepass-data-estimate-recovery',kind:'SERVICE' as const},clientId:'job:recover-estimate-operational-master',purpose:'restore a manufacturer-verified first Estimate master release from the existing operating identity tables'},operation:input.mode==='inspect'?'READ_ESTIMATE_RECOVERY':'WRITE_ESTIMATE_RECOVERY',resource:{kind:'PROJECTION' as const,name:'estimate-newcar-master',projectionId:'estimate-newcar-master'},requestDigest:stableDigest(input),summarize:(result:unknown)=>({digest:stableDigest(result)})};
+    return input.mode==='inspect'?access.read(spec,()=>runKiaRayEstimateRecovery(ports,input)):access.write(spec,()=>runKiaRayEstimateRecovery(ports,input));
+  }};
 }

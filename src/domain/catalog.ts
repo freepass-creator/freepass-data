@@ -1,3 +1,4 @@
+import type { EstimateNewcarMasterRecord } from './estimate-master.js';
 import type { CommercialOfferView } from './commercial-product-view.js';
 import type { SourceVehicleFacts } from './source-vehicle-facts.js';
 export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
@@ -228,7 +229,7 @@ export type AdminCatalogProduct = {
   }>;
 };
 
-export type ProjectionProduct = ErpPublicProduct | AdminCatalogProduct;
+export type ProjectionProduct = ErpPublicProduct | AdminCatalogProduct | EstimateNewcarMasterRecord;
 
 export type ProjectionRelease<T> = {
   releaseId: string; projectionId: string; schemaVersion: string; canonicalRevision: number;

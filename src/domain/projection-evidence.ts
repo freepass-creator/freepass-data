@@ -1,3 +1,4 @@
+import type { OperationalEstimateReleaseProof } from './estimate-operational-publication.js';
 import type { ErpPublicProduct, ProjectionProduct, ProjectionRelease, ValidationStatus } from './catalog.js';
 import type { CatalogEntityType } from './history.js';
 
@@ -19,6 +20,8 @@ export type ProjectionReleaseManifest = {
   schemaVersion: string;
   generatedAt: string;
   canonicalInputs: ProjectionCanonicalInput[];
+  /** Current Data authority uses immutable document versions, not future graph revisions. */
+  operationalEstimateProof?: OperationalEstimateReleaseProof;
   productCount: number;
   offerCount: number;
   fieldEvidenceCount: number;

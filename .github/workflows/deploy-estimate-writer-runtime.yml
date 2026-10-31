@@ -3,6 +3,20 @@ name: Deploy FreePass Data Estimate writer runtime
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Deploy the existing writer or run the bounded Estimate master recovery job
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, estimate-master-inspect, estimate-master-prepare, estimate-master-publish, estimate-master-restore]
+      reviewed_plan_id:
+        description: Persisted recovery plan ID; required only for publication
+        required: false
+        type: string
+      reviewed_plan_digest:
+        description: Exact independently reviewed plan digest; required only for publication
+        required: false
+        type: string
       write_mode:
         description: Keep off for staging; use on only after authenticated canary approval
         required: true
@@ -20,6 +34,7 @@ permissions:
 
 jobs:
   deploy:
+    if: inputs.operation == 'deploy' || inputs.operation == ''
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -310,3 +325,78 @@ jobs:
           test "$write_mode" = "off"
           test "$latest_traffic" = "true"
           echo 'ON activation failed; a new Ready revision was deployed with writes OFF.' >> "$GITHUB_STEP_SUMMARY"
+
+  estimate-master-recovery:
+    if: startsWith(inputs.operation, 'estimate-master-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: freepasserp5
+      REGION: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_REGION }}
+      ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_RUNTIME_SERVICE_ACCOUNT }}
+      JOB_NAME: freepass-data-estimate-master-recovery
+      RECOVERY_OPERATION: ${{ inputs.operation }}
+      REVIEWED_PLAN_ID: ${{ inputs.reviewed_plan_id }}
+      REVIEWED_PLAN_DIGEST: ${{ inputs.reviewed_plan_digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate recovery scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test -n "$REGION"
+          test -n "$ARTIFACT_REPOSITORY"
+          test -n "$RUNTIME_SERVICE_ACCOUNT"
+          [[ "$RECOVERY_OPERATION" =~ ^estimate-master-(inspect|prepare|publish|restore)$ ]]
+          if [[ "$RECOVERY_OPERATION" == 'estimate-master-publish' ]]; then
+            [[ "$REVIEWED_PLAN_ID" =~ ^[A-Za-z0-9_-]{1,160}$ ]]
+            [[ "$REVIEWED_PLAN_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          fi
+      - name: Authenticate existing Data deployment identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - name: Build reviewed recovery image
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="$REGION-docker.pkg.dev"
+          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-estimate-writer:$GITHUB_SHA"
+          if ! gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)' > image-digest.txt 2>/dev/null; then
+            gcloud auth configure-docker "$registry" --quiet
+            docker build --pull --tag "$image" .
+            docker push "$image"
+          fi
+          digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "RECOVERY_IMAGE=$image@$digest" >> "$GITHUB_ENV"
+      - name: Create or update only the dedicated recovery job
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${RECOVERY_OPERATION#estimate-master-}"
+          action=create
+          if gcloud run jobs describe "$JOB_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json > previous-job.json 2> previous-job.err; then
+            jq -e --arg account "$RUNTIME_SERVICE_ACCOUNT" '.metadata.labels["purpose"] == "estimate-master-recovery" and .spec.template.spec.template.spec.serviceAccountName == $account' previous-job.json >/dev/null
+            action=update
+          elif ! grep -q 'NOT_FOUND\|not found\|does not exist' previous-job.err; then
+            cat previous-job.err >&2
+            exit 1
+          fi
+          gcloud run jobs "$action" "$JOB_NAME" --project="$PROJECT_ID" --region="$REGION"             --image="$RECOVERY_IMAGE" --service-account="$RUNTIME_SERVICE_ACCOUNT"             --command=node --args=dist/src/jobs/recover-estimate-operational-master.js             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,ESTIMATE_RECOVERY_MODE=$mode,ESTIMATE_RECOVERY_PLAN_ID=$REVIEWED_PLAN_ID,ESTIMATE_RECOVERY_PLAN_DIGEST=$REVIEWED_PLAN_DIGEST"             --labels=owner=freepass-data,purpose=estimate-master-recovery             --max-retries=0 --task-timeout=900s --tasks=1 --parallelism=1 --memory=1Gi --quiet
+      - name: Execute and verify completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$JOB_NAME" --project="$PROJECT_ID" --region="$REGION" --wait --format=json > execution.json
+          gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" --project="$PROJECT_ID" --freshness=30m --limit=60 --order=asc --format='value(textPayload)'
+          echo "Completed $RECOVERY_OPERATION for $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

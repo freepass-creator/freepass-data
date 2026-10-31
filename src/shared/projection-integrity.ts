@@ -1,3 +1,4 @@
+import { validateOperationalProof } from './estimate-operational-proof.js';
 import type {
   AdminCatalogProduct,
   ErpPublicProduct,
@@ -11,6 +12,7 @@ import type {
 import { stableDigest, stableRecordSetDigest } from './stable-digest.js';
 
 export type ProjectionIntegrityFailureCode =
+  | 'OPERATIONAL_ESTIMATE_PROOF_INVALID'
   | 'RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH'
   | 'MANIFEST_DATA_DIGEST_MISMATCH'
   | 'MANIFEST_CANONICAL_INPUT_DIGEST_MISMATCH'
@@ -100,7 +102,9 @@ export function verifyProjectionReleaseIntegrity(
 ): ProjectionIntegrityResult {
   const failures: ProjectionIntegrityFailureCode[] = [];
   const recomputedDataDigest = stableDigest(release.data);
-  const recomputedCanonicalInputDigest = stableDigest(manifest.canonicalInputs);
+  const operational=manifest.operationalEstimateProof;
+  const recomputedCanonicalInputDigest = stableDigest(operational ?? manifest.canonicalInputs);
+  if(operational && (release.projectionId !== 'estimate-newcar-master' || manifest.canonicalInputs.length !== 0 || release.canonicalRevision !== 0 || !validateOperationalProof(operational,new Map((release.data as EstimateNewcarMasterRecord[]).map(row=>[row.productId,stableDigest(row)])),recomputedDataDigest))) failures.push('OPERATIONAL_ESTIMATE_PROOF_INVALID');
   const recomputedLineageDigest = stableRecordSetDigest(lineage);
   const payloadCounts = projectionCounts(release);
   const offerCount = payloadCounts.offers;
