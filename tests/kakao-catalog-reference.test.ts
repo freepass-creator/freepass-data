@@ -841,6 +841,7 @@ describe('Kakao billing, payout and margin facts', () => {
       [60, [1080000, 840000]],
     ]);
     for (const supplierId of new Set(supplierIds)) {
+      if (supplierId === 'RP031') continue; // 이안카는 10-31 결정으로 «월 렌트료 × 기간 배수» — 아래 별도 시험
       for (const [termMonths, [billing, payout]] of expected) {
         const input = { supplierId, productType: '중고렌트', termMonths, monthlyRent: 800000, fuel: '가솔린' };
         expect(resolveSupplierBillingFee(input), `${supplierId}/${termMonths}/billing`).toMatchObject(
@@ -1240,6 +1241,7 @@ describe('F04 2026-10-04 alignment regression', () => {
   });
   it.each([20,25,26,28,33,72,84])('unlisted term %s applies only the approved payout ladder fallback', termMonths => {
     for (const supplierId of KAKAO_COMMISSION_POLICY.standardSupplierIds) {
+      if (supplierId === 'RP031') continue; // 이안카는 표에 없는 기간을 «확인 필요»로 멈춘다(대표 10-31 배수표) — 아래 별도 시험
       const results = both({ ...base, supplierId, productType: '장기렌트', termMonths });
       const billing = results[0]!, payout = results[1]!;
       // 청구 비정형 기간: 아이언(#801) + 기본 회사(대표 10-28 표준표)만 가까운 짧은 표준 기간, 나머지는 그대로 UNKNOWN.
@@ -1273,7 +1275,7 @@ describe('F04 2026-10-04 alignment regression', () => {
 });
 
 describe('F04 source references and term scope (2026-10-04 review)', () => {
-  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-10-28-contract-writer-standard-fee|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
+  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-10-28-contract-writer-standard-fee|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:1|3|5|12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
   it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
     const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
     const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
@@ -1612,11 +1614,11 @@ describe('이안카형 원문 「구분」 신차 세부조건', () => {
   const fee = (extra: Record<string, unknown>, evidence = {}) => buildKakaoCatalogReferenceProduct('synthetic',
     { ...base, ...extra }, { '36': evidence })!.offers[0]!.priceTerms[0]!.supplierBillingFee;
 
-  it('«신차(선출고)» 는 선출고로 읽어 차량가액이 있으면 계산한다', () => {
-    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } }, { vehicleValue: 40000000 })).toMatchObject({ state: 'CALCULATED', amount: 1400000 });
+  it('«신차(선출고)» 는 선출고로 읽어 월 렌트료×기간 배수로 계산한다(대표 10-31, 차량가액 불필요)', () => {
+    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } }, { vehicleValue: 40000000 })).toMatchObject({ state: 'CALCULATED', amount: 600000 });
   });
-  it('차량가액이 없으면 사유가 차량가액 필요로 좁혀진다', () => {
-    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } }).reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
+  it('차량가액이 없어도 선출고는 계산된다(이안카는 차량가액 비례가 아님)', () => {
+    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } })).toMatchObject({ state: 'CALCULATED', amount: 600000 });
   });
   it('«신차(견적출고)» 는 매칭이라 합의 요율 필요로 멈춘다', () => {
     expect(fee({ 원문: { 전체: { 구분: '신차(견적출고)' } } }, { vehicleValue: 40000000 }).reasonCode).toBe('MATCHING_AGREED_RATE_REQUIRED');
@@ -1665,5 +1667,25 @@ describe('원문 출고 방식과 증거 subtype 충돌', () => {
     const t = buildKakaoCatalogReferenceProduct('synthetic', product, { '36': { vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' } })!.offers[0]!.priceTerms[0]!;
     expect(t.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
     expect(t.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'CONFLICTING_NEW_PRODUCT_SUBTYPE' });
+  });
+});
+
+describe('이안카(RP031) 월 렌트료 × 기간 배수 (대표 10-31)', () => {
+  const base = { supplierId: 'RP031', productType: '재렌트', termMonths: 12, monthlyRent: 600000 };
+  it.each([[1, 30000], [3, 60000], [5, 150000], [12, 300000], [24, 450000], [36, 600000], [48, 750000], [60, 900000]])(
+    '%i개월 수수료는 월 렌트료×배수(나눗셈 없음), 지급은 그 80%', (termMonths, fee) => {
+      expect(resolveSupplierBillingFee({ ...base, termMonths })).toMatchObject({ state: 'CALCULATED', amount: fee, vatTreatment: 'EXCLUDED' });
+      expect(resolveSalesCommission({ ...base, termMonths })).toMatchObject({ state: 'CALCULATED', amount: fee * 0.8 });
+      expect(resolveSupplierBillingFee({ ...base, termMonths }).sourceRefs?.length).toBeGreaterThan(0);
+    });
+  it('구독·선출고도 같은 배수, 매칭출고는 사람 판단, 비정형 기간은 더 짧은 표준 기간', () => {
+    expect(resolveSupplierBillingFee({ ...base, productType: '중고구독', termMonths: 36 })).toMatchObject({ state: 'CALCULATED', amount: 600000 });
+    expect(resolveSupplierBillingFee({ ...base, productType: '선출고', termMonths: 24 })).toMatchObject({ state: 'CALCULATED', amount: 450000 });
+    expect(resolveSupplierBillingFee({ ...base, productType: '견적출고', vehicleValue: 40000000 }).state).toBe('UNKNOWN');
+    expect(resolveSupplierBillingFee({ ...base, termMonths: 30 })).toMatchObject({ state: 'CALCULATED', amount: 450000, note: 'NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(30→24)' });
+    for (const [term, applied, fee] of [[2, 1, 30000], [4, 3, 60000], [6, 5, 150000], [11, 5, 150000]] as const)
+      expect(resolveSupplierBillingFee({ ...base, termMonths: term })).toMatchObject({ state: 'CALCULATED', amount: fee, note: `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${term}→${applied})` });
+    expect(resolveSupplierBillingFee({ ...base, termMonths: 0 }).state).toBe('UNKNOWN');
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', termMonths: 12 })).toMatchObject({ amount: 600000, vatTreatment: 'EXCLUDED' });
   });
 });

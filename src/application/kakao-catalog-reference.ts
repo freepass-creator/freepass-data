@@ -174,7 +174,7 @@ const validStoredFee=(fee:unknown): fee is CommissionResolution => {
   if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
     (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
     (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
-    (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
+    (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:1|3|5|12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
   return (f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
     Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
     f.totalAmount===f.amount!+f.vatAmount! :
@@ -569,6 +569,9 @@ export const KAKAO_COMMISSION_POLICY = {
     installmentAbolishedFrom: '2026-10-05',
   },
 } as const;
+
+/** 이안카(RP031) 기간별 «월 렌트료 × 배수»(퍼센트). 대표 10-31 결정 — 1개월 0.05 · 3개월 0.10 · 5개월 0.25 · 12개월 0.50 · 24개월 0.75 · 36개월 1.00 · 48개월 1.25 · 60개월 1.50. */
+const IANCAR_RENT_MULTIPLE_PERCENT: Readonly<Record<number, number>> = { 1: 5, 3: 10, 5: 25, 12: 50, 24: 75, 36: 100, 48: 125, 60: 150 };
 
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
 
@@ -1078,6 +1081,15 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 6) return fixedRule(billing ? 'IANCAR_RERENT_6_MONTH_BILLING_FIXED' : 'IANCAR_RERENT_6_MONTH_FIXED');
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
+  // 이안카(RP031) 대표 10-31 결정: 수수료 = 월 렌트료 × 기간 배수(나눗셈 없음), 영업자 지급 = 그 80%. 선출고(신차)도 같은 배수, 매칭출고는 사람이 정한다(아래 기존 규칙).
+  if (supplierId === 'RP031' && (rerent || subscription || (/^신차/.test(productType) && input.newProductSubtype === 'NEW_PREDELIVERY'))) {
+    // 비정형 기간은 대표 10-28 규칙대로 «더 짧은 가장 가까운 표준 기간»(1·3·5·12·24·36·48·60). 1개월 미만 같은 표 밖 값만 확인 필요.
+    const appliedTerm = Object.keys(IANCAR_RENT_MULTIPLE_PERCENT).map(Number).filter(term => term <= termMonths).pop() ?? termMonths;
+    const percent = IANCAR_RENT_MULTIPLE_PERCENT[appliedTerm];
+    if (percent === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    const result = fixed(`IANCAR_RENT_MULTIPLE_${appliedTerm}_${side}`, monthlyRent * percent * (billing ? 100 : 80) / 10000, 'EXCLUDED');
+    return appliedTerm === termMonths ? result : { ...result, note: `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${termMonths}→${appliedTerm})` };
+  }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
   // 기본 회사(대표 10-28 표준표)는 청구도 지급과 같이 비정형 기간을 가까운 짧은 표준 기간으로 본다 — 아이언(RP006)은 #801.
   const nonstandardBilling = side === 'BILLING' && (supplierId === 'RP006' || supplierPolicy?.basicSubscription === true);
@@ -1120,7 +1132,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   const id = result.ruleId ?? '';
   const product = input.productType.trim();
   const first = supplierFirstRow[input.supplierId];
-  const appliedTerm = Number(/NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(12|24|36|48|60)\)/.exec(result.note ?? '')?.[1] ?? input.termMonths);
+  const appliedTerm = Number(/NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(1|3|5|12|24|36|48|60)\)/.exec(result.note ?? '')?.[1] ?? input.termMonths);
   let rows: number[] = [];
   if (input.individualException || input.individualAgreement || input.individualExceptionEvidence !== undefined) rows = input.individualAgreement ? [input.individualAgreement.sourceRow] : [160, 163];
   else if (input.supplierId === 'RP034') rows = [168];
@@ -1135,6 +1147,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     rows = index >= 0 ? [first + 2 + index] : [183,184,185,186,187,188,189];
   }
   else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
+  else if (input.supplierId === 'RP031' && /재렌트|중고렌트|장기렌트|구독|선출고|신차/.test(product) && !/견적출고/.test(product)) rows = [22, 23, 24, 25, 26, 27, 28];
   else if (id.startsWith('IANCAR_EV')) rows = [138];
   else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];
   else if (result.reasonCode === 'IANCAR_SHORT_TERM_BASIS_REQUIRED') rows = [131];
