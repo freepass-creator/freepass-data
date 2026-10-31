@@ -1275,7 +1275,7 @@ describe('F04 2026-10-04 alignment regression', () => {
 });
 
 describe('F04 source references and term scope (2026-10-04 review)', () => {
-  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-10-28-contract-writer-standard-fee|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
+  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-10-28-contract-writer-standard-fee|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:1|3|5|12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191)$/;
   it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
     const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
     const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
@@ -1683,7 +1683,9 @@ describe('이안카(RP031) 월 렌트료 × 기간 배수 (대표 10-31)', () =>
     expect(resolveSupplierBillingFee({ ...base, productType: '선출고', termMonths: 24 })).toMatchObject({ state: 'CALCULATED', amount: 450000 });
     expect(resolveSupplierBillingFee({ ...base, productType: '견적출고', vehicleValue: 40000000 }).state).toBe('UNKNOWN');
     expect(resolveSupplierBillingFee({ ...base, termMonths: 30 })).toMatchObject({ state: 'CALCULATED', amount: 450000, note: 'NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(30→24)' });
-    expect(resolveSupplierBillingFee({ ...base, termMonths: 6 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    for (const [term, applied, fee] of [[2, 1, 30000], [4, 3, 60000], [6, 5, 150000], [11, 5, 150000]] as const)
+      expect(resolveSupplierBillingFee({ ...base, termMonths: term })).toMatchObject({ state: 'CALCULATED', amount: fee, note: `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${term}→${applied})` });
+    expect(resolveSupplierBillingFee({ ...base, termMonths: 0 }).state).toBe('UNKNOWN');
     expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', termMonths: 12 })).toMatchObject({ amount: 600000, vatTreatment: 'EXCLUDED' });
   });
 });
