@@ -1081,11 +1081,15 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 6) return fixedRule(billing ? 'IANCAR_RERENT_6_MONTH_BILLING_FIXED' : 'IANCAR_RERENT_6_MONTH_FIXED');
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
-  // 이안카(RP031) 대표 10-31 결정: 청구 = 월 렌트료(VAT 포함) × 기간 배수, 영업자 지급 = 그 80%. 스타 재렌트처럼 VAT 포함 금액을 ÷1.1 로 공급가화.
-  if (supplierId === 'RP031' && (rerent || subscription)) {
-    const percent = IANCAR_RENT_MULTIPLE_PERCENT[termMonths];
+  // 이안카(RP031) 대표 10-31 결정: 수수료 = 월 렌트료 × 기간 배수(나눗셈 없음), 영업자 지급 = 그 80%. 선출고(신차)도 같은 배수, 매칭출고는 사람이 정한다(아래 기존 규칙).
+  if (supplierId === 'RP031' && (rerent || subscription || (/^신차/.test(productType) && input.newProductSubtype === 'NEW_PREDELIVERY'))) {
+    // 12개월 이상 비정형 기간은 대표 10-28 규칙대로 더 짧은 가장 가까운 표준 기간(12·24·36·48·60). 1·3·5개월은 표 값 그대로, 그 밖의 12개월 미만은 확인 필요.
+    const standardTerms = [12, 24, 36, 48, 60];
+    const appliedTerm = termMonths >= 12 ? [...standardTerms].reverse().find(term => term <= termMonths)! : termMonths;
+    const percent = IANCAR_RENT_MULTIPLE_PERCENT[appliedTerm];
     if (percent === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
-    return fixed(`IANCAR_RENT_MULTIPLE_${termMonths}_${side}`, monthlyRent * percent * (billing ? 100 : 80) / 10000, 'INCLUDED');
+    const result = fixed(`IANCAR_RENT_MULTIPLE_${appliedTerm}_${side}`, monthlyRent * percent * (billing ? 100 : 80) / 10000, 'EXCLUDED');
+    return appliedTerm === termMonths ? result : { ...result, note: `NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD(${termMonths}→${appliedTerm})` };
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
   // 기본 회사(대표 10-28 표준표)는 청구도 지급과 같이 비정형 기간을 가까운 짧은 표준 기간으로 본다 — 아이언(RP006)은 #801.
@@ -1144,7 +1148,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     rows = index >= 0 ? [first + 2 + index] : [183,184,185,186,187,188,189];
   }
   else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
-  else if (input.supplierId === 'RP031' && /재렌트|중고렌트|장기렌트|구독/.test(product)) rows = [22, 23, 24, 25, 26, 27, 28];
+  else if (input.supplierId === 'RP031' && /재렌트|중고렌트|장기렌트|구독|선출고|신차/.test(product) && !/견적출고/.test(product)) rows = [22, 23, 24, 25, 26, 27, 28];
   else if (id.startsWith('IANCAR_EV')) rows = [138];
   else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];
   else if (result.reasonCode === 'IANCAR_SHORT_TERM_BASIS_REQUIRED') rows = [131];
