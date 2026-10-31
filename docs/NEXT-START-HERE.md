@@ -3528,3 +3528,7 @@ This file exists so another session can continue without re-discovering or re-cr
 - 실제 원문 되읽기: 정정 전 24개 오분류/중복 후보 → 정정 후 3개 파워트레인 × 5개 트림 = 15개. 숫자 이름 옵션 0. 가솔린/하이브리드2WD/하이브리드전자식4WD 분리. 2WD 프레스티지 전40,630,000/후39,630,000원 구분 확인. 이 한 페이지의 파싱 확인이며 전 제조사/전 차종 전수 일치 판정은 아니다.
 - 테스트: vehicle-master-source-parser / vehicle-master-source-parse-persistence / vehicle-master-source-capture 총 13 PASS, diff-check PASS. 실행 환경 외부 tsx/vitest를 사용했다. 전체 Data build/전체 suite는 실행하지 않았다.
 - next_start_here: 기존 source capture → ingest/parse → canonical 승격 경로에서 parser1.3.0을 사용해 원문 lineage/가격 기준/옵션 배타·선행조건을 검토한다. 현대·제네시스 공식 자료, 운영 활성 Estimate master 전수 대조와 소비처 실제 조회는 미검증. Estimate에는 원본 출처/배타·선행/가격을 비교하는 읽기 전용 감사기와 제휴/표준 추정 비교를 연결했다.
+
+### 2026-10-31 Estimate recovery execution boundary
+
+PR #837 merged; writer deployment run 41253935103 passed with artifact writes OFF. Recovery run 41254048398 stopped before any source capture: existing deployer lacks `run.jobs.get`. No IAM changes were made. Recovery now uses a separately named **private Cloud Run service builder**, within the existing authorized service deployment mechanism, with the existing writer runtime identity. It exposes health only and runs the bounded recovery once per process; the consumer/read serving plane has no publication hook. Min instances 0, max 1. Exact manufacturer fingerprint, source witnesses, initial-release-only scope and transaction CAS remain mandatory. Actual master availability must still be verified on the public consumer contract; service readiness alone is not publication proof.
