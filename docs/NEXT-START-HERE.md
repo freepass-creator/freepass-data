@@ -259,6 +259,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-31 비HKG 차량 추가 후보·제조사 대조
 
+- **최신 추가 지시: 데이터 보유와 상품별 운영 개방은 분리한다.** 신용무관/신용심사에서 미운영이고 소득확인만 운영할 수 있어도 차량 데이터는 보존한다. visible-only 추출 조건을 제거해 전체247행/45원본모델명(표시201+숨김46)을 보존했다. BMW105/벤츠54/KGM64/르노22/VW2. visible/creditTypes 원문 보존, 운영 스위치 자동 개방0. 예시는 실제 유형 활성화 지시가 아니다. 원본247/247·7필드 차이0, 경계회귀6 PASS. 아래 201행 기록은 이전 범위이며 이번 지시로 대체된다. 운영 조건 코드/서버 견적 가드 연결은 후속 미완료.
+
 - 최신 대표 지시: 현대·기아·제네시스 제외, BMW/벤츠/KGM/르노/폭스바겐의 카메치 모델·파워트레인·세부 트림 추가 및 제조사 확인. HKG 기존 정본·배타조건은 이번 변경 대상 아님.
 - 작업선 `work/docs/vehicle-expansion-evidence-20261031`, 기준 main `5de2f5ec4b6cf9550178e045b903b1076b9df2a6`; pinned source Estimate `4f5aa3a80f562803f4a5b15d247da1f489c2a604`.
 - [후보/공식 대조 패킷](references/vehicle-expansion-20261031/README.md): visible 원본 201행/40모델명, BMW105/벤츠54/KGM26/르노14/VW2. 원문 모델·lineup·trim·가격 및 원본 ID·snapshot SHA256 보존. lineup을 일괄 POWERTRAIN으로 승격하지 않고 연식·canonical ID 미확정은 null.
