@@ -73,7 +73,7 @@ describe('기본 회사 표준 수수료표(대표 10-28)', () => {
     expect(getSupplierCommissionPolicy('RP008')!.newRentDefaultSubtype).toBeNull();
     expect(resolveSalesCommission({ supplierId: 'RP008', productType: '신차렌트', termMonths: 48, monthlyRent: 700000, vehicleValue: 40000000 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'NEW_PRODUCT_SUBTYPE_REQUIRED' });
-    expect(resolveSupplierBillingFee({ supplierId: 'RP031', productType: '중고렌트', termMonths: 31, monthlyRent: 1000000 }))
+    expect(resolveSupplierBillingFee({ supplierId: 'RP017', productType: '중고렌트', termMonths: 31, monthlyRent: 1000000 }))
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'TERM_NOT_IN_F04_COMMISSION_POLICY' });
     expect(getSupplierCommissionPolicy('RP008')).not.toHaveProperty('contractWriterStandard');
   });
