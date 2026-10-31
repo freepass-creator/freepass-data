@@ -1,0 +1,20 @@
+{
+  "status": "PASS_EVIDENCE_EXTRACTION_ONLY",
+  "records": 201,
+  "rawModels": 40,
+  "brandCounts": {
+    "BMW": 105,
+    "벤츠": 54,
+    "KGM": 26,
+    "르노": 14,
+    "폭스바겐": 2
+  },
+  "sourceIdCoverage": 201,
+  "rawFieldMismatches": 0,
+  "HkgRows": 0,
+  "findingGroups": 10,
+  "flaggedSourceRows": 13,
+  "officialVerification": "PARTIAL",
+  "canonicalWrites": 0,
+  "consumerReadback": "NOT_EXECUTED"
+}

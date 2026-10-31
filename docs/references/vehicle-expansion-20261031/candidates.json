@@ -1,0 +1,4063 @@
+{
+  "schema": "freepass-vehicle-expansion-evidence/v1",
+  "observedDate": "2026-10-31",
+  "provenance": {
+    "url": "https://kamatch.kr/api/vehicles",
+    "snapshotSha256": "62b7ec14f353820aceef1db5d0991a4bfbc4050f4759eb42fd44054708fd4708",
+    "repository": "freepass-creator/freepass-estimate",
+    "commit": "4f5aa3a80f562803f4a5b15d247da1f489c2a604",
+    "path": "docs/references/kamatch/catalog.snapshot.json.gz"
+  },
+  "scope": {
+    "brands": [
+      "BMW",
+      "벤츠",
+      "KGM",
+      "르노",
+      "폭스바겐"
+    ],
+    "excluded": [
+      "현대",
+      "기아",
+      "제네시스",
+      "현대 전기차",
+      "기아 전기차"
+    ],
+    "visibleOnly": true,
+    "accountSaleAvailability": "NOT_CONFIRMED_FOR_THESE_BRANDS"
+  },
+  "counts": {
+    "records": 201,
+    "rawModels": 40,
+    "byBrand": {
+      "BMW": 105,
+      "벤츠": 54,
+      "KGM": 26,
+      "르노": 14,
+      "폭스바겐": 2
+    }
+  },
+  "productionReady": false,
+  "records": [
+    {
+      "sourceId": "007b7af5-488e-4547-af6d-30cffd0d6cd4",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스 하이브리드",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "T7",
+        "price": 37930000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "00a9ed85-5442-449c-9e23-bf29cf57471a",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "420i",
+        "trim": "Coupe M Spt Pro LCI",
+        "price": 73300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "01da4f9e-7dfc-4183-8bdd-b5ae70507c36",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40i DPE LCI 6 Seater ",
+        "price": 154300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "020195f3-17b0-44e1-aeb6-15b1504eff2f",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLA",
+        "lineup": "가솔린 2.0",
+        "trim": "GLA 250 4Matic AMG Line",
+        "price": 69100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "023092dd-7119-427b-9758-e8fda8396e16",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 3.0",
+        "trim": "GLE 450 4Matic",
+        "price": 127600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "04417e7d-7214-46e4-9595-e1b5f97dd443",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQE",
+        "lineup": "26년형 전기 SUV",
+        "trim": "EQE 500 4Matic",
+        "price": 140800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "04b07dac-630e-443e-ae84-a5b4ccbc7d97",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQE",
+        "lineup": "26년형 전기",
+        "trim": "EQE 350+",
+        "price": 110000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "064d7c0a-4e61-4de2-88f5-390aed0b6615",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 2.0 쿠페",
+        "trim": "CLE 200 AMG Line ",
+        "price": 75700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "072df662-da89-470c-9fe1-91ef113c7e85",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "X1 ",
+        "trim": "xDrive20i xLine",
+        "price": 63100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0766bf65-68e7-46dd-b73a-be7afa1e7bc1",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "420i Gran Coupe ",
+        "trim": "M Spt Pro LCI",
+        "price": 68200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "08854eae-f87e-4c9c-b069-b25e6083b3e5",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQE",
+        "lineup": "26년형 전기",
+        "trim": "EQE 350+ SUV",
+        "price": 1060000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "08cc788f-7346-4a2a-abbe-7bef649f7f77",
+      "raw": {
+        "brand": "KGM",
+        "model": "엑티언",
+        "lineup": "가솔린 1.5 2WD",
+        "trim": "S8",
+        "price": 34700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "08fd5849-cfe7-4410-b8bd-7f18de9285d6",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "techno",
+        "price": 34970000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0a91bccb-668d-4872-8a98-182e94903a78",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320d",
+        "trim": "LCI II (xDrive)",
+        "price": 62700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0b72391d-d391-4dd8-bee8-95928f9d2119",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive40i M Spt LCI 5 Seater",
+        "price": 130500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0c7fa1a1-e883-45f9-9dde-a4c3fc0f075a",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 2WD 7인승",
+        "trim": "노블레스",
+        "price": 4144000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0eb1e503-526d-4b14-9038-dcfa599aff19",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQA",
+        "lineup": "2026년형 전기",
+        "trim": "EQA 250 AMG Line",
+        "price": 75800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0fd73f0e-a0b0-45a5-a7c3-4fd070ee4526",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "M235 그란쿠페",
+        "trim": "xDrive Gran Coupe Pro",
+        "price": 64000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "0fe7b78c-29d4-4aa6-9bd6-455cf5dba7c8",
+      "raw": {
+        "brand": "KGM",
+        "model": "엑티언 하이브리드",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "S8",
+        "price": 38450000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "10217569-21e8-4260-a12e-f282693fe783",
+      "raw": {
+        "brand": "BMW",
+        "model": "X4 Series",
+        "lineup": "X4 ",
+        "trim": "xDrive20i M Spt Pro SE LCI (P1)",
+        "price": 79300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "102e91bc-319d-45c0-b9a0-30bccce26e35",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": "20 xDrive M Spt",
+        "price": 74700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "11dbf92a-875a-48fb-b617-97708f34a2c2",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "i7",
+        "trim": "xDrive60 Desing Pure Excellence",
+        "price": 212100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1339a2dc-2678-40c0-a53c-d86c275525ec",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 4WD 7인승",
+        "trim": "노블레스",
+        "price": 46194000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "14c4f57b-9df3-4a3e-b586-4810ac9f79be",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "X1 ",
+        "trim": "sDrive18d xLine",
+        "price": 59100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1545bc37-825a-4e45-b3cc-58453b3d0ab7",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "T7",
+        "price": 32480000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "159b3312-a33a-4388-a112-4e22569b2bb2",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "i5 ",
+        "trim": "eDrive40 SE ",
+        "price": 84900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "16ad7c8b-3c8b-4d1d-bd8f-8e02a7c2db20",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "X1 ",
+        "trim": "M35 xDrive ",
+        "price": 72200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "16f08aac-e11a-480c-b274-725d6062ecd5",
+      "raw": {
+        "brand": "BMW",
+        "model": "1 Series",
+        "lineup": "120",
+        "trim": "M Spt",
+        "price": 52800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "17c215b4-ff70-47fa-a291-9af3555d1316",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "530e ",
+        "trim": "2.0L  ",
+        "price": 89500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "18176b8e-d55b-4b43-ae01-1fbe652c24d9",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320i",
+        "trim": "LCI II ",
+        "price": 60000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "18b77132-91a5-4e37-8185-7e5f25c45293",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320i",
+        "trim": "Touring LCI II",
+        "price": 62400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "199cb09a-0e8c-4208-b698-c4e1c33fd67f",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40d DPE LCI 6 Seater ",
+        "price": 155300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1b4f9197-87aa-44f8-ba6d-b67cd0c19c64",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 3.0 세단",
+        "trim": "E450 4Matic Exclusive",
+        "price": 128200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1c7f2b53-572f-45a7-970b-c4de553f76d6",
+      "raw": {
+        "brand": "BMW",
+        "model": "X6 Series",
+        "lineup": "X6 ",
+        "trim": "xDrive40d M Spt Pro LCI",
+        "price": 0
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1ca36de2-5df1-4458-bbf0-726a68a77393",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 2WD 7인승",
+        "trim": "프리미엄",
+        "price": 41000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1dfcb3c2-5890-45c4-8e05-ffdded6ef5c9",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "i5 ",
+        "trim": "xDrive40 M Spt Pro ",
+        "price": 105800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "1e45d5cd-d0ab-41d2-95a0-0d1663bf0f26",
+      "raw": {
+        "brand": "BMW",
+        "model": " iX (i20)Series",
+        "lineup": "iX",
+        "trim": "xDrive45 M Spt LCI ",
+        "price": 124800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2203151b-9e87-4947-a61e-6fdf2a2eddce",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "740d ",
+        "trim": "xDrive M Spt ",
+        "price": 150700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "226de517-1420-436e-bdb6-db967173d061",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": "M50 xDrive Pro ",
+        "price": 98700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "22c5b663-420d-4167-8200-45a4e3b48e97",
+      "raw": {
+        "brand": "르노",
+        "model": "Filante",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "iconic",
+        "price": 46969000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2330bc63-e486-478f-a597-bb8e37fc2ca7",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "escapade",
+        "price": 45810000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2332c8b8-b6c3-45b1-91fa-8e524b3bc016",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0 쿠페",
+        "trim": "GLC 300 4Matic AMG Line",
+        "price": 95700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2497f92b-65ec-4669-911f-c6369229b7d9",
+      "raw": {
+        "brand": "KGM",
+        "model": "엑티언",
+        "lineup": "가솔린 1.5 AWD",
+        "trim": "S8",
+        "price": 36720000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "28d8f1c2-6f3b-4a6e-be9c-9a0c80b66e4b",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "530e ",
+        "trim": "xDrive M Spt Pro ",
+        "price": 98900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2bab66d0-11b8-42b7-aef6-4153885a6e88",
+      "raw": {
+        "brand": "폭스바겐",
+        "model": "ID4",
+        "lineup": "Pro",
+        "trim": "Lite",
+        "price": 52990000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2c096c65-114f-476b-a79e-5601ccc57d12",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "M440i ",
+        "trim": "xDrive Coupe Pro LCI (OS)",
+        "price": 93400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2fae6ded-b4ef-4187-9983-ec03984c6f04",
+      "raw": {
+        "brand": "BMW",
+        "model": "XM Label",
+        "lineup": "Label",
+        "trim": "V형 8기통 M 트윈파워 터보 가솔린 엔진(748)",
+        "price": 227700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "2fc495b4-2d33-4a51-95ec-ede527bc0446",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLB",
+        "lineup": "가솔린 2.0",
+        "trim": "GLB 250 4Matic",
+        "price": 71100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "32ccffd5-102f-485e-bd2a-23e758e9d605",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": "30 xDrive M Spt Pro",
+        "price": 83900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "3399e7e5-7bd7-4bd0-bc57-898a26b9a1af",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "i7",
+        "trim": "eDrive50 M Spt Limited",
+        "price": 166100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "33e6fe3c-646a-416c-969b-892429ab8ad8",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "X1 ",
+        "trim": "sDrive18d M Spt",
+        "price": 63900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "34462791-b5c9-40e5-80c1-9ea7801b911e",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 2.0 세단",
+        "trim": "E300 4Matic AMG Line",
+        "price": 97700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "3974834a-a089-45ef-b429-4894c3632d97",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "i7",
+        "trim": "eDrive50 M Spt ",
+        "price": 181100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "3e14f5da-e444-4959-bfb1-b492cb7af3f5",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive30d M Spt LCI 7 Seater",
+        "price": 125400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "3e968dd2-2629-468d-a72e-c254e4061ec0",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "740i ",
+        "trim": "xDrive M Spt Limited",
+        "price": 160800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "419492ec-9128-4da7-9f33-e7dcd95a2098",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "740i ",
+        "trim": "xDrive M Spt",
+        "price": 176000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4372de76-7d05-482c-9542-ab0c3fa13825",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "M340i",
+        "trim": "xDrive Touring Pro LCI II",
+        "price": 92300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "440b5508-ba09-42d4-95f0-26a9ee3011fe",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 2WD 5인승",
+        "trim": "노블레스",
+        "price": 43754000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "443fddb2-56c4-4c9d-a7b7-d4b8fd4e8edc",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI 2WD 밴",
+        "trim": "TV7",
+        "price": 29670000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "476c709b-37a3-4e1e-9ed7-b067202440aa",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "520i",
+        "trim": "2.0L",
+        "price": 69800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4799e138-88a3-4764-8f95-9379ed3473a9",
+      "raw": {
+        "brand": "벤츠",
+        "model": "S-Class",
+        "lineup": "가솔린 3.0",
+        "trim": "S500 4Matic Long",
+        "price": 213600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4a2caa58-5778-481d-b793-a5d0b73cbded",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "디젤 2.0",
+        "trim": "GLE 300d 4Matic",
+        "price": 117800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4a8ef66a-ed4e-48d0-bf09-0a7652f1c402",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "220i 액티브 투어러",
+        "trim": "Active Tourer M Spt Design",
+        "price": 52400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4a929c7d-51d0-4207-b299-228e30b44513",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5M",
+        "trim": "Competition LCI",
+        "price": 191700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4bb7e7eb-effb-4dad-a4b7-270df6854b32",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0 쿠페",
+        "trim": "GLC 300 4Matic Avangarde",
+        "price": 85500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4bf3e4ab-6d95-4ff5-a207-92a305f9090e",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "M240i",
+        "trim": "xDrive Coupe OS",
+        "price": 74300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4c0ac28b-9c04-4f4a-bc92-aca92320e63a",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI AWD 밴",
+        "trim": "TV7",
+        "price": 31650000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4dce34b1-dff0-4f34-964a-76b9e159bc0a",
+      "raw": {
+        "brand": "BMW",
+        "model": "1 Series",
+        "lineup": "M135",
+        "trim": "xDrive",
+        "price": 61800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4f070ede-3ee5-448f-924a-65fd39dd56fe",
+      "raw": {
+        "brand": "BMW",
+        "model": "Z4",
+        "lineup": "sDrive20i M Spt LCI ",
+        "trim": "2.0L 트윈파워 터보 가솔린 엔진",
+        "price": 77100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "4fe9d7c7-fd5e-4756-8677-baff8b5342c1",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 4WD 5인승",
+        "trim": "노블레스",
+        "price": 45804000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "51c7fe68-baf3-487a-b016-9063f412a32e",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "iX1 ",
+        "trim": "eDrive20 xLine",
+        "price": 64200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "52dfcd6b-ae0c-4e8a-9b3a-dffaf01583df",
+      "raw": {
+        "brand": "벤츠",
+        "model": "G바겐",
+        "lineup": "디젤 3.0",
+        "trim": "G 450 d",
+        "price": 193500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5317b228-3787-4e15-a61e-70469c0d6c9b",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 3.0 AMG 쿠페",
+        "trim": "CLE 53 AMG 4Matic+",
+        "price": 107700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5333e089-8cb3-4c22-b653-7b864a8ee0ae",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 3.0 쿠페",
+        "trim": "GLE 450 4Matic AMG Line",
+        "price": 141100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "548a9fe0-301c-4c58-b0a1-abf46ef58b3b",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "i5 ",
+        "trim": "eDrive40 M Spt ",
+        "price": 95700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "55cffda4-5918-4d0a-ab1f-4055e38d2457",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQB",
+        "lineup": "26년형 전기",
+        "trim": "EQB 300 4Matic AMG Line",
+        "price": 84300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "57c8d06f-721b-4048-b086-5ef6370d64d1",
+      "raw": {
+        "brand": "폭스바겐",
+        "model": "ID4",
+        "lineup": "Pro",
+        "trim": "Lite",
+        "price": 52990000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5889854b-a06d-4ec5-bb11-f95ca60b4272",
+      "raw": {
+        "brand": "BMW",
+        "model": "X2 Series",
+        "lineup": "X2 ",
+        "trim": "M35 xDrive ",
+        "price": 75600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "59116a61-429f-4874-86e6-e7a59d533cb9",
+      "raw": {
+        "brand": "BMW",
+        "model": " iX (i20)Series",
+        "lineup": "iX",
+        "trim": "xDrive60 M Spt Pro LCI",
+        "price": 153800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5b479557-7e81-4f3c-b1e2-abf441fecbcf",
+      "raw": {
+        "brand": "BMW",
+        "model": "X6 Series",
+        "lineup": "X6 ",
+        "trim": "xDrive40i M Spt LCI",
+        "price": 132600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5c236a08-ba70-4ce6-bbe1-8cca76981e62",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 2.0 세단",
+        "trim": "E200 Avantgarde",
+        "price": 76500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5d7b1442-801b-4a8a-b140-49d1bbafd874",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQS",
+        "lineup": "26년형 전기",
+        "trim": "EQS 680 4M SUV 마이바흐 ",
+        "price": 233600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "5fb277e8-c0f2-4b09-90c5-fc48a1f41d61",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "530i",
+        "trim": "xDrive M Spt 2.0L  ",
+        "price": 89000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "617ef8f4-4e07-43e6-b3a6-096859828997",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "740e ",
+        "trim": "xDrive M Spt ",
+        "price": 204100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "625a13b7-63b9-4e51-990b-bf8257ba1dc6",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "M235 그란쿠페",
+        "trim": "xDrive Gran Coup",
+        "price": 62400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "62babf5a-ce76-4bd0-9756-27466205351c",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "523d",
+        "trim": " xDrive",
+        "price": 76800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6681b004-6d9e-454c-890a-39bf5a37edaa",
+      "raw": {
+        "brand": "벤츠",
+        "model": "S-Class",
+        "lineup": "가솔린 3.0",
+        "trim": "S450 4Matic Long",
+        "price": 191600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6820dd78-5a92-4d87-a609-81d4b01eedfd",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "220i 액티브 투어러",
+        "trim": "Active Tourer Luxury",
+        "price": 50800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "69143604-32cf-48af-800d-db74aedb1f3e",
+      "raw": {
+        "brand": "KGM",
+        "model": "티볼리",
+        "lineup": "가솔린 1.6 2WD",
+        "trim": "V3",
+        "price": 22630000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "69baaa05-4c15-45fc-a4bc-13f3c987752a",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0",
+        "trim": "GLC 300 4Matic AMG Line",
+        "price": 91400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6a3d1125-85de-4cf7-a67c-c561394f0372",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 2WD 5인승",
+        "trim": "프리미엄",
+        "price": 40610000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6b7455eb-eb6e-49d8-ab64-6e7acc85a20e",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 4WD 7인승",
+        "trim": "프리미엄",
+        "price": 43050000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6bfccded-1aaa-4b4c-9a67-680867d3a3e0",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive40i xLine LCI 7 Seater",
+        "price": 123800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6c4c1ea9-ceee-4f8b-9f29-a3cffdaa57c3",
+      "raw": {
+        "brand": "BMW",
+        "model": "X4 Series",
+        "lineup": "X4 ",
+        "trim": "xDrive20d M Spt LCI",
+        "price": 82300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6ce0b09b-86d8-4dab-8552-335fa5b9a138",
+      "raw": {
+        "brand": "BMW",
+        "model": "1 Series",
+        "lineup": "120",
+        "trim": "F70",
+        "price": 48400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6d2e2473-3526-4c61-916a-7b055924a208",
+      "raw": {
+        "brand": "BMW",
+        "model": "X2 Series",
+        "lineup": "X2 ",
+        "trim": "xDrive20i M Spt",
+        "price": 69400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6e5374ab-047d-47ba-9978-1a77245eaebc",
+      "raw": {
+        "brand": "벤츠",
+        "model": "G바겐",
+        "lineup": "가솔린 4.0",
+        "trim": "AMG G63 Vanguard Edition",
+        "price": 295800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "6e5cb5b0-c6d8-4402-9d7e-ee77f6b3614f",
+      "raw": {
+        "brand": "BMW",
+        "model": "X6 Series",
+        "lineup": "X6M",
+        "trim": "Competition LCI",
+        "price": 195800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "7006cc5c-f4c3-40d7-85f5-0f099e46387c",
+      "raw": {
+        "brand": "BMW",
+        "model": " iX (i20)Series",
+        "lineup": "iX",
+        "trim": "M70 xDrive LCI ",
+        "price": 177700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "7114877f-3af0-418d-8af0-f5c4a8750fc6",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 2.0 세단",
+        "trim": "E200 AMG Line",
+        "price": 80000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "71bbe47b-2ff9-4129-9e66-96c0531c1470",
+      "raw": {
+        "brand": "르노",
+        "model": "Filante",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "esprit Alpine 1955",
+        "price": 52189000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "743477c7-68d4-49c0-9292-288b8786d46f",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스 하이브리드",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "T5",
+        "price": 32900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "7671075f-4086-411e-bdac-185a3a6316cc",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "530i",
+        "trim": "xDrive 2.0L ",
+        "price": 84500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "797af9a7-58ef-4f7b-a14a-a0750f26ec16",
+      "raw": {
+        "brand": "벤츠",
+        "model": "C-Class",
+        "lineup": "가솔린 2.0",
+        "trim": "C 200 Avantgarde",
+        "price": 64300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "7cc391a3-1105-4ff5-a8ad-c7d741268b29",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "블랙엣지",
+        "price": 35690000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "834d08b0-e929-4ea7-8e9e-f44393cce212",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 2.0 세단",
+        "trim": "E300 4Matic Exclusive",
+        "price": 93600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "842a439a-78aa-45aa-9686-ab86cc0678d0",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "M440i xDrive Convertible",
+        "trim": " Pro LCI (OS)",
+        "price": 99200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "84921708-3c3a-4dcf-8cfa-c2b9767bcfef",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320i",
+        "trim": "M Spt LCI II ",
+        "price": 63100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8619924d-e891-4f05-8f04-003e30449619",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "iX1 ",
+        "trim": "xDrive30 M Spt",
+        "price": 70500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8620f6e2-55da-4c6c-901e-8d0448cf98ba",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 3.0 세단",
+        "trim": "E450 4Matic AMG Line",
+        "price": 114600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8676e549-0f60-4a15-b16a-6c3cd4dab9a0",
+      "raw": {
+        "brand": "BMW",
+        "model": "X2 Series",
+        "lineup": "iX2 ",
+        "trim": "eDrive20 M Spt",
+        "price": 65800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "86c5c903-691d-422a-8bea-58856f155709",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": " 20 xDrive ",
+        "price": 68500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8b140abf-ef74-42d3-8739-91acbe3cb197",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive50e xLine LCI",
+        "price": 129400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8be41991-a46c-418f-8207-39029fb4c19a",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "M340I",
+        "trim": "PRO LCI 2",
+        "price": 85300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8d7f58d4-4100-4e60-b391-6ff1b010ff05",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "iX3 ",
+        "trim": "50 xDrive M Spt",
+        "price": 86900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8e4da23b-70e6-4bc6-a3a3-4c88e3092a9c",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive50e M Spt Pro LCI",
+        "price": 136100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "8e7d6b06-363e-4c5b-979a-b8244bd94759",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "T5",
+        "price": 28540000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "907be0e8-3536-4976-9c87-92a90c9e8f5d",
+      "raw": {
+        "brand": "르노",
+        "model": "Filante",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "techno",
+        "price": 43319000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "93381760-f903-4e40-878c-a0925a6092fb",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": "가솔린 2.0 카브리올레",
+        "trim": "140th Anniversary Edition ",
+        "price": 86400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "93fec9cc-b440-4330-836c-1c374be7226d",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "i5 ",
+        "trim": "xDrive40 M Spt ",
+        "price": 103800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "94e5ca28-513c-4b07-a904-12223947e121",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 3.0 카브리올레",
+        "trim": "CLE 450 4Matic AMG Line ",
+        "price": 102600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "98eb44da-03ca-43be-8d4b-dd04c407a60b",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 2.0 카브리올레",
+        "trim": "CLE 200 AMG Line  (복사)",
+        "price": 82100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "99c55320-0289-4697-9a06-142e39d019f5",
+      "raw": {
+        "brand": "벤츠",
+        "model": "A-Class",
+        "lineup": "A220 해치백",
+        "trim": "가솔린 2.0 세단",
+        "price": 48100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "9b6024ca-8f72-4c5f-a4c9-d9c02bcd219f",
+      "raw": {
+        "brand": "KGM",
+        "model": "티볼리",
+        "lineup": "가솔린 1.6 2WD",
+        "trim": "V1",
+        "price": 19350000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "9cccbaff-320c-42b2-b95a-2e20ae8035ae",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "iconic 4WD",
+        "price": 41470000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "9e53ded0-91bc-4d82-9526-203422c095df",
+      "raw": {
+        "brand": "벤츠",
+        "model": "G바겐",
+        "lineup": "가솔린 4.0",
+        "trim": "AMG G63",
+        "price": 261200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "9e8d1e4b-ebcd-45a1-a360-fc91dbda907b",
+      "raw": {
+        "brand": "벤츠",
+        "model": "A-Class",
+        "lineup": "A220 세단",
+        "trim": "가솔린 2.0 세단",
+        "price": 49900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a1ff2bb1-5695-4435-ba35-f511e89ff091",
+      "raw": {
+        "brand": "BMW",
+        "model": "8 Series",
+        "lineup": "M850i ",
+        "trim": "xDrive Gran Coupe M Perf. LCI",
+        "price": 146700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a299542b-1b55-4e00-b6a9-d3eeb8149813",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 3.0 AMG",
+        "trim": "GLE 53 AMG 4Matic+",
+        "price": 164600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a29daf9f-5e80-4e7d-84bd-8863b7c6025f",
+      "raw": {
+        "brand": "BMW",
+        "model": "X4 Series",
+        "lineup": "X4 ",
+        "trim": "M40i (P1/P3) ",
+        "price": 101900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a2b6a832-5cc1-4828-a0c5-13eda2d03a95",
+      "raw": {
+        "brand": "벤츠",
+        "model": "S-Class",
+        "lineup": "가솔린 3.0",
+        "trim": "S450 4Matic Night Edition",
+        "price": 160600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a5d3d09c-ac11-4d4e-988f-444b399443ee",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "i5 ",
+        "trim": "M60 xDrive Pro ",
+        "price": 138100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a6e2e39a-7e27-4ff0-8de5-7ea856cd82f7",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "228 그란쿠페",
+        "trim": "xDrive Gran Coupe M Spt",
+        "price": 57000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "a8d30ea8-97b3-4d6a-914b-4a482e466dd3",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 3.0",
+        "trim": "GLE 450 4Matic AMG Line",
+        "price": 137600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "aadf73c5-c866-4a25-a8c7-cd912b5e94de",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "iX3 ",
+        "trim": "50 xDrive M Spt Pro",
+        "price": 91900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ab8d1870-ecbc-4211-bf3e-d7da2b4812e0",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "esprit Alpine",
+        "price": 40920000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "abb227f6-09b6-43c1-b901-293f2fe74009",
+      "raw": {
+        "brand": "벤츠",
+        "model": "C-Class",
+        "lineup": "가솔린 2.0",
+        "trim": "C 200 AMG Line",
+        "price": 67500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "abc4c882-0ab6-49ab-87ea-a2be79b78f2a",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQS",
+        "lineup": "26년형 전기",
+        "trim": "EQS 450 4M SUV",
+        "price": 164600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "abe49234-d9fa-422a-9754-495cae1b1990",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "550e ",
+        "trim": "xDrive M Spt Pro ",
+        "price": 115300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "acf0a971-b1f3-400c-bbf7-9dfe7a0aeb0f",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "M60i xDrive Pro LCI",
+        "price": 159000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "aedd17c3-abd0-4d2c-b979-5542ebde882e",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40i DPE LCI 7 Seater",
+        "price": 152300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "aef1f2cb-b721-4bf3-b9ed-8a16d4c04993",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "530e ",
+        "trim": "M Spt xDrive",
+        "price": 92500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "af862c3f-6685-4442-9fe7-34bb68a5fb9a",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "escapade",
+        "price": 41610000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b0a51112-dfd4-4f97-b690-595d05318177",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320d",
+        "trim": "M Spt LCI II (xDrive)",
+        "price": 65600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b0e828e8-a702-4f6c-a328-2172fb8c4ca9",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLB",
+        "lineup": "가솔린 2.0 AMG",
+        "trim": "GLB 35 AMG 4Matic",
+        "price": 78500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b5d08995-54c1-4ff3-9fba-138cc9e21448",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQA",
+        "lineup": "2026년형 전기",
+        "trim": "EQA 250 Progressive",
+        "price": 70000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b5e871a0-3167-4f51-8626-ac23cc96d7df",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive40i M Spt LCI 7 Seater",
+        "price": 133500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b65bed92-3f29-4385-aa76-4cd902bb5493",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive40d M Spt Pro LCI_OS",
+        "price": 133000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b7f45c2f-52a2-4505-83e7-604373dd394d",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI AWD",
+        "trim": "블랙엣지",
+        "price": 37740000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "b9751c1e-07b4-4c4e-9874-9f5100b31d0d",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "740e ",
+        "trim": "xDrive Design Pure Excellence",
+        "price": 201100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ba2491e9-2edb-4294-ab5d-32e8c19d68b0",
+      "raw": {
+        "brand": "BMW",
+        "model": "X6 Series",
+        "lineup": "X6 ",
+        "trim": "M60i xDrive Pro LCI",
+        "price": 163200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "bb045d2a-e590-4c53-94f1-6032282d5d41",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40d M Spt LCI 7 Seater",
+        "price": 155800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "be382dc4-4b91-41d9-bad3-5b89e987cc51",
+      "raw": {
+        "brand": "BMW",
+        "model": "X6 Series",
+        "lineup": "X6 ",
+        "trim": "xDrive30d M Spt LCI",
+        "price": 126500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "c128b8d3-93b1-4973-9347-892ed15c05b4",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "X1 ",
+        "trim": "xDrive20i M Spt",
+        "price": 67900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "c36fc612-2c32-4b48-830f-043ead33dc1f",
+      "raw": {
+        "brand": "KGM",
+        "model": "티볼리",
+        "lineup": "가솔린 1.6 2WD",
+        "trim": "V5",
+        "price": 22640000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "c6b87be8-973c-4686-ba73-ebea7bcc0716",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0 AMG 쿠페",
+        "trim": "GLC 43 AMG 4Matic",
+        "price": 106900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "c7275b9c-4988-4c3b-a8e9-7c079755ee1a",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40d DPE LCI 7 Seater",
+        "price": 153300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "c8f15ea5-b70b-41ad-ab68-adc2909323a8",
+      "raw": {
+        "brand": "벤츠",
+        "model": "EQB",
+        "lineup": "26년형 전기",
+        "trim": "EQB 300 4Matic Progressive",
+        "price": 78800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ca2d01f9-db0c-42e5-a316-0d13f987667d",
+      "raw": {
+        "brand": "벤츠",
+        "model": "G바겐",
+        "lineup": "가솔린 4.0",
+        "trim": "AMG G63 Manufaktur",
+        "price": 288400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cae521f2-2a0e-4ecf-866a-f2af87983ac2",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "420i Convertible",
+        "trim": " M Spt LCI",
+        "price": 75800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cb8f6869-f211-4719-81a5-4d12aadfc6bb",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스 하이브리드",
+        "lineup": "가솔린 1.5 T-GDI 2WD",
+        "trim": "블랙엣지",
+        "price": 41330000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cccf413f-8b2b-4fe9-98ca-9d27bd65e1c2",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40i M Spt LCI 7 Seater",
+        "price": 154800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cd302b6c-4890-490b-9f5e-902a4b6a2465",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 3.0 AMG 쿠페",
+        "trim": "CLE 53 AMG 4Matic+ Limited Edition",
+        "price": 131300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cf5be30a-45b7-4d76-9493-1fe73b75d6c6",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "iconic",
+        "price": 38810000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cf842fd4-1e08-4274-bca0-65e9729cd2c2",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0 쿠페",
+        "trim": "GLC 300 4Matic AMG Line 140th Anniversary Edition",
+        "price": 101100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "cfd2363b-ac15-4b7a-aac1-ad7d39ebbfce",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 2.0",
+        "trim": "GLE 350 4Matic",
+        "price": 116600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d0aa37e7-24d1-4b88-8902-67b440cb98de",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": "가솔린 2.0 쿠페",
+        "trim": "140th Anniversary Edition",
+        "price": 80200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d0bafd7d-a465-47dd-b3e6-de3b6ca0a2db",
+      "raw": {
+        "brand": "벤츠",
+        "model": "G바겐",
+        "lineup": "디젤 3.0",
+        "trim": "G 450 d 매뉴팩쳐",
+        "price": 217700000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d1454723-8d73-4f62-97fb-a491e46fb944",
+      "raw": {
+        "brand": "벤츠",
+        "model": "S-Class",
+        "lineup": "가솔린 3.0",
+        "trim": "S450 4Matic",
+        "price": 159600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d2f5b400-8445-4ebe-a205-d38b5b74819d",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "esprit Alpine",
+        "price": 44059000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d35324ab-839b-4226-9543-649194796c75",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40i M Spt LCI 6 Seater ",
+        "price": 156800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d4fc7759-dfb1-4574-bb5a-270fe3478637",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "techno",
+        "price": 38149000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d537e0c9-578a-4ffe-a061-edd34e5058d4",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320d",
+        "trim": "Touring LCI II",
+        "price": 65100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d6d07f22-64e6-447e-9fe4-72e197fb0733",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "220 그란쿠페",
+        "trim": "M Spt ",
+        "price": 53500000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d701f55e-3722-4731-9031-9a45a2a97544",
+      "raw": {
+        "brand": "BMW",
+        "model": "Z4",
+        "lineup": "X4 M40i LCI ",
+        "trim": "3.0L 트윈파워 터보 가솔린 엔진",
+        "price": 99600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "d77a645f-b8be-478b-bc3f-8016088c2c2b",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "523d",
+        "trim": "M Spt xDrive",
+        "price": 81400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "dd21a5d0-9d61-479e-b627-4f2d552e6b1c",
+      "raw": {
+        "brand": "BMW",
+        "model": "5 Series",
+        "lineup": "520i",
+        "trim": "M Spt 2.0L ",
+        "price": 74300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "dd288668-da26-4cb0-8b12-105e09dbd228",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI 2WD 밴",
+        "trim": "TV5",
+        "price": 26710000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "dd955f2f-1ddc-402f-a4fc-793f99648f3d",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "iconio",
+        "price": 42089000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "de697d7d-ec22-4837-ae40-6aa819c416df",
+      "raw": {
+        "brand": "KGM",
+        "model": "티볼리",
+        "lineup": "가솔린 1.6 2WD",
+        "trim": "V7",
+        "price": 26200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "decce8b3-e0f6-4a79-bfcf-b75c302ec575",
+      "raw": {
+        "brand": "BMW",
+        "model": "7 Series",
+        "lineup": "i7",
+        "trim": "xDrive60 M Spt ",
+        "price": 215100000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "e3a9d52a-1844-4cb1-af7a-13122803089a",
+      "raw": {
+        "brand": "BMW",
+        "model": "3 Series",
+        "lineup": "320d",
+        "trim": "Touring M Spt LCI II",
+        "price": 68900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "e62ea3e4-7066-4462-950b-a5a0297bc72d",
+      "raw": {
+        "brand": "KGM",
+        "model": "렉스턴 뉴 아레나",
+        "lineup": "디젤 2.2 LET 4WD 5인승",
+        "trim": "프리미엄",
+        "price": 42660000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "e7c11fc1-2348-47b5-8e29-ee0043933764",
+      "raw": {
+        "brand": "BMW",
+        "model": "2 Series",
+        "lineup": "220 그란쿠페",
+        "trim": "Gran Coupe M Spt Design",
+        "price": 49900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "e9b4e8d8-67ce-4eb5-8133-be616c4231bc",
+      "raw": {
+        "brand": "르노",
+        "model": "Grand Koleos",
+        "lineup": "가솔린 2.0 터보",
+        "trim": "escapade 4WD",
+        "price": 44310000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ea1102ea-21fe-40ae-8af4-64a71cd10af5",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0",
+        "trim": "GLC 300 4Matic Avangarde",
+        "price": 81400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "eacbff63-64d0-4fb4-aab9-251848dab853",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "xDrive40d M Spt LCI 6 Seater ",
+        "price": 157800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "eae6b14c-54bd-461d-b838-1ee642b0d760",
+      "raw": {
+        "brand": "벤츠",
+        "model": "CLE",
+        "lineup": " 가솔린 3.0 쿠페",
+        "trim": "CLE 450 4Matic AMG Line",
+        "price": 98400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "eb94922b-b75b-4c66-90cd-2f8e4a372f29",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": "20d xDrive M Spt",
+        "price": 78200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ed55cc56-52bb-4daf-9cb8-097d8c0c4d26",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive30d xLine LCI 7 Seater",
+        "price": 117800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ee002d4a-9a33-496d-9403-647f7b0cf5ec",
+      "raw": {
+        "brand": "벤츠",
+        "model": "E-Class",
+        "lineup": "가솔린 2.0 세단",
+        "trim": "E300 4Matic AMG Line 140th Anniversary Edition",
+        "price": 103400000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "f628b4f1-be18-45a4-bc07-1e051b25b8f1",
+      "raw": {
+        "brand": "BMW",
+        "model": "X7 Series",
+        "lineup": "X7 ",
+        "trim": "M60i xDrive Pro LCI",
+        "price": 184800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "f86a4318-a9e3-4470-9309-9fca2d55899b",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLE",
+        "lineup": "가솔린 3.0 AMG 쿠페",
+        "trim": "GLE 53 AMG 4Matic+",
+        "price": 168600000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "f94d1b0e-236f-44ab-9f2a-5df96124ad8e",
+      "raw": {
+        "brand": "르노",
+        "model": "Filante",
+        "lineup": "하이브리드 E-Tech",
+        "trim": "esprit Alpine",
+        "price": 49719000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "fb51e4c7-374b-4a87-8f81-a9a45c2dfbfd",
+      "raw": {
+        "brand": "BMW",
+        "model": "X1 Series",
+        "lineup": "iX1 ",
+        "trim": "xDrive30 xLine",
+        "price": 67900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "fb77eb77-eb1a-4292-89c4-1d2bc75f220b",
+      "raw": {
+        "brand": "BMW",
+        "model": "4 Series",
+        "lineup": "420i Convertible",
+        "trim": " M Spt Pro LCI",
+        "price": 79200000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "fd46358f-3d7d-43fb-897b-bd98fefad89f",
+      "raw": {
+        "brand": "KGM",
+        "model": "토레스",
+        "lineup": "가솔린 1.5 T-GDI AWD",
+        "trim": "T7",
+        "price": 34530000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "fecb4920-4934-494e-899c-322a97ffcb62",
+      "raw": {
+        "brand": "BMW",
+        "model": "X4 Series",
+        "lineup": "X4 ",
+        "trim": "xDrive20i xLine LCI (P1)",
+        "price": 73300000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ff38dbc8-4fab-432d-adc1-f3a1ea5f2e5d",
+      "raw": {
+        "brand": "BMW",
+        "model": "X3 Series",
+        "lineup": "X3 ",
+        "trim": "20d xDrive ",
+        "price": 72000000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ff90fbba-8ae2-4287-8f12-e3450761693d",
+      "raw": {
+        "brand": "벤츠",
+        "model": "GLC",
+        "lineup": "가솔린 2.0",
+        "trim": "GLC 300 4Matic AMG Line 140th Anniversary Edition",
+        "price": 96800000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    },
+    {
+      "sourceId": "ffca3e44-af3c-40a2-87ab-4ae4ce7c58b6",
+      "raw": {
+        "brand": "BMW",
+        "model": "X5 Series",
+        "lineup": "X5 ",
+        "trim": "xDrive30d M Spt LCI 5 Seater ",
+        "price": 122900000
+      },
+      "canonical": {
+        "makerId": null,
+        "modelId": null,
+        "generationId": null,
+        "modelYear": null,
+        "powertrainId": null,
+        "trimId": null
+      },
+      "state": "CANDIDATE_REQUIRES_CANONICAL_RECONCILIATION",
+      "priceUse": "AUDIT_ONLY_NOT_CANONICAL"
+    }
+  ]
+}

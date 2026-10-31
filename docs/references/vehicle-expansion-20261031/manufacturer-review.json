@@ -1,0 +1,38 @@
+{
+  "schema": "freepass-vehicle-expansion-review/v1",
+  "checkedDate": "2026-10-31",
+  "coverage": "PARTIAL: official family/powertrain evidence and selected trim defects; not all 201 source rows verified",
+  "sources": {
+    "bmw": "https://www.bmw.co.kr/content/dam/bmw/marketKR/bmw_co_kr/Pricelist/pricelist_oct2026.pdf.asset.1792129034710.pdf",
+    "benzCatalog": "https://www.mercedes-benz.co.kr/passengercars/models/catalog.html",
+    "benzE": "https://www.mercedes-benz.co.kr/passengercars/brand/news-events/news-story/2026/news-20260424.html",
+    "vw": "https://www.volkswagen.co.kr/idhub/content/dam/onehub_pkw/importers/kr/models/id4/leaflet/ID4_Price%20List_260105_web.pdf",
+    "tivoli": "https://www.kg-mobility.com/attached/contents/display/file/2000001000100070004/20251128102341788_eoGjBu.pdf",
+    "rexton": "https://www.kg-mobility.com/attached/contents/display/file/2000001000100120001/20251128102057184_Kcz77H.pdf",
+    "actyonHev": "https://www.kg-mobility.com/attached/contents/display/file/2000001000100180001/20260529151052815_zXL9oW.pdf",
+    "torresHev": "https://www.kg-mobility.com/attached/contents/display/file/2000001000100170001/20260331142134151_gDOzbQ.pdf",
+    "filante": "https://cdn.renault.co.kr/ko/model/filante_overview.jsp?inBanner=RKMgnbOverviewFilante&inSeq=1",
+    "koleos": "https://cdn.renault.co.kr/ko/model/koleos_overview.jsp?inBanner=RKMgnbOverviewKoleos&inSeq=1"
+  },
+  "findings": [
+    {"sourceIds":["d701f55e-3722-4731-9031-9a45a2a97544"],"code":"MODEL_LINEUP_CONFLICT","evidence":"bmw","detail":"Raw model Z4, lineup X4 M40i LCI. Official Z4 M40i exists; review proposes Z4 M40i, no automatic replacement. October official price 100900000 differs from raw 99600000."},
+    {"sourceIds":["1c7f2b53-572f-45a7-970b-c4de553f76d6"],"code":"ZERO_PRICE","evidence":"bmw","detail":"X6 xDrive40d M Sport Pro raw price 0, October official 141400000. Cannot quote at zero; same model-year/price basis still needs binding."},
+    {"sourceIds":["b9751c1e-07b4-4c4e-9874-9f5100b31d0d","617ef8f4-4e07-43e6-b3a6-096859828997"],"code":"BADGE_YEAR_REVIEW","evidence":"bmw","detail":"Raw 740e versus October official 750e. Do not infer year or badge substitution from price."},
+    {"sourceIds":["5c236a08-ba70-4ce6-bbe1-8cca76981e62"],"code":"HISTORICAL_TRIM_REVIEW","evidence":"benzE","detail":"Official April 24 news replaces E200 Avantgarde with Exclusive. Raw Avantgarde may represent older stock; do not delete based on latest listing."},
+    {"sourceIds":["98eb44da-03ca-43be-8d4b-dd04c407a60b"],"code":"COPY_SUFFIX","evidence":null,"detail":"CLE200 cabrio trim contains (복사). Raw source defect candidate; canonical name must not contain UI copy marker."},
+    {"sourceIds":["08854eae-f87e-4c9c-b069-b25e6083b3e5"],"code":"PRICE_OUTLIER_REQUIRES_SOURCE_CONFIRMATION","evidence":null,"detail":"EQE350+ SUV raw 1060000000 KRW. Suspected typo; no verified replacement price, remains unresolved."},
+    {"sourceIds":["0c7fa1a1-e883-45f9-9dde-a4c3fc0f075a"],"code":"PRICE_OUTLIER_REQUIRES_YEAR_TAX_BINDING","evidence":"rexton","detail":"Rexton 2WD 7-seat Noblesse raw 4144000. Official document 5% 5-seat Noblesse 43754000 plus 390000 seat option = 44144000; correction candidate only, not applied."},
+    {"sourceIds":["c36fc612-2c32-4b48-830f-043ead33dc1f","de697d7d-ec22-4837-ae40-6aa819c416df"],"code":"POWERTRAIN_CONFLICT","evidence":"tivoli","detail":"Raw Tivoli V5/V7 gas 1.6; official document separates 1.6 V1/V3 and 1.5 turbo V5/V7. Need exact year binding before canonical correction."},
+    {"sourceIds":["dd955f2f-1ddc-402f-a4fc-793f99648f3d"],"code":"TRIM_SPELLING_REVIEW","evidence":"koleos","detail":"Raw iconio versus official iconic."},
+    {"sourceIds":["57c8d06f-721b-4048-b086-5ef6370d64d1","2bab66d0-11b8-42b7-aef6-4153885a6e88"],"code":"DUPLICATE_IDENTITY_AND_TAXONOMY","evidence":"vw","detail":"Both source IDs have ID4/Pro/Lite at 52990000. Official MY25 ID.4 Pro Lite is electric, 210kW; Pro belongs in trim badge, not POWERTRAIN. Map both provider IDs to one reviewed canonical identity if year/specs agree. Preserve both source rows."}
+  ],
+  "familyChecks": [
+    {"brand":"BMW","status":"PARTIAL","detail":"Current October official price list obtained. Provider raw 5/7/X1/X2/X3 families also contain i5/i7/iX1/iX2/iX3; split canonical model identity after stable-ID reconciliation. Do not mass-update all older prices."},
+    {"brand":"벤츠","status":"PARTIAL","detail":"Official catalog family evidence obtained; price page JS shell does not expose full table. A220 hatch raw trim says sedan; EQE and EQE SUV need separate body identity. Full per-trim prices unresolved."},
+    {"brand":"KGM","status":"PARTIAL","detail":"Official Rexton/Tivoli/Actyon HEV/Torres HEV PDFs obtained. Raw 엑티언 should reconcile with existing 액티언 authority. Actyon/Torres gasoline full exact-year trim audit remains pending. Preserve 5%/3.5%/post-benefit price basis separately."},
+    {"brand":"르노","status":"PARTIAL","detail":"Official Grand Koleos gas 2.0 turbo / E-Tech hybrid and Filante E-Tech confirmed. Current Filante page has techno/iconic/esprit Alpine; raw esprit Alpine 1955 needs edition-date evidence, absence on current page does not prove invalidity."},
+    {"brand":"폭스바겐","status":"TRIM_EVIDENCE_FOUND_CANONICAL_BINDING_PENDING","detail":"Official PDF January 2026 explicitly MY25; ID.4 Pro Lite 52990000 / Pro 60407000, electric 210kW. Do not invent MY26 from document date."}
+  ],
+  "promotionRequirements": ["current ACTIVE canonical IDs/revision readback", "model year/generation/body/powertrain/trim reconciliation", "existing KGM/Renault IDs reused where identity matches", "unresolved per-row official trim checks completed", "existing capture -> ingest -> promote with source hash and writer receipt", "Estimate consumer readback at same release"],
+  "productionReady": false
+}
