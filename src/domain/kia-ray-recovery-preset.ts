@@ -180,14 +180,14 @@ export const KIA_RAY_REVIEWED_BINDINGS=[
   {
     "productId": "kia_ray_가솔린1.0_프레스티지",
     "trimRowKey": "mf-002.md-058.sm-tam-ray-gas-2027-korea__the-2027-ray::v01::t02",
-    "masterId": "mf-002.md-058.sm-tam-ray-gas-2027-korea__the-2027-ray",
+    "masterId": "mf-002.md-058.sm-tam",
     "sourceTrimNo": "2905",
     "trimName": "프레스티지"
   },
   {
     "productId": "kia_ray_가솔린1.0_시그니처",
     "trimRowKey": "mf-002.md-058.sm-tam-ray-gas-2027-korea__the-2027-ray::v01::t03",
-    "masterId": "mf-002.md-058.sm-tam-ray-gas-2027-korea__the-2027-ray",
+    "masterId": "mf-002.md-058.sm-tam",
     "sourceTrimNo": "2906",
     "trimName": "시그니처"
   }

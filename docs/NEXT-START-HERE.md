@@ -3552,3 +3552,7 @@ PR #837 merged; writer deployment run 41253935103 passed with artifact writes OF
 ## 2026-11-01 Estimate 실제 가격 대조 후 현재 운영ID 읽기 검토
 
 기존 ERP5 read-only audit의 수동 입력 estimate_identity_review=true일 때만 기존 원자 snapshot/동일 reader에서 identity/base-price allowlist를 추가 출력한다. 기본 scheduled summary에는 상세값을 넣지 않는다. 임의 필드/연락처/자유문/옵션 원문은 제외하고 정확 ID·updateTime·입력digest·원문 scalar만 유지한다. 출력은 notCanonicalPublished/canIssueQuote=false이며 release발행이나 별도 저장/쓰기를 허용하지 않는다. 기존443개 가격대조를 실제 운영525개 상품 및 vehicle_master/vehicle_trim_master와 연결하기 위한 읽기다. 로컬14검사/build/architecture/data-access-boundary 결과를 확인 후 PR CI/수동audit를 실행한다. 전용 master 복구서비스 권한 blocker는 이 읽기변경으로 우회하거나 해결됐다고 주장하지 않는다.
+
+## 2026-11-01 Estimate 실제 operational 부모 참조 수정
+
+실제 수동 읽기 전용 감사41264941423 SUCCESS，sourceReadAt=2026-11-01T02:25:34.816Z。当前master1872/trim2106/newCar525。2027 Ray永久trim_row_key仍使用较长历史namespace，但存储master_id实际为mf-002.md-058.sm-tam；旧recovery preset错误地把namespace前缀当作父文档ID。修正preset的精确parent并以现存FK/物理事实/2027年/seq1检验，不迁移identity表、不新建同名parent。powertrain投影ID保留永久row namespace，modelYear投影ID绑定实际parent和明确2027。实际审计两个trim都通过新的纯identity校验；19相关测试/build/architecture/data-access通过。source facts fingerprint/432组合/来源保存/发布CAS及专用service边界不变。此修正不是生产publication成功；私有recovery service权限问题仍在。

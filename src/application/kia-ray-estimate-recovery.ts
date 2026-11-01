@@ -19,6 +19,15 @@ export type EstimateRecoveryPorts={
   now:()=>string;
 };
 function exact(rows:OperationalMasterDocument[],id:string){const found=rows.filter(row=>row.id===id||row.data.trim_row_key===id);if(found.length!==1)throw new Error('ESTIMATE_RECOVERY_EXACT_IDENTITY_REQUIRED:'+id);return found[0]!;}
+export function reviewedKiaRayIdentity(master:OperationalMasterDocument,trim:OperationalMasterDocument,binding:typeof KIA_RAY_REVIEWED_BINDINGS[number]) {
+  const rowKey=String(trim.data.trim_row_key||trim.id);
+  if(master.id!==binding.masterId||rowKey!==binding.trimRowKey||trim.data.master_id!==master.id||master.data.retired===true||trim.data.retired===true||master.data.maker!=='기아'||master.data.model!=='레이'||trim.data.trim!==binding.trimName||trim.data.seats!==5||Number(trim.data.engine_cc)!==998||trim.data.turbo!==false||Number(trim.data.powertrain_seq)!==1||Number(trim.data.model_year_start)!==2027||['maker','model','sub_model'].some(key=>master.data[key]!==trim.data[key]))throw new Error('ESTIMATE_RECOVERY_REVIEWED_PHYSICAL_IDENTITY_CHANGED');
+  // A permanent trim-row namespace need not equal its stored parent's document ID.
+  // Preserve the actual reference; do not reconstruct a parent from the row key.
+  const suffix=rowKey.match(/^(.*::v01)::t\d+$/);
+  if(!suffix)throw new Error('ESTIMATE_RECOVERY_PERMANENT_AXIS_REQUIRED');
+  return {rowKey,masterId:master.id,powertrainId:suffix[1]!,modelYearId:master.id+'::model-year:2027'};
+}
 export async function runKiaRayEstimateRecovery(ports:EstimateRecoveryPorts,input:{mode:'inspect'|'prepare'|'publish'|'restore';planId?:string;planDigest?:string}) {
   if(input.mode==='inspect')return {mode:input.mode,status:'INSPECTED',source:inspectOperationalEstimateSource(await ports.snapshot()).summary};
   if(input.mode==='publish') {
@@ -62,11 +71,9 @@ export async function runKiaRayEstimateRecovery(ports:EstimateRecoveryPorts,inpu
   const snapshot=await ports.snapshot(),now=ports.now();
   const bindings:OperationalEstimateReviewedBinding[]=KIA_RAY_REVIEWED_BINDINGS.map((binding,index)=>{
     const master=exact(snapshot.masters,binding.masterId),trim=exact(snapshot.trims,binding.trimRowKey),product=exact(snapshot.newCarTrims,binding.productId),packet=packets[index]!;
-    if(master.data.maker!=='기아'||master.data.model!=='레이'||trim.data.trim!==binding.trimName||trim.data.seats!==5||Number(trim.data.engine_cc)!==998||trim.data.turbo!==false)throw new Error('ESTIMATE_RECOVERY_REVIEWED_PHYSICAL_IDENTITY_CHANGED');
-    const rowKey=String(trim.data.trim_row_key||trim.id),masterId=master.id;
-    if(!rowKey.startsWith(masterId+'::v01::t')||trim.data.master_id!==masterId)throw new Error('ESTIMATE_RECOVERY_PERMANENT_AXIS_REQUIRED');
+    const {masterId,powertrainId,modelYearId}=reviewedKiaRayIdentity(master,trim,binding);
     const facts=(packet.normalizedDocument.data.payload as {estimateFacts:OperationalManufacturerFacts}).estimateFacts;
-    return {productId:product.id,masterId,trimId:trim.id,vehicleModelId:'mf-002.md-058',powertrainId:masterId+'::v01',modelYearId:masterId+'::model-year:2027',
+    return {productId:product.id,masterId,trimId:trim.id,vehicleModelId:'mf-002.md-058',powertrainId,modelYearId,
       expectedMasterDigest:stableDigest(master.data),expectedTrimDigest:stableDigest(trim.data),expectedProductDigest:stableDigest(product.data),manufacturerFactsDigest:stableDigest(facts),
       sourceDocumentId:packet.sourceDocument.id,normalizedDocumentId:packet.normalizedDocument.id,normalizedFactsPath:packet.normalizedFactsPath};
   });
