@@ -3532,3 +3532,9 @@ This file exists so another session can continue without re-discovering or re-cr
 ### 2026-10-31 Estimate recovery execution boundary
 
 PR #837 merged; writer deployment run 41253935103 passed with artifact writes OFF. Recovery run 41254048398 stopped before any source capture: existing deployer lacks `run.jobs.get`. No IAM changes were made. Recovery now uses a separately named **private Cloud Run service builder**, within the existing authorized service deployment mechanism, with the existing writer runtime identity. It exposes health only and runs the bounded recovery once per process; the consumer/read serving plane has no publication hook. Min instances 0, max 1. Exact manufacturer fingerprint, source witnesses, initial-release-only scope and transaction CAS remain mandatory. Actual master availability must still be verified on the public consumer contract; service readiness alone is not publication proof.
+
+### 2026-11-01 데이터 전용 — 제조사 목록과 견적 준비 상태 구분
+
+사용자 최신 지시: UI·UX는 사용자/Claude 담당, 여기서는 데이터만 처리한다. `inspectOperationalEstimateSource`의 읽기 전용 summary에 `manufacturerInventory`를 추가했다. 운영 중인 동일 vehicle_master/vehicle_trim_master/new_car_trim snapshot에서 제조사별 master/model/trim 수, retired 수, new-car product 수, exact link 수, review-ready/HOLD 수와 사유를 집계한다. 카탈로그에만 있는 제조사도 남기되 견적 가능으로 승격하지 않는다. 제조사명이 빠진 행은 null로 별도 집계하고 상품명/ID로 추정하지 않는다. summary에는 차량명/상품키/가격을 노출하지 않는다.
+
+검증: operational reader/readiness12개, TypeScript build, architecture/data-access boundary PASS. 데이터/권한/UI write 0. 실제 운영 수치는 main 병합 후 기존 read-only audit workflow 재실행으로 확인한다. 이것은 목록과 준비 상태 진단이며 ACTIVE 발행이나 #839 권한 문제의 해결을 의미하지 않는다.

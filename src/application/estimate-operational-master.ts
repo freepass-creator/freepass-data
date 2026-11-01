@@ -123,8 +123,21 @@ export function inspectOperationalEstimateSource(snapshot:OperationalEstimateSou
   const counts=new Map<string,number>();
   for(const row of rows)for(const reason of row.holdReasons)counts.set(reason,(counts.get(reason)||0)+1);
   const ready=rows.filter(row=>row.status==='READY_FOR_REVIEW').length;
+  // Inventory is distinct from quote readiness. Catalog-only manufacturers must
+  // remain visible in diagnostics without claiming that they have live tariffs.
+  const inventory=new Map<string,{maker:string|null;masters:number;models:Set<string>;retiredMasters:number;trims:number;retiredTrims:number;products:number;exactlyLinkedProducts:number;readyForReviewProducts:number;holdProducts:number;reasons:Map<string,number>}>();
+  const makerInventory=(raw:Record<string,unknown>)=>{
+    const maker=text(raw.maker),key=maker||'\u0000UNSPECIFIED';
+    if(!inventory.has(key))inventory.set(key,{maker:maker||null,masters:0,models:new Set(),retiredMasters:0,trims:0,retiredTrims:0,products:0,exactlyLinkedProducts:0,readyForReviewProducts:0,holdProducts:0,reasons:new Map()});
+    return inventory.get(key)!;
+  };
+  for(const master of masters.values()){const item=makerInventory(master.data);item.masters++;if(text(master.data.model))item.models.add(text(master.data.model));if(master.data.retired===true)item.retiredMasters++;}
+  for(const trim of trims.values()){const item=makerInventory(trim.data);item.trims++;if(trim.data.retired===true)item.retiredTrims++;}
+  snapshot.newCarTrims.forEach((product,index)=>{const item=makerInventory(product.data),diagnostic=rows[index]!;item.products++;if(diagnostic.masterId&&diagnostic.trimId)item.exactlyLinkedProducts++;if(diagnostic.status==='READY_FOR_REVIEW')item.readyForReviewProducts++;else item.holdProducts++;for(const reason of diagnostic.holdReasons)item.reasons.set(reason,(item.reasons.get(reason)||0)+1);});
+  const manufacturerInventory=[...inventory.values()].sort((a,b)=>(a.maker||'').localeCompare(b.maker||'')).map(item=>({maker:item.maker,catalogMasters:item.masters,catalogModels:item.models.size,retiredMasters:item.retiredMasters,catalogTrims:item.trims,retiredTrims:item.retiredTrims,newCarProducts:item.products,exactlyLinkedProducts:item.exactlyLinkedProducts,readyForReviewProducts:item.readyForReviewProducts,holdProducts:item.holdProducts,holdReasons:[...item.reasons].sort(([a],[b])=>a.localeCompare(b)).map(([reason,count])=>({reason,count}))}));
+
   return {
-    summary:{contract:'estimate-operational-source-readiness/v1',source:snapshot.source,readAt:snapshot.readAt,inputDigest:snapshot.inputDigest,publicationState:'NOT_PUBLISHED',
+    summary:{contract:'estimate-operational-source-readiness/v1',source:snapshot.source,readAt:snapshot.readAt,inputDigest:snapshot.inputDigest,publicationState:'NOT_PUBLISHED',manufacturerInventory,
       counts:{masters:masters.size,trims:trims.size,products:rows.length,explicitModelYearProducts:explicitYears,exactTrimReferences,priceCompleteProducts:priceComplete,optionCompleteProducts:optionComplete,colorCompleteProducts:colorComplete,readyForReview:ready,hold:rows.length-ready},
       knownFieldKeysPresent:[...fields].sort(),holdReasons:[...counts].sort(([a],[b])=>a.localeCompare(b)).map(([reason,count])=>({reason,count}))},
     rows,
