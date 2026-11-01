@@ -3548,3 +3548,7 @@ PR #837 merged; writer deployment run 41253935103 passed with artifact writes OF
 검증: source parser+parse persistence12개, TypeScript build, arch/data-access boundary PASS. 실제 원문 replay에서 2027 K5트렌디25,170,000/프레스티지27,840,000, K8프레스티지35,910,000/노블레스39,550,000을 정확히 확인했다. 이 네 기본가격 확인은 옵션/색상 검증이나 운영 제공 완료가 아니다. 원문/SHA/파서버전/결과는 shared/estimate-recovery/manufacturer-base-prices/kia-rental-base-price-checks.json에 보존했다.
 
 기아10차종 기본 configurator 원본191개는 별도 관측 자료다. rent페이지와 같은 rcCode의 기본 configurator를 호출하면 일반판매16/20개가 다시 나오는 것이 확인되어 그36개를 렌터카 신규 트림으로 세지 않는다. 렌터카 가격은 위 실제 rent HTML의4행으로 확인한다. 모든 원본은 permanent identity/세제기준 정합 검토 후에만 발행한다. Data #839의 실행 권한 문제는 그대로 남아 있다.
+
+## 2026-11-01 Estimate 실제 가격 대조 후 현재 운영ID 읽기 검토
+
+기존 ERP5 read-only audit의 수동 입력 estimate_identity_review=true일 때만 기존 원자 snapshot/동일 reader에서 identity/base-price allowlist를 추가 출력한다. 기본 scheduled summary에는 상세값을 넣지 않는다. 임의 필드/연락처/자유문/옵션 원문은 제외하고 정확 ID·updateTime·입력digest·원문 scalar만 유지한다. 출력은 notCanonicalPublished/canIssueQuote=false이며 release발행이나 별도 저장/쓰기를 허용하지 않는다. 기존443개 가격대조를 실제 운영525개 상품 및 vehicle_master/vehicle_trim_master와 연결하기 위한 읽기다. 로컬14검사/build/architecture/data-access-boundary 결과를 확인 후 PR CI/수동audit를 실행한다. 전용 master 복구서비스 권한 blocker는 이 읽기변경으로 우회하거나 해결됐다고 주장하지 않는다.

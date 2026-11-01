@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inspectOperationalEstimateSource } from '../src/application/estimate-operational-master.js';
+import { inspectOperationalEstimateSource, operationalEstimateIdentityReview } from '../src/application/estimate-operational-master.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import type { OperationalEstimateSourceSnapshot } from '../src/ports/estimate-operational-source.js';
 const now=Date.parse('2026-10-31T15:00:00Z');
@@ -116,4 +116,18 @@ describe('manufacturer inventory versus quote-ready products',()=>{
     expect(result.summary.manufacturerInventory[0]?.holdReasons).toContainEqual({reason:'EXACT_TRIM_REFERENCE_REQUIRED',count:1});
     expect(JSON.stringify(result.summary.manufacturerInventory)).not.toMatch(/private-commercial-id|immutable-master|쏘렌토|36410000|450000/);
   });
+});
+
+describe('manual identity/price review without a second master',()=>{
+ it('retains exact IDs, revisions and scalar price facts while excluding arbitrary or private fields',()=>{
+  const snapshot=source({contactPhone:'PRIVATE_SENTINEL',secret:'PRIVATE_SENTINEL',rawNotes:'PRIVATE_SENTINEL'});const result=operationalEstimateIdentityReview(snapshot,now);
+  expect(result.products[0]).toMatchObject({id:'private-commercial-id',fields:{priceBefore:36410000,modelYear:2027},updateTime:snapshot.newCarTrims[0]!.updateTime});
+  expect(result).toMatchObject({readOnly:true,notCanonicalPublished:true,canIssueQuote:false,sourceInputDigest:snapshot.inputDigest});
+  expect(JSON.stringify(result)).not.toMatch(/PRIVATE_SENTINEL|optionsMaster|CANONICAL_ACTIVE/);
+ });
+ it('does not infer missing year or accept a changed source digest',()=>{
+  const snapshot=source();delete snapshot.newCarTrims[0]!.data.modelYear;reseal(snapshot);
+  expect(operationalEstimateIdentityReview(snapshot,now).products[0]!.fields).not.toHaveProperty('modelYear');
+  snapshot.newCarTrims[0]!.data.priceBefore=1;expect(()=>operationalEstimateIdentityReview(snapshot,now)).toThrow('DIGEST_MISMATCH');
+ });
 });

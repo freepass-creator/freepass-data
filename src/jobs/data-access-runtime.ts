@@ -4,7 +4,7 @@ import { runKiaRayEstimateRecovery, type EstimateRecoveryPorts } from '../applic
 import { deterministicVehicleMasterRecordId, sealVehicleMasterPipelineRecord } from '../domain/vehicle-master.js';
 import type { OperationalEstimateSourceDocument, OperationalEstimatePublicationPlan } from '../domain/estimate-operational-publication.js';
 import { readOperationalEstimateSourceSnapshot } from '../infra/estimate-operational-master-reader.js';
-import { inspectOperationalEstimateSource } from '../application/estimate-operational-master.js';
+import { inspectOperationalEstimateSource, operationalEstimateIdentityReview } from '../application/estimate-operational-master.js';
 import { readVehicleMasterSnapshot } from '../infra/erp5-compat-catalog-reader.js';
 export async function captureVehicleMasterSnapshotReadOnly() {
   return createJobDataAccessRuntime().access.read({
@@ -732,7 +732,7 @@ export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
   const store = createFirestoreVehicleMasterStore();
 
   return {
-    operationalEstimateReadiness: () => access.read({
+    operationalEstimateReadiness: (options:{includeIdentityReview?:boolean} = {}) => access.read({
       context: {
         actor: { id: 'service:freepass-data-estimate-master-readiness', kind: 'SERVICE' },
         clientId: 'job:check-estimate-master-readiness',
@@ -740,9 +740,9 @@ export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
       },
       operation: 'READ_ESTIMATE_MASTER_READINESS',
       resource: { kind: 'PROJECTION', name: 'estimate-newcar-master-readiness', projectionId: 'estimate-newcar-master' },
-      requestDigest: stableDigest({source:'OPERATIONAL_V1'}),
+      requestDigest: stableDigest({source:'OPERATIONAL_V1',includeIdentityReview:options.includeIdentityReview===true}),
       summarize: value => ({count:value.counts.products,digest:stableDigest(value),inputDigest:value.inputDigest}),
-    }, async () => inspectOperationalEstimateSource(await readOperationalEstimateSourceSnapshot()).summary),
+    }, async () => {const snapshot=await readOperationalEstimateSourceSnapshot();return {...inspectOperationalEstimateSource(snapshot).summary,...(options.includeIdentityReview?{identityReview:operationalEstimateIdentityReview(snapshot)}:{})};}),
     estimateMasterReadiness: (bridge: EstimateMasterCanonicalBridge = {}) => access.read({
       context: {
         actor: { id: 'service:freepass-data-estimate-master-readiness', kind: 'SERVICE' },

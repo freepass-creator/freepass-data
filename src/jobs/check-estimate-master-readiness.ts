@@ -29,7 +29,7 @@ const runtime = createVehicleMasterReadOnlyDataAccessRuntime({
 });
 // The production SSOT explicitly remains vehicle_master + vehicle_trim_master.
 // Empty future graph nodes are not evidence that the operating master is empty.
-const operationalSource = await runtime.operationalEstimateReadiness();
+const operationalSource = await runtime.operationalEstimateReadiness({includeIdentityReview:process.argv.includes('--identity-review')});
 const result = {
   contractVersion:'estimate-master-readiness-v1', schemaVersion:'1.0.0',
   status:'BLOCKED', generatedAt:new Date().toISOString(), projectionId:'estimate-newcar-master',
