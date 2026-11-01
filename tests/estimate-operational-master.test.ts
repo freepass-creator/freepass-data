@@ -93,3 +93,27 @@ describe('operational source atomic reader',()=>{
     await expect(readOperationalEstimateSourceSnapshot(fakeDatabase(true).db)).rejects.toThrow('NON_ATOMIC_READ');
   });
 });
+
+describe('manufacturer inventory versus quote-ready products',()=>{
+  it('keeps catalog-only and retired manufacturer entries without inventing an operating product',()=>{
+    const snapshot=source();const version=snapshot.masters[0]!.updateTime;
+    snapshot.masters.push({id:'renault-a',data:{maker:'르노코리아',model:'그랑 콜레오스'},updateTime:version},{id:'renault-old',data:{maker:'르노코리아',model:'그랑 콜레오스',retired:true},updateTime:version});
+    snapshot.trims.push({id:'renault-trim',data:{maker:'르노코리아',master_id:'renault-a',trim:'테크노'},updateTime:version});reseal(snapshot);
+    const result=inspectOperationalEstimateSource(snapshot,now);
+    expect(result.summary.manufacturerInventory.find(row=>row.maker==='르노코리아')).toMatchObject({catalogMasters:2,catalogModels:1,retiredMasters:1,catalogTrims:1,newCarProducts:0,readyForReviewProducts:0,holdProducts:0});
+    expect(result.summary.manufacturerInventory.find(row=>row.maker==='기아')).toMatchObject({newCarProducts:1,exactlyLinkedProducts:1,readyForReviewProducts:1});
+    expect(result.summary.counts.products).toBe(1);
+  });
+  it('reports missing maker separately without guessing it from a product ID or matching a name',()=>{
+    const snapshot=source({trimKey:'unlinked'});delete snapshot.newCarTrims[0]!.data.maker;reseal(snapshot);
+    const result=inspectOperationalEstimateSource(snapshot,now);
+    expect(result.summary.manufacturerInventory.find(row=>row.maker===null)).toMatchObject({newCarProducts:1,exactlyLinkedProducts:0,readyForReviewProducts:0,holdProducts:1});
+    expect(result.summary.manufacturerInventory.find(row=>row.maker==='기아')).toMatchObject({catalogMasters:1,newCarProducts:0});
+    expect(result.summary.publicationState).toBe('NOT_PUBLISHED');
+  });
+  it('aggregates real HOLD reasons without exposing row identities, prices or model names',()=>{
+    const result=inspectOperationalEstimateSource(source({trimKey:'unlinked'}),now);
+    expect(result.summary.manufacturerInventory[0]?.holdReasons).toContainEqual({reason:'EXACT_TRIM_REFERENCE_REQUIRED',count:1});
+    expect(JSON.stringify(result.summary.manufacturerInventory)).not.toMatch(/private-commercial-id|immutable-master|쏘렌토|36410000|450000/);
+  });
+});
