@@ -217,3 +217,20 @@ it('keeps official powertrain panels, tax bases and named option prices separate
   expect(hybrid?.priceAfter).toBe(39630000);
   expect(hybrid?.priceBasis).toBe('세제혜택 후');
 });
+
+it('parses observed rental LPG trims and preserves the explicitly stated tax-exempt price basis',()=>{
+  const parser=new KiaOfficialPriceParser();
+  const input={sourceDocumentId:'test-k5-rental-prices',sourceUrl:'https://www.kia.com/kr/vehicles/k5/price/rent',contentType:'text/html',bytes:Buffer.from(`<title>기아 K5 렌터카 가격 - 공식</title><script>var meta={'vehicleName':'K5'};</script><div>The 2027 K5</div><div>2026년 10월 1일 기준</div><button>2.0 LPG</button><h3>트렌디</h3><div>25,170,000</div><h3>프레스티지</h3><div>27,840,000</div><p>렌터카/장애인 전용 가격은 면세가격임</p>`)};
+  expect(parser.canParse(input)).toBe(true);const result=parser.parse(input);
+  expect(result.records.map(row=>({model:row.model,year:row.modelYear,powertrain:row.powertrainName,trim:row.trimName,price:row.basePrice,fuel:row.fuelType,basis:row.priceBasis}))).toEqual([
+    {model:'K5',year:2027,powertrain:'2.0 LPG',trim:'트렌디',price:25170000,fuel:'LPG',basis:'MANUFACTURER_RENTAL_TAX_EXEMPT_SALE_PRICE'},
+    {model:'K5',year:2027,powertrain:'2.0 LPG',trim:'프레스티지',price:27840000,fuel:'LPG',basis:'MANUFACTURER_RENTAL_TAX_EXEMPT_SALE_PRICE'},
+  ]);expect(result.warnings).not.toContain('RENTAL_TAX_BASIS_UNVERIFIED');
+});
+it('does not infer rental tax exemption from the URL or accept a non-official price path',()=>{
+  const parser=new KiaOfficialPriceParser();const input={sourceDocumentId:'test-rental-tax-missing',sourceUrl:'https://www.kia.com/kr/vehicles/k8/price/rent',contentType:'text/html',bytes:Buffer.from(`<title>기아 K8 가격 - 공식</title><div>The 2027 K8</div><button>3.5 LPG</button><h3>프레스티지</h3><div>35,910,000</div>`)};
+  expect(parser.parse(input).warnings).toContain('RENTAL_TAX_BASIS_UNVERIFIED');expect(parser.parse(input).records[0]?.priceBasis).toBeUndefined();
+  expect(parser.canParse({...input,sourceUrl:'https://www.kia.com/kr/vehicles/k8/price/private'})).toBe(true);
+  expect(parser.canParse({...input,sourceUrl:'https://kia.com.attacker.example/kr/vehicles/k8/price/rent'})).toBe(false);
+  expect(parser.canParse({...input,sourceUrl:'http://www.kia.com/kr/vehicles/k8/price/rent'})).toBe(false);
+});

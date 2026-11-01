@@ -3538,3 +3538,13 @@ PR #837 merged; writer deployment run 41253935103 passed with artifact writes OF
 사용자 최신 지시: UI·UX는 사용자/Claude 담당, 여기서는 데이터만 처리한다. `inspectOperationalEstimateSource`의 읽기 전용 summary에 `manufacturerInventory`를 추가했다. 운영 중인 동일 vehicle_master/vehicle_trim_master/new_car_trim snapshot에서 제조사별 master/model/trim 수, retired 수, new-car product 수, exact link 수, review-ready/HOLD 수와 사유를 집계한다. 카탈로그에만 있는 제조사도 남기되 견적 가능으로 승격하지 않는다. 제조사명이 빠진 행은 null로 별도 집계하고 상품명/ID로 추정하지 않는다. summary에는 차량명/상품키/가격을 노출하지 않는다.
 
 검증: operational reader/readiness12개, TypeScript build, architecture/data-access boundary PASS. 데이터/권한/UI write 0. 실제 운영 수치는 main 병합 후 기존 read-only audit workflow 재실행으로 확인한다. 이것은 목록과 준비 상태 진단이며 ACTIVE 발행이나 #839 권한 문제의 해결을 의미하지 않는다.
+
+### 2026-11-01 기본 트림 가격 우선 — 기아 트렌디/LPG 렌터카 원본
+
+사용자 우선순위: 세부 모델/파워트레인/세부 트림의 기본가격 먼저 정확히, 그 뒤 옵션/색상. UI 수정 없음.
+
+실제 K5/K8 공식 /price/rent 원문을 확인하면서 기존 KiaOfficialPriceParser가 트렌디·LPG와 /price/private|rent 경로를 처리하지 못하는 누락을 확인했다. parser1.4.0에서 해당 관측 구조를 처리한다. 모델명은 공식 HTML의 유일한 vehicleName 선언을 우선 사용하되 서로 다르면 UNKNOWN으로 보존한다. 면세는 URL로 추정하지 않고 ‘렌터카/장애인 전용 가격은 면세가격임’ 원문이 있을 때만 MANUFACTURER_RENTAL_TAX_EXEMPT_SALE_PRICE로 기록한다. 근거가 없으면 경고를 남긴다. 원본/정규화 자료의 기존 source persistence lifecycle을 사용하며 현재 master/ACTIVE/요금은 바꾸지 않는다.
+
+검증: source parser+parse persistence12개, TypeScript build, arch/data-access boundary PASS. 실제 원문 replay에서 2027 K5트렌디25,170,000/프레스티지27,840,000, K8프레스티지35,910,000/노블레스39,550,000을 정확히 확인했다. 이 네 기본가격 확인은 옵션/색상 검증이나 운영 제공 완료가 아니다. 원문/SHA/파서버전/결과는 shared/estimate-recovery/manufacturer-base-prices/kia-rental-base-price-checks.json에 보존했다.
+
+기아10차종 기본 configurator 원본191개는 별도 관측 자료다. rent페이지와 같은 rcCode의 기본 configurator를 호출하면 일반판매16/20개가 다시 나오는 것이 확인되어 그36개를 렌터카 신규 트림으로 세지 않는다. 렌터카 가격은 위 실제 rent HTML의4행으로 확인한다. 모든 원본은 permanent identity/세제기준 정합 검토 후에만 발행한다. Data #839의 실행 권한 문제는 그대로 남아 있다.

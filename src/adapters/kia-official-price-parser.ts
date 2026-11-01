@@ -20,6 +20,7 @@ import {
 } from './vehicle-master-parser-utils.js';
 
 const TRIM_NAMES = new Set([
+  '트렌디',
   '프레스티지',
   '노블레스',
   '시그니처',
@@ -27,7 +28,10 @@ const TRIM_NAMES = new Set([
   '블랙 에디션',
 ]);
 
-function kiaModelName(text: string, url: string | null) {
+function kiaModelName(text: string, url: string | null, html: string) {
+  const declared=[...new Set([...html.matchAll(/['"]vehicleName['"]\s*:\s*['"]([^'"]+)['"]/g)].map(match=>htmlToVehicleText(Buffer.from(match[1]!)).trim()).filter(Boolean))];
+  if(declared.length===1)return declared[0]!;
+  if(declared.length>1)return 'UNKNOWN';
   const title = text.match(/기아\s+([^\n]+?)\s+가격(?:\s*-|\n|$)/);
   if (title?.[1]) return title[1].trim();
   if (text.includes('쏘렌토')) return '쏘렌토';
@@ -55,7 +59,7 @@ function effectiveFrom(text: string) {
 
 function selectedPowertrain(lines: string[]) {
   const pattern =
-    /^(?:\d(?:\.\d+)?\s*)?(?:가솔린|디젤|터보 하이브리드|하이브리드|전기|EV)(?:\s|\(|$)/;
+    /^(?:\d(?:\.\d+)?\s*)?(?:가솔린|디젤|LPG|LPI|터보 하이브리드|하이브리드|전기|EV)(?:\s|\(|$)/;
   return lines.find((line) => pattern.test(line) && line.length <= 50) ?? null;
 }
 
@@ -104,15 +108,16 @@ function nextPrice(lines: string[], start: number) {
 
 export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
   readonly parserId = 'KIA_OFFICIAL_PRICE';
-  readonly parserVersion = '1.3.0';
+  readonly parserVersion = '1.4.0';
 
   canParse(input: VehicleMasterParseInput) {
     if (!input.sourceUrl) return false;
     try {
       const url = new URL(input.sourceUrl);
       return (
+        url.protocol === 'https:' &&
         (url.hostname === 'kia.com' || url.hostname.endsWith('.kia.com')) &&
-        /\/vehicles\/[^/]+\/price\/?$/.test(url.pathname)
+        /\/vehicles\/[^/]+\/price(?:\/(?:private|rent))?\/?$/.test(url.pathname)
       );
     } catch {
       return false;
@@ -126,10 +131,13 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
     const contexts = panels.length ? panels.map(panel => ({ powertrainName: panel.powertrainName, lines: vehicleTextLines(htmlToVehicleText(Buffer.from(panel.html))) })) : [{ powertrainName: selectedPowertrain(rootLines), lines: rootLines }];
     const year = modelYear(text);
     const powertrainName = selectedPowertrain(rootLines);
-    const model = kiaModelName(text, input.sourceUrl);
+    const model = kiaModelName(text, input.sourceUrl, input.bytes.toString('utf8'));
+    const rentalPage=!!input.sourceUrl&&/\/price\/rent\/?$/.test(new URL(input.sourceUrl).pathname);
+    const rentalTaxExempt=rentalPage&&/렌터카\s*\/\s*장애인\s*전용\s*가격은\s*면세가격/.test(text);
     const effective = effectiveFrom(text);
     const seats = heroSeats(text);
     const warnings: string[] = [];
+    if(rentalPage&&!rentalTaxExempt)warnings.push('RENTAL_TAX_BASIS_UNVERIFIED');
     const records: VehicleMasterParsedTrim[] = [];
 
     if (!year) warnings.push('MODEL_YEAR_NOT_FOUND');
@@ -214,12 +222,13 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
               powertrainName.includes('하이브리드') ? 'HYBRID'
                 : powertrainName.includes('전기') || powertrainName.includes('EV') ? 'ELECTRIC'
                   : powertrainName.includes('디젤') ? 'DIESEL'
-                    : powertrainName.includes('가솔린') ? 'GASOLINE'
+                    : /LPG|LPI/.test(powertrainName) ? 'LPG'
+                      : powertrainName.includes('가솔린') ? 'GASOLINE'
                       : null,
             basePrice: priced.price,
             ...(priced.priceBefore !== null ? { priceBefore: priced.priceBefore } : {}),
             ...(priced.priceAfter !== null ? { priceAfter: priced.priceAfter } : {}),
-            ...(priced.priceBasis ? { priceBasis: priced.priceBasis } : {}),
+            ...(rentalTaxExempt?{priceBasis:'MANUFACTURER_RENTAL_TAX_EXEMPT_SALE_PRICE'}:priced.priceBasis ? { priceBasis: priced.priceBasis } : {}),
             currency: 'KRW',
             effectiveFrom: effective,
             baseItems: [...new Set(baseItems)],
