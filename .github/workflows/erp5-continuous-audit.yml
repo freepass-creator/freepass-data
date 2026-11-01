@@ -3,6 +3,10 @@ name: ERP5 continuous read-only audit
 on:
   workflow_dispatch:
     inputs:
+      estimate_identity_review:
+        description: 'Manual vehicle identity/base-price review only (no writes; no options or private freeform fields)'
+        type: boolean
+        default: false
       economics_dry_run:
         description: '기간별 수수료 일괄 재계산 dry-run 만 실행(쓰기 0). 켜면 정시 감사 단계는 건너뜀'
         type: boolean
@@ -99,7 +103,11 @@ jobs:
           FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
           set +e
-          npx tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only > estimate-master-readiness.json
+          review_args=()
+          if [ '${{ github.event_name }}' = workflow_dispatch ] && [ '${{ inputs.estimate_identity_review }}' = true ]; then
+            review_args+=(--identity-review)
+          fi
+          npx tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only "${review_args[@]}" > estimate-master-readiness.json
           code=$?
           set -e
           test "$code" -eq 0 -o "$code" -eq 2

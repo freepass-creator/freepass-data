@@ -143,3 +143,11 @@ export function inspectOperationalEstimateSource(snapshot:OperationalEstimateSou
     rows,
   };
 }
+
+/** Manual read-only identity/price review. Not a master export or publication input. */
+export function operationalEstimateIdentityReview(snapshot:OperationalEstimateSourceSnapshot,now=Date.now()) {
+  inspectOperationalEstimateSource(snapshot,now);
+  const fields=['maker','model','sub_model','trim','powertrain','fuel','fuelRaw','drivetrain','seats','engine_cc','displacement_l','turbo','modelYear','model_year','model_year_start','model_year_end','year_start','year_end','retired','master_id','trim_row_key','powertrain_seq','trim_seq','trimKey','carType','priceBefore','priceAfter','priceBasis','crawledAt',...masterReferenceKeys,...trimReferenceKeys];
+  const project=(documents:OperationalMasterDocument[])=>documents.map(doc=>({id:doc.id,updateTime:doc.updateTime,fields:Object.fromEntries([...new Set(fields)].filter(key=>own(doc.data,key)&& (doc.data[key]==null||['string','number','boolean'].includes(typeof doc.data[key]))).map(key=>[key,doc.data[key]]))}));
+  return {contract:'estimate-operational-identity-review/v1',readOnly:true,notCanonicalPublished:true,canIssueQuote:false,source:snapshot.source,readAt:snapshot.readAt,sourceInputDigest:snapshot.inputDigest,masters:project(snapshot.masters),trims:project(snapshot.trims),products:project(snapshot.newCarTrims)};
+}
