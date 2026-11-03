@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 0,
-      "CHANGED": 56,
+      "ADDED": 1,
+      "CHANGED": 15,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 2447
+      "UNCHANGED": 2489
     },
     "current": {
-      "count": 2503,
-      "digest": "61d609ae21afbe6a1625b206fef5b599e5da9b2972178626b53bf6bf0e7b4ae9",
-      "readTime": "2026-11-03T03:40:59.554992Z"
+      "count": 2505,
+      "digest": "7f2d04f1a551f86d2434f1b214ab2133235d767f9e17624c7d0878f1362636a2",
+      "readTime": "2026-11-03T12:17:06.247332Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "cc1b745663398aa8c6e8c9492d112e2744c80c599f4e4174e2abe544c0daa23c",
-    "inventoryTransitionCount": 12,
+    "digest": "868a0c75b77d94bb1af4055b45d48bcc99b4dfa2718021e6996f264222d73f89",
+    "inventoryTransitionCount": 10,
     "previous": {
-      "count": 2503,
-      "digest": "391dfff43b2a80303dfb419c190c4942138b03d2de2ea0a5ce2419036a73d303",
-      "readTime": "2026-11-03T01:31:21.250461Z"
+      "count": 2504,
+      "digest": "c7909635b0dc244e3f6bc35ca66eda205c72a5c1babca63c1f40ee35f9196725",
+      "readTime": "2026-11-03T08:35:39.001151Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 12,
+    "inventoryTransitionCount": 10,
     "mappedForReview": 91,
-    "mappingHold": 2412,
+    "mappingHold": 2414,
     "productFieldPathCount": 1320
   },
-  "runId": "41573583168-1",
+  "runId": "41634311235-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 99,
-      "products": 2503
+      "products": 2505
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "61d609ae21afbe6a1625b206fef5b599e5da9b2972178626b53bf6bf0e7b4ae9",
+    "digest": "7f2d04f1a551f86d2434f1b214ab2133235d767f9e17624c7d0878f1362636a2",
     "projectId": "freepasserp5",
-    "readTime": "2026-11-03T03:40:59.554992Z"
+    "readTime": "2026-11-03T12:17:06.247332Z"
   },
   "version": "erp5-source-inventory/1"
 }
