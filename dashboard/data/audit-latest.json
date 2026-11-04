@@ -12,44 +12,44 @@
   },
   "change": {
     "counts": {
-      "ADDED": 0,
-      "CHANGED": 8,
+      "ADDED": 9,
+      "CHANGED": 26,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 2502
+      "UNCHANGED": 2484
     },
     "current": {
-      "count": 2510,
-      "digest": "1d66155202445e178ea94e267d79b3785b70910820fed72d303308e21539224f",
-      "readTime": "2026-11-03T19:45:58.327456Z"
+      "count": 2519,
+      "digest": "cdecaf26d0e0152591868041c5fe89588237c09673307badc9cb2c2d82a6f024",
+      "readTime": "2026-11-04T00:51:02.081820Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "4350fafaa7656697c8e120d985c3a40f4b10df48193d09be212cf4834feb527e",
-    "inventoryTransitionCount": 0,
+    "digest": "50a21e4213016161a7adeb1487287479b12964ff9d6a00272c194dc018be72b3",
+    "inventoryTransitionCount": 5,
     "previous": {
       "count": 2510,
-      "digest": "3c84794ed98ff81eb4a7e732d2db97bf0bad6fe1283584aef326ee86e5f4a457",
-      "readTime": "2026-11-03T16:36:26.227824Z"
+      "digest": "cbb9fe79661753684311fb63297d614cff0cc3dc1b0d5ed6fab234deac6dd1e6",
+      "readTime": "2026-11-03T23:12:53.733658Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 0,
+    "inventoryTransitionCount": 5,
     "mappedForReview": 91,
-    "mappingHold": 2419,
-    "productFieldPathCount": 1320
+    "mappingHold": 2428,
+    "productFieldPathCount": 1321
   },
-  "runId": "41706163044-1",
+  "runId": "41749780881-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 99,
-      "products": 2510
+      "products": 2519
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "1d66155202445e178ea94e267d79b3785b70910820fed72d303308e21539224f",
+    "digest": "cdecaf26d0e0152591868041c5fe89588237c09673307badc9cb2c2d82a6f024",
     "projectId": "freepasserp5",
-    "readTime": "2026-11-03T19:45:58.327456Z"
+    "readTime": "2026-11-04T00:51:02.081820Z"
   },
   "version": "erp5-source-inventory/1"
 }
