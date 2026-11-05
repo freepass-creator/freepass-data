@@ -53,6 +53,7 @@
     "ingest:settlement-source": "tsx src/jobs/ingest-settlement-source.ts",
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts",
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
+    "project:f03-sheet": "tsx src/jobs/project-f03-sheet.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
     "repair:policy-correction": "tsx src/jobs/apply-policy-correction.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
