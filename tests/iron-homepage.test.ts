@@ -255,6 +255,15 @@ describe('아이언 홈페이지 어댑터', () => {
     const capped = await run(sitemap(['n1', 'u1', ...many]));
     expect(capped.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: [`IRON_SITEMAP:${many.length + 2}:missing${many.length}:stale0`] });
     expect(capped.calls.some(u => /\/vehicles\/m\d+$/.test(u))).toBe(false);
+    // 11-05 실측 재현: 사이트맵 잔재 14건(전부 상세 404)은 상한(10→60) 안이라 전부 확인해 stale — 회차가 막히지 않는다
+    const realistic = Array.from({ length: 14 }, (_, i) => `r${i}`);
+    const rr = await run(sitemap(['n1', 'u1', ...realistic]));
+    expect(rr.read).toMatchObject({ complete: true, notes: ['IRON_SITEMAP:16:missing0:stale14'] });
+    // 404 가 아닌 응답이 나오면 거기서 멈춘다(요청 폭주 없음) — 상세가 열린 첫 id 에서 중단, 남은 것은 누락으로 쳐 불완전
+    const five = ['p0', 'p1', 'p2', 'p3', 'p4'];
+    const stopped = await run(sitemap(['n1', 'u1', ...five]), { [`${BASE}/vehicles/p1`]: detail('12가1010') });
+    expect(stopped.read).toMatchObject({ complete: false, incompleteReason: 'IRON_LIST_SHORT_OF_SITEMAP', notes: ['IRON_SITEMAP:7:missing4:stale1'] });   // p0 404(stale1) → p1 열림 → 나머지 4 누락
+    expect(stopped.calls.filter(u => /\/vehicles\/p\d$/.test(u))).toEqual([`${BASE}/vehicles/p0`, `${BASE}/vehicles/p1`]);
   });
 
   it('runtime fetch contract: final host is judged before HTTP status, so an external-host 404 is never a stale-sitemap 404', () => {

@@ -197,8 +197,10 @@ export const ironFloorRecords = (records: readonly SourceProductRecord[]) =>
 export type IronHomepageRead = { observedAt: string; complete: boolean; incompleteReason?: string; records: SourceProductRecord[];
   held: Array<{ id: string; reason: string }>; duplicatePlates: string[]; listed: number; sold: number; notes: string[] };
 
-/** 사이트맵에만 있는 id 를 상세로 확인하는 상한. 이보다 많이 빠졌으면 잔재가 아니라 목록 읽기 부족으로 보고 확인 없이 불완전. */
-export const IRON_SITEMAP_PROBE_MAX = 10;
+/** 사이트맵에만 있는 id 를 상세로 확인하는 상한. 이보다 많이 빠졌으면 잔재가 아니라 목록 읽기 부족으로 보고 확인 없이 불완전.
+ * 11-05: 10 → 60. 아이언이 상품을 내리면서 사이트맵 잔재 14건이 쌓였는데(전부 상세 404) 상한 10 을 넘어 «전부 누락»으로 쳐 10:30 부터 3회 연속 STOPPED 였다.
+ * 상한이 커도 안전한 이유: 404 만 stale 로 인정하고, 404 가 아닌 응답(상세가 열림·5xx·시간 초과)이 하나라도 나오면 거기서 멈추고 남은 것까지 누락으로 쳐 불완전(요청 폭주 없음). */
+export const IRON_SITEMAP_PROBE_MAX = 60;
 /** 주입된 fetchHtml 이 «페이지 없음»을 알리는 유일한 모양(runtime 의 fetchHtml 은 ironFetchFailure 로 `IRON_HTTP_<status>` 를 던진다). 404 만 — 5xx·시간 초과·HTML 아님은 해당 없음. */
 const isIronNotFound = (e: unknown): boolean => e instanceof Error && e.message === 'IRON_HTTP_404';
 /** runtime fetchHtml 의 실패 판정 — 순서 고정: ① 최종 호스트(리다이렉트 뒤)가 아이언이 아니면 IRON_HOST_REJECTED, ② 그다음 HTTP 오류 IRON_HTTP_<status>.
@@ -252,9 +254,9 @@ export async function readIronHomepage(fetchHtml: (url: string) => Promise<strin
     let missing = 0, stale = 0;
     // 상한을 넘게 빠졌으면 잔재가 아니라 목록이 덜 읽힌 것 — 확인 요청을 더 보내지 않고 불완전.
     if (onlyInSitemap.length > IRON_SITEMAP_PROBE_MAX) missing = onlyInSitemap.length;
-    else for (const id of onlyInSitemap) {
-      try { await get(`${IRON_HOMEPAGE_POLICY.baseUrl}/vehicles/${id}`); missing++; }
-      catch (e) { if (isIronNotFound(e)) stale++; else missing++; }
+    else for (const [i, id] of onlyInSitemap.entries()) {
+      try { await get(`${IRON_HOMEPAGE_POLICY.baseUrl}/vehicles/${id}`); missing = onlyInSitemap.length - stale; break; }   // 상세가 열림 = 목록이 덜 읽힘 → 불완전, 남은 것은 확인 안 함
+      catch (e) { if (isIronNotFound(e)) stale++; else { missing = onlyInSitemap.length - stale; break; } }                  // 404 가 아닌 실패 = 확인 못 함 → 거기서 멈춤
     }
     notes.push(`IRON_SITEMAP:${sitemapIds.length}:missing${missing}:stale${stale}`);
     if (missing > 0) incomplete ??= 'IRON_LIST_SHORT_OF_SITEMAP';
