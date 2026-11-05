@@ -4,11 +4,11 @@
 
 export interface TrimMasterRow {
   maker: string; model: string; sub_model: string; trim: string;
-  origin?: string; production_start?: string; production_end?: string; trim_row_key?: string;
+  origin?: string | undefined; production_start?: string | undefined; production_end?: string | undefined; trim_row_key?: string | undefined;
 }
 export interface VehicleMasterRow {
-  id?: string; maker: string; model: string; sub_model: string;
-  origin?: string; year_start?: string; year_end?: string; trims?: string[]; market_class?: string;
+  id?: string | undefined; maker: string; model: string; sub_model: string;
+  origin?: string | undefined; year_start?: string | undefined; year_end?: string | undefined; trims?: string[] | undefined; market_class?: string | undefined;
 }
 export const F03_HEADER = ['원산지', '제조사', '모델', '세부모델', '세부트림', '생산시작', '생산종료'] as const;
 export const F03_WIDTH = 16; // A~P, 모델행키는 P(16번째)
@@ -17,7 +17,7 @@ const norm = (v: unknown) => String(v ?? '').trim().replace(/\s+/g, ' ');
 export const f03Key = (maker: unknown, model: unknown, sub: unknown, trim: unknown) =>
   [maker, model, sub, trim].map((v) => norm(v).toLowerCase()).join('|');
 
-export interface ProjectionRow { values: string[]; key: string; source: 'trim_master' | 'vehicle_master'; marketClass?: string }
+export interface ProjectionRow { values: string[]; key: string; source: 'trim_master' | 'vehicle_master'; marketClass?: string | undefined }
 export interface ProjectionPlan {
   append: ProjectionRow[];
   alreadyInSheet: number;
@@ -27,7 +27,7 @@ export interface ProjectionPlan {
   marketClassCounts: Record<string, number>;
 }
 
-function line(r: { origin?: string; maker: string; model: string; sub_model: string; trim: string; start?: string; end?: string; rowKey: string }): string[] {
+function line(r: { origin?: string | undefined; maker: string; model: string; sub_model: string; trim: string; start?: string | undefined; end?: string | undefined; rowKey: string }): string[] {
   const v = new Array<string>(F03_WIDTH).fill('');
   v[0] = norm(r.origin); v[1] = norm(r.maker); v[2] = norm(r.model); v[3] = norm(r.sub_model); v[4] = norm(r.trim);
   v[5] = norm(r.start); v[6] = norm(r.end);
@@ -74,13 +74,14 @@ export function planF03Projection(input: { trimRows: TrimMasterRow[]; masterRows
     });
   }
 
-  const missing = [...canon.values()].filter((r) => !have.has(r.key) && (!makerSet.size || makerSet.has(norm(r.values[1]).toLowerCase())));
-  const append = onlyNew ? missing.filter((r) => !haveModel.has(f03Key(r.values[1], r.values[2], '', ''))) : missing;
+  const missing = [...canon.values()].filter((r) => !have.has(r.key) && (!makerSet.size || makerSet.has(norm(r.values[1] ?? '').toLowerCase())));
+  const append = onlyNew ? missing.filter((r) => !haveModel.has(f03Key(r.values[1] ?? '', r.values[2] ?? '', '', ''))) : missing;
   const nameDiffers = missing.length - append.length;
   const makers: Record<string, number> = {};
   const marketClassCounts: Record<string, number> = {};
   for (const r of append) {
-    makers[r.values[1]] = (makers[r.values[1]] ?? 0) + 1;
+    const mk = r.values[1] ?? '';
+    makers[mk] = (makers[mk] ?? 0) + 1;
     const mc = r.marketClass ?? '(트림 마스터)';
     marketClassCounts[mc] = (marketClassCounts[mc] ?? 0) + 1;
   }
