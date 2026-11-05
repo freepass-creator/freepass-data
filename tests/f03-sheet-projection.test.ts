@@ -16,9 +16,9 @@ describe('F03 투영 계획', () => {
     }, { onlyNewModels: false });
     expect(plan.alreadyInSheet).toBe(1);
     expect(plan.append.map((r) => r.values[4])).toEqual(['인스퍼레이션']);
-    expect(plan.append[0].values).toHaveLength(16);
-    expect(plan.append[0].values[15]).toBe('k2');
-    expect(plan.append[0].values.slice(7, 13)).toEqual(['', '', '', '', '', '']); // 검토 칸은 비워 둔다
+    expect(plan.append[0]!.values).toHaveLength(16);
+    expect(plan.append[0]!.values[15]).toBe('k2');
+    expect(plan.append[0]!.values.slice(7, 13)).toEqual(['', '', '', '', '', '']); // 검토 칸은 비워 둔다
   });
 
   it('차종 마스터에만 있는 새 차(아우디 Q2)는 세부트림을 펼쳐 넣고, 트림이 없으면 기본형', () => {
@@ -31,7 +31,7 @@ describe('F03 투영 계획', () => {
       sheetRows: [],
     });
     expect(plan.append.map((r) => r.values.slice(1, 5).join('/'))).toEqual(['아우디/Q2/Q2/35 TDI', '아우디/Q2/Q2/35 TDI 프리미엄', '아우디/Q3/Q3/기본형']);
-    expect(plan.append[0].values[15]).toBe('mf-011.md-036.sm-q2::1');
+    expect(plan.append[0]!.values[15]).toBe('mf-011.md-036.sm-q2::1');
     expect(plan.marketClassCounts['신차']).toBe(2);
   });
 
@@ -42,7 +42,7 @@ describe('F03 투영 계획', () => {
       sheetRows: [],
     });
     expect(plan.append).toHaveLength(1);
-    expect(plan.append[0].source).toBe('trim_master');
+    expect(plan.append[0]!.source).toBe('trim_master');
   });
 
   it('시트에만 있는 줄은 지우지 않고 보고만 한다', () => {
