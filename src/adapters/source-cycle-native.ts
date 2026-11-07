@@ -1,6 +1,6 @@
 import { sharedSheetEngine, sharedSheetPhotoLinks, type SharedSheetSpecOptions } from './shared-sheet-engine.js';
 import { sharedSheetFactNumber, sharedSheetFactRegistration } from '../domain/shared-sheet-fact-parsing.js';
-import { explicitSeatCount, SPEC_FORMAT_RULES } from '../domain/source-spec-validation.js';
+import { explicitSeatCount, SPEC_FORMAT_RULES, SOURCE_PLACEHOLDER_TEXT } from '../domain/source-spec-validation.js';
 import { canonicalFuel } from '../domain/fuel-alias.js';
 import { sharedSheetChannels, sharedSheetChannelOf, sharedSheetCaptureDigest, type SharedSheetCapture } from './shared-sheet-source.js';
 import { sourceCyclePlugin, AICA_SCOPES, aicaActualTab, type CycleCapture, type CyclePlugin } from './source-cycle-plugins.js';
@@ -185,7 +185,7 @@ export function productTypeFromCell(headers: readonly unknown[], cells: readonly
   return PRODUCT_TYPE_VOCABULARY.has(mapped) ? { product_type: mapped } : {};
 }
 export type AicaTable = { title: string; values: unknown[][] };
-const AICA_UNRESOLVED = /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/;
+const AICA_UNRESOLVED = SOURCE_PLACEHOLDER_TEXT;   // 원천 자리표시자 목록 하나(domain/source-spec-validation)
 /** 아이카 장기 행의 차 한 대 사실(연료·외장·내장·Km·최초등록·배기량·명시 인승) → 기존 제원 키(raw.spec). 연식은 모델연도(MY) 표기가 명시된 경우에만 만든다(최초등록에서 연식 추정 금지).
  * 형식 규칙(SPEC_FORMAT_RULES)·연료 별칭(canonicalFuel)을 통과한 값만, 전기·수소는 배기량 제외. 빈 칸에만 쓰는 것은 기존 쓰기 경로가 맡는다. */
 export function aicaSpecFacts(get: (header: string) => unknown, vehicleText: string): Record<string, string> {

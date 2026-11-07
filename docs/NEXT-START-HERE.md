@@ -1,5 +1,10 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-28 PC3 원천 자리표시자 «-»·«—»·«미정» = 원천에 없음 (아이언 연료 빈칸)
+
+- `SOURCE_PLACEHOLDER_TEXT`(domain/source-spec-validation) 하나: 아이카 시트 해석·`masterFuelFallback`·색 형식(ext/int_color)이 같이 쓴다. 자리표시자는 마스터 연료 보완을 막지 않고 색으로 채우지 않는다. 인승·구동·배기량 마스터 보완(`masterSpecFallback`)은 종전대로(«미정» = 있음).
+- 아이언 8대 연료가 이것만으로는 안 채워진다: `vehicle_review_required` 가 true/없음이면 마스터 연료를 아예 찾지 않는다(`masterFuelOf`). false 를 세우는 길은 `identityFields`(MASTER_MATCH) 하나뿐이고, 이름 네 칸이 모두 빈 보류 문서에만 돈다 — 이름 정정 작업으로 이름이 채워진 이 문서들은 확정 경로가 없다. 2021 아이오닉 5 NE 는 차종 마스터 행(2022~)이 없어 확정돼도 연료를 못 찾는다.
+
 ## 2026-10-28 PC3 뮤카(RP035) 영업 GA 지급 — 잔가표 6차 차종 구분 (대표 10-28 «프로모션 차종은 150»)
 
 - 선납: 국산 12개월 90만·24~60개월 120만 / 제네시스·수입·테슬라·카니발 하이리무진 12개월 100만·24~60개월 150만, + min(추가보증금×10%, 50만). 근거 `ledger:2026-10-28-mewcar-ga-fee-brands`, gnafit `pricing/policy-config-sixth·fifth-20261015.js`·`policy-20261011.js latestBrandPolicy`.

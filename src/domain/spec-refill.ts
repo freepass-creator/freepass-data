@@ -2,7 +2,7 @@
  * «문서 칸이 비어 있고 지금 원천에 형식이 맞는 값이 있으면» 그 칸만 다시 채운다. 이미 값이 있는 칸은 절대 덮지 않는다(빈 칸만).
  * 계획(application)과 쓰기(infra)가 같은 판정을 쓰도록 순수 함수 하나로 둔다 — 계획이 «채울 것 있음»으로 고른 문서는 쓰기에서 반드시 그 칸이 채워져
  * 다음 회차에 다시 고르지 않는다(되풀이 없음). */
-import { SPEC_FORMAT_RULES } from './source-spec-validation.js';
+import { SPEC_FORMAT_RULES, SOURCE_PLACEHOLDER_TEXT } from './source-spec-validation.js';
 import { canonicalFuel, masterTrimRowsLookup, type TrimFuelRow, type TrimIdentity } from './fuel-alias.js';
 
 /** 다시 채움 대상 칸(제원 입구 매핑 SPEC_FILL_KEYS 와 같은 목록). */
@@ -11,6 +11,8 @@ export type SpecRefillKey = (typeof SPEC_REFILL_KEYS)[number];
 const ELECTRIC = new Set(['전기', '수소']);
 
 export const specValueBlank = (v: unknown): boolean => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+/** 원천 원문 칸이 «없음»인가: 없음·null·빈 문자열·자리표시자만. 숫자·객체 등 형식이 틀린 값은 «있음»(원천 우선, 마스터로 덮지 않음). */
+export const sourceValueAbsent = (v: unknown): boolean => specValueBlank(v) || (typeof v === 'string' && SOURCE_PLACEHOLDER_TEXT.test(v.trim()));
 
 /** 원천 제원(raw.spec)에서 «주어진 빈 칸들»에 쓸 수 있는 값. 연료는 별칭 표(canonicalFuel)로 표준 이름으로 바꾸고 차명과 어긋나면 뺀다.
  * 다른 칸은 정해진 형식(SPEC_FORMAT_RULES)일 때만. 전기·수소(문서 연료 또는 이번에 채울 연료)이면 배기량은 빼낸다. */
@@ -37,8 +39,8 @@ export function masterFuelFallback(raw: unknown, plannedMasterFuel: unknown, veh
   const r = obj(raw);
   // 원천 연료 원문이 어느 자리에든 있으면(제원 칸, 손오공 목록·상세, 이안카 원문, 오토플러스 원문 표기) 마스터로 보완하지 않는다.
   const sourceTexts = [obj(r.spec).fuel_type, obj(r.list).fuel, obj(r.detail).fuel, obj(obj(r.detail).data).fuel, r.fuel, r.source_fuel_text];
-  // 빈 값(없음·null·빈 문자열)만 «없음»이다. 숫자·객체 등 형식이 틀린 값도 «원천에 있음»으로 보고 마스터로 보완하지 않는다(Codex 3차 검토).
-  if (sourceTexts.some(v => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim()))) return null;
+  // 빈 값(없음·null·빈 문자열)과 자리표시자(«-»·«미정» 등)만 «없음»이다. 숫자·객체 등 형식이 틀린 값도 «원천에 있음»으로 보고 마스터로 보완하지 않는다(Codex 3차 검토).
+  if (sourceTexts.some(v => !sourceValueAbsent(v))) return null;
   return typeof plannedMasterFuel === 'string' ? canonicalFuel(plannedMasterFuel, vehicleText) : null;
 }
 

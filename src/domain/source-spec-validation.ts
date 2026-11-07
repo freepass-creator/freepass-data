@@ -3,6 +3,9 @@
 import type { SourceAmount, SourceProductRecord, SourceTerm } from './source-engine.js';
 
 export const SPEC_FUEL_VALUES: ReadonlySet<string> = new Set(['가솔린', '디젤', 'LPG', '하이브리드', '플러그인 하이브리드', '전기', '수소', '가솔린+LPG']);
+/** 원천 자리표시자(«-»·«—»·«미정»·«모름» 등): 값이 아니라 «원천에 없음»이다. 아이카 시트 해석·마스터 연료 보완 판정·색상 형식이 같은 목록을 쓴다.
+ * 대표 2026-10-28 아이언 연료 빈칸 — 원천 연료 «-» 가 «원천에 있음»으로 읽혀 마스터 연료 보완이 막혔고, 내장색 «-» 가 색으로 채워질 뻔했다. */
+export const SOURCE_PLACEHOLDER_TEXT = /^(?:[-—–－]+|모름|미정|미확인|확인\s*필요|협의)$/;
 const ELECTRIC = new Set(['전기', '수소']);
 const calendar = (v: string): boolean => {
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(v);
@@ -22,8 +25,8 @@ export const SPEC_FORMAT_RULES: Readonly<Record<string, (v: string) => boolean>>
   engine_cc: v => /^\d{3,5}$/.test(v) && Number(v) >= 50,
   mileage: v => /^\d{1,7}$/.test(v),
   seats: v => /^\d{1,2}$/.test(v) && Number(v) >= 1,
-  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
-  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v),
+  ext_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v) && !SOURCE_PLACEHOLDER_TEXT.test(v.trim()),
+  int_color: v => v.length >= 1 && v.length <= 20 && !/\d{4,}/.test(v) && !SOURCE_PLACEHOLDER_TEXT.test(v.trim()),
 };
 /** 공급사 차명에 독립된 «N인승»이 명시된 경우만 읽는다. 모델로 추정하지 않으며 범위·대안·부정·변경 표기는 보류한다. */
 export function explicitSeatCount(vehicleText: unknown): string | null {
