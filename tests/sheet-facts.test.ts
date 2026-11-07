@@ -174,6 +174,71 @@ describe("시트 옵션(공개 화면에 그대로 보임) — 대표 2026-10-23
   });
 });
 
+describe("F05 자손한도 → self_body_accident (대표 2026-10-28 «맞춰주세요»·«그냥 숫자만»: 차 줄 값 우선, 총액 기준 숫자 하나)", () => {
+  const hdr = ["차량번호", "자손한도", "자손면책"];
+  it("F05 금액 표기를 정수 원으로, 한 금액이 아니면 후보에서 뺀다", () => {
+    for (const [cell, won] of [["1억원", 100000000], ["1억5천만원", 150000000], ["5천만원", 50000000], ["1천5백만원", 15000000],
+      ["1,500만원", 15000000], ["1억", 100000000], ["100,000,000", 100000000], [30000000, 30000000]] as const)
+      expect(sheetFactsOf(hdr, ["1", cell, ""])).toEqual({ self_body_accident: won });
+    for (const bad of ["", "-", "무한", "1억/50", "사망 1억 부상 1500만", "1억원 (1인당)", "500,000", "200억", "1,5억원", "1,,500만원", "15,00만원"]) expect(sheetFactsOf(hdr, ["1", bad, ""])).toBeUndefined();
+  });
+  it("소수 억은 정상 금액(«1.5억» = «1억5천만원»), 괄호는 «(총액)»·«(전체)» 만 받는다 — PC1 검토 10-28", () => {
+    for (const [cell, won] of [["1.5억", 150000000], ["1.5억원", 150000000], ["0.5억", 50000000], ["1.25억", 125000000], ["2.12345678억", 212345678],
+      ["1억원(총액)", 100000000], ["1억 (전체)", 100000000], ["1.5억원（총액）", 150000000], ["5천만원 (총액)", 50000000]] as const)
+      expect(sheetFactsOf(hdr, ["1", cell, ""])).toEqual({ self_body_accident: won });
+    expect(sheetFactsOf(hdr, ["1", "1.5억", ""])).toEqual(sheetFactsOf(hdr, ["1", "1억5천만원", ""]));
+    // 총액이 아닌 괄호·괄호가 금액 앞에 오거나 둘 이상·소수 자리 초과·소수 억 뒤 만 단위·소수 만은 금액 아님 → 정책 값 표시
+    for (const bad of ["1억원(1인당)", "1억(사망)", "(총액)1억", "1억(총액)(전체)", "1억(총액", "1.123456789억", "1.5억5천만", "1.5천만", "1.억", ".5억", "1.5"])
+      expect(sheetFactsOf(hdr, ["1", bad, ""])).toBeUndefined();
+    // 범위 경계: 1백만·100억 포함
+    expect(sheetFactsOf(hdr, ["1", "100만원", ""])).toEqual({ self_body_accident: 1000000 });
+    expect(sheetFactsOf(hdr, ["1", "100억", ""])).toEqual({ self_body_accident: 10000000000 });
+  });
+  it("엔진이 주인인 칸: 다르면 충돌이 아니라 F05 값으로 채움, 같으면 아무 것도 아님", () => {
+    expect(sheetFactPlan({ self_body_accident: "15000000" }, { self_body_accident: 100000000 }, ["self_body_accident"])).toEqual({ fill: ["self_body_accident"], conflicts: [] });
+    expect(sheetFactPlan({ self_body_accident: "100000000" }, { self_body_accident: 100000000 }, ["self_body_accident"])).toEqual({ fill: [], conflicts: [] });
+    expect(sheetFactFields({ self_body_accident: 100000000 }, { self_body_accident: 15000000 }, ["self_body_accident"])).toEqual({ self_body_accident: 100000000 });
+    // 다른 칸은 종전대로 덮지 않는다
+    expect(sheetFactFields({ origin: "수입" }, { origin: "국산" }, ["origin"])).toEqual({});
+  });
+  it("빈 칸 채움·F05 값 변경 반영(작아져도)·문자열 값은 숫자로·같은 값은 변경 0, F05 칸이 비면 문서를 건드리지 않는다", async () => {
+    const { commands, fake } = await setup({ sources: [source], keys: ["self_body_accident"] });
+    fake.put("12가7001", heldDoc(rec("12가7001")));
+    fake.put("12가7002", heldDoc(rec("12가7002"), { self_body_accident: 15000000 }));
+    fake.put("12가7003", heldDoc(rec("12가7003")));
+    fake.put("12가7004", heldDoc(rec("12가7004"), { self_body_accident: 100000000 }));
+    fake.put("12가7005", heldDoc(rec("12가7005"), { self_body_accident: "100000000" }));
+    fake.put("12가7006", heldDoc(rec("12가7006"), { self_body_accident: 50000000 }));
+    const limit = { sheet_facts: { self_body_accident: 100000000 } };
+    const low = { sheet_facts: { self_body_accident: 15000000 } };
+    const records = [rec("12가7001", limit), rec("12가7002", limit), rec("12가7003"), rec("12가7004", low), rec("12가7005", limit), rec("12가7006")];
+    const first = await run(commands, records);
+    expect(first.plan.warnings).toEqual(expect.arrayContaining(["SHEET_FACT_FILL:4"]));
+    expect(first.plan.warnings.some(w => w.startsWith("SHEET_FACT_CONFLICT"))).toBe(false);
+    expect(fake.fields("12가7001").self_body_accident).toBe(100000000);
+    expect(fake.fields("12가7002").self_body_accident).toBe(100000000);
+    expect(fake.fields("12가7003").self_body_accident).toBeUndefined();   // F05 빈 칸 + 문서에도 없음 → 정책 값 표시
+    expect(fake.fields("12가7004").self_body_accident).toBe(15000000);    // F05 가 더 작아도 F05
+    expect(fake.fields("12가7005").self_body_accident).toBe(100000000);   // 문자열 → 숫자
+    // 알려진 한계: 한 번 쓴 값은 F05 가 칸을 비워도 지우지 않는다(후속 과제).
+    expect(fake.fields("12가7006").self_body_accident).toBe(50000000);
+    const patches = fake.patches();
+    expect((await run(commands, records)).kinds).toEqual([]);
+    expect(fake.patches()).toBe(patches);
+  });
+  it("켜지 않은 칸·공급사, 계약 잠금 문서에는 쓰지 않는다", async () => {
+    const limit = { sheet_facts: { self_body_accident: 100000000 } };
+    const off = await setup({ sources: [source], keys: ["origin"] });
+    off.fake.put("12가7101", heldDoc(rec("12가7101"), { self_body_accident: 15000000 }));
+    expect((await run(off.commands, [rec("12가7101", limit)])).kinds).toEqual([]);
+    expect(off.fake.fields("12가7101").self_body_accident).toBe(15000000);
+    const locked = await setup({ sources: [source], keys: ["self_body_accident"] });
+    locked.fake.put("12가7102", heldDoc(rec("12가7102"), { self_body_accident: 15000000, locked_by_contract: true }));
+    await run(locked.commands, [rec("12가7102", limit)]);
+    expect(locked.fake.fields("12가7102").self_body_accident).toBe(15000000);
+  });
+});
+
 describe("시트 차량가격 → consumer_price (대표 2026-10-23 승인: 정수 원 5백만~3억, 세금 포함 여부는 단정하지 않음)", () => {
   const hdr = ["차량번호", "차량가격"];
   it("쉼표·원 표기를 정수로, 범위 밖·비숫자·소수는 후보에서 뺀다", () => {
