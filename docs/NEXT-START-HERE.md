@@ -257,6 +257,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-31 비HKG 차량 추가 후보·제조사 대조
+
+- **최신 추가 지시: 데이터 보유와 상품별 운영 개방은 분리한다.** 신용무관/신용심사에서 미운영이고 소득확인만 운영할 수 있어도 차량 데이터는 보존한다. visible-only 추출 조건을 제거해 전체247행/45원본모델명(표시201+숨김46)을 보존했다. BMW105/벤츠54/KGM64/르노22/VW2. visible/creditTypes 원문 보존, 운영 스위치 자동 개방0. 예시는 실제 유형 활성화 지시가 아니다. 원본247/247·7필드 차이0, 경계회귀6 PASS. 아래 201행 기록은 이전 범위이며 이번 지시로 대체된다. 운영 조건 코드/서버 견적 가드 연결은 후속 미완료.
+
+- 최신 대표 지시: 현대·기아·제네시스 제외, BMW/벤츠/KGM/르노/폭스바겐의 카메치 모델·파워트레인·세부 트림 추가 및 제조사 확인. HKG 기존 정본·배타조건은 이번 변경 대상 아님.
+- 작업선 `work/docs/vehicle-expansion-evidence-20261031`, 기준 main `5de2f5ec4b6cf9550178e045b903b1076b9df2a6`; pinned source Estimate `4f5aa3a80f562803f4a5b15d247da1f489c2a604`.
+- [후보/공식 대조 패킷](references/vehicle-expansion-20261031/README.md): visible 원본 201행/40모델명, BMW105/벤츠54/KGM26/르노14/VW2. 원문 모델·lineup·trim·가격 및 원본 ID·snapshot SHA256 보존. lineup을 일괄 POWERTRAIN으로 승격하지 않고 연식·canonical ID 미확정은 null.
+- 검증: 경계 회귀 5 PASS, 실제 원본 ID 201/201·5개 원문 필드 차이0·HKG0·finding ID 미연결0. 공식 대조는 PARTIAL: 발견10그룹/영향13행; 가격0·Z4/X4명칭·티볼리1.6/1.5T·ID.4중복 등 포함. 테스트 PASS는 전체 트림 정확성 PASS가 아님.
+- 남음: 현재 ACTIVE stable ID/연식·차체·파워트레인 대조, KGM/르노 중복 방지, 나머지 세부 트림 공식 확인, 기존 capture→ingest→promote 및 consumer readback. 차단된 reference importer를 재개하지 않는다. 운영 쓰기/승격/배포0, 실제 정본 추가 미완료. 해당 계정 브랜드 메뉴는 HKG만 확인되어 raw visible을 판매 가능 판정으로 사용하지 않음. 기존 PR834 기아 파서·Estimate PR83/84 작업 보존.
+
+
 ### 2026-10-29 Firestore 비용 수정 main 병합·운영 활성화
 
 - 정식 PR **#826**, main `2d625871bb963a8e6959e26189fcf9375279525c`(구현 `3ea46a3a`, 숫자 집계 `1fa968f1`). 처음 #825는 가지 규칙 실패로 닫혔으며 같은 개발선을 `work/freepass-data/firestore-read-cost-20261029`로 정정했다. #826 canon PASS, Linux Core CI `40813555415` SUCCESS, Vitest **4,632 PASS/기존13 SKIP/실패0**. Windows의 기존 배포검증5초 timeout은 단독 재현되며 Linux 성공으로 Windows 실패를 지우지 않는다. 테스트 기대·제한 변경0.
