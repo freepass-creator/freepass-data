@@ -1,5 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
-import { buildContractLockReleaseUpdate } from '../domain/contract-lock-release-update.js';
+import { buildContractLockReleaseUpdate, releasableLockToken } from '../domain/contract-lock-release-update.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 
@@ -33,7 +33,8 @@ export async function releaseContractLock(input: ContractLockReleaseWrite): Prom
     if (!Number.isFinite(evidenceAt) || Date.now() - evidenceAt > input.maxEvidenceAgeMs) return 'EVIDENCE_EXPIRED' as const;
     const snap = await tx.get(ref);
     const data = snap.data() as Rec | undefined;
-    if (!data || data.provider_company_code !== input.supplierCode || data.locked_by_contract !== 'LEDGER' || typeof data._ledger_lock_at !== 'number' || data._ledger_lock_at !== input.expectedLockAt) {
+    const token = data ? releasableLockToken(data) : null;
+    if (!data || data.provider_company_code !== input.supplierCode || !token || typeof token.value !== 'number' || token.value !== input.expectedLockAt) {
       return 'PRECONDITION_FAILED' as const;
     }
     tx.update(ref, buildContractLockReleaseUpdate(data, input, Date.now()));

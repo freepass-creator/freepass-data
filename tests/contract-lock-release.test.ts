@@ -31,7 +31,7 @@ describe('contract lock release decision', () => {
   it.each([
     ['PRODUCT_NOT_FOUND', null, evidence()],
     ['SUPPLIER_MISMATCH', { ...product, provider_company_code: 'RP002' }, evidence()],
-    ['LOCK_VALUE_NOT_LEDGER', { ...product, locked_by_contract: '정산원장' }, evidence()],
+    ['LOCK_VALUE_NOT_LEDGER', { ...product, locked_by_contract: 'X' }, evidence()],
     ['LOCK_TIME_CHANGED', { ...product, _ledger_lock_at: 1 }, evidence()],
     ['SHEET_EVIDENCE_STALE', product, evidence({}, { readAt: '2026-10-12T04:00:00.000Z' })],
     ['SHEET_ROW_NOT_FOUND', product, evidence({ intakeRows: [{ row: 99, cancel: true }] })],
@@ -69,6 +69,59 @@ describe('contract lock release decision', () => {
       decideContractLockRelease(other, null, parsed(evidence()), now),
     ]);
     expect(summary).toMatchObject({ total: 2, releasable: 1, hold: 1, holdReasons: { PRODUCT_NOT_FOUND: 1 } });
+  });
+});
+
+describe('정산원장 (legacy Korean lock) release', () => {
+  const legacyItem = { plate: '11가0003', supplierCode: 'RP023', sheetRow: 12, expectedLockAt: 1789022065389 };
+  const legacy = { provider_company_code: 'RP023', locked_by_contract: '정산원장', _ledger_status_at: 1789022065389, status: '계약중' };
+  const ev = (plate: string, row: number) => ({ plate, intakeRows: [{ row, cancel: true }], otherTabHits: 0 });
+  const evidenceBoth = parsed({ ...evidence(), items: [ev('11가0001', 10), ev('11가0003', 12)] });
+
+  it('releases when _ledger_status_at matches', () => {
+    expect(decideContractLockRelease(legacyItem, legacy, evidenceBoth, now)).toMatchObject({ decision: 'RELEASABLE' });
+  });
+  it('holds LOCK_TIME_CHANGED on status_at mismatch (and _ledger_lock_at is not accepted)', () => {
+    expect(decideContractLockRelease(legacyItem, { ...legacy, _ledger_status_at: 1 }, evidenceBoth, now)).toMatchObject({ reason: 'LOCK_TIME_CHANGED' });
+    const { _ledger_status_at: _d, ...noStatus } = legacy;
+    expect(decideContractLockRelease(legacyItem, { ...noStatus, _ledger_lock_at: legacyItem.expectedLockAt }, evidenceBoth, now)).toMatchObject({ reason: 'LOCK_TIME_CHANGED' });
+  });
+  it('keeps the other safety conditions', () => {
+    const cancelNo = parsed({ ...evidence(), items: [{ ...ev('11가0003', 12), intakeRows: [{ row: 12, cancel: false }] }] });
+    expect(decideContractLockRelease(legacyItem, legacy, cancelNo, now)).toMatchObject({ reason: 'SHEET_CANCEL_NOT_ENTERED' });
+    const hit = parsed({ ...evidence(), items: [{ ...ev('11가0003', 12), otherTabHits: 2 }] });
+    expect(decideContractLockRelease(legacyItem, legacy, hit, now)).toMatchObject({ reason: 'OTHER_TAB_HIT' });
+    expect(decideContractLockRelease(legacyItem, legacy, evidenceBoth, new Date('2026-10-12T06:00:00.000Z'))).toMatchObject({ reason: 'SHEET_EVIDENCE_STALE' });
+  });
+  it('LEDGER regression and mixed plan are judged per item', () => {
+    expect(decideContractLockRelease(item, product, evidenceBoth, now)).toMatchObject({ decision: 'RELEASABLE' });
+    const bad = { ...legacyItem, plate: '11가0004' };
+    expect(decideContractLockRelease(bad, { ...legacy, _ledger_status_at: 5 }, evidenceBoth, now)).toMatchObject({ decision: 'HOLD' });
+  });
+  it('records actual previous lock value and token for undo; LEDGER shape unchanged', () => {
+    const upd = buildContractLockReleaseUpdate(legacy, { expectedLockAt: legacyItem.expectedLockAt, reason: 'r' }, 1);
+    expect(upd).toMatchObject({ locked_by_contract: null, _ledger_unlock_previous: { locked_by_contract: '정산원장', token_field: '_ledger_status_at', token_value: 1789022065389 } });
+    expect(buildContractLockReleaseUpdate(product, { expectedLockAt: 5, reason: 'r' }, 1)._ledger_unlock_previous).toEqual({ locked_by_contract: 'LEDGER', _ledger_lock_at: 5 });
+  });
+  it('job releases a mixed plan and flags readback mismatch per item', async () => {
+    const plan = { planId: 'mix', items: [item, legacyItem] };
+    const dir = await mkdtemp(join(tmpdir(), 'lock-mix-'));
+    await writeFile(join(dir, 'plan.json'), JSON.stringify(plan));
+    await writeFile(join(dir, 'ev.json'), JSON.stringify({ readAt: '2026-10-12T04:58:00.000Z', otherTabsRead: ['분납실적', '완납실적'], items: [ev('11가0001', 10), ev('11가0003', 12)] }));
+    const stored = new Map<string, string>();
+    const calls: string[] = [];
+    const runtime: ContractLockRuntime = {
+      readProducts: async ids => Object.fromEntries(ids.map(id => [id, id === legacyItem.plate ? { ...legacy, locked_by_contract: calls.includes(id) ? '정산원장' : legacy.locked_by_contract } : { ...product, locked_by_contract: calls.includes(id) ? null : 'LEDGER' }])),
+      release: async (_d, input) => { calls.push(input.id); return 'RELEASED'; },
+    };
+    const result = await runReleaseContractLocks(
+      ['--plan', join(dir, 'plan.json'), '--evidence', join(dir, 'ev.json'), '--apply', '--backup-dir', join(dir, 'bk')],
+      { FREEPASS_CONTRACT_LOCK_RELEASE: 'on', FREEPASS_CONTRACT_LOCK_RELEASE_APPROVED: contractLockPlanDigest(plan) },
+      { runtime, clock: () => now, writeBackup: async (p, t) => { stored.set(p, t); }, readBackup: async p => stored.get(p) ?? '' },
+    ) as { writes: number; results: Array<{ result: string }> };
+    expect(calls).toEqual([item.plate, legacyItem.plate]);
+    expect(result.results.map(r => r.result)).toEqual(['RELEASED', 'READBACK_MISMATCH']);
+    expect(result.writes).toBe(1);
   });
 });
 
