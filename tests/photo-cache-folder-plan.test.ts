@@ -62,3 +62,16 @@ describe('planPhotoCacheFromFolder', () => {
     expect(planPhotoCacheFromFolder({ ...base, files: [img(2, { sha256: null })] })).toMatchObject({ status: 'SKIP', reason: 'NO_PHOTOS' });
   });
 });
+
+describe('공급사 코드 인자·문서 값 (렌트존 PT-0001 형)', () => {
+  it('RP### 와 PT-#### 만 받는다', async () => {
+    const { PROVIDER_CODE_ARG } = await import('../src/application/photo-cache-folder-plan.js');
+    for (const ok of ['RP004', 'PT-0001']) expect(PROVIDER_CODE_ARG.test(ok)).toBe(true);
+    for (const no of ['', 'RP07', 'PT-1', 'pt-0001', 'RP0071', 'PT0001', 'PT-0001 ']) expect(PROVIDER_CODE_ARG.test(no)).toBe(false);
+  });
+  it('문서 값이 PT-0001 이면 expectedProvider PT-0001 로 쓰고, RP007 로는 여전히 건너뛴다(대응을 지어내지 않음)', () => {
+    const doc = { provider_company_code: 'PT-0001' } as Record<string, unknown>;
+    expect(planPhotoCacheFromFolder({ ...base, expectedProvider: 'PT-0001', doc }).status).toBe('WRITE');
+    expect(planPhotoCacheFromFolder({ ...base, expectedProvider: 'RP007', doc })).toEqual({ status: 'SKIP', reason: 'PROVIDER_MISMATCH' });
+  });
+});

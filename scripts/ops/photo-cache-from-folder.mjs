@@ -22,9 +22,9 @@ const dec = v => { if (v == null) return v; if ('nullValue' in v) return null; i
 const csvArg = process.argv.find(a => a.startsWith('--folders='))?.slice(10);
 if (csvArg !== undefined) {
   if (!csvArg) throw new Error('FOLDERS_CSV_PATH_REQUIRED');
-  if (!process.argv.some(a => /^--code=RP\d{3}$/.test(a))) throw new Error('CODE_REQUIRED_FOR_CSV_MODE');   // 기본값(RP023)으로 다른 공급사 문서를 쓰지 않는다
+  const { planPhotoCacheFromFolder, PROVIDER_CODE_ARG } = await import('../../dist/src/application/photo-cache-folder-plan.js');
+  if (!process.argv.some(a => a.startsWith('--code=') && PROVIDER_CODE_ARG.test(a.slice(7)))) throw new Error('CODE_REQUIRED_FOR_CSV_MODE');   // 기본값(RP023)으로 다른 공급사 문서를 쓰지 않는다
   const { readFileSync } = await import('node:fs');
-  const { planPhotoCacheFromFolder } = await import('../../dist/src/application/photo-cache-folder-plan.js');
   const maxArg = Number(process.argv.find(a => a.startsWith('--max='))?.slice(6) ?? 40);
   const folderOf = v => FOLDER.exec(v)?.[1] ?? (/^[A-Za-z0-9_-]{20,}$/.test(v.trim()) ? v.trim() : null);
   const csvLines = readFileSync(csvArg, 'utf8').replace(/^﻿/, '').split(/\r?\n/).filter(Boolean);

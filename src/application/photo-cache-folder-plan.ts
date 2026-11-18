@@ -25,6 +25,9 @@ const hasUrls = (cache: unknown): boolean => {
   return Array.isArray(urls) && urls.some(u => typeof u === 'string' && u.trim() !== '');
 };
 
+// 공급사 코드 인자 형식: 옛 RP### 와 상품 문서의 provider_company_code 형 PT-####(렌트존 3대 PROVIDER_MISMATCH, PC3 e5bd4392 11-18). 두 형식 사이를 바꿔 주지는 않는다 — 문서 값과 글자가 같아야 쓴다.
+export const PROVIDER_CODE_ARG = /^(RP\d{3}|PT-\d{4})$/;
+
 export function planPhotoCacheFromFolder(input: {
   plate: string; expectedProvider: string;
   doc: { provider_company_code?: unknown; photo_link?: unknown; photo_cache?: unknown };
