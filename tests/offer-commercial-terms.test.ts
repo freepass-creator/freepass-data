@@ -361,8 +361,17 @@ describe('F04 explicit canonical evidence', () => {
       priceTerms: [{ termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' }],
     }, 'OGONG_SUBSCRIPTION')[0]!;
     expect(fixedQ12.supplierBillingFee).toMatchObject({ amount: { amount: 700000 }, vatAmount: 70000 });
-    expect(fixedQ12.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, vatAmount: null,
-      reasonCode: 'PAYOUT_EXCEEDS_BILLING' });
+    // 장부 11-12·11-19: 손오공 오공구독 영업자 몫(12개월 반납형 월 대여료 100%)은 공급사 청구(−10만)와 따로 정한다 — 역마진 가드 예외.
+    expect(fixedQ12.channelPayoutFee).toMatchObject({ state: 'KNOWN', amount: { amount: 800000 }, ruleId: 'SONOKONG_SUBSCRIPTION_12_PAYOUT' });
+
+    // 다른 공급사는 그대로: 개별 합의로 지급(20만)이 청구(10만)보다 크면 지급은 미확인.
+    const agreement = { status: 'APPROVED', billing: 100000, payout: 200000, contractRef: 'opaque:abcdefghijklmnop1',
+      matchedContractRef: 'opaque:abcdefghijklmnop1', agreementId: 'private:abcd', sourceRow: 160 };
+    const guarded = precomputeOfferEconomics({ id: 'synthetic', supplierId: 'RP013',
+      priceTerms: [{ termKey: 'm36', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' }, depositState: 'UNKNOWN' }] },
+      'USED_RENT', '가솔린', { m36: { individualAgreement: agreement } } as never)[0]!;
+    expect(guarded.supplierBillingFee.amount?.amount).toBe(100000);
+    expect(guarded.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'PAYOUT_EXCEEDS_BILLING' });
 
     const other = precomputeOfferEconomics({
       id: 'synthetic', supplierId: 'RP013',
