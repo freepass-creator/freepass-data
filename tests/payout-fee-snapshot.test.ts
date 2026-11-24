@@ -192,9 +192,9 @@ describe('영업자 지급수수료 박제 계획', () => {
     });
   };
 
-  it('아이카 원천 기록이 «무보증»이면 지급 50만(=청구)이고 사다리로 계산하지 않는다', () => {
+  it('아이카 원천 기록이 «무보증»이면 지급 40만 고정(청구 50만 그대로)이고 사다리로 계산하지 않는다', () => {
     const term = plan({ aica: aicaDepositFree() }).documents[0]!.terms[0]!;
-    expect(term).toMatchObject({ state: 'KNOWN', amount: 500000, ruleId: 'IANCAR_DEPOSIT_FREE_PAYOUT_EQUALS_BILLING_FIXED' });
+    expect(term).toMatchObject({ state: 'KNOWN', amount: 400000, ruleId: 'IANCAR_DEPOSIT_FREE_PAYOUT_FIXED' });
     expect(term.computedFrom.deposit?.state).toBe('ZERO');
   });
 
@@ -205,7 +205,7 @@ describe('영업자 지급수수료 박제 계획', () => {
     (paid.source_cycle_record as { terms: { raw: Record<string, unknown> }[] }).terms[0]!.raw.deposit = 1000000;
     const term = plan({ aica: paid }).documents[0]!.terms[0]!;
     expect(term.computedFrom.deposit?.state).toBe('UNKNOWN');
-    expect(term.ruleId).not.toBe('IANCAR_DEPOSIT_FREE_PAYOUT_EQUALS_BILLING_FIXED');
+    expect(term.ruleId).not.toBe('IANCAR_DEPOSIT_FREE_PAYOUT_FIXED');
   });
 
   it('오토플러스 «오플구독»은 F04 구독 정액(일반 80만·전기 130만)으로 지급하고 청구를 넘지 않는다', () => {

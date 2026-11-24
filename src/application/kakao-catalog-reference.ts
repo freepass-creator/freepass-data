@@ -174,7 +174,7 @@ const validStoredFee=(fee:unknown): fee is CommissionResolution => {
   if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
     (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
     (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
-    (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:1|3|5|12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
+    (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:ledger:59c7c3ba|ledger:2026-10-28-rp004-payout-equals-billing|ledger:2026-11-24-rp004-zero-deposit-payout-400k|NONSTANDARD_TERM_NEAREST_SHORTER_STANDARD\([1-9][0-9]*→(?:1|3|5|12|24|36|48|60)\)|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
   return (f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
     Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
     f.totalAmount===f.amount!+f.vatAmount! :
@@ -1001,12 +1001,12 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
   if (hasAgreement && (!agreement || typeof agreement !== 'object' || Array.isArray(agreement))) return unknownCommission('INDIVIDUAL_AGREEMENT_INVALID');
-  // 대표 2026-10-28 정정: 아이카 무보증만 청구·지급 500,000원이며, 그 외에는 기존 지급 사다리를 따른다.
+  // 대표 2026-11-24 «40만으로»(10-28 «무보증 지급=청구 50만»을 대체): 아이카 무보증은 청구 500,000원 그대로, 지급만 400,000원 고정.
+  // 청구가 계산되지 않는 조건이면 지급도 단정하지 않는다. 보증금이 있거나 UNKNOWN 이면 아래 기존 지급 사다리.
   if (supplierId === 'RP004' && !billing && input.depositState === 'ZERO') {
     const billed = resolveCommissionAmount(input, 'BILLING');
     if (billed.state !== 'CALCULATED' && billed.state !== 'CALCULATED_APPROX') return billed;
-    return { ...billed, ruleId: billed.ruleId?.replace('_BILLING_', '_PAYOUT_EQUALS_BILLING_')
-      .replace(/_BILLING$/, '_PAYOUT_EQUALS_BILLING') ?? 'IANCAR_PAYOUT_EQUALS_BILLING' };
+    return fixed('IANCAR_DEPOSIT_FREE_PAYOUT_FIXED', 400000);
   }
   if (input.individualException || hasAgreement) {
     if (!agreement || !/^opaque:[a-zA-Z0-9_-]{16,}$/.test(agreement.contractRef) || agreement.contractRef !== agreement.matchedContractRef
@@ -1170,7 +1170,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
     ...(contractWriterStandardApplied(input, side, result) ? [KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.contractWriterStandard.sourceRef] : []),
     ...(id.startsWith('MEWCAR_GA_PREPAID_') ? [KAKAO_COMMISSION_POLICY.mewcar.brandFeeSourceRef] : []),
     ...(side === 'PAYOUT' && input.supplierId === 'RP004' && input.depositState === 'ZERO'
-      ? ['ledger:2026-10-28-rp004-payout-equals-billing'] : []),
+      ? ['ledger:2026-11-24-rp004-zero-deposit-payout-400k'] : []),
   ];
   return { ...result, sourceRefs: [...new Set([...new Set(rows)].map(f04Ref).concat(notes))] };
 }
