@@ -21,6 +21,12 @@ describe('명시된 인승 원천 → 기존 raw.spec/빈칸 채움', () => {
     expect(refillableSpecValues(spec, ['seats'])).toEqual({ seats: '8' });
     expect(refillableSpecValues(spec, ['fuel_type'])).not.toHaveProperty('seats');
     expect(aicaSpecFacts(() => undefined, '합성 7/9인승')).not.toHaveProperty('seats');
+    // 원천 자리표시자 목록 하나(대표 2026-10-28): 대시 변형도 색이 아니다, 하이픈이 든 실제 색은 그대로
+    const colors = (ext: string, int: string) => aicaSpecFacts(h => (h === '외장' ? ext : h === '내장' ? int : undefined), '합성');
+    expect(colors('—', '－')).not.toHaveProperty('ext_color');
+    expect(colors('—', '－')).not.toHaveProperty('int_color');
+    expect(colors('블랙-베이지', '미정')).toMatchObject({ ext_color: '블랙-베이지' });
+    expect(colors('블랙-베이지', '미정')).not.toHaveProperty('int_color');
   });
 
   const time = '2026-10-27T10:00:00.000Z';

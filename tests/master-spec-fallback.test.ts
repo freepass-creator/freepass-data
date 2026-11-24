@@ -101,6 +101,8 @@ describe('쓰기: 빈 칸만, 기존 값 보존, 원천 값 우선, 전기 배�
   it('sourceSpecFillFields(첫 채움 문서): 마스터 연료가 전기면 마스터 배기량도 쓰지 않는다', () => {
     expect(sourceSpecFillFields({}, {}, '', '전기', masterSpecs)).toEqual({ fuel_type: '전기', seats: '5', drive_type: '2WD' });
     expect(sourceSpecFillFields({ seats: '4' }, {}, '', null, masterSpecs)).toEqual({ seats: '4', drive_type: '2WD', engine_cc: '1598' });
+    // 대표 2026-10-28 아이언: 원천 연료·내장색 «-» 는 원천에 없음 — 색으로 쓰지 않고, 연료는 계획이 고정한 마스터 연료로 채운다.
+    expect(sourceSpecFillFields({ fuel_type: '-', int_color: '-', ext_color: '화이트' }, {}, '아이오닉 5', '전기', null)).toEqual({ fuel_type: '전기', ext_color: '화이트' });
   });
 });
 
