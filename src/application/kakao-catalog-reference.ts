@@ -1398,6 +1398,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const evidenceSubtype = (automaticCommissionEvidence as Rec).newProductSubtype ?? (effectiveEvidence as Rec | undefined)?.newProductSubtype;
     const subtypeConflict = !!statedSubtype && !!evidenceSubtype && statedSubtype !== evidenceSubtype;
     const guardSubtype = (fee: CommissionResolution): CommissionResolution => subtypeConflict ? unknownCommission('CONFLICTING_NEW_PRODUCT_SUBTYPE') : fee;
+    // 보증금 상태를 계산기에 넘긴다 — 아이카(RP004) 무보증 청구 50만·지급 40만(결정 장부 11-24)은 이 값으로만 정해진다.
     const channelPayoutFee = withVehicleValueEvidence(guardSubtype(resolveSalesCommission({
       ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...effectiveEvidence,
@@ -1408,6 +1409,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
+      depositState: deposit.depositState,
     })));
     const supplierBillingFee = withVehicleValueEvidence(guardSubtype(resolveSupplierBillingFee({
       ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
@@ -1419,6 +1421,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
+      depositState: deposit.depositState,
     })));
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{

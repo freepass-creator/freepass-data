@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { planPayoutFeeSnapshots, type PayoutFeeEvidence, type PayoutFeeSnapshotDocument } from '../src/application/payout-fee-snapshot.js';
 import { applyPayoutFeeSnapshotPlan, parsePayoutFeeEvidence, runPayoutFeeSnapshotJob } from '../src/jobs/snapshot-payout-fees.js';
 import type { PayoutFeeSnapshotStore } from '../src/ports/payout-fee-snapshot-store.js';
+import { buildKakaoCatalogReferenceProduct } from '../src/application/kakao-catalog-reference.js';
 
 const product = (supplierId: string, overrides: Record<string, unknown> = {}) => ({
   provider_company_code: supplierId,
@@ -191,6 +192,18 @@ describe('영업자 지급수수료 박제 계획', () => {
       ...overrides,
     });
   };
+
+  it('카톡 읽기 출력(buildKakaoCatalogReferenceProduct)도 아이카 무보증은 청구 50만·지급 40만, 보증금 있으면 사다리', () => {
+    const free = buildKakaoCatalogReferenceProduct('aica-free', aicaDepositFree())!.offers[0]!.priceTerms[0]!;
+    expect(free.depositState).toBe('ZERO');
+    expect(free.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 500000, ruleId: 'IANCAR_DEPOSIT_FREE_BILLING_FIXED' });
+    expect(free.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 400000, ruleId: 'IANCAR_DEPOSIT_FREE_PAYOUT_FIXED' });
+    expect(free.salesCommission).toMatchObject({ amount: 400000 });
+    const paid = buildKakaoCatalogReferenceProduct('aica-paid', product('RP004'))!.offers[0]!.priceTerms[0]!;
+    expect(paid.depositState).not.toBe('ZERO');
+    expect(paid.channelPayoutFee.ruleId).not.toBe('IANCAR_DEPOSIT_FREE_PAYOUT_FIXED');
+    expect(paid.supplierBillingFee.ruleId).not.toBe('IANCAR_DEPOSIT_FREE_BILLING_FIXED');
+  });
 
   it('아이카 원천 기록이 «무보증»이면 지급 40만 고정(청구 50만 그대로)이고 사다리로 계산하지 않는다', () => {
     const term = plan({ aica: aicaDepositFree() }).documents[0]!.terms[0]!;
