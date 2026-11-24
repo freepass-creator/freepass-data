@@ -1,3 +1,5 @@
+import { gzip as gzipCallback } from "node:zlib";
+import { promisify } from "node:util";
 import type { ContractStandardEdition } from '../application/contract-standard-catalog.js';
 import { isSupplierContractStandard } from '../domain/supplier-contract-standard.js';
 import type { VehiclePhotoReadOptions } from '../domain/consumer-output-contract.js';
@@ -236,6 +238,17 @@ class ConsumerReadError extends Error {
 
 type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
 type PublicCatalogCompatProduct = PublicProduct & Record<string, unknown>;
+
+const gzipAsync = promisify(gzipCallback);
+function acceptsGzip(header: string | string[] | undefined): boolean {
+  const value = Array.isArray(header) ? header.join(',') : header ?? '';
+  return value.split(',').some((part) => {
+    const [coding, ...params] = part.trim().toLowerCase().split(';').map((x) => x.trim());
+    if (coding !== 'gzip') return false;
+    const q = params.find((p) => p.startsWith('q='));
+    return !q || Number(q.slice(2)) > 0;
+  });
+}
 
 const PUBLIC_CACHE_MS = 300_000;   // 5분(커맨드 판정 10-30: 원천 갱신이 매시 단위라 지연 영향 없음, Firestore 읽기 비용)
 const PUBLIC_TIMEOUT_MS = 5_000;
@@ -902,6 +915,16 @@ export function createConsumerGateway(
         !result.data.policies
       ) {
         return reply.code(503).send({ code: 'CATALOG_COMPAT_RESPONSE_INVALID' });
+      }
+      // 전체 카탈로그는 35MB 를 넘어 Cloud Run HTTP/1 응답 한도(32MiB)에 걸린다(11-24 read 배포 500).
+      // 받는 쪽이 gzip 을 받겠다고 하면 압축해 보낸다(node fetch·curl --compressed 는 자동으로 푼다).
+      if (acceptsGzip(request.headers['accept-encoding'])) {
+        const body = await gzipAsync(Buffer.from(JSON.stringify(result)));
+        return reply
+          .header('Content-Type', 'application/json; charset=utf-8')
+          .header('Content-Encoding', 'gzip')
+          .header('Vary', 'Accept-Encoding')
+          .send(body);
       }
       return result;
     } catch (error) {
