@@ -410,7 +410,10 @@ export function precomputeOfferEconomics(
     let channelPayoutFee = convert(resolveSalesCommission(args), 'PAYOUT');
     const billingAmount = supplierBillingFee.state === 'KNOWN' || supplierBillingFee.state === 'ZERO' ? supplierBillingFee.amount?.amount : null;
     const payoutAmount = channelPayoutFee.state === 'KNOWN' || channelPayoutFee.state === 'ZERO' ? channelPayoutFee.amount?.amount : null;
-    if (billingAmount !== null && billingAmount !== undefined && payoutAmount !== null && payoutAmount !== undefined && payoutAmount > billingAmount) {
+    // 역마진 가드(장부 10-28). 단 손오공(RP012) 오공구독은 영업자 몫(12개월 반납형 월 대여료 100%)과 공급사 청구(대여료 − 10만 + 기간 가산)를
+    // 따로 정한 대표 결정(장부 11-12·11-19)이라 지급이 청구보다 커도 막지 않는다.
+    const sonokongSplitPayout = offer.supplierId === 'RP012' && !!channelPayoutFee.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_');
+    if (!sonokongSplitPayout && billingAmount !== null && billingAmount !== undefined && payoutAmount !== null && payoutAmount !== undefined && payoutAmount > billingAmount) {
       const { referenceRentBasis: _guardedReference, ...guardedPayout } = channelPayoutFee;
       channelPayoutFee = { ...guardedPayout, state: 'UNKNOWN', amount: null, calculation: null,
         sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'PAYOUT_EXCEEDS_BILLING' };
