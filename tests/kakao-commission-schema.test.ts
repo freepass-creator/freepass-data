@@ -81,3 +81,12 @@ test('commission schema: 엔진 실제 출력이 계약을 지킨다(미등록 �
     expect(validate(r), JSON.stringify(validate.errors)).toBe(true);
   }
 });
+
+test('아이카 무보증 지급 40만(11-24) 결과는 계약 스키마를 통과한다', () => {
+  const payout = resolveSalesCommission({ supplierId: 'RP004', productType: '중고렌트', termMonths: 12, monthlyRent: 700000, fuel: '가솔린', depositState: 'ZERO' });
+  expect(payout).toMatchObject({ state: 'CALCULATED', amount: 400000, ruleId: 'IANCAR_DEPOSIT_FREE_PAYOUT_FIXED' });
+  expect(payout.sourceRefs).toContain('ledger:2026-11-24-rp004-zero-deposit-payout-400k');
+  expect(validate(payout), JSON.stringify(validate.errors)).toBe(true);
+  const billing = resolveSupplierBillingFee({ supplierId: 'RP004', productType: '중고렌트', termMonths: 12, monthlyRent: 700000, fuel: '가솔린', depositState: 'ZERO' });
+  expect(billing).toMatchObject({ state: 'CALCULATED', amount: 500000 });
+});
