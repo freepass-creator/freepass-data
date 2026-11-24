@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { gunzipSync } from 'node:zlib';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from '../src/api/photo-request-limit.js';
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
@@ -486,6 +487,17 @@ describe('read-only consumer gateway', () => {
       operation: 'READ_CONSUMER_CATALOG_COMPAT',
       result: { count: 1 },
     });
+    // 11-24 read 배포 500: 전체 카탈로그가 Cloud Run 응답 한도(32MiB)를 넘는다 — gzip 을 받겠다는 쪽에는 압축해 보낸다.
+    const plain = result.json();
+    const zipped = await app.inject({ url: compatUrl, headers: { ...headers, 'accept-encoding': 'gzip, deflate, br' } });
+    expect(zipped.statusCode).toBe(200);
+    expect(zipped.headers['content-encoding']).toBe('gzip');
+    expect(zipped.headers['vary']).toContain('Accept-Encoding');
+    expect(String(zipped.headers['content-type'])).toContain('application/json');
+    expect(JSON.parse(gunzipSync(zipped.rawPayload).toString('utf8'))).toEqual(plain);
+    const refused = await app.inject({ url: compatUrl, headers: { ...headers, 'accept-encoding': 'gzip;q=0, identity' } });
+    expect(refused.headers['content-encoding']).toBeUndefined();
+    expect(refused.json()).toEqual(plain);
     await app.close();
   });
 

@@ -598,6 +598,7 @@ jobs:
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
             --dump-header "$headers_file" \
             --write-out '%{http_code}' \
+            --compressed \
             --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
             --header "Authorization: Bearer $consumer_token" \
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
@@ -800,6 +801,7 @@ jobs:
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
             --dump-header "$headers_file" \
             --write-out '%{http_code}' \
+            --compressed \
             --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
             --header "Authorization: Bearer $consumer_token" \
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
