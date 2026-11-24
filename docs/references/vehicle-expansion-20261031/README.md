@@ -41,7 +41,7 @@
 
 ```sh
 node scripts/prepare-vehicle-expansion.mjs /path/to/catalog.snapshot.json.gz /tmp/candidates.json
-node --test scripts/prepare-vehicle-expansion.test.mjs
+node --test scripts/prepare-vehicle-expansion.node.mjs
 ```
 
 ## 모델별 원본 목록
